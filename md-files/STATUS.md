@@ -23,10 +23,12 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/test_c64_bus
+./build/test_c64_cpu_validation
+./build/test_runtime_scheduler
 ./build/c64m --noini
 ```
 
-Build, machine tests, and runtime smoke tests pass.
+Build, machine tests, scheduler tests, and runtime smoke tests pass.
 
 ## Current Configuration Surface
 
@@ -107,6 +109,7 @@ Implemented:
 - Per-cycle bus behavior retained.
 - CPU accesses memory only through C64 bus callbacks.
 - CPU snapshots available.
+- Machine-level synthetic CPU validation exists under `tests/machine/test_c64_cpu_validation.c`.
 
 ### Memory System
 
@@ -138,8 +141,16 @@ Implemented:
 - ROM loading on emulation thread.
 - Reset command.
 - Instruction stepping.
+- Bounded instruction-run command.
+- Central machine cycle scheduler.
+- Cycle stepping.
+- Bounded cycle-run command.
+- Runtime run/pause execution state.
 - CPU state requests.
+- Machine state requests.
 - Runtime event publication.
+- Runtime smoke validation for bounded instruction runs.
+- Runtime scheduler validation for bounded cycle runs, run/pause responsiveness, and step-while-running pause semantics.
 
 ### Machine Work Still Missing
 
@@ -147,7 +158,6 @@ Implemented:
 - Harte CPU validation suite.
 - VIC-II integration.
 - CIA integration.
-- Global machine scheduler.
 - Interrupt-driven system bring-up.
 
 ## Runtime Status
@@ -159,7 +169,8 @@ Implemented:
 - Command queue.
 - Event queue.
 - CPU state snapshots.
-- Reset and step commands.
+- Machine state snapshots.
+- Reset, run, pause, step-cycle, step-instruction, run-cycles, run-instructions, CPU-state, and machine-state commands.
 - Clean startup/shutdown.
 
 Current model:
@@ -186,7 +197,8 @@ Implemented:
 - Main event loop.
 - Clean quit behavior.
 - F9 UI visibility toggle.
-- F10 turbo placeholder toggle.
+- Developer bring-up hotkeys from `md-files/DEBUGKEYS.md`: F10 run, F11/Ctrl+S step instruction, F12/Ctrl+C pause.
+- Runtime state and copied CPU snapshot display in the CPU registers pane.
 - Placeholder rendering path.
 - Initial pane/layout system.
 
@@ -195,8 +207,13 @@ Not implemented:
 - Real emulator display.
 - Texture upload pipeline.
 - Keyboard matrix input.
-- Debugger content.
+- Full debugger content.
 - Real turbo execution behavior.
+
+Must-know:
+
+- Debug hotkeys send runtime commands only; frontend must continue not touching machine state directly.
+- The app does not yet expose a reset hotkey. Instruction stepping requires the runtime machine to have been reset/ROM-ready through existing runtime flow.
 
 ## Rules That Must Not Be Broken
 
@@ -239,20 +256,19 @@ No live machine pointers may cross threads.
 
 Recommended next work:
 
-1. Integrate Harte-style CPU validation tests.
-2. Add NMI support.
-3. Establish machine cycle scheduling.
-4. Create frame publication pipeline.
-5. Begin VIC-II integration.
-6. Add CIA foundations when VIC-II timing exists.
+1. Create frame publication pipeline.
+2. Begin VIC-II skeleton integration.
+3. Add CIA foundations when VIC-II timing exists.
+4. Add IRQ/NMI validation when CIA/VIA interrupt sources exist.
+5. Integrate Harte-style CPU validation tests if symptoms justify it.
 
 ## Definition Of Success For Next Milestone
 
 The next meaningful milestone is:
 
 ```text
-CPU
- -> machine scheduler
+runtime
+ -> frame publication pipeline
  -> VIC-II skeleton
  -> frame publication
  -> visible machine-generated output

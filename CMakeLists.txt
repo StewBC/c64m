@@ -60,6 +60,18 @@ target_link_libraries(test_c64_rom PRIVATE
 
 add_test(NAME c64_rom COMMAND test_c64_rom)
 
+add_executable(test_c64_cpu_validation
+    tests/machine/test_c64_cpu_validation.c
+)
+
+target_compile_features(test_c64_cpu_validation PRIVATE c_std_99)
+
+target_link_libraries(test_c64_cpu_validation PRIVATE
+    runtime
+)
+
+add_test(NAME c64_cpu_validation COMMAND test_c64_cpu_validation)
+
 add_executable(test_app_options
     src/app_options.c
     tests/test_app_options.c
@@ -89,3 +101,15 @@ target_link_libraries(test_runtime_romboot PRIVATE
 )
 
 add_test(NAME runtime_romboot COMMAND test_runtime_romboot)
+
+add_executable(test_runtime_scheduler
+    tests/runtime/test_runtime_scheduler.c
+)
+
+target_compile_features(test_runtime_scheduler PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_scheduler PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_scheduler COMMAND test_runtime_scheduler)

@@ -14,6 +14,12 @@
 typedef struct message_queue message_queue;
 typedef struct thread thread;
 
+typedef enum runtime_exec_state {
+    RUNTIME_EXEC_STOPPED = 0,
+    RUNTIME_EXEC_PAUSED,
+    RUNTIME_EXEC_RUNNING
+} runtime_exec_state;
+
 struct runtime_client {
     message_queue *command_queue;
     message_queue *event_queue;
@@ -30,6 +36,7 @@ struct runtime {
     char *char_rom_path;
     char *kernal_rom_path;
     char *system_rom_path;
+    runtime_exec_state exec_state;
     bool started;
 };
 

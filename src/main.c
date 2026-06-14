@@ -8,6 +8,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+static bool has_ctrl_modifier(const SDL_KeyboardEvent *key) {
+    return key != NULL && (key->keysym.mod & KMOD_CTRL) != 0;
+}
+
 static bool is_host_quit_shortcut(const SDL_KeyboardEvent *key) {
     SDL_Keymod modifiers;
 
@@ -24,20 +28,119 @@ static bool is_host_quit_shortcut(const SDL_KeyboardEvent *key) {
 #endif
 }
 
-static void poll_runtime_events(runtime_client *client) {
+static void request_debug_state(runtime_client *client) {
+    runtime_client_request_cpu_state(client);
+    runtime_client_request_machine_state(client);
+}
+
+static void update_debug_state_from_event(
+    frontend_debug_state *debug_state,
+    const runtime_event *event) {
+    if (debug_state == NULL || event == NULL) {
+        return;
+    }
+
+    switch (event->type) {
+        case RUNTIME_EVENT_RUNNING:
+            debug_state->runtime_state = FRONTEND_RUNTIME_STATE_RUNNING;
+            break;
+
+        case RUNTIME_EVENT_PAUSED:
+        case RUNTIME_EVENT_RESET_COMPLETE:
+        case RUNTIME_EVENT_STEP_COMPLETE:
+        case RUNTIME_EVENT_RUN_COMPLETE:
+            debug_state->runtime_state = FRONTEND_RUNTIME_STATE_PAUSED;
+            break;
+
+        case RUNTIME_EVENT_ERROR:
+            debug_state->runtime_state = FRONTEND_RUNTIME_STATE_ERROR;
+            break;
+
+        case RUNTIME_EVENT_CPU_STATE_RESPONSE:
+            debug_state->cpu = event->data.cpu_state;
+            debug_state->has_cpu = true;
+            break;
+
+        case RUNTIME_EVENT_MACHINE_STATE_RESPONSE:
+            debug_state->cpu.pc = event->data.machine_state.pc;
+            debug_state->cpu.a = event->data.machine_state.a;
+            debug_state->cpu.x = event->data.machine_state.x;
+            debug_state->cpu.y = event->data.machine_state.y;
+            debug_state->cpu.sp = event->data.machine_state.sp;
+            debug_state->cpu.p = event->data.machine_state.p;
+            debug_state->cpu.cycles = event->data.machine_state.cpu_cycles;
+            debug_state->has_cpu = true;
+            if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_ERROR) {
+                debug_state->runtime_state = event->data.machine_state.running ?
+                    FRONTEND_RUNTIME_STATE_RUNNING :
+                    FRONTEND_RUNTIME_STATE_PAUSED;
+            }
+            break;
+
+        case RUNTIME_EVENT_STARTED:
+            if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_UNKNOWN) {
+                debug_state->runtime_state = FRONTEND_RUNTIME_STATE_PAUSED;
+            }
+            break;
+
+        case RUNTIME_EVENT_STOPPED:
+            debug_state->runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
+            break;
+
+        case RUNTIME_EVENT_NONE:
+        case RUNTIME_EVENT_PONG:
+        default:
+            break;
+    }
+}
+
+static void poll_runtime_events(runtime_client *client, frontend_debug_state *debug_state) {
     runtime_event event;
 
     while (runtime_client_poll_event(client, &event)) {
+        update_debug_state_from_event(debug_state, &event);
         if (event.type == RUNTIME_EVENT_ERROR) {
             SDL_Log("runtime error: %s", event.data.error.message);
+        } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
+                   debug_state != NULL &&
+                   debug_state->has_cpu) {
+            SDL_Log(
+                "STEP instruction PC=%04X CYCLES=%llu",
+                debug_state->cpu.pc,
+                (unsigned long long)debug_state->cpu.cycles);
         }
+    }
+}
+
+static void send_run_command(runtime_client *client) {
+    SDL_Log("RUN command requested");
+    if (runtime_client_run(client)) {
+        request_debug_state(client);
+    }
+}
+
+static void send_pause_command(runtime_client *client) {
+    SDL_Log("PAUSE command requested");
+    if (runtime_client_pause(client)) {
+        request_debug_state(client);
+    }
+}
+
+static void send_step_instruction_command(runtime_client *client) {
+    SDL_Log("STEP instruction requested");
+    if (runtime_client_step_instruction(client)) {
+        request_debug_state(client);
     }
 }
 
 static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui) {
     bool running = true;
     bool ui_visible = false;
-    bool turbo_enabled = false;
+    frontend_debug_state debug_state = {
+        .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
+    };
+
+    request_debug_state(client);
 
     while (running) {
         SDL_Event event;
@@ -53,8 +156,13 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
                 } else if (event.key.keysym.sym == SDLK_F10) {
-                    turbo_enabled = !turbo_enabled;
-                    SDL_Log("turbo_enabled=%s", turbo_enabled ? "true" : "false");
+                    send_run_command(client);
+                } else if (event.key.keysym.sym == SDLK_F11 ||
+                           (event.key.keysym.sym == SDLK_s && has_ctrl_modifier(&event.key))) {
+                    send_step_instruction_command(client);
+                } else if (event.key.keysym.sym == SDLK_F12 ||
+                           (event.key.keysym.sym == SDLK_c && has_ctrl_modifier(&event.key))) {
+                    send_pause_command(client);
                 }
             }
 
@@ -64,12 +172,12 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         }
         frontend_end_input(ui);
 
-        poll_runtime_events(client);
+        poll_runtime_events(client, &debug_state);
 
         if (!platform_window_clear(window)) {
             return false;
         }
-        frontend_render(ui, ui_visible);
+        frontend_render(ui, ui_visible, &debug_state);
         platform_window_present(window);
     }
 
@@ -150,7 +258,7 @@ int main(int argc, char **argv) {
 
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client);
+    poll_runtime_events(client, NULL);
 
     frontend_destroy(ui);
     platform_window_destroy(window);

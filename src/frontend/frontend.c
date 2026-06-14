@@ -27,6 +27,21 @@ static void frontend_label_value(struct nk_context *ctx, const char *label, cons
     nk_layout_row_end(ctx);
 }
 
+static const char *frontend_runtime_state_name(frontend_runtime_state state)
+{
+    switch (state) {
+        case FRONTEND_RUNTIME_STATE_RUNNING:
+            return "RUNNING";
+        case FRONTEND_RUNTIME_STATE_PAUSED:
+            return "PAUSED";
+        case FRONTEND_RUNTIME_STATE_ERROR:
+            return "ERROR";
+        case FRONTEND_RUNTIME_STATE_UNKNOWN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
 static void frontend_draw_display_placeholder(struct nk_context *ctx, struct nk_rect bounds)
 {
     if (nk_begin(ctx, "Commodore Display", bounds, pane_flags)) {
@@ -50,16 +65,41 @@ static void frontend_draw_display_placeholder(struct nk_context *ctx, struct nk_
     nk_end(ctx);
 }
 
-static void frontend_draw_registers(struct nk_context *ctx, struct nk_rect bounds)
+static void frontend_draw_registers(
+    struct nk_context *ctx,
+    struct nk_rect bounds,
+    const frontend_debug_state *debug_state)
 {
     if (nk_begin(ctx, "CPU Registers", bounds, pane_flags)) {
+        char value[32];
+
         nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "6510 placeholder", NK_TEXT_LEFT);
-        frontend_label_value(ctx, "PC", "$0000");
-        frontend_label_value(ctx, "A", "$00");
-        frontend_label_value(ctx, "X", "$00");
-        frontend_label_value(ctx, "Y", "$00");
-        frontend_label_value(ctx, "SP", "$ff");
+        nk_label(ctx, frontend_runtime_state_name(debug_state->runtime_state), NK_TEXT_LEFT);
+
+        if (debug_state->has_cpu) {
+            snprintf(value, sizeof(value), "$%04X", debug_state->cpu.pc);
+            frontend_label_value(ctx, "PC", value);
+            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.a);
+            frontend_label_value(ctx, "A", value);
+            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.x);
+            frontend_label_value(ctx, "X", value);
+            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.y);
+            frontend_label_value(ctx, "Y", value);
+            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.sp);
+            frontend_label_value(ctx, "SP", value);
+            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.p);
+            frontend_label_value(ctx, "P", value);
+            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->cpu.cycles);
+            frontend_label_value(ctx, "CYC", value);
+        } else {
+            frontend_label_value(ctx, "PC", "--");
+            frontend_label_value(ctx, "A", "--");
+            frontend_label_value(ctx, "X", "--");
+            frontend_label_value(ctx, "Y", "--");
+            frontend_label_value(ctx, "SP", "--");
+            frontend_label_value(ctx, "P", "--");
+            frontend_label_value(ctx, "CYC", "--");
+        }
     }
     nk_end(ctx);
 }
@@ -178,7 +218,7 @@ frontend *frontend_create(platform_window *window)
     nk_sdl_font_stash_begin(&atlas);
     nk_sdl_font_stash_end();
 
-    ui->limits.registers_h_px = 142;
+    ui->limits.registers_h_px = 178;
     ui->limits.min_display_w_px = 220;
     ui->limits.min_right_w_px = 220;
     ui->limits.min_disassembly_h_px = 120;
@@ -232,7 +272,7 @@ void frontend_end_input(frontend *ui)
     nk_input_end(ui->ctx);
 }
 
-void frontend_render(frontend *ui, bool ui_visible)
+void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state)
 {
     int width = 0;
     int height = 0;
@@ -242,7 +282,7 @@ void frontend_render(frontend *ui, bool ui_visible)
     int split_memory_misc_active;
     int display_corner_active;
 
-    if (ui == NULL || ui->ctx == NULL || !ui_visible) {
+    if (ui == NULL || ui->ctx == NULL || !ui_visible || debug_state == NULL) {
         return;
     }
 
@@ -256,7 +296,7 @@ void frontend_render(frontend *ui, bool ui_visible)
     c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
 
     frontend_draw_display_placeholder(ui->ctx, ui->layout.display);
-    frontend_draw_registers(ui->ctx, ui->layout.registers);
+    frontend_draw_registers(ui->ctx, ui->layout.registers, debug_state);
     frontend_draw_disassembly(ui->ctx, ui->layout.disassembly);
     frontend_draw_memory(ui->ctx, ui->layout.memory);
     frontend_draw_misc(ui->ctx, ui->layout.misc);

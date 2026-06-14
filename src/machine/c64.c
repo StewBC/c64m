@@ -22,6 +22,22 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     c64_bus_write(&machine->bus, address, value);
 }
 
+static void c64_step_vic(c64_t *machine) {
+    machine->clock.vic_cycles++;
+}
+
+static void c64_step_cia1(c64_t *machine) {
+    (void)machine;
+}
+
+static void c64_step_cia2(c64_t *machine) {
+    machine->clock.cia_cycles++;
+}
+
+static void c64_step_sid(c64_t *machine) {
+    (void)machine;
+}
+
 void c64_init(c64_t *machine) {
     assert(machine);
 
@@ -84,6 +100,8 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     c64_bus_reset(&machine->bus);
 
     c6510_reset(&machine->cpu);
+    memset(&machine->clock, 0, sizeof(machine->clock));
+    machine->cpu_cycles_remaining = 0;
     vector = (uint16_t)c64_bus_read(&machine->bus, 0xfffc) |
         ((uint16_t)c64_bus_read(&machine->bus, 0xfffd) << 8);
 
@@ -105,6 +123,35 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
     }
 
     c6510_step(&machine->cpu);
+    machine->clock.cpu_cycles = machine->cpu.cpu.cycles;
+    machine->cpu_cycles_remaining = 0;
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
+bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
+    assert(machine);
+
+    if (!machine->ready) {
+        c64_set_error(error, error_size, "machine is not ready");
+        return false;
+    }
+
+    if (machine->cpu_cycles_remaining == 0) {
+        machine->cpu_cycles_remaining = c6510_step(&machine->cpu);
+        if (machine->cpu_cycles_remaining == 0) {
+            machine->cpu_cycles_remaining = 1;
+        }
+    }
+
+    machine->cpu_cycles_remaining--;
+    machine->clock.cpu_cycles++;
+    c64_step_vic(machine);
+    c64_step_cia1(machine);
+    c64_step_cia2(machine);
+    c64_step_sid(machine);
+    machine->clock.cycle++;
+
     c64_set_error(error, error_size, "");
     return true;
 }
@@ -120,4 +167,21 @@ void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out) {
     out->sp = (uint8_t)(machine->cpu.cpu.sp & 0xff);
     out->p = machine->cpu.cpu.flags;
     out->cycles = machine->cpu.cpu.cycles;
+}
+
+void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out) {
+    assert(machine);
+    assert(out);
+
+    out->cycle = machine->clock.cycle;
+    out->cpu_cycles = machine->clock.cpu_cycles;
+    out->vic_cycles = machine->clock.vic_cycles;
+    out->cia_cycles = machine->clock.cia_cycles;
+    out->pc = machine->cpu.cpu.pc;
+    out->a = machine->cpu.cpu.A;
+    out->x = machine->cpu.cpu.X;
+    out->y = machine->cpu.cpu.Y;
+    out->sp = (uint8_t)(machine->cpu.cpu.sp & 0xff);
+    out->p = machine->cpu.cpu.flags;
+    out->ready = machine->ready;
 }

@@ -17,7 +17,10 @@ target_include_directories(frontend PUBLIC
 
 target_compile_features(frontend PUBLIC c_std_99)
 
-target_link_libraries(frontend PRIVATE
+target_link_libraries(frontend
+    PUBLIC
+        runtime
+    PRIVATE
     platform
     SDL2::SDL2
     util

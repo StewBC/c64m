@@ -18,9 +18,32 @@ typedef struct c64_cpu_snapshot {
     uint64_t cycles;
 } c64_cpu_snapshot;
 
+typedef struct c64_clock {
+    uint64_t cycle;
+    uint64_t cpu_cycles;
+    uint64_t vic_cycles;
+    uint64_t cia_cycles;
+} c64_clock;
+
+typedef struct c64_machine_snapshot {
+    uint64_t cycle;
+    uint64_t cpu_cycles;
+    uint64_t vic_cycles;
+    uint64_t cia_cycles;
+    uint16_t pc;
+    uint8_t a;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sp;
+    uint8_t p;
+    bool ready;
+} c64_machine_snapshot;
+
 typedef struct c64_t {
     c64_bus_t bus;
     C6510 cpu;
+    c64_clock clock;
+    size_t cpu_cycles_remaining;
     bool has_basic_rom;
     bool has_kernal_rom;
     bool has_character_rom;
@@ -31,4 +54,6 @@ void c64_init(c64_t *machine);
 bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size_t error_size);
 bool c64_reset(c64_t *machine, char *error, size_t error_size);
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);
+bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
+void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
