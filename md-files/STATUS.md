@@ -12,7 +12,7 @@ These documents are authoritative. STATUS.md records the current project state a
 
 c64m is a C99 Commodore 64 emulator using SDL2 for platform services and Nuklear for UI.
 
-The project is currently in early machine bring-up. The CPU, memory system, ROM loading, runtime threading model, initial UI shell, and synthetic frame pipeline exist. VIC-II, CIA, keyboard input, and real video output do not.
+The project is currently in early machine bring-up. The CPU, memory system, ROM loading, runtime threading model, initial UI shell, and minimal machine-owned VIC-II frame pipeline exist. CIA, keyboard input, character display, and BASIC-screen video output do not.
 
 ## Current Build Status
 
@@ -24,6 +24,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/test_c64_bus
 ./build/test_c64_frame
+./build/test_c64_vicii
 ./build/test_c64_cpu_validation
 ./build/test_runtime_scheduler
 ./build/test_runtime_frame
@@ -122,8 +123,29 @@ Implemented:
 - KERNAL ROM.
 - Character ROM.
 - Address decoding.
-- Placeholder I/O region.
+- VIC-II `$D000-$D3FF` visible-I/O register routing.
+- Placeholder I/O behavior for non-VIC ranges.
 - Initial `$0000/$0001` banking support.
+
+### VIC-II
+
+Implemented:
+
+- Machine-owned VIC-II skeleton under `src/machine/`.
+- Minimal 64-register storage with `$D000-$D3FF` mirroring.
+- Raster counters tied to machine-cycle stepping.
+- Frame-complete signal for runtime publication.
+- Deterministic 384 x 272 ARGB8888 frame snapshots.
+- Border color from `$D020` and background/pattern color from `$D021`.
+- Banking rules preserved: RAM/character ROM still override I/O visibility according to `$0001`.
+
+Not implemented:
+
+- Character/screen RAM rendering.
+- Sprites.
+- Raster interrupts.
+- Badline or cycle-perfect VIC-II behavior.
+- Color RAM integration.
 
 ### ROM Handling
 
@@ -149,7 +171,7 @@ Implemented:
 - Cycle stepping.
 - Bounded cycle-run command.
 - Runtime run/pause execution state.
-- Synthetic test-frame generation.
+- VIC-II-generated frame snapshots.
 - CPU state requests.
 - Machine state requests.
 - Copied latest-frame publication.
@@ -162,7 +184,7 @@ Implemented:
 
 - NMI path.
 - Harte CPU validation suite.
-- VIC-II integration.
+- Full VIC-II character/screen rendering.
 - CIA integration.
 - Interrupt-driven system bring-up.
 
@@ -208,12 +230,12 @@ Implemented:
 - Developer bring-up hotkeys from `md-files/DEBUGKEYS.md`: F10 run, F11/Ctrl+S step instruction, F12/Ctrl+C pause.
 - Runtime state and copied CPU snapshot display in the CPU registers pane.
 - SDL texture upload path for copied runtime frames.
-- Synthetic frame display in display-only and UI-visible modes.
+- Minimal VIC-II-generated frame display in display-only and UI-visible modes.
 - Initial pane/layout system.
 
 Not implemented:
 
-- Real VIC-II display.
+- BASIC screen / character-mode VIC-II display.
 - Keyboard matrix input.
 - Full debugger content.
 - Real turbo execution behavior.
