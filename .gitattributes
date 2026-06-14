@@ -1,2 +1,3 @@
 * text eol=lf
 *.gif -text
+*.bin binary

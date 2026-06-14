@@ -6,6 +6,3 @@ disks/
 *.ini
 !c64m.ini
 !CMakeLists.txt
-assets/roms/*.bin
-symbols/USER.SYM
-samples/penetrator
