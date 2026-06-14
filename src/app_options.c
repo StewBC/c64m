@@ -1,0 +1,362 @@
+#include "app_options.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "argparse.h"
+#include "config.h"
+
+#define C64M_DEFAULT_INI "c64m.ini"
+#define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
+#define C64M_DEFAULT_VIDEO_FILTER "nearest"
+
+static char *copy_string(const char *value)
+{
+    size_t length;
+    char *copy;
+
+    if (value == NULL) {
+        return NULL;
+    }
+
+    length = strlen(value);
+    copy = (char *)malloc(length + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+
+    memcpy(copy, value, length + 1);
+    return copy;
+}
+
+static bool replace_string(char **target, const char *value)
+{
+    char *copy;
+
+    copy = copy_string(value);
+    if (copy == NULL && value != NULL) {
+        return false;
+    }
+
+    free(*target);
+    *target = copy;
+    return true;
+}
+
+static int parse_bool_value(const char *value, bool *out)
+{
+    if (strcmp(value, "on") == 0 || strcmp(value, "yes") == 0 ||
+        strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+        *out = true;
+        return 1;
+    }
+
+    if (strcmp(value, "off") == 0 || strcmp(value, "no") == 0 ||
+        strcmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+        *out = false;
+        return 1;
+    }
+
+    return 0;
+}
+
+static bool apply_disk_spec(app_options *options, const char *spec)
+{
+    char *end;
+    long drive;
+    const char *image;
+
+    drive = strtol(spec, &end, 10);
+    if (end == spec || *end != '=' || drive < 0 || drive >= C64M_DRIVE_COUNT) {
+        fprintf(stderr, "invalid disk spec `%s`; expected <drive>=<image>\n", spec);
+        return false;
+    }
+
+    image = end + 1;
+    if (*image == '\0') {
+        fprintf(stderr, "invalid disk spec `%s`; image path is empty\n", spec);
+        return false;
+    }
+
+    return replace_string(&options->disk_images[drive], image);
+}
+
+static void apply_config(app_options *options, config *cfg)
+{
+    const char *value;
+    char key[8];
+    int drive;
+
+    if (cfg == NULL) {
+        return;
+    }
+
+    options->show_leds = config_get_bool(cfg, "ui", "leds", options->show_leds);
+    value = config_get(cfg, "Video", "standard");
+    if (value != NULL) {
+        replace_string(&options->video_standard, value);
+    }
+    options->display_width = config_get_int(
+        cfg, "Video", "display_width", options->display_width);
+    options->display_height = config_get_int(
+        cfg, "Video", "display_height", options->display_height);
+    options->integer_scale = config_get_bool(
+        cfg, "Video", "integer_scale", options->integer_scale);
+    options->aspect_correct = config_get_bool(
+        cfg, "Video", "aspect_correct", options->aspect_correct);
+    value = config_get(cfg, "Video", "filter");
+    if (value != NULL) {
+        replace_string(&options->video_filter, value);
+    }
+
+    value = config_get(cfg, "runtime", "turbo");
+    if (value != NULL) {
+        replace_string(&options->turbo_multipliers, value);
+    }
+
+    value = config_get(cfg, "rom", "basic");
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "basic");
+    }
+    if (value != NULL) {
+        replace_string(&options->basic_rom_path, value);
+    }
+    value = config_get(cfg, "rom", "char");
+    if (value == NULL) {
+        value = config_get(cfg, "rom", "character");
+    }
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "char");
+    }
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "character");
+    }
+    if (value != NULL) {
+        replace_string(&options->char_rom_path, value);
+    }
+    value = config_get(cfg, "rom", "kernal");
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "kernal");
+    }
+    if (value != NULL) {
+        replace_string(&options->kernal_rom_path, value);
+    }
+    value = config_get(cfg, "rom", "system");
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "system");
+    }
+    if (value != NULL) {
+        replace_string(&options->system_rom_path, value);
+    }
+
+    for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
+        snprintf(key, sizeof(key), "%d", drive);
+        value = config_get(cfg, "disk", key);
+        if (value != NULL) {
+            replace_string(&options->disk_images[drive], value);
+        }
+    }
+}
+
+static bool apply_disk_args(app_options *options, int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; ++i) {
+        const char *arg = argv[i];
+
+        if (strcmp(arg, "--disk") == 0 || strcmp(arg, "-d") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "%s requires a value\n", arg);
+                return false;
+            }
+            if (!apply_disk_spec(options, argv[++i])) {
+                return false;
+            }
+        } else if (strncmp(arg, "--disk=", 7) == 0) {
+            if (!apply_disk_spec(options, arg + 7)) {
+                return false;
+            }
+        } else if (strncmp(arg, "-d", 2) == 0 && arg[2] != '\0') {
+            if (!apply_disk_spec(options, arg + 2)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool preparse_ini_options(app_options *options, int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; ++i) {
+        const char *arg = argv[i];
+
+        if (strcmp(arg, "--defaults") == 0 || strcmp(arg, "-f") == 0) {
+            options->defaults = true;
+            options->use_ini = false;
+        } else if (strcmp(arg, "--noini") == 0 || strcmp(arg, "-n") == 0) {
+            options->use_ini = false;
+        } else if (strcmp(arg, "--inifile") == 0 || strcmp(arg, "-i") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "%s requires a value\n", arg);
+                return false;
+            }
+            if (!replace_string(&options->ini_path, argv[++i])) {
+                return false;
+            }
+        } else if (strncmp(arg, "--inifile=", 10) == 0) {
+            if (!replace_string(&options->ini_path, arg + 10)) {
+                return false;
+            }
+        } else if (strncmp(arg, "-i", 2) == 0 && arg[2] != '\0') {
+            if (!replace_string(&options->ini_path, arg + 2)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool parse_command_line_overrides(app_options *options, int argc, char **argv)
+{
+    int defaults = 0;
+    int noini = 0;
+    int no_save_ini = 0;
+    int remember = 0;
+    int save_ini = 0;
+    const char *breakpoint = NULL;
+    const char *disk = NULL;
+    const char *ini_path = NULL;
+    const char *leds = NULL;
+    const char *turbo = NULL;
+    struct argparse argparse;
+    const char *const usages[] = {
+        "c64m [options]",
+        NULL,
+    };
+    struct argparse_option parse_options[] = {
+        OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
+        OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
+        OPT_STRING('d', "disk", &disk, "1541 drive contains image", NULL, 0, 0),
+        OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
+        OPT_STRING('l', "leds", &leds, "show disk activity LEDs in window based ui", NULL, 0, 0),
+        OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
+        OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
+        OPT_BOOLEAN('r', "remember", &remember, "add save at quit to ini file", NULL, 0, OPT_NONEG),
+        OPT_BOOLEAN('v', "saveini", &save_ini, "save to ini file at quit", NULL, 0, OPT_NONEG),
+        OPT_STRING('t', "turbo", &turbo, "comma separated set of turbo multipliers", NULL, 0, 0),
+        OPT_HELP(),
+        OPT_END(),
+    };
+
+    argparse_init(&argparse, parse_options, usages, 0);
+    argparse_describe(&argparse, "Commodore 64 emulator", NULL);
+    argparse_parse(&argparse, argc, (const char **)argv);
+
+    if (defaults) {
+        options->defaults = true;
+        options->use_ini = false;
+    }
+    if (ini_path != NULL) {
+        replace_string(&options->ini_path, ini_path);
+    }
+    if (noini) {
+        options->use_ini = false;
+    }
+    if (breakpoint != NULL) {
+        replace_string(&options->breakpoint, breakpoint);
+    }
+    if (!apply_disk_args(options, argc, argv)) {
+        return false;
+    }
+    if (leds != NULL && !parse_bool_value(leds, &options->show_leds)) {
+        fprintf(stderr, "invalid leds value `%s`; expected on or off\n", leds);
+        return false;
+    }
+    if (turbo != NULL) {
+        replace_string(&options->turbo_multipliers, turbo);
+    }
+
+    if (remember) {
+        options->remember = true;
+        options->save_ini = true;
+    }
+    if (save_ini) {
+        options->save_ini = true;
+    }
+    if (no_save_ini) {
+        options->no_save_ini = true;
+        options->save_ini = false;
+    }
+
+    return true;
+}
+
+void app_options_init(app_options *options)
+{
+    memset(options, 0, sizeof(*options));
+    options->use_ini = true;
+    replace_string(&options->ini_path, C64M_DEFAULT_INI);
+    options->show_leds = true;
+    replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
+    options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
+    options->display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
+    options->integer_scale = true;
+    options->aspect_correct = true;
+    replace_string(&options->video_filter, C64M_DEFAULT_VIDEO_FILTER);
+}
+
+bool app_options_load_startup(app_options *options, int argc, char **argv)
+{
+    config *cfg = NULL;
+
+    app_options_init(options);
+
+    if (!preparse_ini_options(options, argc, argv)) {
+        return false;
+    }
+
+    if (options->use_ini) {
+        cfg = config_load(options->ini_path);
+        if (cfg != NULL) {
+            apply_config(options, cfg);
+        }
+    }
+
+    if (!parse_command_line_overrides(options, argc, argv)) {
+        config_destroy(cfg);
+        return false;
+    }
+
+    config_destroy(cfg);
+    return true;
+}
+
+void app_options_destroy(app_options *options)
+{
+    int i;
+
+    if (options == NULL) {
+        return;
+    }
+
+    free(options->ini_path);
+    free(options->breakpoint);
+    free(options->turbo_multipliers);
+    free(options->video_standard);
+    free(options->video_filter);
+    free(options->basic_rom_path);
+    free(options->char_rom_path);
+    free(options->kernal_rom_path);
+    free(options->system_rom_path);
+    for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
+        free(options->disk_images[i]);
+    }
+
+    memset(options, 0, sizeof(*options));
+}

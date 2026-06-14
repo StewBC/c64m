@@ -1,0 +1,11 @@
+.DS_Store
+.vscode/
+.cache/
+build/
+disks/
+*.ini
+!c64m.ini
+!CMakeLists.txt
+assets/roms/*.bin
+symbols/USER.SYM
+samples/penetrator
