@@ -8,6 +8,8 @@
 
 enum {
     TEST_RESET_VECTOR = 0xe000,
+    TEST_COLOR_GREEN = 0xff56ac4du,
+    TEST_COLOR_BLUE = 0xff2e2c9bu,
 };
 
 static void expect_true(const char *name, bool value) {
@@ -38,6 +40,13 @@ static void expect_u64(const char *name, uint64_t expected, uint64_t actual) {
     }
 }
 
+static void expect_not_u32(const char *name, uint32_t unexpected, uint32_t actual) {
+    if (unexpected == actual) {
+        fprintf(stderr, "%s: expected value other than %u\n", name, unexpected);
+        exit(1);
+    }
+}
+
 static void build_roms(c64_rom_set *roms) {
     c64_rom_set_init(roms);
     roms->has_basic = true;
@@ -46,6 +55,10 @@ static void build_roms(c64_rom_set *roms) {
     roms->kernal[0x1ffc] = (uint8_t)(TEST_RESET_VECTOR & 0xff);
     roms->kernal[0x1ffd] = (uint8_t)(TEST_RESET_VECTOR >> 8);
     roms->kernal[TEST_RESET_VECTOR - 0xe000] = 0xea;
+    roms->character[1 * 8 + 0] = 0x80;
+    roms->character[1 * 8 + 1] = 0x40;
+    roms->character[1 * 8 + 2] = 0x20;
+    roms->character[1 * 8 + 3] = 0x10;
 }
 
 static void reset_machine(c64_t *machine) {
@@ -117,12 +130,56 @@ static void test_frame_snapshot_geometry_and_regions(void) {
     corner = frame.pixels[0];
     active = frame.pixels[(VICII_ACTIVE_Y + 10) * C64_FRAME_WIDTH + VICII_ACTIVE_X + 10];
     expect_true("corner is visible border", corner != 0);
-    expect_true("active differs from border", active != corner);
+    expect_not_u32("active differs from border", corner, active);
+}
+
+static void test_reset_screen_starts_clear(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+
+    expect_u8("reset screen byte", 0, c64_bus_vic_read_screen(&machine.bus, 0));
+    expect_u8("reset color byte", 0, c64_bus_vic_read_color(&machine.bus, 0));
+    expect_u8("reset later screen byte", 0, c64_bus_vic_read_screen(&machine.bus, 39));
+}
+
+static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
+    c64_t machine;
+    c64_frame frame_a;
+    c64_frame frame_b;
+    uint32_t glyph_pixel;
+    uint32_t background_pixel;
+    uint32_t next_row_glyph_pixel;
+
+    reset_machine(&machine);
+
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+
+    expect_u8("character rom glyph fetch", 0x80, c64_bus_vic_read_char_glyph(&machine.bus, 1, 0));
+    expect_u8("screen ram fetch", 1, c64_bus_vic_read_screen(&machine.bus, 0));
+    expect_u8("color ram fetch", 5, c64_bus_vic_read_color(&machine.bus, 0));
+
+    expect_true("make glyph frame", c64_make_frame_snapshot(&machine, &frame_a));
+    expect_true("make second glyph frame", c64_make_frame_snapshot(&machine, &frame_b));
+
+    glyph_pixel = frame_a.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X];
+    background_pixel = frame_a.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X + 1];
+    next_row_glyph_pixel = frame_a.pixels[(VICII_ACTIVE_Y + 1) * C64_FRAME_WIDTH + VICII_ACTIVE_X + 1];
+
+    expect_u32("glyph foreground color", TEST_COLOR_GREEN, glyph_pixel);
+    expect_u32("glyph background color", TEST_COLOR_BLUE, background_pixel);
+    expect_u32("second glyph row foreground", TEST_COLOR_GREEN, next_row_glyph_pixel);
+    expect_u32("deterministic glyph pixel", frame_a.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X],
+        frame_b.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X]);
 }
 
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
     test_frame_snapshot_geometry_and_regions();
+    test_reset_screen_starts_clear();
+    test_character_rendering_uses_screen_char_rom_and_color_ram();
     return 0;
 }

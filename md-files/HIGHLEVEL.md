@@ -1,285 +1,205 @@
 # HIGHLEVEL.md
 
-# C64 Bring-Up Plan: Boot to BASIC
-
-## Purpose
-
-This document defines the high-level roadmap for bringing the emulator from a functioning CPU core to a system capable of booting into a recognizable Commodore 64 BASIC screen.
-
-The intent is that each section becomes the basis for a separate detailed implementation guide. The focus here is sequencing, dependencies, milestones, and architectural goals rather than implementation specifics.
-
----
-
-# Guiding Principle
-
-Bring the machine up vertically rather than horizontally.
-
-Avoid implementing every subsystem in depth before integration. Instead, build the smallest functional slice that moves the emulator closer to displaying a BASIC screen.
-
-Each milestone should result in a demonstrably more complete machine.
-
----
-
-# Phase 1: Memory and Bus Infrastructure
+# C64 Bring-Up Roadmap
 
 ## Goal
 
-Connect the existing CPU to a realistic C64 memory system.
+```text
+Reach a visible Commodore 64 BASIC startup screen.
+```
 
-## Deliverables
+## Guiding Principle
 
-- System bus abstraction
-- RAM implementation
-- ROM implementation
-- Memory map definition
-- CPU read/write callbacks routed through the bus
-- Support for 6510 banking via $0000/$0001
-- Reset vector reads from ROM
+Build vertically.
 
-## Success Criteria
+Each phase must produce a demonstrably more complete machine.
 
-- CPU can fetch instructions through the bus
-- RAM read/write behavior is verified
-- ROM regions are visible and protected
-- Banking changes visibility correctly
-- Reset sequence functions using ROM vectors
-
-## Why First
-
-Everything else depends on a functioning memory model.
+Do not implement future phases early.
 
 ---
 
-# Phase 2: ROM Integration
+# Phase 1 - Memory And Bus
 
-## Goal
+Goal:
 
-Introduce ROM loading and execution.
+```text
+CPU -> C64 memory map
+```
 
-## Deliverables
-
-- KERNAL ROM support
-- BASIC ROM support
-- Character ROM support
-- ROM loading infrastructure
-- Validation and error reporting
-
-## Success Criteria
-
-- ROMs load correctly
-- Reset vector resolves from KERNAL ROM
-- CPU begins executing real ROM code
-
-## Why Next
-
-A C64 cannot boot without ROM execution.
+Completed.
 
 ---
 
-# Phase 3: CPU Validation Against the Machine
+# Phase 2 - ROM Integration
 
-## Goal
+Goal:
 
-Validate CPU behavior inside the real machine environment.
+```text
+real ROMs -> reset vector -> ROM execution
+```
 
-## Deliverables
-
-- Bus-aware CPU tests
-- Reset tests
-- Banking tests
-- ROM execution tests
-- NMI entry path
-- IRQ entry path foundations
-
-## Success Criteria
-
-- CPU executes correctly through the memory system
-- Interrupt vectors can be reached
-- Machine-level tests pass
-
-## Why Next
-
-The CPU core may already work in isolation, but must be validated in the actual machine architecture.
+Completed.
 
 ---
 
-# Phase 4: Machine Clock and Scheduling
+# Phase 3 - Machine Validation
 
-## Goal
+Goal:
 
-Establish a central timing model.
+```text
+CPU validation inside machine architecture
+```
 
-## Deliverables
-
-- Machine cycle step function
-- Global timing ownership
-- Component registration model
-- Per-cycle advancement infrastructure
-
-## Success Criteria
-
-- CPU advances through machine cycles
-- Other devices can be attached to the scheduler
-- Timing is no longer CPU-centric
-
-## Why Next
-
-The VIC-II and CIAs depend on coordinated timing.
+Completed.
 
 ---
 
-# Phase 5: Runtime Frame Pipeline
+# Phase 4 - Scheduler And Timing
 
-## Goal
+Goal:
 
-Complete the display pipeline before implementing real video generation.
+```text
+machine-owned cycle progression
+```
 
-## Deliverables
-
-- Frame buffer ownership model
-- Runtime frame publication
-- Frontend frame consumption
-- SDL texture update path
-- Test-pattern rendering
-
-## Success Criteria
-
-- Emulator can display generated frames
-- Frontend never reads machine memory directly
-- Frame publication architecture is proven
-
-## Why Before VIC-II
-
-This isolates display architecture from video emulation complexity.
+Completed.
 
 ---
 
-# Phase 6: Minimal VIC-II Integration
+# Phase 5 - Frame Pipeline
 
-## Goal
+Goal:
 
-Produce the first machine-generated video output.
+```text
+runtime -> copied frame -> frontend
+```
 
-## Deliverables
-
-- VIC-II device skeleton
-- VIC-II memory access path
-- Raster timing foundation
-- Screen buffer generation
-- Border rendering
-
-## Success Criteria
-
-- Stable frame generation
-- Visible screen output
-- Deterministic raster progression
-
-## Non-Goals
-
-- Cycle-perfect behavior
-- Advanced raster effects
-- Accurate badline behavior
-
-These come later.
+Completed.
 
 ---
 
-# Phase 7: CIA Foundations
+# Phase 6 - Minimal VIC-II Integration
 
-## Goal
+Goal:
 
-Provide the minimum functionality required for boot progression.
+```text
+machine-generated video output
+```
 
-## Deliverables
+Completed.
 
-- CIA register framework
-- Timer infrastructure
-- IRQ generation
-- Keyboard matrix foundation
+Result:
 
-## Success Criteria
-
-- ROM code can interact with CIA registers
-- Interrupt paths become operational
-
-## Why Here
-
-Many ROM routines assume CIA availability.
+```text
+border
+background
+raster timing
+frame generation
+```
 
 ---
 
-# Phase 8: Character Display Path
+# Phase 7 - Character Display
 
-## Goal
+Goal:
 
-Display recognizable text output.
+```text
+screen RAM
+    + character ROM
+    + color RAM
+        -> visible PETSCII character display
+```
 
-## Deliverables
+Success Criteria:
 
-- Character ROM access
-- Screen RAM interpretation
-- Character rendering
-- Color RAM support
-
-## Success Criteria
-
-- Text can be displayed
-- BASIC startup text becomes visible
-- Screen updates are reflected visually
-
----
-
-# Phase 9: First BASIC Screen
-
-## Goal
-
-Reach a visible BASIC startup screen.
-
-## Deliverables
-
-- Successful ROM boot sequence
-- Video output connected to machine state
-- Required interrupt functionality
-- Minimal keyboard infrastructure if required
-
-## Success Criteria
-
-The emulator displays a recognizable Commodore 64 BASIC screen.
-
-This milestone represents the first true machine bring-up completion.
+- Character ROM glyphs render.
+- Screen RAM participates in rendering.
+- Color RAM affects character colors.
+- Existing frame pipeline remains unchanged.
+- Visible text appears on screen.
 
 ---
 
-# Deferred Work
+# Phase 8 - CIA Foundations
 
-The following are intentionally outside the scope of the initial bring-up effort:
+Goal:
 
-- Cycle-perfect VIC-II behavior
-- Advanced raster effects
-- SID emulation
-- Accurate tape support
-- Accurate disk support
-- Fast-loader compatibility
-- Performance optimization
-- Save states
-- Debugger enhancements
+```text
+CIA #1
+CIA #2
+interrupt infrastructure
+```
 
-These should only be addressed after successful BASIC boot.
+Success Criteria:
+
+- CIA devices exist.
+- Timer foundations exist.
+- IRQ generation path exists.
+- Runtime remains stable.
 
 ---
 
-# Immediate Next Task
+# Phase 9 - Interrupt-Driven Bring-Up
 
-Implement the memory and bus infrastructure.
+Goal:
 
-Specifically:
+```text
+CPU
+ <- IRQ/NMI
+ <- CIA
+ <- VIC-II
+```
 
-1. Create the C64 bus abstraction.
-2. Add RAM ownership.
-3. Add ROM ownership.
-4. Implement memory mapping.
-5. Implement $0000/$0001 banking.
-6. Route CPU memory accesses through the bus.
-7. Verify reset vector execution.
+Success Criteria:
 
-Once complete, the project can begin executing real ROM code and move toward machine-level timing and video generation.
+- IRQ path works.
+- NMI path works.
+- Interrupt vectors execute correctly.
+
+---
+
+# Phase 10 - Keyboard Matrix
+
+Goal:
+
+```text
+host keyboard
+    -> C64 keyboard matrix
+```
+
+Success Criteria:
+
+- Key presses reach the machine.
+- Keyboard scanning functions.
+
+---
+
+# Phase 11 - BASIC Startup
+
+Goal:
+
+```text
+boot to recognizable BASIC screen
+```
+
+Success Criteria:
+
+- BASIC startup sequence executes.
+- Startup screen is visible.
+- System reaches stable idle state.
+
+---
+
+# Future Work
+
+```text
+sprites
+SID
+disk support
+cartridges
+debugger expansion
+timing accuracy
+badlines
+raster effects
+compatibility work
+```

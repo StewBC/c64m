@@ -51,6 +51,9 @@ struct runtime {
     char *system_rom_path;
     runtime_exec_state exec_state;
     uint64_t next_frame_cycle;
+    uint64_t next_frame_counter;
+    uint64_t frame_counter_step;
+    bool pace_initialized;
     bool started;
 };
 

@@ -6,6 +6,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef C64M_C64_BUS_TYPEDEF
+#define C64M_C64_BUS_TYPEDEF
+typedef struct c64_bus_t c64_bus_t;
+#endif
+
+#ifndef C64M_VICII_TYPEDEF
+#define C64M_VICII_TYPEDEF
+typedef struct vicii vicii;
+#endif
+
 enum {
     VICII_REGISTER_COUNT = 0x40,
     VICII_ACTIVE_X = 32,
@@ -33,11 +43,11 @@ typedef struct c64_vicii_snapshot {
     uint8_t background_color;
 } c64_vicii_snapshot;
 
-typedef struct vicii {
+struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
     c64_frame working_frame;
-} vicii;
+};
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
@@ -47,5 +57,5 @@ void vicii_destroy(vicii *v);
 uint8_t vicii_read_register(vicii *v, uint16_t addr);
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value);
 bool vicii_consume_frame_complete(vicii *v);
-bool vicii_make_frame_snapshot(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);
+bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle);
 void vicii_copy_snapshot(const vicii *v, c64_vicii_snapshot *out);

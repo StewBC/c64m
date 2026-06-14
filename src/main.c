@@ -153,6 +153,129 @@ static void send_step_instruction_command(runtime_client *client) {
     }
 }
 
+static bool map_sdl_key_to_c64(SDL_Keycode sym, c64_key *out_key) {
+    if (!out_key) {
+        return false;
+    }
+
+    if (sym >= SDLK_a && sym <= SDLK_z) {
+        *out_key = (c64_key)(C64_KEY_A + (sym - SDLK_a));
+        return true;
+    }
+
+    if (sym >= SDLK_0 && sym <= SDLK_9) {
+        *out_key = (c64_key)(C64_KEY_0 + (sym - SDLK_0));
+        return true;
+    }
+
+    switch (sym) {
+        case SDLK_SPACE:
+            *out_key = C64_KEY_SPACE;
+            return true;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+            *out_key = C64_KEY_RETURN;
+            return true;
+        case SDLK_BACKSPACE:
+            *out_key = C64_KEY_DELETE;
+            return true;
+        case SDLK_LSHIFT:
+            *out_key = C64_KEY_LEFT_SHIFT;
+            return true;
+        case SDLK_RSHIFT:
+            *out_key = C64_KEY_RIGHT_SHIFT;
+            return true;
+        case SDLK_PLUS:
+        case SDLK_KP_PLUS:
+            *out_key = C64_KEY_PLUS;
+            return true;
+        case SDLK_MINUS:
+        case SDLK_KP_MINUS:
+            *out_key = C64_KEY_MINUS;
+            return true;
+        case SDLK_ASTERISK:
+        case SDLK_KP_MULTIPLY:
+            *out_key = C64_KEY_ASTERISK;
+            return true;
+        case SDLK_EQUALS:
+            *out_key = C64_KEY_EQUALS;
+            return true;
+        case SDLK_COLON:
+            *out_key = C64_KEY_COLON;
+            return true;
+        case SDLK_SEMICOLON:
+            *out_key = C64_KEY_SEMICOLON;
+            return true;
+        case SDLK_COMMA:
+            *out_key = C64_KEY_COMMA;
+            return true;
+        case SDLK_PERIOD:
+            *out_key = C64_KEY_PERIOD;
+            return true;
+        case SDLK_SLASH:
+        case SDLK_KP_DIVIDE:
+            *out_key = C64_KEY_SLASH;
+            return true;
+        case SDLK_AT:
+            *out_key = C64_KEY_AT;
+            return true;
+        case SDLK_RIGHT:
+            *out_key = C64_KEY_CURSOR_RIGHT;
+            return true;
+        case SDLK_DOWN:
+            *out_key = C64_KEY_CURSOR_DOWN;
+            return true;
+        case SDLK_HOME:
+            *out_key = C64_KEY_HOME;
+            return true;
+        case SDLK_ESCAPE:
+            *out_key = C64_KEY_RUN_STOP;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool map_sdl_key_to_shifted_c64_cursor(SDL_Keycode sym, c64_key *out_key) {
+    if (!out_key) {
+        return false;
+    }
+
+    switch (sym) {
+        case SDLK_LEFT:
+            *out_key = C64_KEY_CURSOR_RIGHT;
+            return true;
+        case SDLK_UP:
+            *out_key = C64_KEY_CURSOR_DOWN;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void send_keyboard_event(runtime_client *client, const SDL_KeyboardEvent *event, bool pressed) {
+    c64_key key;
+
+    if (!event || event->repeat != 0) {
+        return;
+    }
+
+    if (map_sdl_key_to_shifted_c64_cursor(event->keysym.sym, &key)) {
+        runtime_client_keyboard_key(client, C64_KEY_RIGHT_SHIFT, pressed);
+        runtime_client_keyboard_key(client, key, pressed);
+    } else if (map_sdl_key_to_c64(event->keysym.sym, &key)) {
+        runtime_client_keyboard_key(client, key, pressed);
+    }
+}
+
+static void send_restore_command(runtime_client *client, const SDL_KeyboardEvent *event) {
+    if (!event || event->repeat != 0) {
+        return;
+    }
+
+    runtime_client_restore(client);
+}
+
 static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui) {
     bool running = true;
     bool ui_visible = false;
@@ -184,7 +307,13 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_F12 ||
                            (event.key.keysym.sym == SDLK_c && has_ctrl_modifier(&event.key))) {
                     send_pause_command(client);
+                } else if (event.key.keysym.sym == SDLK_DELETE && !ui_visible) {
+                    send_restore_command(client, &event.key);
+                } else if (!ui_visible) {
+                    send_keyboard_event(client, &event.key, true);
                 }
+            } else if (event.type == SDL_KEYUP && !ui_visible) {
+                send_keyboard_event(client, &event.key, false);
             }
 
             if (ui_visible) {
@@ -272,6 +401,8 @@ int main(int argc, char **argv) {
         app_options_destroy(&options);
         return 1;
     }
+
+    send_run_command(client);
 
     if (!run_main_loop(window, client, ui)) {
         exit_code = 1;

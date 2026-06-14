@@ -4,12 +4,55 @@
 #include "runtime_command.h"
 #include "runtime_event.h"
 
+#include <SDL.h>
 #include <stdio.h>
 #include <string.h>
 
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
+    RUNTIME_TARGET_FPS = 60,
 };
+
+static void runtime_reset_pacer(runtime *rt) {
+    uint64_t frequency;
+
+    frequency = SDL_GetPerformanceFrequency();
+    rt->frame_counter_step = frequency / RUNTIME_TARGET_FPS;
+    if (rt->frame_counter_step == 0) {
+        rt->frame_counter_step = 1;
+    }
+    rt->next_frame_counter = SDL_GetPerformanceCounter() + rt->frame_counter_step;
+    rt->pace_initialized = true;
+}
+
+static void runtime_pace_after_frame(runtime *rt) {
+    uint64_t now;
+    uint64_t frequency;
+
+    if (!rt->pace_initialized) {
+        runtime_reset_pacer(rt);
+        return;
+    }
+
+    now = SDL_GetPerformanceCounter();
+    frequency = SDL_GetPerformanceFrequency();
+    if (now < rt->next_frame_counter) {
+        uint64_t remaining = rt->next_frame_counter - now;
+        uint32_t delay_ms = (uint32_t)((remaining * 1000u) / frequency);
+        if (delay_ms > 0) {
+            SDL_Delay(delay_ms);
+        }
+        while (SDL_GetPerformanceCounter() < rt->next_frame_counter) {
+            SDL_Delay(0);
+        }
+    }
+
+    rt->next_frame_counter += rt->frame_counter_step;
+    now = SDL_GetPerformanceCounter();
+    if (rt->next_frame_counter < now) {
+        rt->next_frame_counter = now + rt->frame_counter_step;
+    }
+}
 
 static bool runtime_publish_event(
     runtime *rt,
@@ -78,6 +121,20 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.frame_number = rt->frame_slot.published_frames;
     event.data.machine_state.frame_cycle = rt->next_frame_cycle;
     event.data.machine_state.dropped_frames = rt->frame_slot.dropped_frames;
+    event.data.machine_state.screen_ram_writes = snapshot.screen_ram_writes;
+    event.data.machine_state.color_ram_writes = snapshot.color_ram_writes;
+    event.data.machine_state.vic_register_writes = snapshot.vic_register_writes;
+    event.data.machine_state.cia1_register_writes = snapshot.cia1_register_writes;
+    event.data.machine_state.cia2_register_writes = snapshot.cia2_register_writes;
+    event.data.machine_state.keyboard_events = snapshot.keyboard_events;
+    event.data.machine_state.irq_entries = snapshot.irq_entries;
+    event.data.machine_state.cia1_icr_reads = snapshot.cia1_icr_reads;
+    event.data.machine_state.cia1_icr_writes = snapshot.cia1_icr_writes;
+    event.data.machine_state.cia1_interrupt_assertions = snapshot.cia1_interrupt_assertions;
+    event.data.machine_state.nmi_entries = snapshot.nmi_entries;
+    event.data.machine_state.restore_requests = snapshot.restore_requests;
+    event.data.machine_state.cia1_irq_pending = snapshot.cia1_irq_pending ? 1 : 0;
+    event.data.machine_state.cia2_nmi_pending = snapshot.cia2_nmi_pending ? 1 : 0;
 
     runtime_publish_event(rt, &event);
 }
@@ -165,6 +222,7 @@ static bool runtime_reset_machine(runtime *rt) {
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->next_frame_cycle = 0;
+    rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
     runtime_publish_cpu_state(rt);
     return true;
@@ -261,6 +319,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_RUN:
             fprintf(stderr, "RUN command received\n");
             rt->exec_state = RUNTIME_EXEC_RUNNING;
+            runtime_reset_pacer(rt);
             runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
             break;
 
@@ -303,6 +362,14 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_publish_frame(rt);
             break;
 
+        case RUNTIME_COMMAND_KEYBOARD_KEY:
+            c64_set_key(&rt->machine, command->data.keyboard_key.key, command->data.keyboard_key.pressed != 0);
+            break;
+
+        case RUNTIME_COMMAND_RESTORE:
+            c64_restore(&rt->machine);
+            break;
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -319,6 +386,7 @@ int runtime_thread_main(void *userdata) {
     c64_init(&rt->machine);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->next_frame_cycle = 0;
+    rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     if (runtime_load_configured_roms(rt)) {
         runtime_reset_machine(rt);
@@ -343,6 +411,7 @@ int runtime_thread_main(void *userdata) {
                 if (c64_consume_frame_complete(&rt->machine)) {
                     runtime_publish_frame(rt);
                     rt->next_frame_cycle = rt->machine.clock.cycle;
+                    runtime_pace_after_frame(rt);
                 }
             }
 

@@ -497,7 +497,40 @@ static inline uint8_t c6510_take_irq_if_pending(C6510 *m) {
     pc_lo_to_stack(m);
     push(m, (m->cpu.flags & (uint8_t)~0b00010000) | 0b00100000);
     CYCLE(m);
+    m->cpu.irq_entries++;
     c6510_irq(m);
+    return 1;
+}
+
+static inline void c6510_nmi(C6510 *m) {
+    m->cpu.pc = 0xFFFA;
+    a(m);
+    m->cpu.pc = m->cpu.address_16;
+    m->cpu.I = 1;
+    if(m->cpu.class == CPU_65c02) {
+        m->cpu.D = 0;
+    }
+}
+
+static inline uint8_t c6510_nmi_pending(C6510 *m) {
+    return m->nmi_pending ? m->nmi_pending(m->user) : 0;
+}
+
+static inline uint8_t c6510_take_nmi_if_pending(C6510 *m) {
+    if(!c6510_nmi_pending(m)) {
+        return 0;
+    }
+
+    m->cpu.opcode_pc = m->cpu.pc;
+    read_from_memory(m, m->cpu.pc);
+    CYCLE(m);
+    read_sp(m);
+    pc_hi_to_stack(m);
+    pc_lo_to_stack(m);
+    push(m, (m->cpu.flags & (uint8_t)~0b00010000) | 0b00100000);
+    CYCLE(m);
+    m->cpu.nmi_entries++;
+    c6510_nmi(m);
     return 1;
 }
 

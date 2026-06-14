@@ -191,6 +191,41 @@ static void test_runtime_run_for_cycles(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_keyboard_event_reaches_machine(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("send key down", runtime_client_keyboard_key(client, C64_KEY_A, true));
+    expect_true("send key up", runtime_client_keyboard_key(client, C64_KEY_A, false));
+    expect_true("request machine state after key", runtime_client_request_machine_state(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine state after key not received");
+    }
+    expect_u64("runtime keyboard events", 2, event.data.machine_state.keyboard_events);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_restore_event_reaches_machine(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("send restore", runtime_client_restore(client));
+    expect_true("request machine state after restore", runtime_client_request_machine_state(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine state after restore not received");
+    }
+    expect_u64("runtime restore requests", 1, event.data.machine_state.restore_requests);
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_run_pause(void) {
     runtime *rt;
     runtime_client *client;
@@ -267,6 +302,8 @@ int main(void) {
     write_runtime_roms();
     test_single_machine_cycle();
     test_runtime_run_for_cycles();
+    test_runtime_keyboard_event_reaches_machine();
+    test_runtime_restore_event_reaches_machine();
     test_runtime_run_pause();
     test_runtime_step_instruction_from_running_pauses();
     remove("scheduler_64c.bin");

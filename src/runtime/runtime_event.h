@@ -44,6 +44,20 @@ typedef struct runtime_machine_snapshot {
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
+    uint64_t screen_ram_writes;
+    uint64_t color_ram_writes;
+    uint64_t vic_register_writes;
+    uint64_t cia1_register_writes;
+    uint64_t cia2_register_writes;
+    uint64_t keyboard_events;
+    uint64_t irq_entries;
+    uint64_t cia1_icr_reads;
+    uint64_t cia1_icr_writes;
+    uint64_t cia1_interrupt_assertions;
+    uint64_t nmi_entries;
+    uint64_t restore_requests;
+    uint8_t cia1_irq_pending;
+    uint8_t cia2_nmi_pending;
 } runtime_machine_snapshot;
 
 typedef struct runtime_event {

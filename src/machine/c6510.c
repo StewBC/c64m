@@ -24,6 +24,11 @@ void c6510_set_irq_pending_callback(C6510 *m, c6510_irq_pending_fn irq_pending) 
     m->irq_pending = irq_pending;
 }
 
+void c6510_set_nmi_pending_callback(C6510 *m, c6510_nmi_pending_fn nmi_pending) {
+    assert(m);
+    m->nmi_pending = nmi_pending;
+}
+
 void c6510_set_trace_callback(C6510 *m, c6510_trace_fn trace) {
     assert(m);
     m->trace = trace;
@@ -41,10 +46,15 @@ void c6510_reset(C6510 *m) {
     m->cpu.E = 1;
     m->cpu.irq_defer = 0;
     m->cpu.irq_defer_i = 0;
+    m->cpu.irq_entries = 0;
+    m->cpu.nmi_entries = 0;
 }
 
 size_t c6510_step(C6510 *m) {
     size_t start_cycle = m->cpu.cycles;
+    if(c6510_take_nmi_if_pending(m)) {
+        return m->cpu.cycles - start_cycle;
+    }
     if(c6510_take_irq_if_pending(m)) {
         return m->cpu.cycles - start_cycle;
     }

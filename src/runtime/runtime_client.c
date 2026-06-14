@@ -85,6 +85,24 @@ bool runtime_client_request_frame(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_FRAME);
 }
 
+bool runtime_client_keyboard_key(runtime_client *client, c64_key key, bool pressed) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_KEYBOARD_KEY,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.keyboard_key.key = key;
+    command.data.keyboard_key.pressed = pressed ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_restore(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_RESTORE);
+}
+
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
     runtime_frame_slot *slot;
 

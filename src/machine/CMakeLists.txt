@@ -1,10 +1,12 @@
 # src/machine/CMakeLists.txt
 
 add_library(machine STATIC
+    cia.c
     c64.c
     c64_bus.c
     c64_rom.c
     c6510.c
+    keyboard.c
     vicii.c
 )
 

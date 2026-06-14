@@ -114,6 +114,19 @@ static void test_vicii_io_mirroring_and_banking(void) {
     expect_u8("vic register preserved while ram banked", 0x05, c64_bus_read(&machine.bus, 0xd020));
 }
 
+static void test_color_ram_nibble_storage(void) {
+    c64_t machine;
+
+    c64_init(&machine);
+
+    c64_bus_write(&machine.bus, 0xd800, 0x1f);
+    c64_bus_write(&machine.bus, 0xdbff, 0x26);
+    expect_u8("color ram low nibble read", 0x0f, c64_bus_read(&machine.bus, 0xd800));
+    expect_u8("color ram high address read", 0x06, c64_bus_read(&machine.bus, 0xdbff));
+    expect_u8("vic color low nibble", 0x0f, c64_bus_vic_read_color(&machine.bus, 0));
+    expect_u8("vic color high address", 0x06, c64_bus_vic_read_color(&machine.bus, C64_COLOR_RAM_SIZE - 1));
+}
+
 static void test_reset_vector(void) {
     c64_t machine;
     c64_rom_set roms;
@@ -175,6 +188,7 @@ int main(void) {
     test_rom_visibility();
     test_banking();
     test_vicii_io_mirroring_and_banking();
+    test_color_ram_nibble_storage();
     test_reset_vector();
     test_combined_system_rom();
     return 0;

@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 6.
+Completed through Phase 10.
 
 Implemented:
 
@@ -18,30 +18,85 @@ Implemented:
   - raster timing foundation
   - frame generation
   - border/background rendering
+- Character display bring-up:
+  - screen RAM fetch from $0400
+  - character ROM glyph fetch
+  - color RAM nibble storage and fetch
+  - 40x25 text rendering into the active display area
+- CIA foundations:
+  - CIA #1 and CIA #2 machine-owned devices
+  - `$DC00-$DCFF` and `$DD00-$DDFF` bus routing
+  - register storage and mirroring
+  - timer A/B latch, counter, and underflow foundations
+  - interrupt mask/flag foundations
+  - CIA #1 IRQ pending callback path
+  - CIA #2 NMI pending foundation
+  - deterministic no-key keyboard matrix reads
+- ROM boot progression:
+  - machine/runtime boot checkpoint counters
+  - IRQ vector entry validation through the machine bus
+  - IRQ stack push validation
+  - ROM-driven screen RAM writes reflected in frames
+  - ROM-driven color RAM writes reflected in frames
+  - VIC-II `$D018` screen/character pointer support
+  - real 64C ROM smoke checkpoint reaches VIC/CIA/screen activity
+- Keyboard Pass 1 plumbing:
+  - machine-owned C64 keyboard matrix
+  - key press/release state
+  - CIA #1 keyboard scan reads through `$DC00/$DC01`
+  - runtime copied key down/up commands
+  - SDL key mapping for letters, digits, space, return, delete, shift, and common BASIC punctuation keys
+  - semantic host cursor arrows:
+    - right/down map to C64 cursor keys
+    - left/up synthesize Shift + C64 cursor keys
+  - ESC maps to C64 RUN/STOP
+  - Backspace maps to C64 DEL
+  - host Delete maps to RESTORE
+- IRQ/CIA boot compatibility:
+  - CIA #1 ICR read/write diagnostics
+  - CIA interrupt assertion diagnostics
+  - CPU IRQ entry diagnostics
+  - CPU NMI entry path for RESTORE
+  - CIA zero-latch timer reload behavior
+  - CIA one-shot timer stop behavior
+  - normal runtime RUN pacing at roughly 60 Hz frame cadence
+- App startup:
+  - reset screen starts clear
+  - frontend queues Run automatically after initialization
 - SDL display of machine-generated frames.
 
 ## Not Implemented
 
-- Character/screen RAM rendering.
-- Character ROM display.
-- Color RAM.
-- CIA #1.
-- CIA #2.
-- IRQ/NMI bring-up.
-- Keyboard matrix.
+- Full CIA accuracy.
+- CPU NMI entry path.
 - Sprites.
 - SID.
-- BASIC startup screen.
+- Cycle-perfect video/audio timing.
+
+## Current Runtime Notes
+
+Real 64C ROM execution reaches the BASIC READY prompt with a visible cursor and keyboard input.
+
+After a 1,000,000-cycle smoke trace:
+
+```text
+PC=$FD7E
+CIA #1 IRQ pending = true
+CPU IRQ entries = 0
+CIA #1 ICR reads = 0
+```
+
+The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the CPU interrupt-disable flag remains set during the trace.
 
 ## Next Phase
 
-Phase 7.
+Phase 11.
 
 Goal:
 
 ```text
-screen RAM
-    + character ROM
-    + color RAM
-        -> visible PETSCII character display
+BASIC usability polish
+    + keyboard mapping refinements
+    + cursor/repeat timing validation
+    + focused CIA behavior fixes as needed
 ```

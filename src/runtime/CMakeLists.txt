@@ -18,4 +18,6 @@ target_link_libraries(runtime
     PUBLIC
         machine
         util
+    PRIVATE
+        SDL2::SDL2
 )

@@ -86,7 +86,6 @@ For each phase:
 4. Implement only the documented phase.
 5. Run tests.
 6. Update STATUS.md.
-7. Generate next phase document.
 ```
 
 ## Definition Of Done

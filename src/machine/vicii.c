@@ -1,5 +1,7 @@
 #include "vicii.h"
 
+#include "c64_bus.h"
+
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,10 +9,14 @@
 enum {
     VICII_REG_RASTER = 0x12,
     VICII_REG_CONTROL_1 = 0x11,
+    VICII_REG_MEMORY_POINTER = 0x18,
     VICII_REG_BORDER_COLOR = 0x20,
     VICII_REG_BACKGROUND_COLOR_0 = 0x21,
     VICII_DEFAULT_BORDER_COLOR = 6,
     VICII_DEFAULT_BACKGROUND_COLOR = 14,
+    VICII_TEXT_COLUMNS = 40,
+    VICII_CHARACTER_WIDTH = 8,
+    VICII_CHARACTER_HEIGHT = 8,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -124,25 +130,26 @@ bool vicii_consume_frame_complete(vicii *v) {
     return complete;
 }
 
-bool vicii_make_frame_snapshot(vicii *v, c64_frame *out_frame, uint64_t machine_cycle) {
+bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
     uint8_t border_index;
     uint8_t background_index;
-    uint8_t alternate_index;
     uint32_t border_color;
     uint32_t background_color;
-    uint32_t alternate_color;
     uint32_t x;
     uint32_t y;
+    uint16_t screen_base;
+    uint16_t character_base;
 
     assert(v);
+    assert(bus);
     assert(out_frame);
 
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     background_index = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
-    alternate_index = (uint8_t)((background_index + 1u) & 0x0fu);
+    screen_base = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    character_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
     border_color = vicii_palette_argb[border_index];
     background_color = vicii_palette_argb[background_index];
-    alternate_color = vicii_palette_argb[alternate_index];
 
     v->working_frame.width = C64_FRAME_WIDTH;
     v->working_frame.height = C64_FRAME_HEIGHT;
@@ -158,9 +165,23 @@ bool vicii_make_frame_snapshot(vicii *v, c64_frame *out_frame, uint64_t machine_
             uint32_t pixel = border_color;
 
             if (active) {
+                uint32_t active_x = x - VICII_ACTIVE_X;
+                uint32_t active_y = y - VICII_ACTIVE_Y;
+                uint32_t column = active_x / VICII_CHARACTER_WIDTH;
+                uint32_t row = active_y / VICII_CHARACTER_HEIGHT;
+                uint16_t cell = (uint16_t)(row * VICII_TEXT_COLUMNS + column);
+                uint8_t character_code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                uint8_t glyph_row = c64_bus_vic_read_char_glyph_at(
+                    bus,
+                    character_base,
+                    character_code,
+                    (uint8_t)(active_y & 0x07u));
+                uint8_t foreground_index = c64_bus_vic_read_color(bus, cell);
+                uint8_t bit = (uint8_t)(0x80u >> (active_x & 0x07u));
+
                 pixel = background_color;
-                if (((x + y + (uint32_t)v->timing.frame_number) & 0x20u) == 0) {
-                    pixel = alternate_color;
+                if ((glyph_row & bit) != 0) {
+                    pixel = vicii_palette_argb[foreground_index & 0x0fu];
                 }
             }
 

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "keyboard.h"
+
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum runtime_command_type {
     RUNTIME_COMMAND_NONE = 0,
@@ -15,7 +18,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_RUN_INSTRUCTIONS,
     RUNTIME_COMMAND_REQUEST_CPU_STATE,
     RUNTIME_COMMAND_REQUEST_MACHINE_STATE,
-    RUNTIME_COMMAND_REQUEST_FRAME
+    RUNTIME_COMMAND_REQUEST_FRAME,
+    RUNTIME_COMMAND_KEYBOARD_KEY,
+    RUNTIME_COMMAND_RESTORE
 } runtime_command_type;
 
 typedef struct runtime_command {
@@ -28,5 +33,10 @@ typedef struct runtime_command {
         struct {
             size_t count;
         } run_instructions;
+
+        struct {
+            c64_key key;
+            uint8_t pressed;
+        } keyboard_key;
     } data;
 } runtime_command;

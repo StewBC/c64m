@@ -1,5 +1,6 @@
 #include "c64_bus.h"
 
+#include "cia.h"
 #include "vicii.h"
 
 #include <assert.h>
@@ -8,6 +9,13 @@
 enum {
     C64_CPU_PORT_DIRECTION = 0x0000,
     C64_CPU_PORT_DATA = 0x0001,
+    C64_DEFAULT_SCREEN_BASE = 0x0400,
+    C64_COLOR_RAM_BASE = 0xd800,
+    C64_COLOR_RAM_END = 0xdbff,
+    C64_CIA1_BASE = 0xdc00,
+    C64_CIA1_END = 0xdcff,
+    C64_CIA2_BASE = 0xdd00,
+    C64_CIA2_END = 0xddff,
 };
 
 static uint8_t c64_bus_cpu_port_read(const c64_bus_t *bus, uint16_t address) {
@@ -52,12 +60,43 @@ static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
         return vicii_read_register(bus->vic, address);
     }
 
+    if (address >= C64_COLOR_RAM_BASE && address <= C64_COLOR_RAM_END) {
+        return (uint8_t)(bus->color_ram[address - C64_COLOR_RAM_BASE] & 0x0f);
+    }
+
+    if (address >= C64_CIA1_BASE && address <= C64_CIA1_END && bus->cia1) {
+        return cia_read_register(bus->cia1, address);
+    }
+
+    if (address >= C64_CIA2_BASE && address <= C64_CIA2_END && bus->cia2) {
+        return cia_read_register(bus->cia2, address);
+    }
+
     return 0xff;
 }
 
 static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
         vicii_write_register(bus->vic, address, value);
+        bus->vic_register_writes++;
+        return;
+    }
+
+    if (address >= C64_COLOR_RAM_BASE && address <= C64_COLOR_RAM_END) {
+        bus->color_ram[address - C64_COLOR_RAM_BASE] = (uint8_t)(value & 0x0f);
+        bus->color_ram_writes++;
+        return;
+    }
+
+    if (address >= C64_CIA1_BASE && address <= C64_CIA1_END && bus->cia1) {
+        cia_write_register(bus->cia1, address, value);
+        bus->cia1_register_writes++;
+        return;
+    }
+
+    if (address >= C64_CIA2_BASE && address <= C64_CIA2_END && bus->cia2) {
+        cia_write_register(bus->cia2, address, value);
+        bus->cia2_register_writes++;
     }
 }
 
@@ -70,20 +109,39 @@ void c64_bus_init(c64_bus_t *bus) {
 
 void c64_bus_reset(c64_bus_t *bus) {
     vicii *vic;
+    cia *cia1;
+    cia *cia2;
 
     assert(bus);
 
     vic = bus->vic;
+    cia1 = bus->cia1;
+    cia2 = bus->cia2;
     memset(bus->ram, 0, sizeof(bus->ram));
+    memset(bus->color_ram, 0, sizeof(bus->color_ram));
     bus->vic = vic;
+    bus->cia1 = cia1;
+    bus->cia2 = cia2;
     bus->cpu_port_direction = 0x2f;
     bus->cpu_port_data = 0x37;
+    bus->screen_ram_writes = 0;
+    bus->color_ram_writes = 0;
+    bus->vic_register_writes = 0;
+    bus->cia1_register_writes = 0;
+    bus->cia2_register_writes = 0;
 }
 
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v) {
     assert(bus);
 
     bus->vic = v;
+}
+
+void c64_bus_attach_cias(c64_bus_t *bus, cia *cia1, cia *cia2) {
+    assert(bus);
+
+    bus->cia1 = cia1;
+    bus->cia2 = cia2;
 }
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {
@@ -118,6 +176,9 @@ void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     assert(bus);
 
     bus->ram[address] = value;
+    if (address >= C64_DEFAULT_SCREEN_BASE && address < C64_DEFAULT_SCREEN_BASE + 1000u) {
+        bus->screen_ram_writes++;
+    }
 
     if (address == C64_CPU_PORT_DIRECTION) {
         bus->cpu_port_direction = value;
@@ -132,6 +193,43 @@ void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     if (address >= 0xd000 && address <= 0xdfff && c64_bus_io_visible(bus)) {
         c64_io_write(bus, address, value);
     }
+}
+
+uint8_t c64_bus_vic_read_ram(const c64_bus_t *bus, uint16_t address) {
+    assert(bus);
+
+    return bus->ram[address];
+}
+
+uint8_t c64_bus_vic_read_screen(const c64_bus_t *bus, uint16_t offset) {
+    assert(bus);
+
+    return bus->ram[(uint16_t)(C64_DEFAULT_SCREEN_BASE + (offset % 1000u))];
+}
+
+uint8_t c64_bus_vic_read_color(const c64_bus_t *bus, uint16_t offset) {
+    assert(bus);
+
+    return (uint8_t)(bus->color_ram[offset % C64_COLOR_RAM_SIZE] & 0x0f);
+}
+
+uint8_t c64_bus_vic_read_char_glyph(const c64_bus_t *bus, uint8_t character_code, uint8_t glyph_row) {
+    assert(bus);
+
+    return bus->char_rom[((uint16_t)character_code * 8u) + (glyph_row & 0x07u)];
+}
+
+uint8_t c64_bus_vic_read_char_glyph_at(
+    const c64_bus_t *bus,
+    uint16_t character_base,
+    uint8_t character_code,
+    uint8_t glyph_row) {
+    uint16_t offset;
+
+    assert(bus);
+
+    offset = (uint16_t)((character_base + (uint16_t)character_code * 8u + (glyph_row & 0x07u)) % C64_CHAR_ROM_SIZE);
+    return bus->char_rom[offset];
 }
 
 bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {

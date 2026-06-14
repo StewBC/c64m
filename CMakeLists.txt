@@ -84,6 +84,42 @@ target_link_libraries(test_c64_vicii PRIVATE
 
 add_test(NAME c64_vicii COMMAND test_c64_vicii)
 
+add_executable(test_c64_cia
+    tests/machine/test_c64_cia.c
+)
+
+target_compile_features(test_c64_cia PRIVATE c_std_99)
+
+target_link_libraries(test_c64_cia PRIVATE
+    machine
+)
+
+add_test(NAME c64_cia COMMAND test_c64_cia)
+
+add_executable(test_c64_boot_progression
+    tests/machine/test_c64_boot_progression.c
+)
+
+target_compile_features(test_c64_boot_progression PRIVATE c_std_99)
+
+target_link_libraries(test_c64_boot_progression PRIVATE
+    machine
+)
+
+add_test(NAME c64_boot_progression COMMAND test_c64_boot_progression)
+
+add_executable(test_c64_keyboard
+    tests/machine/test_c64_keyboard.c
+)
+
+target_compile_features(test_c64_keyboard PRIVATE c_std_99)
+
+target_link_libraries(test_c64_keyboard PRIVATE
+    machine
+)
+
+add_test(NAME c64_keyboard COMMAND test_c64_keyboard)
+
 add_executable(test_c64_cpu_validation
     tests/machine/test_c64_cpu_validation.c
 )
