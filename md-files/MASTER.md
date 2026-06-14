@@ -36,8 +36,8 @@ Suggested files:
 machine/
     c64.c
     c64.h
-    cpu.c
-    cpu.h
+    c6510.c
+    c6510.h
     memory.c
     memory.h
     ram.c

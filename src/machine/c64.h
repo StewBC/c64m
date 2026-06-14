@@ -2,7 +2,7 @@
 
 #include "c64_bus.h"
 #include "c64_rom.h"
-#include "cpu.h"
+#include "c6510.h"
 
 #include <stdbool.h>
 #include <stddef.h>
