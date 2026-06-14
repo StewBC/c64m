@@ -5,6 +5,7 @@ add_library(machine STATIC
     c64_bus.c
     c64_rom.c
     c6510.c
+    vicii.c
 )
 
 target_include_directories(machine PUBLIC

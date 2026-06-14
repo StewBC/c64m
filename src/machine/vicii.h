@@ -1,0 +1,51 @@
+#pragma once
+
+#include "c64_frame.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    VICII_REGISTER_COUNT = 0x40,
+    VICII_ACTIVE_X = 32,
+    VICII_ACTIVE_Y = 36,
+    VICII_ACTIVE_W = 320,
+    VICII_ACTIVE_H = 200,
+    VICII_NTSC_CYCLES_PER_LINE = 65,
+    VICII_NTSC_LINES_PER_FRAME = 263,
+};
+
+typedef struct vicii_timing {
+    uint32_t cycles_per_line;
+    uint32_t lines_per_frame;
+    uint32_t cycle_in_line;
+    uint32_t raster_line;
+    uint64_t frame_number;
+    bool frame_complete;
+} vicii_timing;
+
+typedef struct c64_vicii_snapshot {
+    uint32_t raster_line;
+    uint32_t cycle_in_line;
+    uint64_t frame_number;
+    uint8_t border_color;
+    uint8_t background_color;
+} c64_vicii_snapshot;
+
+typedef struct vicii {
+    uint8_t registers[VICII_REGISTER_COUNT];
+    vicii_timing timing;
+    c64_frame working_frame;
+} vicii;
+
+bool vicii_init(vicii *v, char *error, size_t error_size);
+void vicii_reset(vicii *v);
+void vicii_step_cycle(vicii *v);
+void vicii_destroy(vicii *v);
+
+uint8_t vicii_read_register(vicii *v, uint16_t addr);
+void vicii_write_register(vicii *v, uint16_t addr, uint8_t value);
+bool vicii_consume_frame_complete(vicii *v);
+bool vicii_make_frame_snapshot(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);
+void vicii_copy_snapshot(const vicii *v, c64_vicii_snapshot *out);

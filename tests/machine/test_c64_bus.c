@@ -97,6 +97,23 @@ static void test_banking(void) {
     expect_u8("kernal hidden by hiram", 0x33, c64_bus_read(&bus, 0xe000));
 }
 
+static void test_vicii_io_mirroring_and_banking(void) {
+    c64_t machine;
+
+    c64_init(&machine);
+
+    c64_bus_write(&machine.bus, 0xd020, 0x05);
+    expect_u8("vic border visible", 0x05, c64_bus_read(&machine.bus, 0xd020));
+    expect_u8("vic border mirror", 0x05, c64_bus_read(&machine.bus, 0xd060));
+
+    c64_bus_write(&machine.bus, 0x0001, 0x34);
+    c64_bus_write(&machine.bus, 0xd020, 0x09);
+    expect_u8("ram under io visible", 0x09, c64_bus_read(&machine.bus, 0xd020));
+
+    c64_bus_write(&machine.bus, 0x0001, 0x37);
+    expect_u8("vic register preserved while ram banked", 0x05, c64_bus_read(&machine.bus, 0xd020));
+}
+
 static void test_reset_vector(void) {
     c64_t machine;
     c64_rom_set roms;
@@ -157,6 +174,7 @@ int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
     test_banking();
+    test_vicii_io_mirroring_and_banking();
     test_reset_vector();
     test_combined_system_rom();
     return 0;

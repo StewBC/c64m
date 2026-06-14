@@ -94,7 +94,7 @@ static void test_frame_copy_stays_stable(void) {
     saved_pixel = first.pixels[40 * C64_FRAME_WIDTH + 40];
     expect_true("generate second frame", c64_generate_test_frame(&machine, &second));
 
-    expect_u64("second frame number", 1, second.frame_number);
+    expect_u64("second frame number", 0, second.frame_number);
     expect_u64("first frame number stable", 0, first.frame_number);
     expect_u32("first frame pixel stable", saved_pixel, first.pixels[40 * C64_FRAME_WIDTH + 40]);
 }

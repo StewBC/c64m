@@ -9,7 +9,6 @@
 
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
-    RUNTIME_FRAME_INTERVAL_CYCLES = 20000,
 };
 
 static bool runtime_publish_event(
@@ -89,7 +88,7 @@ static bool runtime_publish_frame(runtime *rt) {
     };
     c64_frame frame;
 
-    if (!c64_generate_test_frame(&rt->machine, &frame)) {
+    if (!c64_make_frame_snapshot(&rt->machine, &frame)) {
         runtime_publish_error(rt, "failed to generate frame");
         return false;
     }
@@ -165,7 +164,7 @@ static bool runtime_reset_machine(runtime *rt) {
     mutex_unlock(rt->frame_slot.mutex);
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
-    rt->next_frame_cycle = RUNTIME_FRAME_INTERVAL_CYCLES;
+    rt->next_frame_cycle = 0;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
     runtime_publish_cpu_state(rt);
     return true;
@@ -319,7 +318,7 @@ int runtime_thread_main(void *userdata) {
 
     c64_init(&rt->machine);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
-    rt->next_frame_cycle = RUNTIME_FRAME_INTERVAL_CYCLES;
+    rt->next_frame_cycle = 0;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     if (runtime_load_configured_roms(rt)) {
         runtime_reset_machine(rt);
@@ -341,9 +340,9 @@ int runtime_thread_main(void *userdata) {
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
-                if (rt->machine.clock.cycle >= rt->next_frame_cycle) {
+                if (c64_consume_frame_complete(&rt->machine)) {
                     runtime_publish_frame(rt);
-                    rt->next_frame_cycle = rt->machine.clock.cycle + RUNTIME_FRAME_INTERVAL_CYCLES;
+                    rt->next_frame_cycle = rt->machine.clock.cycle;
                 }
             }
 

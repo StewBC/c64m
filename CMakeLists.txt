@@ -72,6 +72,18 @@ target_link_libraries(test_c64_frame PRIVATE
 
 add_test(NAME c64_frame COMMAND test_c64_frame)
 
+add_executable(test_c64_vicii
+    tests/machine/test_c64_vicii.c
+)
+
+target_compile_features(test_c64_vicii PRIVATE c_std_99)
+
+target_link_libraries(test_c64_vicii PRIVATE
+    machine
+)
+
+add_test(NAME c64_vicii COMMAND test_c64_vicii)
+
 add_executable(test_c64_cpu_validation
     tests/machine/test_c64_cpu_validation.c
 )

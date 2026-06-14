@@ -1,5 +1,7 @@
 #include "c64_bus.h"
 
+#include "vicii.h"
+
 #include <assert.h>
 #include <string.h>
 
@@ -46,15 +48,17 @@ static bool c64_bus_char_visible(const c64_bus_t *bus) {
 }
 
 static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
-    (void)bus;
-    (void)address;
+    if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
+        return vicii_read_register(bus->vic, address);
+    }
+
     return 0xff;
 }
 
 static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
-    (void)bus;
-    (void)address;
-    (void)value;
+    if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
+        vicii_write_register(bus->vic, address, value);
+    }
 }
 
 void c64_bus_init(c64_bus_t *bus) {
@@ -65,11 +69,21 @@ void c64_bus_init(c64_bus_t *bus) {
 }
 
 void c64_bus_reset(c64_bus_t *bus) {
+    vicii *vic;
+
     assert(bus);
 
+    vic = bus->vic;
     memset(bus->ram, 0, sizeof(bus->ram));
+    bus->vic = vic;
     bus->cpu_port_direction = 0x2f;
     bus->cpu_port_data = 0x37;
+}
+
+void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v) {
+    assert(bus);
+
+    bus->vic = v;
 }
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {
