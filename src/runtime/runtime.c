@@ -1,6 +1,7 @@
 #include "runtime.h"
 
 #include "message_queue.h"
+#include "mutex.h"
 #include "runtime_command.h"
 #include "runtime_internal.h"
 #include "thread.h"
@@ -46,13 +47,16 @@ runtime *runtime_create(const runtime_config *config) {
         sizeof(runtime_event),
         RUNTIME_EVENT_QUEUE_CAPACITY);
 
-    if (!rt->command_queue || !rt->event_queue) {
+    rt->frame_slot.mutex = mutex_create();
+
+    if (!rt->command_queue || !rt->event_queue || !rt->frame_slot.mutex) {
         runtime_destroy(rt);
         return NULL;
     }
 
     rt->client.command_queue = rt->command_queue;
     rt->client.event_queue = rt->event_queue;
+    rt->client.frame_slot = &rt->frame_slot;
 
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
@@ -82,6 +86,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->char_rom_path);
     free(rt->kernal_rom_path);
     free(rt->system_rom_path);
+    mutex_destroy(rt->frame_slot.mutex);
     message_queue_destroy(rt->event_queue);
     message_queue_destroy(rt->command_queue);
     free(rt);

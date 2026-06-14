@@ -12,7 +12,7 @@ These documents are authoritative. STATUS.md records the current project state a
 
 c64m is a C99 Commodore 64 emulator using SDL2 for platform services and Nuklear for UI.
 
-The project is currently in early machine bring-up. The CPU, memory system, ROM loading, runtime threading model, and initial UI shell exist. VIC-II, CIA, keyboard input, and real video output do not.
+The project is currently in early machine bring-up. The CPU, memory system, ROM loading, runtime threading model, initial UI shell, and synthetic frame pipeline exist. VIC-II, CIA, keyboard input, and real video output do not.
 
 ## Current Build Status
 
@@ -23,12 +23,14 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/test_c64_bus
+./build/test_c64_frame
 ./build/test_c64_cpu_validation
 ./build/test_runtime_scheduler
+./build/test_runtime_frame
 ./build/c64m --noini
 ```
 
-Build, machine tests, scheduler tests, and runtime smoke tests pass.
+Build, machine tests, scheduler tests, frame pipeline tests, and runtime smoke tests pass.
 
 ## Current Configuration Surface
 
@@ -139,6 +141,7 @@ Implemented:
 
 - Runtime-owned machine instance.
 - ROM loading on emulation thread.
+- Automatic reset into PAUSED after configured ROMs load successfully.
 - Reset command.
 - Instruction stepping.
 - Bounded instruction-run command.
@@ -146,11 +149,14 @@ Implemented:
 - Cycle stepping.
 - Bounded cycle-run command.
 - Runtime run/pause execution state.
+- Synthetic test-frame generation.
 - CPU state requests.
 - Machine state requests.
+- Copied latest-frame publication.
 - Runtime event publication.
 - Runtime smoke validation for bounded instruction runs.
 - Runtime scheduler validation for bounded cycle runs, run/pause responsiveness, and step-while-running pause semantics.
+- Runtime frame validation for requested frames and running-frame publication.
 
 ### Machine Work Still Missing
 
@@ -170,7 +176,9 @@ Implemented:
 - Event queue.
 - CPU state snapshots.
 - Machine state snapshots.
+- Latest-frame copy handoff.
 - Reset, run, pause, step-cycle, step-instruction, run-cycles, run-instructions, CPU-state, and machine-state commands.
+- Request-frame command.
 - Clean startup/shutdown.
 
 Current model:
@@ -199,13 +207,13 @@ Implemented:
 - F9 UI visibility toggle.
 - Developer bring-up hotkeys from `md-files/DEBUGKEYS.md`: F10 run, F11/Ctrl+S step instruction, F12/Ctrl+C pause.
 - Runtime state and copied CPU snapshot display in the CPU registers pane.
-- Placeholder rendering path.
+- SDL texture upload path for copied runtime frames.
+- Synthetic frame display in display-only and UI-visible modes.
 - Initial pane/layout system.
 
 Not implemented:
 
-- Real emulator display.
-- Texture upload pipeline.
+- Real VIC-II display.
 - Keyboard matrix input.
 - Full debugger content.
 - Real turbo execution behavior.
@@ -256,8 +264,8 @@ No live machine pointers may cross threads.
 
 Recommended next work:
 
-1. Create frame publication pipeline.
-2. Begin VIC-II skeleton integration.
+1. Begin VIC-II skeleton integration.
+2. Replace synthetic frames with minimal machine-generated VIC-II frames.
 3. Add CIA foundations when VIC-II timing exists.
 4. Add IRQ/NMI validation when CIA/VIA interrupt sources exist.
 5. Integrate Harte-style CPU validation tests if symptoms justify it.
@@ -268,9 +276,7 @@ The next meaningful milestone is:
 
 ```text
 runtime
- -> frame publication pipeline
  -> VIC-II skeleton
- -> frame publication
  -> visible machine-generated output
 ```
 

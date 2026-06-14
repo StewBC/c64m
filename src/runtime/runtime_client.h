@@ -2,6 +2,8 @@
 
 #include "runtime_event.h"
 
+#include "c64_frame.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -18,6 +20,8 @@ bool runtime_client_run_cycles(runtime_client *client, size_t count);
 bool runtime_client_run_instructions(runtime_client *client, size_t count);
 bool runtime_client_request_cpu_state(runtime_client *client);
 bool runtime_client_request_machine_state(runtime_client *client);
+bool runtime_client_request_frame(runtime_client *client);
+bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 
 bool runtime_client_poll_event(
     runtime_client *client,

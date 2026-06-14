@@ -5,6 +5,7 @@
 
 #include "c64.h"
 #include "c64_rom.h"
+#include "mutex.h"
 
 #include <stdbool.h>
 
@@ -23,13 +24,25 @@ typedef enum runtime_exec_state {
 struct runtime_client {
     message_queue *command_queue;
     message_queue *event_queue;
+    struct runtime_frame_slot *frame_slot;
 };
+
+typedef struct runtime_frame_slot {
+    mutex *mutex;
+    /* Single copied handoff slot. The frontend consumes the latest complete frame. */
+    c64_frame frame;
+    bool has_frame;
+    uint64_t published_frames;
+    uint64_t consumed_frames;
+    uint64_t dropped_frames;
+} runtime_frame_slot;
 
 struct runtime {
     thread *thread;
     message_queue *command_queue;
     message_queue *event_queue;
     runtime_client client;
+    runtime_frame_slot frame_slot;
     c64_t machine;
     c64_rom_set roms;
     char *basic_rom_path;
@@ -37,6 +50,7 @@ struct runtime {
     char *kernal_rom_path;
     char *system_rom_path;
     runtime_exec_state exec_state;
+    uint64_t next_frame_cycle;
     bool started;
 };
 

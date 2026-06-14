@@ -11,11 +11,56 @@
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
+    SDL_Renderer *renderer;
+    SDL_Texture *display_texture;
+    c64_frame current_frame;
+    bool has_frame;
     c64_layout layout;
     c64_layout_limits limits;
 };
 
 static const nk_flags pane_flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR;
+
+static SDL_Rect frontend_fit_rect(int area_x, int area_y, int area_w, int area_h, int source_w, int source_h)
+{
+    SDL_Rect out = {area_x, area_y, 0, 0};
+    int width_from_height;
+    int height_from_width;
+
+    if (area_w <= 0 || area_h <= 0 || source_w <= 0 || source_h <= 0) {
+        return out;
+    }
+
+    height_from_width = area_w * source_h / source_w;
+    if (height_from_width <= area_h) {
+        out.w = area_w;
+        out.h = height_from_width;
+    } else {
+        width_from_height = area_h * source_w / source_h;
+        out.w = width_from_height;
+        out.h = area_h;
+    }
+
+    out.x = area_x + (area_w - out.w) / 2;
+    out.y = area_y + (area_h - out.h) / 2;
+    return out;
+}
+
+static struct nk_rect frontend_fit_nk_rect(
+    struct nk_rect area,
+    uint32_t source_w,
+    uint32_t source_h)
+{
+    SDL_Rect fit = frontend_fit_rect(
+        (int)area.x,
+        (int)area.y,
+        (int)area.w,
+        (int)area.h,
+        (int)source_w,
+        (int)source_h);
+
+    return nk_rect((float)fit.x, (float)fit.y, (float)fit.w, (float)fit.h);
+}
 
 static void frontend_label_value(struct nk_context *ctx, const char *label, const char *value)
 {
@@ -42,27 +87,39 @@ static const char *frontend_runtime_state_name(frontend_runtime_state state)
     }
 }
 
-static void frontend_draw_display_placeholder(struct nk_context *ctx, struct nk_rect bounds)
+static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bounds)
 {
-    if (nk_begin(ctx, "Commodore Display", bounds, pane_flags)) {
+    if (nk_begin(ui->ctx, "Commodore Display", bounds, pane_flags)) {
         struct nk_rect canvas_bounds;
         struct nk_command_buffer *canvas;
 
-        nk_layout_row_dynamic(ctx, bounds.h - 52.0f, 1);
-        canvas_bounds = nk_widget_bounds(ctx);
-        canvas = nk_window_get_canvas(ctx);
+        nk_layout_row_dynamic(ui->ctx, bounds.h - 52.0f, 1);
+        canvas_bounds = nk_widget_bounds(ui->ctx);
+        canvas = nk_window_get_canvas(ui->ctx);
         nk_fill_rect(canvas, canvas_bounds, 0.0f, nk_rgb(17, 22, 28));
-        nk_stroke_rect(canvas, canvas_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
-        nk_draw_text(
-            canvas,
-            nk_rect(canvas_bounds.x + 14.0f, canvas_bounds.y + 14.0f, canvas_bounds.w - 28.0f, 20.0f),
-            "384 x 272 placeholder",
-            21,
-            ctx->style.font,
-            nk_rgb(17, 22, 28),
-            nk_rgb(196, 214, 228));
+
+        if (ui->has_frame && ui->display_texture != NULL) {
+            struct nk_image image = nk_image_handle(nk_handle_ptr(ui->display_texture));
+            struct nk_rect image_bounds = frontend_fit_nk_rect(
+                canvas_bounds,
+                ui->current_frame.width,
+                ui->current_frame.height);
+
+            nk_draw_image(canvas, image_bounds, &image, nk_rgba(255, 255, 255, 255));
+            nk_stroke_rect(canvas, image_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
+        } else {
+            nk_stroke_rect(canvas, canvas_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
+            nk_draw_text(
+                canvas,
+                nk_rect(canvas_bounds.x + 14.0f, canvas_bounds.y + 14.0f, canvas_bounds.w - 28.0f, 20.0f),
+                "waiting for frame",
+                17,
+                ui->ctx->style.font,
+                nk_rgb(17, 22, 28),
+                nk_rgb(196, 214, 228));
+        }
     }
-    nk_end(ctx);
+    nk_end(ui->ctx);
 }
 
 static void frontend_draw_registers(
@@ -91,6 +148,12 @@ static void frontend_draw_registers(
             frontend_label_value(ctx, "P", value);
             snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->cpu.cycles);
             frontend_label_value(ctx, "CYC", value);
+            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->frame_number);
+            frontend_label_value(ctx, "FRM", debug_state->has_frame ? value : "--");
+            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->frame_cycle);
+            frontend_label_value(ctx, "FCYC", debug_state->has_frame ? value : "--");
+            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->dropped_frames);
+            frontend_label_value(ctx, "DROP", value);
         } else {
             frontend_label_value(ctx, "PC", "--");
             frontend_label_value(ctx, "A", "--");
@@ -99,6 +162,9 @@ static void frontend_draw_registers(
             frontend_label_value(ctx, "SP", "--");
             frontend_label_value(ctx, "P", "--");
             frontend_label_value(ctx, "CYC", "--");
+            frontend_label_value(ctx, "FRM", "--");
+            frontend_label_value(ctx, "FCYC", "--");
+            frontend_label_value(ctx, "DROP", "--");
         }
     }
     nk_end(ctx);
@@ -209,6 +275,7 @@ frontend *frontend_create(platform_window *window)
     }
 
     ui->window = window;
+    ui->renderer = sdl_renderer;
     ui->ctx = nk_sdl_init(sdl_window, sdl_renderer);
     if (ui->ctx == NULL) {
         free(ui);
@@ -242,6 +309,10 @@ void frontend_destroy(frontend *ui)
         nk_sdl_shutdown();
     }
 
+    if (ui->display_texture != NULL) {
+        SDL_DestroyTexture(ui->display_texture);
+    }
+
     free(ui);
 }
 
@@ -272,6 +343,63 @@ void frontend_end_input(frontend *ui)
     nk_input_end(ui->ctx);
 }
 
+bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
+{
+    if (ui == NULL || frame == NULL || ui->renderer == NULL) {
+        return false;
+    }
+
+    if (frame->width != C64_FRAME_WIDTH ||
+        frame->height != C64_FRAME_HEIGHT ||
+        frame->stride_bytes != C64_FRAME_WIDTH * sizeof(frame->pixels[0]) ||
+        frame->pixel_format != C64_FRAME_PIXEL_FORMAT_ARGB8888) {
+        SDL_Log("unexpected frame format: %ux%u stride=%u format=%u",
+            frame->width,
+            frame->height,
+            frame->stride_bytes,
+            frame->pixel_format);
+        return false;
+    }
+
+    if (ui->display_texture == NULL) {
+        ui->display_texture = SDL_CreateTexture(
+            ui->renderer,
+            SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING,
+            (int)frame->width,
+            (int)frame->height);
+        if (ui->display_texture == NULL) {
+            SDL_Log("SDL_CreateTexture failed: %s", SDL_GetError());
+            return false;
+        }
+        SDL_SetTextureBlendMode(ui->display_texture, SDL_BLENDMODE_NONE);
+    }
+
+    if (SDL_UpdateTexture(ui->display_texture, NULL, frame->pixels, (int)frame->stride_bytes) != 0) {
+        SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
+        return false;
+    }
+
+    ui->current_frame = *frame;
+    ui->has_frame = true;
+    return true;
+}
+
+static void frontend_render_display_only(frontend *ui)
+{
+    int width = 0;
+    int height = 0;
+    SDL_Rect dest;
+
+    if (ui == NULL || ui->display_texture == NULL || !ui->has_frame) {
+        return;
+    }
+
+    platform_window_get_size(ui->window, &width, &height);
+    dest = frontend_fit_rect(0, 0, width, height, (int)ui->current_frame.width, (int)ui->current_frame.height);
+    SDL_RenderCopy(ui->renderer, ui->display_texture, NULL, &dest);
+}
+
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state)
 {
     int width = 0;
@@ -282,7 +410,16 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     int split_memory_misc_active;
     int display_corner_active;
 
-    if (ui == NULL || ui->ctx == NULL || !ui_visible || debug_state == NULL) {
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    if (!ui_visible) {
+        frontend_render_display_only(ui);
+        return;
+    }
+
+    if (debug_state == NULL) {
         return;
     }
 
@@ -295,7 +432,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     c64_layout_compute(&ui->layout, parent, &ui->limits);
     c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
 
-    frontend_draw_display_placeholder(ui->ctx, ui->layout.display);
+    frontend_draw_display_placeholder(ui, ui->layout.display);
     frontend_draw_registers(ui->ctx, ui->layout.registers, debug_state);
     frontend_draw_disassembly(ui->ctx, ui->layout.disassembly);
     frontend_draw_memory(ui->ctx, ui->layout.memory);

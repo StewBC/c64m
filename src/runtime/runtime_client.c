@@ -3,6 +3,7 @@
 #include "runtime_command.h"
 #include "runtime_internal.h"
 #include "message_queue.h"
+#include "mutex.h"
 
 static bool runtime_client_send_command(
     runtime_client *client,
@@ -78,6 +79,31 @@ bool runtime_client_request_cpu_state(runtime_client *client) {
 
 bool runtime_client_request_machine_state(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_MACHINE_STATE);
+}
+
+bool runtime_client_request_frame(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_FRAME);
+}
+
+bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
+    runtime_frame_slot *slot;
+
+    if (!client || !out_frame || !client->frame_slot) {
+        return false;
+    }
+
+    slot = client->frame_slot;
+    mutex_lock(slot->mutex);
+    if (!slot->has_frame) {
+        mutex_unlock(slot->mutex);
+        return false;
+    }
+
+    *out_frame = slot->frame;
+    slot->has_frame = false;
+    slot->consumed_frames++;
+    mutex_unlock(slot->mutex);
+    return true;
 }
 
 bool runtime_client_poll_event(

@@ -14,7 +14,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_STEP_COMPLETE,
     RUNTIME_EVENT_RUN_COMPLETE,
     RUNTIME_EVENT_CPU_STATE_RESPONSE,
-    RUNTIME_EVENT_MACHINE_STATE_RESPONSE
+    RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
+    RUNTIME_EVENT_FRAME_READY
 } runtime_event_type;
 
 typedef struct runtime_cpu_snapshot {
@@ -40,6 +41,9 @@ typedef struct runtime_machine_snapshot {
     uint8_t p;
     uint8_t ready;
     uint8_t running;
+    uint64_t frame_number;
+    uint64_t frame_cycle;
+    uint64_t dropped_frames;
 } runtime_machine_snapshot;
 
 typedef struct runtime_event {
@@ -53,6 +57,12 @@ typedef struct runtime_event {
         struct {
             char message[1024];
         } error;
+
+        struct {
+            uint64_t frame_number;
+            uint64_t machine_cycle;
+            uint64_t dropped_frames;
+        } frame_ready;
 
         runtime_cpu_snapshot cpu_state;
         runtime_machine_snapshot machine_state;

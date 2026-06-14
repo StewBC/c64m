@@ -9,6 +9,7 @@
 
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
+    RUNTIME_FRAME_INTERVAL_CYCLES = 20000,
 };
 
 static bool runtime_publish_event(
@@ -75,8 +76,38 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.p = snapshot.p;
     event.data.machine_state.ready = snapshot.ready ? 1 : 0;
     event.data.machine_state.running = rt->exec_state == RUNTIME_EXEC_RUNNING ? 1 : 0;
+    event.data.machine_state.frame_number = rt->frame_slot.published_frames;
+    event.data.machine_state.frame_cycle = rt->next_frame_cycle;
+    event.data.machine_state.dropped_frames = rt->frame_slot.dropped_frames;
 
     runtime_publish_event(rt, &event);
+}
+
+static bool runtime_publish_frame(runtime *rt) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_FRAME_READY,
+    };
+    c64_frame frame;
+
+    if (!c64_generate_test_frame(&rt->machine, &frame)) {
+        runtime_publish_error(rt, "failed to generate frame");
+        return false;
+    }
+
+    mutex_lock(rt->frame_slot.mutex);
+    if (rt->frame_slot.has_frame) {
+        rt->frame_slot.dropped_frames++;
+    }
+    rt->frame_slot.frame = frame;
+    rt->frame_slot.has_frame = true;
+    rt->frame_slot.published_frames++;
+    event.data.frame_ready.frame_number = frame.frame_number;
+    event.data.frame_ready.machine_cycle = frame.machine_cycle;
+    event.data.frame_ready.dropped_frames = rt->frame_slot.dropped_frames;
+    mutex_unlock(rt->frame_slot.mutex);
+
+    runtime_publish_event(rt, &event);
+    return true;
 }
 
 static bool runtime_load_rom(
@@ -126,7 +157,15 @@ static bool runtime_reset_machine(runtime *rt) {
         return false;
     }
 
+    mutex_lock(rt->frame_slot.mutex);
+    rt->frame_slot.has_frame = false;
+    rt->frame_slot.published_frames = 0;
+    rt->frame_slot.consumed_frames = 0;
+    rt->frame_slot.dropped_frames = 0;
+    mutex_unlock(rt->frame_slot.mutex);
+
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->next_frame_cycle = RUNTIME_FRAME_INTERVAL_CYCLES;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
     runtime_publish_cpu_state(rt);
     return true;
@@ -261,6 +300,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_publish_machine_state(rt);
             break;
 
+        case RUNTIME_COMMAND_REQUEST_FRAME:
+            runtime_publish_frame(rt);
+            break;
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -275,9 +318,12 @@ int runtime_thread_main(void *userdata) {
     bool alive = true;
 
     c64_init(&rt->machine);
-    runtime_load_configured_roms(rt);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->next_frame_cycle = RUNTIME_FRAME_INTERVAL_CYCLES;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
+    if (runtime_load_configured_roms(rt)) {
+        runtime_reset_machine(rt);
+    }
 
     while (alive) {
         runtime_command command;
@@ -294,6 +340,10 @@ int runtime_thread_main(void *userdata) {
             for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
                 if (!runtime_step_cycle(rt)) {
                     break;
+                }
+                if (rt->machine.clock.cycle >= rt->next_frame_cycle) {
+                    runtime_publish_frame(rt);
+                    rt->next_frame_cycle = rt->machine.clock.cycle + RUNTIME_FRAME_INTERVAL_CYCLES;
                 }
             }
 

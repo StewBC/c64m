@@ -69,6 +69,9 @@ static void update_debug_state_from_event(
             debug_state->cpu.sp = event->data.machine_state.sp;
             debug_state->cpu.p = event->data.machine_state.p;
             debug_state->cpu.cycles = event->data.machine_state.cpu_cycles;
+            debug_state->frame_number = event->data.machine_state.frame_number;
+            debug_state->frame_cycle = event->data.machine_state.frame_cycle;
+            debug_state->dropped_frames = event->data.machine_state.dropped_frames;
             debug_state->has_cpu = true;
             if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_ERROR) {
                 debug_state->runtime_state = event->data.machine_state.running ?
@@ -77,8 +80,16 @@ static void update_debug_state_from_event(
             }
             break;
 
+        case RUNTIME_EVENT_FRAME_READY:
+            debug_state->frame_number = event->data.frame_ready.frame_number;
+            debug_state->frame_cycle = event->data.frame_ready.machine_cycle;
+            debug_state->dropped_frames = event->data.frame_ready.dropped_frames;
+            debug_state->has_frame = true;
+            break;
+
         case RUNTIME_EVENT_STARTED:
-            if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_UNKNOWN) {
+            if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_UNKNOWN ||
+                debug_state->runtime_state == FRONTEND_RUNTIME_STATE_ERROR) {
                 debug_state->runtime_state = FRONTEND_RUNTIME_STATE_PAUSED;
             }
             break;
@@ -94,8 +105,9 @@ static void update_debug_state_from_event(
     }
 }
 
-static void poll_runtime_events(runtime_client *client, frontend_debug_state *debug_state) {
+static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_debug_state *debug_state) {
     runtime_event event;
+    c64_frame frame;
 
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
@@ -108,6 +120,14 @@ static void poll_runtime_events(runtime_client *client, frontend_debug_state *de
                 "STEP instruction PC=%04X CYCLES=%llu",
                 debug_state->cpu.pc,
                 (unsigned long long)debug_state->cpu.cycles);
+        }
+    }
+
+    while (ui != NULL && runtime_client_poll_frame(client, &frame)) {
+        if (frontend_submit_frame(ui, &frame) && debug_state != NULL) {
+            debug_state->frame_number = frame.frame_number;
+            debug_state->frame_cycle = frame.machine_cycle;
+            debug_state->has_frame = true;
         }
     }
 }
@@ -141,6 +161,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
     };
 
     request_debug_state(client);
+    runtime_client_request_frame(client);
 
     while (running) {
         SDL_Event event;
@@ -172,7 +193,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         }
         frontend_end_input(ui);
 
-        poll_runtime_events(client, &debug_state);
+        poll_runtime_events(client, ui, &debug_state);
 
         if (!platform_window_clear(window)) {
             return false;
@@ -258,7 +279,7 @@ int main(int argc, char **argv) {
 
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client, NULL);
+    poll_runtime_events(client, NULL, NULL);
 
     frontend_destroy(ui);
     platform_window_destroy(window);

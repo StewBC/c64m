@@ -1,6 +1,7 @@
 #pragma once
 
 #include "c64_bus.h"
+#include "c64_frame.h"
 #include "c64_rom.h"
 #include "c6510.h"
 
@@ -43,6 +44,8 @@ typedef struct c64_t {
     c64_bus_t bus;
     C6510 cpu;
     c64_clock clock;
+    c64_frame working_frame;
+    uint64_t next_frame_number;
     size_t cpu_cycles_remaining;
     bool has_basic_rom;
     bool has_kernal_rom;
@@ -55,5 +58,6 @@ bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size
 bool c64_reset(c64_t *machine, char *error, size_t error_size);
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);
 bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
+bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);

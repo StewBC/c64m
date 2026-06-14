@@ -38,6 +38,10 @@ static void c64_step_sid(c64_t *machine) {
     (void)machine;
 }
 
+static uint32_t c64_argb(uint8_t r, uint8_t g, uint8_t b) {
+    return 0xff000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
 void c64_init(c64_t *machine) {
     assert(machine);
 
@@ -101,6 +105,8 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
 
     c6510_reset(&machine->cpu);
     memset(&machine->clock, 0, sizeof(machine->clock));
+    memset(&machine->working_frame, 0, sizeof(machine->working_frame));
+    machine->next_frame_number = 0;
     machine->cpu_cycles_remaining = 0;
     vector = (uint16_t)c64_bus_read(&machine->bus, 0xfffc) |
         ((uint16_t)c64_bus_read(&machine->bus, 0xfffd) << 8);
@@ -153,6 +159,59 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
     machine->clock.cycle++;
 
     c64_set_error(error, error_size, "");
+    return true;
+}
+
+bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame) {
+    uint64_t frame_number;
+    uint32_t x;
+    uint32_t y;
+    uint32_t marker_x;
+
+    assert(machine);
+    assert(out_frame);
+
+    frame_number = machine->next_frame_number++;
+    machine->working_frame.width = C64_FRAME_WIDTH;
+    machine->working_frame.height = C64_FRAME_HEIGHT;
+    machine->working_frame.stride_bytes = C64_FRAME_WIDTH * sizeof(machine->working_frame.pixels[0]);
+    machine->working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    machine->working_frame.frame_number = frame_number;
+    machine->working_frame.machine_cycle = machine->clock.cycle;
+
+    marker_x = (uint32_t)((frame_number * 5u) % (C64_FRAME_WIDTH - 48u));
+
+    for (y = 0; y < C64_FRAME_HEIGHT; y++) {
+        for (x = 0; x < C64_FRAME_WIDTH; x++) {
+            uint32_t index = y * C64_FRAME_WIDTH + x;
+            uint8_t r;
+            uint8_t g;
+            uint8_t b;
+
+            if (x < 20 || x >= C64_FRAME_WIDTH - 20 || y < 18 || y >= C64_FRAME_HEIGHT - 18) {
+                machine->working_frame.pixels[index] = c64_argb(88, 75, 164);
+                continue;
+            }
+
+            r = (uint8_t)((x + frame_number * 3u) & 0xffu);
+            g = (uint8_t)((y * 2u + frame_number * 7u) & 0xffu);
+            b = (uint8_t)(((x ^ y) + frame_number * 11u) & 0xffu);
+            if ((((x / 16u) + (y / 16u)) & 1u) == 0) {
+                r = (uint8_t)(r / 2u);
+                g = (uint8_t)(g / 2u);
+                b = (uint8_t)(b / 2u);
+            }
+            machine->working_frame.pixels[index] = c64_argb(r, g, b);
+        }
+    }
+
+    for (y = 34; y < 50; y++) {
+        for (x = marker_x + 24u; x < marker_x + 48u; x++) {
+            machine->working_frame.pixels[y * C64_FRAME_WIDTH + x] = c64_argb(245, 238, 118);
+        }
+    }
+
+    memcpy(out_frame, &machine->working_frame, sizeof(*out_frame));
     return true;
 }
 
