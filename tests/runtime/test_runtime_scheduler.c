@@ -140,6 +140,21 @@ static void write_runtime_roms(void) {
     fclose(character);
 }
 
+static void write_test_prg(void) {
+    FILE *prg = fopen("scheduler_test.prg", "wb");
+
+    if (!prg) {
+        fail("failed to create scheduler test PRG");
+    }
+
+    fputc(0x00, prg);
+    fputc(0x20, prg);
+    fputc(0x01, prg);
+    fputc(0x02, prg);
+    fputc(0x03, prg);
+    fclose(prg);
+}
+
 static int poll_event(runtime_client *client, runtime_event *event, runtime_event_type type) {
     clock_t start = clock();
 
@@ -506,6 +521,7 @@ static void test_runtime_stops_on_enabled_execute_breakpoint(void) {
     }
     expect_u64("breakpoint hit leaves runtime paused", 0, event.data.machine_state.running);
     expect_u16("breakpoint hit PC unchanged", TEST_RESET_VECTOR, event.data.machine_state.pc);
+    expect_u64("breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
     if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
         fail("breakpoint hit snapshot not received");
     }
@@ -591,8 +607,40 @@ static void test_runtime_clear_all_breakpoints_removes_all(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_load_prg_writes_ram(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("load PRG", runtime_client_load_prg(client, "scheduler_test.prg"));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("PRG load memory response not received");
+    }
+    expect_u16("PRG load address", 0x2000, event.data.memory.address);
+    expect_u8("PRG byte 0", 0x01, event.data.memory.bytes[0]);
+    expect_u8("PRG byte 1", 0x02, event.data.memory.bytes[1]);
+    expect_u8("PRG byte 2", 0x03, event.data.memory.bytes[2]);
+
+    expect_true("request RAM after PRG load", runtime_client_request_memory(
+        client,
+        0x2000,
+        3,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("RAM response after PRG load not received");
+    }
+    expect_u8("loaded RAM byte 0", 0x01, event.data.memory.bytes[0]);
+    expect_u8("loaded RAM byte 1", 0x02, event.data.memory.bytes[1]);
+    expect_u8("loaded RAM byte 2", 0x03, event.data.memory.bytes[2]);
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
+    write_test_prg();
     test_single_machine_cycle();
     test_runtime_run_for_cycles();
     test_runtime_keyboard_event_reaches_machine();
@@ -605,7 +653,9 @@ int main(void) {
     test_runtime_ignores_disabled_execute_breakpoint();
     test_runtime_clear_breakpoint_removes_it();
     test_runtime_clear_all_breakpoints_removes_all();
+    test_runtime_load_prg_writes_ram();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");
+    remove("scheduler_test.prg");
     return 0;
 }

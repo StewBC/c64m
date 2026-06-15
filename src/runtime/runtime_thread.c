@@ -6,6 +6,7 @@
 
 #include <SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -78,6 +79,7 @@ static void runtime_publish_error(
     };
 
     snprintf(event.data.error.message, sizeof(event.data.error.message), "%s", message);
+    rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
     runtime_publish_event(rt, &event);
 }
 
@@ -118,6 +120,7 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.p = snapshot.p;
     event.data.machine_state.ready = snapshot.ready ? 1 : 0;
     event.data.machine_state.running = rt->exec_state == RUNTIME_EXEC_RUNNING ? 1 : 0;
+    event.data.machine_state.stop_reason = rt->last_stop_reason;
     event.data.machine_state.frame_number = rt->frame_slot.published_frames;
     event.data.machine_state.frame_cycle = rt->next_frame_cycle;
     event.data.machine_state.dropped_frames = rt->frame_slot.dropped_frames;
@@ -272,6 +275,7 @@ static bool runtime_reset_machine(runtime *rt) {
     mutex_unlock(rt->frame_slot.mutex);
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_RESET;
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
@@ -320,6 +324,7 @@ static bool runtime_breakpoint_matches_pc(runtime *rt) {
 
 static void runtime_pause_for_breakpoint(runtime *rt) {
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_BREAKPOINT;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
     runtime_publish_machine_state(rt);
     runtime_publish_breakpoints(rt);
@@ -347,6 +352,7 @@ static bool runtime_step_cycle_command(runtime *rt) {
         return false;
     }
 
+    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
     runtime_publish_machine_state(rt);
     return true;
@@ -372,6 +378,7 @@ static bool runtime_step_instruction(runtime *rt) {
         "STEP instruction PC=%04X CYCLES=%llu\n",
         snapshot.pc,
         (unsigned long long)snapshot.cycles);
+    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
     runtime_publish_cpu_state(rt);
     return true;
@@ -393,6 +400,7 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
         }
     }
 
+    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
     runtime_publish_cpu_state(rt);
     return true;
@@ -413,6 +421,7 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     }
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_RUN_COMPLETE;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
     runtime_publish_machine_state(rt);
     return true;
@@ -544,6 +553,67 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
     runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
 }
 
+static void runtime_load_prg(runtime *rt, const runtime_command *command) {
+    FILE *file;
+    uint8_t *bytes;
+    size_t length;
+    size_t payload_length;
+    uint16_t load_address;
+    size_t i;
+
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_error(rt, "PRG load requires paused runtime");
+        return;
+    }
+
+    file = fopen(command->data.load_prg.path, "rb");
+    if (file == NULL) {
+        runtime_publish_error(rt, "failed to open PRG file");
+        return;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to inspect PRG file");
+        return;
+    }
+    length = (size_t)ftell(file);
+    if (fseek(file, 0, SEEK_SET) != 0 || length < 2 || length > 65538u) {
+        fclose(file);
+        runtime_publish_error(rt, "invalid PRG file");
+        return;
+    }
+
+    bytes = malloc(length);
+    if (bytes == NULL) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to allocate PRG buffer");
+        return;
+    }
+
+    if (fread(bytes, 1, length, file) != length) {
+        free(bytes);
+        fclose(file);
+        runtime_publish_error(rt, "failed to read PRG file");
+        return;
+    }
+    fclose(file);
+
+    load_address = (uint16_t)bytes[0] | (uint16_t)((uint16_t)bytes[1] << 8);
+    payload_length = length - 2u;
+    for (i = 0; i < payload_length; ++i) {
+        c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i + 2u]);
+    }
+
+    free(bytes);
+    runtime_publish_memory(
+        rt,
+        load_address,
+        payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
+        RUNTIME_MEMORY_MODE_RAM);
+    runtime_publish_machine_state(rt);
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -562,6 +632,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_RUN:
             fprintf(stderr, "RUN command received\n");
             rt->exec_state = RUNTIME_EXEC_RUNNING;
+            rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
             runtime_reset_pacer(rt);
             runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
             break;
@@ -569,6 +640,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_PAUSE:
             fprintf(stderr, "PAUSE command received\n");
             rt->exec_state = RUNTIME_EXEC_PAUSED;
+            rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
             runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
             runtime_publish_machine_state(rt);
             break;
@@ -653,6 +725,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_publish_breakpoints(rt);
             break;
 
+        case RUNTIME_COMMAND_LOAD_PRG:
+            runtime_load_prg(rt, command);
+            break;
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -668,6 +744,7 @@ int runtime_thread_main(void *userdata) {
 
     c64_init(&rt->machine);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->breakpoint_count = 0;
     rt->next_breakpoint_id = 1;
     rt->next_frame_cycle = 0;

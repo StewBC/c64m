@@ -45,6 +45,7 @@ bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id);
 bool runtime_client_clear_all_breakpoints(runtime_client *client);
 bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, bool enabled);
 bool runtime_client_request_breakpoints(runtime_client *client);
+bool runtime_client_load_prg(runtime_client *client, const char *path);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 
 bool runtime_client_poll_event(

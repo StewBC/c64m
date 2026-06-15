@@ -59,6 +59,7 @@ struct runtime {
     char *kernal_rom_path;
     char *system_rom_path;
     runtime_exec_state exec_state;
+    runtime_stop_reason last_stop_reason;
     runtime_breakpoint breakpoints[RUNTIME_BREAKPOINT_CAPACITY];
     size_t breakpoint_count;
     uint32_t next_breakpoint_id;

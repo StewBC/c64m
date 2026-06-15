@@ -25,6 +25,16 @@ typedef enum runtime_memory_mode {
     RUNTIME_MEMORY_MODE_RAM
 } runtime_memory_mode;
 
+typedef enum runtime_stop_reason {
+    RUNTIME_STOP_REASON_NONE = 0,
+    RUNTIME_STOP_REASON_RESET,
+    RUNTIME_STOP_REASON_PAUSE_COMMAND,
+    RUNTIME_STOP_REASON_STEP,
+    RUNTIME_STOP_REASON_RUN_COMPLETE,
+    RUNTIME_STOP_REASON_BREAKPOINT,
+    RUNTIME_STOP_REASON_ERROR
+} runtime_stop_reason;
+
 enum {
     RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
     RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64
@@ -57,6 +67,7 @@ typedef struct runtime_machine_snapshot {
     uint8_t p;
     uint8_t ready;
     uint8_t running;
+    runtime_stop_reason stop_reason;
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;

@@ -8,6 +8,45 @@
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+static bool choose_prg_path(char *out_path, size_t out_size) {
+#if defined(__APPLE__)
+    FILE *pipe;
+    char *newline;
+
+    if (out_path == NULL || out_size == 0) {
+        return false;
+    }
+
+    out_path[0] = '\0';
+    pipe = popen(
+        "osascript -e 'POSIX path of (choose file with prompt \"Load PRG\" of type {\"prg\"})'",
+        "r");
+    if (pipe == NULL) {
+        return false;
+    }
+
+    if (fgets(out_path, (int)out_size, pipe) == NULL) {
+        pclose(pipe);
+        out_path[0] = '\0';
+        return false;
+    }
+    pclose(pipe);
+
+    newline = strchr(out_path, '\n');
+    if (newline != NULL) {
+        *newline = '\0';
+    }
+
+    return out_path[0] != '\0';
+#else
+    (void)out_path;
+    (void)out_size;
+    return false;
+#endif
+}
 
 static void request_debug_state(runtime_client *client) {
     runtime_client_request_cpu_state(client);
@@ -51,6 +90,10 @@ static void update_debug_state_from_event(
             debug_state->cpu.sp = event->data.machine_state.sp;
             debug_state->cpu.p = event->data.machine_state.p;
             debug_state->cpu.cycles = event->data.machine_state.cpu_cycles;
+            debug_state->machine_cycle = event->data.machine_state.cycle;
+            debug_state->vic_cycles = event->data.machine_state.vic_cycles;
+            debug_state->cia_cycles = event->data.machine_state.cia_cycles;
+            debug_state->stop_reason = event->data.machine_state.stop_reason;
             debug_state->frame_number = event->data.machine_state.frame_number;
             debug_state->frame_cycle = event->data.machine_state.frame_cycle;
             debug_state->dropped_frames = event->data.machine_state.dropped_frames;
@@ -248,6 +291,15 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
 
             case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT:
                 sent = runtime_client_request_breakpoints(client);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG:
+                {
+                    char path[1024];
+                    if (choose_prg_path(path, sizeof(path))) {
+                        sent = runtime_client_load_prg(client, path);
+                    }
+                }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:

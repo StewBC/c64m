@@ -5,6 +5,8 @@
 #include "message_queue.h"
 #include "mutex.h"
 
+#include <stdio.h>
+
 static bool runtime_client_send_command(
     runtime_client *client,
     runtime_command_type type) {
@@ -229,6 +231,19 @@ bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, 
 
 bool runtime_client_request_breakpoints(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_BREAKPOINTS);
+}
+
+bool runtime_client_load_prg(runtime_client *client, const char *path) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_LOAD_PRG,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.load_prg.path, sizeof(command.data.load_prg.path), "%s", path);
+    return message_queue_push(client->command_queue, &command);
 }
 
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {

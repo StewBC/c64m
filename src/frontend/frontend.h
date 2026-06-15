@@ -25,6 +25,10 @@ typedef struct frontend_debug_state {
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
+    uint64_t machine_cycle;
+    uint64_t vic_cycles;
+    uint64_t cia_cycles;
+    runtime_stop_reason stop_reason;
     bool has_frame;
     bool has_cpu;
     bool has_memory;
@@ -45,7 +49,8 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED,
-    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT
+    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT,
+    FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG
 } frontend_debugger_intent_type;
 
 typedef struct frontend_debugger_intent {

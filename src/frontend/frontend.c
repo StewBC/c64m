@@ -104,6 +104,18 @@ typedef struct frontend_disassembly_view_state {
     disasm_6502_line lines[FRONTEND_DISASM_MAX_ROWS];
 } frontend_disassembly_view_state;
 
+typedef enum frontend_misc_tab {
+    FRONTEND_MISC_TAB_PROGRAMS = 0,
+    FRONTEND_MISC_TAB_DEBUGGER,
+    FRONTEND_MISC_TAB_BREAKPOINTS,
+    FRONTEND_MISC_TAB_HARDWARE
+} frontend_misc_tab;
+
+typedef struct frontend_misc_view_state {
+    frontend_misc_tab active_tab;
+    bool initialized;
+} frontend_misc_view_state;
+
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
@@ -116,6 +128,7 @@ struct frontend {
     frontend_register_view_state registers;
     frontend_memory_view_state memory;
     frontend_disassembly_view_state disassembly;
+    frontend_misc_view_state misc;
     symbol_resolver symbols;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
     size_t intent_read;
@@ -186,6 +199,27 @@ static const char *frontend_runtime_state_name(frontend_runtime_state state)
         case FRONTEND_RUNTIME_STATE_UNKNOWN:
         default:
             return "UNKNOWN";
+    }
+}
+
+static const char *frontend_stop_reason_name(runtime_stop_reason reason)
+{
+    switch (reason) {
+        case RUNTIME_STOP_REASON_RESET:
+            return "reset";
+        case RUNTIME_STOP_REASON_PAUSE_COMMAND:
+            return "pause";
+        case RUNTIME_STOP_REASON_STEP:
+            return "step";
+        case RUNTIME_STOP_REASON_RUN_COMPLETE:
+            return "run complete";
+        case RUNTIME_STOP_REASON_BREAKPOINT:
+            return "breakpoint";
+        case RUNTIME_STOP_REASON_ERROR:
+            return "error";
+        case RUNTIME_STOP_REASON_NONE:
+        default:
+            return "none";
     }
 }
 
@@ -2421,7 +2455,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     nk_end(ui->ctx);
 }
 
-static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const frontend_debug_state *debug_state)
+static void frontend_draw_misc_programs(frontend *ui)
 {
     struct nk_context *ctx;
 
@@ -2430,96 +2464,257 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
     }
 
     ctx = ui->ctx;
-    if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-        uint16_t i;
-        uint16_t count = debug_state != NULL && debug_state->has_breakpoints ?
-            debug_state->breakpoints.count :
-            0;
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Programs", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Load PRG...")) {
+        frontend_push_debugger_intent(
+            ui,
+            FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
+            0);
+    }
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "D64 and CRT support deferred", NK_TEXT_LEFT);
+}
 
+static void frontend_draw_misc_debugger(frontend *ui, const frontend_debug_state *debug_state)
+{
+    struct nk_context *ctx;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Debug Status", NK_TEXT_LEFT);
+    {
+        char status[96];
+        snprintf(
+            status,
+            sizeof(status),
+            "State: %s  PC: %04X  Stop: %s",
+            debug_state != NULL ? frontend_runtime_state_name(debug_state->runtime_state) : "UNKNOWN",
+            debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0,
+            debug_state != NULL ? frontend_stop_reason_name(debug_state->stop_reason) : "none");
+        nk_label(ctx, status, NK_TEXT_LEFT);
+    }
+    {
+        char status[128];
+        snprintf(
+            status,
+            sizeof(status),
+            "CPU: %llu  Machine: %llu  VIC: %llu  CIA: %llu",
+            (unsigned long long)(debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.cycles : 0),
+            (unsigned long long)(debug_state != NULL ? debug_state->machine_cycle : 0),
+            (unsigned long long)(debug_state != NULL ? debug_state->vic_cycles : 0),
+            (unsigned long long)(debug_state != NULL ? debug_state->cia_cycles : 0));
+        nk_label(ctx, status, NK_TEXT_LEFT);
+    }
+    {
+        char status[96];
+        snprintf(
+            status,
+            sizeof(status),
+            "Frame: %llu  Frame cycle: %llu  Dropped: %llu",
+            (unsigned long long)(debug_state != NULL ? debug_state->frame_number : 0),
+            (unsigned long long)(debug_state != NULL ? debug_state->frame_cycle : 0),
+            (unsigned long long)(debug_state != NULL ? debug_state->dropped_frames : 0));
+        nk_label(ctx, status, NK_TEXT_LEFT);
+    }
+
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+    nk_layout_row_dynamic(ctx, 18.0f, 2);
+    nk_label(ctx, "Call Stack", NK_TEXT_LEFT);
+    nk_label(ctx, "No stack snapshot", NK_TEXT_LEFT);
+}
+
+static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_state *debug_state)
+{
+    struct nk_context *ctx;
+    uint16_t i;
+    uint16_t count;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    count = debug_state != NULL && debug_state->has_breakpoints ?
+        debug_state->breakpoints.count :
+        0;
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Breakpoints", NK_TEXT_LEFT);
+
+    if (count == 0) {
         nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "Debug Status", NK_TEXT_LEFT);
-        {
-            char status[96];
-            snprintf(
-                status,
-                sizeof(status),
-                "State: %s  PC: %04X  Cycles: %llu",
-                debug_state != NULL ? frontend_runtime_state_name(debug_state->runtime_state) : "UNKNOWN",
-                debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0,
-                (unsigned long long)(debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.cycles : 0));
-            nk_label(ctx, status, NK_TEXT_LEFT);
+        nk_label(ctx, "No breakpoints set", NK_TEXT_LEFT);
+    }
+
+    for (i = 0; i < count; ++i) {
+        const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
+        struct nk_style_button saved_button = ctx->style.button;
+        char label[32];
+
+        if (entry->enabled == 0) {
+            ctx->style.button.text_normal = nk_rgb(180, 142, 210);
+            ctx->style.button.normal = nk_style_item_color(nk_rgb(40, 34, 48));
         }
 
-        nk_layout_row_dynamic(ctx, 8.0f, 1);
-        nk_spacing(ctx, 1);
-        nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "Breakpoints", NK_TEXT_LEFT);
-
-        if (count == 0) {
-            nk_layout_row_dynamic(ctx, 18.0f, 1);
-            nk_label(ctx, "No breakpoints set", NK_TEXT_LEFT);
-        }
-
-        for (i = 0; i < count; ++i) {
-            const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
-            struct nk_style_button saved_button = ctx->style.button;
-            char label[32];
-
-            if (entry->enabled == 0) {
-                ctx->style.button.text_normal = nk_rgb(180, 142, 210);
-                ctx->style.button.normal = nk_style_item_color(nk_rgb(40, 34, 48));
+        if (entry->current_hits > 0 || entry->target_hits > 0) {
+            if (entry->target_hits > 0) {
+                snprintf(
+                    label,
+                    sizeof(label),
+                    "X Break [%04X] (%u/%u)",
+                    entry->address,
+                    entry->current_hits,
+                    entry->target_hits);
+            } else {
+                snprintf(
+                    label,
+                    sizeof(label),
+                    "X Break [%04X] (%u)",
+                    entry->address,
+                    entry->current_hits);
             }
-
+        } else {
             snprintf(label, sizeof(label), "X Break [%04X]", entry->address);
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
-            nk_layout_row_push(ctx, 0.30f);
-            nk_label_colored(
-                ctx,
-                label,
-                NK_TEXT_LEFT,
-                entry->enabled != 0 ? nk_rgb(232, 235, 238) : nk_rgb(180, 142, 210));
-            nk_layout_row_push(ctx, 0.15f);
-            nk_button_label(ctx, "Edit");
-            nk_layout_row_push(ctx, 0.17f);
-            if (nk_button_label(ctx, entry->enabled != 0 ? "Disable" : "Enable")) {
-                frontend_push_breakpoint_id_intent(
-                    ui,
-                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED,
-                    entry->id,
-                    entry->enabled == 0);
-            }
-            nk_layout_row_push(ctx, 0.18f);
-            if (nk_button_label(ctx, "View PC")) {
-                frontend_disassembly_scroll_to_top(ui, frontend_disassembly_center_top(entry->address, ui->disassembly.rows));
-                frontend_disassembly_set_user_cursor(&ui->disassembly, entry->address, ui->disassembly.rows / 2, 1);
-            }
-            nk_layout_row_push(ctx, 0.14f);
-            if (nk_button_label(ctx, "Clear")) {
-                frontend_push_breakpoint_id_intent(
-                    ui,
-                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
-                    entry->id,
-                    false);
-            }
-            nk_layout_row_end(ctx);
-            ctx->style.button = saved_button;
+        }
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
+        nk_layout_row_push(ctx, 0.30f);
+        nk_label_colored(
+            ctx,
+            label,
+            NK_TEXT_LEFT,
+            entry->enabled != 0 ? nk_rgb(232, 235, 238) : nk_rgb(180, 142, 210));
+        nk_layout_row_push(ctx, 0.15f);
+        nk_button_label(ctx, "Edit");
+        nk_layout_row_push(ctx, 0.17f);
+        if (nk_button_label(ctx, entry->enabled != 0 ? "Disable" : "Enable")) {
+            frontend_push_breakpoint_id_intent(
+                ui,
+                FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED,
+                entry->id,
+                entry->enabled == 0);
+        }
+        nk_layout_row_push(ctx, 0.18f);
+        if (nk_button_label(ctx, "View PC")) {
+            frontend_disassembly_scroll_to_top(ui, frontend_disassembly_center_top(entry->address, ui->disassembly.rows));
+            frontend_disassembly_set_user_cursor(&ui->disassembly, entry->address, ui->disassembly.rows / 2, 1);
+        }
+        nk_layout_row_push(ctx, 0.14f);
+        if (nk_button_label(ctx, "Clear")) {
+            frontend_push_breakpoint_id_intent(
+                ui,
+                FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
+                entry->id,
+                false);
+        }
+        nk_layout_row_end(ctx);
+        ctx->style.button = saved_button;
+    }
+
+    if (count >= 2) {
+        nk_layout_row_dynamic(ctx, 24.0f, 1);
+        if (nk_button_label(ctx, "Clear All")) {
+            frontend_push_debugger_intent(
+                ui,
+                FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL,
+                0);
+        }
+    }
+}
+
+static void frontend_draw_misc_hardware(frontend *ui)
+{
+    struct nk_context *ctx;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Hardware", NK_TEXT_LEFT);
+    nk_label(ctx, "VIC-II details deferred", NK_TEXT_LEFT);
+    nk_label(ctx, "CIA details deferred", NK_TEXT_LEFT);
+    nk_label(ctx, "SID details deferred", NK_TEXT_LEFT);
+    nk_label(ctx, "Memory banking details deferred", NK_TEXT_LEFT);
+}
+
+static void frontend_draw_misc_tab_button(
+    frontend *ui,
+    frontend_misc_tab tab,
+    const char *label)
+{
+    struct nk_style_button saved_button = ui->ctx->style.button;
+
+    if (ui->misc.active_tab == tab) {
+        ui->ctx->style.button.normal = nk_style_item_color(nk_rgb(49, 78, 94));
+        ui->ctx->style.button.hover = nk_style_item_color(nk_rgb(58, 93, 112));
+        ui->ctx->style.button.text_normal = nk_rgb(226, 246, 255);
+    }
+
+    if (nk_button_label(ui->ctx, label)) {
+        ui->misc.active_tab = tab;
+    }
+
+    ui->ctx->style.button = saved_button;
+}
+
+static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const frontend_debug_state *debug_state)
+{
+    struct nk_context *ctx;
+    float tab_h = 24.0f;
+    float content_h;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    if (!ui->misc.initialized) {
+        ui->misc.active_tab = FRONTEND_MISC_TAB_PROGRAMS;
+        ui->misc.initialized = true;
+    }
+
+    ctx = ui->ctx;
+    if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+        nk_layout_row_dynamic(ctx, tab_h, 4);
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_PROGRAMS, "Programs");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_DEBUGGER, "Debugger");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_BREAKPOINTS, "Breakpoints");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_HARDWARE, "Hardware");
+
+        content_h = bounds.h - tab_h - 44.0f;
+        if (content_h < 24.0f) {
+            content_h = 24.0f;
         }
 
-        if (count >= 2) {
-            nk_layout_row_dynamic(ctx, 24.0f, 1);
-            if (nk_button_label(ctx, "Clear All")) {
-                frontend_push_debugger_intent(
-                    ui,
-                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL,
-                    0);
-            }
-        }
+        nk_layout_row_dynamic(ctx, content_h, 1);
+        if (nk_group_begin(ctx, "misc-tab-content", NK_WINDOW_BORDER)) {
+            switch (ui->misc.active_tab) {
+                case FRONTEND_MISC_TAB_PROGRAMS:
+                    frontend_draw_misc_programs(ui);
+                    break;
 
-        nk_layout_row_dynamic(ctx, 8.0f, 1);
-        nk_spacing(ctx, 1);
-        nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "Call Stack placeholder", NK_TEXT_LEFT);
-        nk_label(ctx, "C64 Hardware placeholder", NK_TEXT_LEFT);
+                case FRONTEND_MISC_TAB_DEBUGGER:
+                    frontend_draw_misc_debugger(ui, debug_state);
+                    break;
+
+                case FRONTEND_MISC_TAB_BREAKPOINTS:
+                    frontend_draw_misc_breakpoints(ui, debug_state);
+                    break;
+
+                case FRONTEND_MISC_TAB_HARDWARE:
+                default:
+                    frontend_draw_misc_hardware(ui);
+                    break;
+            }
+            nk_group_end(ctx);
+        }
     }
     nk_end(ctx);
 }

@@ -28,8 +28,13 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_CLEAR_BREAKPOINT,
     RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS,
     RUNTIME_COMMAND_SET_BREAKPOINT_ENABLED,
-    RUNTIME_COMMAND_REQUEST_BREAKPOINTS
+    RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
+    RUNTIME_COMMAND_LOAD_PRG
 } runtime_command_type;
+
+enum {
+    RUNTIME_COMMAND_PATH_MAX = 1024
+};
 
 typedef enum runtime_cpu_register {
     RUNTIME_CPU_REGISTER_PC = 0,
@@ -86,5 +91,9 @@ typedef struct runtime_command {
             uint32_t id;
             uint8_t enabled;
         } set_breakpoint_enabled;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+        } load_prg;
     } data;
 } runtime_command;

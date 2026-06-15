@@ -111,12 +111,16 @@ Implemented:
   - breakpoint rendering/toggling uses runtime-owned execute breakpoint snapshots
   - regression coverage validates core decoder formatting and symbol lookup behavior
 - Phase 12 debugger UI foundation, View 4 breakpoint pass:
+  - misc/debugger view is now organized as scrollable tabs: Programs, Debugger, Breakpoints, and Hardware
+  - Programs tab can select a `.prg` file and send it to runtime for direct RAM loading at the PRG load address
+  - D64 disk mounting and CRT cartridge loading remain deferred
   - runtime owns execute breakpoints with stable IDs, enabled/disabled state, and hit counters
+  - runtime owns and publishes a copied stop reason in machine snapshots
   - runtime_client supports set, clear, clear-all, enable/disable, and snapshot request commands
   - runtime checks enabled execute breakpoints while running, stepping, and bounded-running, then pauses and publishes copied state
   - frontend renders breakpoint snapshots only, with disabled breakpoints kept visible as bookmarks
   - disassembly View 2 shows copied breakpoint snapshots in the gutter and Option+B toggles an execute breakpoint at the cursor while paused
-  - misc/debugger view shows debug status, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
+  - misc/debugger view shows debug status, stop reason, cycle/frame counters, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
   - no read/write watchpoints or advanced breakpoint actions are implemented yet
 
 ## Not Implemented
