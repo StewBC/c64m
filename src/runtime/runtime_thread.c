@@ -171,6 +171,25 @@ static void runtime_publish_memory(
     runtime_publish_event(rt, &event);
 }
 
+static void runtime_publish_breakpoints(runtime *rt) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
+    };
+    size_t i;
+
+    event.data.breakpoints.count = (uint16_t)rt->breakpoint_count;
+    for (i = 0; i < rt->breakpoint_count && i < RUNTIME_BREAKPOINT_SNAPSHOT_MAX; ++i) {
+        event.data.breakpoints.entries[i].id = rt->breakpoints[i].id;
+        event.data.breakpoints.entries[i].address = rt->breakpoints[i].address;
+        event.data.breakpoints.entries[i].access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+        event.data.breakpoints.entries[i].enabled = rt->breakpoints[i].enabled ? 1u : 0u;
+        event.data.breakpoints.entries[i].current_hits = rt->breakpoints[i].current_hits;
+        event.data.breakpoints.entries[i].target_hits = rt->breakpoints[i].target_hits;
+    }
+
+    runtime_publish_event(rt, &event);
+}
+
 static bool runtime_publish_frame(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_FRAME_READY,
@@ -257,7 +276,53 @@ static bool runtime_reset_machine(runtime *rt) {
     rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
     runtime_publish_cpu_state(rt);
+    runtime_publish_breakpoints(rt);
     return true;
+}
+
+static int runtime_find_breakpoint_by_id(const runtime *rt, uint32_t id) {
+    size_t i;
+
+    for (i = 0; i < rt->breakpoint_count; ++i) {
+        if (rt->breakpoints[i].id == id) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static int runtime_find_execute_breakpoint_by_address(const runtime *rt, uint16_t address) {
+    size_t i;
+
+    for (i = 0; i < rt->breakpoint_count; ++i) {
+        if (rt->breakpoints[i].address == address) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static bool runtime_breakpoint_matches_pc(runtime *rt) {
+    uint16_t pc = rt->machine.cpu.cpu.pc;
+    size_t i;
+
+    for (i = 0; i < rt->breakpoint_count; ++i) {
+        if (rt->breakpoints[i].enabled && rt->breakpoints[i].address == pc) {
+            rt->breakpoints[i].current_hits++;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void runtime_pause_for_breakpoint(runtime *rt) {
+    rt->exec_state = RUNTIME_EXEC_PAUSED;
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+    runtime_publish_machine_state(rt);
+    runtime_publish_breakpoints(rt);
 }
 
 static bool runtime_step_cycle(runtime *rt) {
@@ -273,6 +338,11 @@ static bool runtime_step_cycle(runtime *rt) {
 }
 
 static bool runtime_step_cycle_command(runtime *rt) {
+    if (runtime_breakpoint_matches_pc(rt)) {
+        runtime_pause_for_breakpoint(rt);
+        return true;
+    }
+
     if (!runtime_step_cycle(rt)) {
         return false;
     }
@@ -285,6 +355,11 @@ static bool runtime_step_cycle_command(runtime *rt) {
 static bool runtime_step_instruction(runtime *rt) {
     char error[256];
     c64_cpu_snapshot snapshot;
+
+    if (runtime_breakpoint_matches_pc(rt)) {
+        runtime_pause_for_breakpoint(rt);
+        return true;
+    }
 
     if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
         runtime_publish_error(rt, error);
@@ -307,6 +382,11 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
     size_t i;
 
     for (i = 0; i < count; i++) {
+        if (runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+
         if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
             runtime_publish_error(rt, error);
             return false;
@@ -322,6 +402,11 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     size_t i;
 
     for (i = 0; i < count; i++) {
+        if (runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+
         if (!runtime_step_cycle(rt)) {
             return false;
         }
@@ -331,6 +416,64 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
     runtime_publish_machine_state(rt);
     return true;
+}
+
+static void runtime_set_execute_breakpoint(runtime *rt, const runtime_command *command) {
+    int index = runtime_find_execute_breakpoint_by_address(
+        rt,
+        command->data.set_execute_breakpoint.address);
+
+    if (index >= 0) {
+        rt->breakpoints[index].enabled = command->data.set_execute_breakpoint.enabled != 0;
+        runtime_publish_breakpoints(rt);
+        return;
+    }
+
+    if (rt->breakpoint_count >= RUNTIME_BREAKPOINT_CAPACITY) {
+        runtime_publish_error(rt, "breakpoint table is full");
+        runtime_publish_breakpoints(rt);
+        return;
+    }
+
+    if (rt->next_breakpoint_id == 0) {
+        rt->next_breakpoint_id = 1;
+    }
+    rt->breakpoints[rt->breakpoint_count].id = rt->next_breakpoint_id++;
+    rt->breakpoints[rt->breakpoint_count].address = command->data.set_execute_breakpoint.address;
+    rt->breakpoints[rt->breakpoint_count].enabled = command->data.set_execute_breakpoint.enabled != 0;
+    rt->breakpoints[rt->breakpoint_count].current_hits = 0;
+    rt->breakpoints[rt->breakpoint_count].target_hits = 0;
+    rt->breakpoint_count++;
+    runtime_publish_breakpoints(rt);
+}
+
+static void runtime_clear_breakpoint(runtime *rt, const runtime_command *command) {
+    int index = runtime_find_breakpoint_by_id(rt, command->data.clear_breakpoint.id);
+
+    if (index >= 0) {
+        size_t i;
+        for (i = (size_t)index; i + 1u < rt->breakpoint_count; ++i) {
+            rt->breakpoints[i] = rt->breakpoints[i + 1u];
+        }
+        rt->breakpoint_count--;
+    }
+
+    runtime_publish_breakpoints(rt);
+}
+
+static void runtime_clear_all_breakpoints(runtime *rt) {
+    rt->breakpoint_count = 0;
+    runtime_publish_breakpoints(rt);
+}
+
+static void runtime_set_breakpoint_enabled(runtime *rt, const runtime_command *command) {
+    int index = runtime_find_breakpoint_by_id(rt, command->data.set_breakpoint_enabled.id);
+
+    if (index >= 0) {
+        rt->breakpoints[index].enabled = command->data.set_breakpoint_enabled.enabled != 0;
+    }
+
+    runtime_publish_breakpoints(rt);
 }
 
 static void runtime_set_cpu_register(runtime *rt, const runtime_command *command) {
@@ -490,6 +633,26 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_write_memory_byte(rt, command);
             break;
 
+        case RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT:
+            runtime_set_execute_breakpoint(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_CLEAR_BREAKPOINT:
+            runtime_clear_breakpoint(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS:
+            runtime_clear_all_breakpoints(rt);
+            break;
+
+        case RUNTIME_COMMAND_SET_BREAKPOINT_ENABLED:
+            runtime_set_breakpoint_enabled(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_REQUEST_BREAKPOINTS:
+            runtime_publish_breakpoints(rt);
+            break;
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -505,6 +668,8 @@ int runtime_thread_main(void *userdata) {
 
     c64_init(&rt->machine);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->breakpoint_count = 0;
+    rt->next_breakpoint_id = 1;
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
@@ -525,6 +690,10 @@ int runtime_thread_main(void *userdata) {
             }
 
             for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
+                if (runtime_breakpoint_matches_pc(rt)) {
+                    runtime_pause_for_breakpoint(rt);
+                    break;
+                }
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }

@@ -12,6 +12,7 @@
 static void request_debug_state(runtime_client *client) {
     runtime_client_request_cpu_state(client);
     runtime_client_request_machine_state(client);
+    runtime_client_request_breakpoints(client);
 }
 
 static void update_debug_state_from_event(
@@ -64,6 +65,11 @@ static void update_debug_state_from_event(
         case RUNTIME_EVENT_MEMORY_RESPONSE:
             debug_state->memory = event->data.memory;
             debug_state->has_memory = true;
+            break;
+
+        case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
+            debug_state->breakpoints = event->data.breakpoints;
+            debug_state->has_breakpoints = true;
             break;
 
         case RUNTIME_EVENT_FRAME_READY:
@@ -222,6 +228,26 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
                     intent.address,
                     (uint8_t)intent.value,
                     intent.memory_mode);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_EXECUTE:
+                sent = runtime_client_set_execute_breakpoint(client, intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR:
+                sent = runtime_client_clear_breakpoint(client, intent.id);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL:
+                sent = runtime_client_clear_all_breakpoints(client);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED:
+                sent = runtime_client_set_breakpoint_enabled(client, intent.id, intent.enabled);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT:
+                sent = runtime_client_request_breakpoints(client);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:

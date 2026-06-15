@@ -182,6 +182,55 @@ bool runtime_client_write_memory_byte(
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t address) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.set_execute_breakpoint.address = address;
+    command.data.set_execute_breakpoint.enabled = 1u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_CLEAR_BREAKPOINT,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.clear_breakpoint.id = id;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_clear_all_breakpoints(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS);
+}
+
+bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, bool enabled) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_BREAKPOINT_ENABLED,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.set_breakpoint_enabled.id = id;
+    command.data.set_breakpoint_enabled.enabled = enabled ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_request_breakpoints(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_BREAKPOINTS);
+}
+
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
     runtime_frame_slot *slot;
 

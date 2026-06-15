@@ -23,7 +23,12 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_RESTORE,
     RUNTIME_COMMAND_SET_CPU_REGISTER,
     RUNTIME_COMMAND_REQUEST_MEMORY,
-    RUNTIME_COMMAND_WRITE_MEMORY_BYTE
+    RUNTIME_COMMAND_WRITE_MEMORY_BYTE,
+    RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT,
+    RUNTIME_COMMAND_CLEAR_BREAKPOINT,
+    RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS,
+    RUNTIME_COMMAND_SET_BREAKPOINT_ENABLED,
+    RUNTIME_COMMAND_REQUEST_BREAKPOINTS
 } runtime_command_type;
 
 typedef enum runtime_cpu_register {
@@ -67,5 +72,19 @@ typedef struct runtime_command {
             uint8_t value;
             uint8_t mode;
         } write_memory_byte;
+
+        struct {
+            uint16_t address;
+            uint8_t enabled;
+        } set_execute_breakpoint;
+
+        struct {
+            uint32_t id;
+        } clear_breakpoint;
+
+        struct {
+            uint32_t id;
+            uint8_t enabled;
+        } set_breakpoint_enabled;
     } data;
 } runtime_command;

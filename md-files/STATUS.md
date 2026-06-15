@@ -108,14 +108,22 @@ Implemented:
   - PageUp/PageDown, Home/End, Up/Down, follow-PC, scrollbar, and basic address-entry navigation are wired
   - running debugger refreshes CPU/machine snapshots at frame cadence
   - symbol resolver hooks exist and currently default to not found
-  - breakpoint rendering/toggling is intentionally left as a future runtime-backed hook
+  - breakpoint rendering/toggling uses runtime-owned execute breakpoint snapshots
   - regression coverage validates core decoder formatting and symbol lookup behavior
+- Phase 12 debugger UI foundation, View 4 breakpoint pass:
+  - runtime owns execute breakpoints with stable IDs, enabled/disabled state, and hit counters
+  - runtime_client supports set, clear, clear-all, enable/disable, and snapshot request commands
+  - runtime checks enabled execute breakpoints while running, stepping, and bounded-running, then pauses and publishes copied state
+  - frontend renders breakpoint snapshots only, with disabled breakpoints kept visible as bookmarks
+  - disassembly View 2 shows copied breakpoint snapshots in the gutter and Option+B toggles an execute breakpoint at the cursor while paused
+  - misc/debugger view shows debug status, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
+  - no read/write watchpoints or advanced breakpoint actions are implemented yet
 
 ## Not Implemented
 
-- Phase 12 debugger Views still pending:
-  - misc/debugger breakpoint/status panel
-- Runtime-backed execute breakpoints and breakpoint snapshots.
+- Phase 12 advanced breakpoint actions are pending:
+  - no read/write watchpoints
+  - no Type/Swap/speed/trace/paste breakpoint actions
 - Full CIA accuracy.
 - Sprites.
 - SID.
@@ -150,10 +158,10 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 
 ## Next Phase
 
-Phase 12, View 2.
+Phase 12, debugger follow-up.
 
 Goal:
 
 ```text
-Implement the disassembly view from md-files/C64PHASE12.md.
+Implement advanced breakpoint/watchpoint actions after the runtime-backed execute breakpoint manager.
 ```

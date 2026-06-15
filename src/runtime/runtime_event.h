@@ -16,6 +16,7 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_CPU_STATE_RESPONSE,
     RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
     RUNTIME_EVENT_MEMORY_RESPONSE,
+    RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
     RUNTIME_EVENT_FRAME_READY
 } runtime_event_type;
 
@@ -25,8 +26,13 @@ typedef enum runtime_memory_mode {
 } runtime_memory_mode;
 
 enum {
-    RUNTIME_MEMORY_SNAPSHOT_MAX = 1024
+    RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
+    RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64
 };
+
+typedef enum runtime_breakpoint_access {
+    RUNTIME_BREAKPOINT_ACCESS_EXECUTE = 0
+} runtime_breakpoint_access;
 
 typedef struct runtime_cpu_snapshot {
     uint16_t pc;
@@ -77,6 +83,20 @@ typedef struct runtime_memory_snapshot {
     uint8_t bytes[RUNTIME_MEMORY_SNAPSHOT_MAX];
 } runtime_memory_snapshot;
 
+typedef struct runtime_breakpoint_snapshot_entry {
+    uint32_t id;
+    uint16_t address;
+    runtime_breakpoint_access access;
+    uint8_t enabled;
+    uint32_t current_hits;
+    uint32_t target_hits;
+} runtime_breakpoint_snapshot_entry;
+
+typedef struct runtime_breakpoint_snapshot {
+    uint16_t count;
+    runtime_breakpoint_snapshot_entry entries[RUNTIME_BREAKPOINT_SNAPSHOT_MAX];
+} runtime_breakpoint_snapshot;
+
 typedef struct runtime_event {
     runtime_event_type type;
 
@@ -98,5 +118,6 @@ typedef struct runtime_event {
         runtime_cpu_snapshot cpu_state;
         runtime_machine_snapshot machine_state;
         runtime_memory_snapshot memory;
+        runtime_breakpoint_snapshot breakpoints;
     } data;
 } runtime_event;

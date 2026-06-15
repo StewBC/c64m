@@ -192,6 +192,62 @@ static const char *frontend_runtime_state_name(frontend_runtime_state state)
 static void frontend_push_debugger_intent(
     frontend *ui,
     frontend_debugger_intent_type type,
+    uint16_t value);
+
+static void frontend_push_breakpoint_id_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    uint32_t id,
+    bool enabled);
+
+static const runtime_breakpoint_snapshot_entry *frontend_find_execute_breakpoint(
+    const frontend_debug_state *debug_state,
+    uint16_t address)
+{
+    uint16_t i;
+
+    if (debug_state == NULL || !debug_state->has_breakpoints) {
+        return NULL;
+    }
+
+    for (i = 0; i < debug_state->breakpoints.count; ++i) {
+        const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
+        if (entry->access == RUNTIME_BREAKPOINT_ACCESS_EXECUTE && entry->address == address) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static void frontend_toggle_execute_breakpoint_at_cursor(
+    frontend *ui,
+    const frontend_debug_state *debug_state)
+{
+    const runtime_breakpoint_snapshot_entry *entry;
+    uint16_t address;
+
+    if (ui == NULL || !ui->disassembly.has_user_cursor) {
+        return;
+    }
+
+    address = ui->disassembly.cursor_address;
+    entry = frontend_find_execute_breakpoint(debug_state, address);
+    if (entry != NULL) {
+        frontend_push_breakpoint_id_intent(
+            ui,
+            FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
+            entry->id,
+            false);
+        return;
+    }
+
+    frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_EXECUTE, address);
+}
+
+static void frontend_push_debugger_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
     uint16_t value)
 {
     size_t next;
@@ -207,6 +263,29 @@ static void frontend_push_debugger_intent(
 
     ui->intents[ui->intent_write].type = type;
     ui->intents[ui->intent_write].value = value;
+    ui->intent_write = next;
+}
+
+static void frontend_push_breakpoint_id_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    uint32_t id,
+    bool enabled)
+{
+    size_t next;
+
+    if (ui == NULL || type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+
+    ui->intents[ui->intent_write].type = type;
+    ui->intents[ui->intent_write].id = id;
+    ui->intents[ui->intent_write].enabled = enabled;
     ui->intent_write = next;
 }
 
@@ -1035,6 +1114,12 @@ static void frontend_disassembly_handle_key(
     mod = key->keysym.mod;
     ctrl = (mod & KMOD_CTRL) != 0;
 
+    if ((mod & KMOD_ALT) != 0 && sym == SDLK_b) {
+        frontend_disassembly_ensure_user_cursor(ui, debug_state);
+        frontend_toggle_execute_breakpoint_at_cursor(ui, debug_state);
+        return;
+    }
+
     if ((mod & KMOD_ALT) != 0 || sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
         return;
     }
@@ -1524,8 +1609,12 @@ static void frontend_draw_disassembly_view(
                 char bytes[16];
                 char rendered[96];
                 struct nk_rect row_bounds;
+                const runtime_breakpoint_snapshot_entry *breakpoint =
+                    frontend_find_execute_breakpoint(debug_state, line->address);
                 bool is_pc = debug_state != NULL && debug_state->has_cpu && line->address == debug_state->cpu.pc;
                 bool is_cursor = view->has_user_cursor && line->address == view->cursor_address && !is_pc;
+                bool is_breakpoint = breakpoint != NULL;
+                bool is_enabled_breakpoint = is_breakpoint && breakpoint->enabled != 0;
                 struct nk_style_selectable saved_selectable = ui->ctx->style.selectable;
                 nk_bool selected = is_cursor ? nk_true : nk_false;
 
@@ -1541,8 +1630,9 @@ static void frontend_draw_disassembly_view(
                     snprintf(bytes, sizeof(bytes), "%02X      ", line->bytes[0]);
                 }
 
-                snprintf(rendered, sizeof(rendered), "%c  %04X  %-8s  %s",
+                snprintf(rendered, sizeof(rendered), "%c%c %04X  %-8s  %s",
                     is_pc ? '>' : ' ',
+                    is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
                     line->address,
                     bytes,
                     line->text);
@@ -1556,6 +1646,11 @@ static void frontend_draw_disassembly_view(
                 if (is_pc) {
                     ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(83, 73, 24));
                     ui->ctx->style.selectable.text_normal = nk_rgb(255, 244, 120);
+                }
+                if (is_breakpoint && !is_pc) {
+                    ui->ctx->style.selectable.text_normal = is_enabled_breakpoint ?
+                        nk_rgb(255, 151, 122) :
+                        nk_rgb(169, 126, 202);
                 }
                 if (is_cursor) {
                     ui->ctx->style.selectable.normal_active = nk_style_item_color(nk_rgb(21, 91, 116));
@@ -2326,14 +2421,105 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     nk_end(ui->ctx);
 }
 
-static void frontend_draw_misc(struct nk_context *ctx, struct nk_rect bounds)
+static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const frontend_debug_state *debug_state)
 {
+    struct nk_context *ctx;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
     if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+        uint16_t i;
+        uint16_t count = debug_state != NULL && debug_state->has_breakpoints ?
+            debug_state->breakpoints.count :
+            0;
+
         nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "SID registers placeholder", NK_TEXT_LEFT);
-        nk_label(ctx, "VIC-II registers placeholder", NK_TEXT_LEFT);
-        nk_label(ctx, "CIA state placeholder", NK_TEXT_LEFT);
-        nk_label(ctx, "Disk images placeholder", NK_TEXT_LEFT);
+        nk_label(ctx, "Debug Status", NK_TEXT_LEFT);
+        {
+            char status[96];
+            snprintf(
+                status,
+                sizeof(status),
+                "State: %s  PC: %04X  Cycles: %llu",
+                debug_state != NULL ? frontend_runtime_state_name(debug_state->runtime_state) : "UNKNOWN",
+                debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0,
+                (unsigned long long)(debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.cycles : 0));
+            nk_label(ctx, status, NK_TEXT_LEFT);
+        }
+
+        nk_layout_row_dynamic(ctx, 8.0f, 1);
+        nk_spacing(ctx, 1);
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "Breakpoints", NK_TEXT_LEFT);
+
+        if (count == 0) {
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "No breakpoints set", NK_TEXT_LEFT);
+        }
+
+        for (i = 0; i < count; ++i) {
+            const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
+            struct nk_style_button saved_button = ctx->style.button;
+            char label[32];
+
+            if (entry->enabled == 0) {
+                ctx->style.button.text_normal = nk_rgb(180, 142, 210);
+                ctx->style.button.normal = nk_style_item_color(nk_rgb(40, 34, 48));
+            }
+
+            snprintf(label, sizeof(label), "X Break [%04X]", entry->address);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
+            nk_layout_row_push(ctx, 0.30f);
+            nk_label_colored(
+                ctx,
+                label,
+                NK_TEXT_LEFT,
+                entry->enabled != 0 ? nk_rgb(232, 235, 238) : nk_rgb(180, 142, 210));
+            nk_layout_row_push(ctx, 0.15f);
+            nk_button_label(ctx, "Edit");
+            nk_layout_row_push(ctx, 0.17f);
+            if (nk_button_label(ctx, entry->enabled != 0 ? "Disable" : "Enable")) {
+                frontend_push_breakpoint_id_intent(
+                    ui,
+                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED,
+                    entry->id,
+                    entry->enabled == 0);
+            }
+            nk_layout_row_push(ctx, 0.18f);
+            if (nk_button_label(ctx, "View PC")) {
+                frontend_disassembly_scroll_to_top(ui, frontend_disassembly_center_top(entry->address, ui->disassembly.rows));
+                frontend_disassembly_set_user_cursor(&ui->disassembly, entry->address, ui->disassembly.rows / 2, 1);
+            }
+            nk_layout_row_push(ctx, 0.14f);
+            if (nk_button_label(ctx, "Clear")) {
+                frontend_push_breakpoint_id_intent(
+                    ui,
+                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
+                    entry->id,
+                    false);
+            }
+            nk_layout_row_end(ctx);
+            ctx->style.button = saved_button;
+        }
+
+        if (count >= 2) {
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            if (nk_button_label(ctx, "Clear All")) {
+                frontend_push_debugger_intent(
+                    ui,
+                    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL,
+                    0);
+            }
+        }
+
+        nk_layout_row_dynamic(ctx, 8.0f, 1);
+        nk_spacing(ctx, 1);
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "Call Stack placeholder", NK_TEXT_LEFT);
+        nk_label(ctx, "C64 Hardware placeholder", NK_TEXT_LEFT);
     }
     nk_end(ctx);
 }
@@ -2633,7 +2819,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_registers(ui, ui->layout.registers, debug_state);
     frontend_draw_disassembly_view(ui, ui->layout.disassembly, debug_state);
     frontend_draw_memory(ui, ui->layout.memory, debug_state);
-    frontend_draw_misc(ui->ctx, ui->layout.misc);
+    frontend_draw_misc(ui, ui->layout.misc, debug_state);
 
     split_display_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_DISPLAY ||
         nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_display);

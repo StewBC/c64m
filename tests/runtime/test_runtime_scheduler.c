@@ -51,6 +51,32 @@ static void expect_u64_gt(const char *name, uint64_t lhs, uint64_t rhs) {
     }
 }
 
+static uint32_t first_breakpoint_id(const runtime_event *event) {
+    if (event->data.breakpoints.count == 0) {
+        fail("expected at least one breakpoint");
+    }
+    return event->data.breakpoints.entries[0].id;
+}
+
+static void poll_breakpoint_count(runtime_client *client, runtime_event *event, uint16_t count) {
+    clock_t start = clock();
+
+    while ((double)(clock() - start) / CLOCKS_PER_SEC < 2.0) {
+        while (runtime_client_poll_event(client, event)) {
+            if (event->type == RUNTIME_EVENT_ERROR) {
+                fprintf(stderr, "runtime error: %s\n", event->data.error.message);
+                exit(1);
+            }
+            if (event->type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
+                event->data.breakpoints.count == count) {
+                return;
+            }
+        }
+    }
+
+    fail("expected breakpoint snapshot count not received");
+}
+
 static void build_roms(c64_rom_set *roms, uint16_t reset_vector) {
     c64_rom_set_init(roms);
     roms->has_basic = true;
@@ -455,6 +481,116 @@ static void test_runtime_memory_snapshots_and_writes_are_paused_only(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_stops_on_enabled_execute_breakpoint(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("set execute breakpoint", runtime_client_set_execute_breakpoint(client, TEST_RESET_VECTOR));
+    poll_breakpoint_count(client, &event, 1);
+    expect_u64("one breakpoint after set", 1, event.data.breakpoints.count);
+    expect_u16("breakpoint address", TEST_RESET_VECTOR, event.data.breakpoints.entries[0].address);
+    expect_u8("breakpoint enabled", 1, event.data.breakpoints.entries[0].enabled);
+
+    expect_true("run into breakpoint", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received before breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for breakpoint");
+    }
+    expect_u64("breakpoint hit leaves runtime paused", 0, event.data.machine_state.running);
+    expect_u16("breakpoint hit PC unchanged", TEST_RESET_VECTOR, event.data.machine_state.pc);
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint hit snapshot not received");
+    }
+    expect_u64("breakpoint hit counter", 1, event.data.breakpoints.entries[0].current_hits);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_ignores_disabled_execute_breakpoint(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    uint32_t id;
+
+    rt = start_runtime(&client);
+
+    expect_true("set disabled test breakpoint", runtime_client_set_execute_breakpoint(client, TEST_RESET_VECTOR));
+    poll_breakpoint_count(client, &event, 1);
+    id = first_breakpoint_id(&event);
+    expect_true("disable breakpoint", runtime_client_set_breakpoint_enabled(client, id, false));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after disable");
+    }
+    expect_u8("breakpoint disabled", 0, event.data.breakpoints.entries[0].enabled);
+
+    expect_true("run cycles past disabled breakpoint", runtime_client_run_cycles(client, 16));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("RUN_COMPLETE not received for disabled breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received after disabled breakpoint run");
+    }
+    expect_u64("disabled breakpoint run advanced", 16, event.data.machine_state.cycle);
+    expect_u64("disabled breakpoint run paused", 0, event.data.machine_state.running);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_clear_breakpoint_removes_it(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    uint32_t id;
+
+    rt = start_runtime(&client);
+
+    expect_true("set clear test breakpoint", runtime_client_set_execute_breakpoint(client, TEST_RESET_VECTOR));
+    poll_breakpoint_count(client, &event, 1);
+    id = first_breakpoint_id(&event);
+    expect_true("clear breakpoint", runtime_client_clear_breakpoint(client, id));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after clear");
+    }
+    expect_u64("clear removes breakpoint", 0, event.data.breakpoints.count);
+
+    expect_true("run cycles after clear", runtime_client_run_cycles(client, 8));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("RUN_COMPLETE not received after clear");
+    }
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_clear_all_breakpoints_removes_all(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("set clear-all breakpoint 1", runtime_client_set_execute_breakpoint(client, TEST_RESET_VECTOR));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("set clear-all breakpoint 2", runtime_client_set_execute_breakpoint(client, (uint16_t)(TEST_RESET_VECTOR + 1u)));
+    poll_breakpoint_count(client, &event, 2);
+    expect_u64("two breakpoints before clear all", 2, event.data.breakpoints.count);
+
+    expect_true("clear all breakpoints", runtime_client_clear_all_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after clear all");
+    }
+    expect_u64("clear all removes breakpoints", 0, event.data.breakpoints.count);
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
     test_single_machine_cycle();
@@ -465,6 +601,10 @@ int main(void) {
     test_runtime_step_instruction_from_running_pauses();
     test_runtime_cpu_register_setters_are_paused_only();
     test_runtime_memory_snapshots_and_writes_are_paused_only();
+    test_runtime_stops_on_enabled_execute_breakpoint();
+    test_runtime_ignores_disabled_execute_breakpoint();
+    test_runtime_clear_breakpoint_removes_it();
+    test_runtime_clear_all_breakpoints_removes_all();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");
     return 0;

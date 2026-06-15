@@ -11,6 +11,7 @@
 
 #define RUNTIME_COMMAND_QUEUE_CAPACITY 256
 #define RUNTIME_EVENT_QUEUE_CAPACITY 256
+#define RUNTIME_BREAKPOINT_CAPACITY 64
 
 typedef struct message_queue message_queue;
 typedef struct thread thread;
@@ -37,6 +38,14 @@ typedef struct runtime_frame_slot {
     uint64_t dropped_frames;
 } runtime_frame_slot;
 
+typedef struct runtime_breakpoint {
+    uint32_t id;
+    uint16_t address;
+    bool enabled;
+    uint32_t current_hits;
+    uint32_t target_hits;
+} runtime_breakpoint;
+
 struct runtime {
     thread *thread;
     message_queue *command_queue;
@@ -50,6 +59,9 @@ struct runtime {
     char *kernal_rom_path;
     char *system_rom_path;
     runtime_exec_state exec_state;
+    runtime_breakpoint breakpoints[RUNTIME_BREAKPOINT_CAPACITY];
+    size_t breakpoint_count;
+    uint32_t next_breakpoint_id;
     uint64_t next_frame_cycle;
     uint64_t next_frame_counter;
     uint64_t frame_counter_step;
