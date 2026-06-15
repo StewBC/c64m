@@ -1,32 +1,13 @@
 #include "app_options.h"
 #include "frontend.h"
+#include "frontend_input.h"
 #include "platform.h"
 #include "runtime.h"
 #include "runtime_client.h"
 
 #include <SDL2/SDL.h>
-#include <stddef.h>
 #include <stdbool.h>
-
-static bool has_ctrl_modifier(const SDL_KeyboardEvent *key) {
-    return key != NULL && (key->keysym.mod & KMOD_CTRL) != 0;
-}
-
-static bool is_host_quit_shortcut(const SDL_KeyboardEvent *key) {
-    SDL_Keymod modifiers;
-
-    if (key == NULL || key->keysym.sym != SDLK_q) {
-        return false;
-    }
-
-    modifiers = key->keysym.mod;
-
-#if defined(__APPLE__)
-    return (modifiers & KMOD_GUI) != 0;
-#else
-    return (modifiers & KMOD_CTRL) != 0;
-#endif
-}
+#include <stddef.h>
 
 static void request_debug_state(runtime_client *client) {
     runtime_client_request_cpu_state(client);
@@ -153,136 +134,53 @@ static void send_step_instruction_command(runtime_client *client) {
     }
 }
 
-static bool map_sdl_key_to_c64(SDL_Keycode sym, c64_key *out_key) {
-    if (!out_key) {
-        return false;
-    }
+static void dispatch_input_actions(
+    runtime_client *client,
+    const frontend_input_action *actions,
+    size_t count) {
+    size_t i;
 
-    if (sym >= SDLK_a && sym <= SDLK_z) {
-        *out_key = (c64_key)(C64_KEY_A + (sym - SDLK_a));
-        return true;
-    }
-
-    if (sym >= SDLK_0 && sym <= SDLK_9) {
-        *out_key = (c64_key)(C64_KEY_0 + (sym - SDLK_0));
-        return true;
-    }
-
-    switch (sym) {
-        case SDLK_SPACE:
-            *out_key = C64_KEY_SPACE;
-            return true;
-        case SDLK_RETURN:
-        case SDLK_KP_ENTER:
-            *out_key = C64_KEY_RETURN;
-            return true;
-        case SDLK_BACKSPACE:
-            *out_key = C64_KEY_DELETE;
-            return true;
-        case SDLK_LSHIFT:
-            *out_key = C64_KEY_LEFT_SHIFT;
-            return true;
-        case SDLK_RSHIFT:
-            *out_key = C64_KEY_RIGHT_SHIFT;
-            return true;
-        case SDLK_PLUS:
-        case SDLK_KP_PLUS:
-            *out_key = C64_KEY_PLUS;
-            return true;
-        case SDLK_MINUS:
-        case SDLK_KP_MINUS:
-            *out_key = C64_KEY_MINUS;
-            return true;
-        case SDLK_ASTERISK:
-        case SDLK_KP_MULTIPLY:
-            *out_key = C64_KEY_ASTERISK;
-            return true;
-        case SDLK_EQUALS:
-            *out_key = C64_KEY_EQUALS;
-            return true;
-        case SDLK_COLON:
-            *out_key = C64_KEY_COLON;
-            return true;
-        case SDLK_SEMICOLON:
-            *out_key = C64_KEY_SEMICOLON;
-            return true;
-        case SDLK_COMMA:
-            *out_key = C64_KEY_COMMA;
-            return true;
-        case SDLK_PERIOD:
-            *out_key = C64_KEY_PERIOD;
-            return true;
-        case SDLK_SLASH:
-        case SDLK_KP_DIVIDE:
-            *out_key = C64_KEY_SLASH;
-            return true;
-        case SDLK_AT:
-            *out_key = C64_KEY_AT;
-            return true;
-        case SDLK_RIGHT:
-            *out_key = C64_KEY_CURSOR_RIGHT;
-            return true;
-        case SDLK_DOWN:
-            *out_key = C64_KEY_CURSOR_DOWN;
-            return true;
-        case SDLK_HOME:
-            *out_key = C64_KEY_HOME;
-            return true;
-        case SDLK_ESCAPE:
-            *out_key = C64_KEY_RUN_STOP;
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool map_sdl_key_to_shifted_c64_cursor(SDL_Keycode sym, c64_key *out_key) {
-    if (!out_key) {
-        return false;
-    }
-
-    switch (sym) {
-        case SDLK_LEFT:
-            *out_key = C64_KEY_CURSOR_RIGHT;
-            return true;
-        case SDLK_UP:
-            *out_key = C64_KEY_CURSOR_DOWN;
-            return true;
-        default:
-            return false;
-    }
-}
-
-static void send_keyboard_event(runtime_client *client, const SDL_KeyboardEvent *event, bool pressed) {
-    c64_key key;
-
-    if (!event || event->repeat != 0) {
+    if (client == NULL || actions == NULL) {
         return;
     }
 
-    if (map_sdl_key_to_shifted_c64_cursor(event->keysym.sym, &key)) {
-        runtime_client_keyboard_key(client, C64_KEY_RIGHT_SHIFT, pressed);
-        runtime_client_keyboard_key(client, key, pressed);
-    } else if (map_sdl_key_to_c64(event->keysym.sym, &key)) {
-        runtime_client_keyboard_key(client, key, pressed);
+    for (i = 0; i < count; i++) {
+        switch (actions[i].type) {
+            case FRONTEND_INPUT_ACTION_KEY:
+                runtime_client_keyboard_key(client, actions[i].key, actions[i].pressed);
+                break;
+
+            case FRONTEND_INPUT_ACTION_RESTORE:
+                runtime_client_restore(client);
+                break;
+
+            case FRONTEND_INPUT_ACTION_NONE:
+            default:
+                break;
+        }
     }
 }
 
-static void send_restore_command(runtime_client *client, const SDL_KeyboardEvent *event) {
-    if (!event || event->repeat != 0) {
-        return;
-    }
+static void handle_keyboard_input(
+    frontend_input_mapper *mapper,
+    runtime_client *client,
+    const SDL_KeyboardEvent *event) {
+    frontend_input_action actions[FRONTEND_INPUT_MAX_ACTIONS];
+    size_t count;
 
-    runtime_client_restore(client);
+    count = frontend_input_map_keyboard_event(mapper, event, actions, FRONTEND_INPUT_MAX_ACTIONS);
+    dispatch_input_actions(client, actions, count);
 }
 
 static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui) {
     bool running = true;
     bool ui_visible = false;
+    frontend_input_mapper input_mapper;
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
 
+    frontend_input_mapper_reset(&input_mapper);
     request_debug_state(client);
     runtime_client_request_frame(client);
 
@@ -294,26 +192,28 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
             if (event.type == SDL_QUIT) {
                 running = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-                if (is_host_quit_shortcut(&event.key)) {
+                if (frontend_input_is_host_quit_shortcut(&event.key)) {
                     running = false;
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
-                } else if (event.key.keysym.sym == SDLK_F10) {
+                } else if (event.key.keysym.sym == SDLK_F10 ||
+                           (event.key.keysym.sym == SDLK_r &&
+                            frontend_input_has_option_modifier(&event.key))) {
                     send_run_command(client);
                 } else if (event.key.keysym.sym == SDLK_F11 ||
-                           (event.key.keysym.sym == SDLK_s && has_ctrl_modifier(&event.key))) {
+                           (event.key.keysym.sym == SDLK_s &&
+                            frontend_input_has_option_modifier(&event.key))) {
                     send_step_instruction_command(client);
                 } else if (event.key.keysym.sym == SDLK_F12 ||
-                           (event.key.keysym.sym == SDLK_c && has_ctrl_modifier(&event.key))) {
+                           (event.key.keysym.sym == SDLK_p &&
+                            frontend_input_has_option_modifier(&event.key))) {
                     send_pause_command(client);
-                } else if (event.key.keysym.sym == SDLK_DELETE && !ui_visible) {
-                    send_restore_command(client, &event.key);
                 } else if (!ui_visible) {
-                    send_keyboard_event(client, &event.key, true);
+                    handle_keyboard_input(&input_mapper, client, &event.key);
                 }
             } else if (event.type == SDL_KEYUP && !ui_visible) {
-                send_keyboard_event(client, &event.key, false);
+                handle_keyboard_input(&input_mapper, client, &event.key);
             }
 
             if (ui_visible) {

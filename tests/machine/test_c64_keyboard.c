@@ -163,6 +163,38 @@ static void test_run_stop_position(void) {
     expect_u8("run stop column", 0x7f, c64_bus_read(&machine.bus, 0xdc01));
 }
 
+static void test_control_commodore_and_symbol_positions(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xdc02, 0xff);
+    c64_bus_write(&machine.bus, 0xdc03, 0x00);
+
+    c64_set_key(&machine, C64_KEY_CONTROL, true);
+    c64_bus_write(&machine.bus, 0xdc00, 0x7f);
+    expect_u8("control column", 0xfb, c64_bus_read(&machine.bus, 0xdc01));
+    c64_set_key(&machine, C64_KEY_CONTROL, false);
+
+    c64_set_key(&machine, C64_KEY_COMMODORE, true);
+    c64_bus_write(&machine.bus, 0xdc00, 0x7f);
+    expect_u8("commodore column", 0xdf, c64_bus_read(&machine.bus, 0xdc01));
+    c64_set_key(&machine, C64_KEY_COMMODORE, false);
+
+    c64_set_key(&machine, C64_KEY_LEFT_ARROW, true);
+    c64_bus_write(&machine.bus, 0xdc00, 0x7f);
+    expect_u8("left arrow column", 0xfd, c64_bus_read(&machine.bus, 0xdc01));
+    c64_set_key(&machine, C64_KEY_LEFT_ARROW, false);
+
+    c64_set_key(&machine, C64_KEY_UP_ARROW, true);
+    c64_bus_write(&machine.bus, 0xdc00, 0xbf);
+    expect_u8("up arrow column", 0xbf, c64_bus_read(&machine.bus, 0xdc01));
+    c64_set_key(&machine, C64_KEY_UP_ARROW, false);
+
+    c64_set_key(&machine, C64_KEY_POUND, true);
+    c64_bus_write(&machine.bus, 0xdc00, 0xbf);
+    expect_u8("pound column", 0xfe, c64_bus_read(&machine.bus, 0xdc01));
+}
+
 int main(void) {
     test_keyboard_matrix_press_release();
     test_cia_keyboard_scan();
@@ -171,5 +203,6 @@ int main(void) {
     test_cursor_key_positions();
     test_home_and_shift_home_positions();
     test_run_stop_position();
+    test_control_commodore_and_symbol_positions();
     return 0;
 }

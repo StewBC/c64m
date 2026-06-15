@@ -59,6 +59,11 @@ typedef enum c64_key {
     C64_KEY_CURSOR_DOWN,
     C64_KEY_HOME,
     C64_KEY_RUN_STOP,
+    C64_KEY_CONTROL,
+    C64_KEY_COMMODORE,
+    C64_KEY_LEFT_ARROW,
+    C64_KEY_UP_ARROW,
+    C64_KEY_POUND,
     C64_KEY_COUNT
 } c64_key;
 

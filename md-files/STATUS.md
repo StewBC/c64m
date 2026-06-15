@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 10.
+Completed through Phase 11 keyboard mapping pass.
 
 Implemented:
 
@@ -52,11 +52,21 @@ Implemented:
   - ESC maps to C64 RUN/STOP
   - Backspace maps to C64 DEL
   - host Delete maps to RESTORE
+- Keyboard Pass 2 / Phase 11 BASIC typing polish:
+  - SDL-to-C64 key translation moved out of `main.c` into frontend-owned input mapping
+  - runtime still receives copied project-level keyboard/RESTORE commands, not SDL events
+  - default mapping is semantic host typing rather than physical C64 key layout
+  - focused frontend mapper regression tests cover shifted punctuation, remembered synthetic releases, cursor keys, CONTROL, Commodore, and RESTORE
+  - C64 CONTROL is mapped from host Control
+  - C64 Commodore is mapped from host Tab
+  - emulator controls use Option+R run, Option+S step, and Option+P pause
+  - F10/F11/F12 remain available for run/step/pause
+  - host quote/double-quote, colon, plus, parentheses, asterisk, @, cursor arrows, HOME/CLR HOME, RUN/STOP, RESTORE, left-arrow, and up-arrow have semantic mappings
 - IRQ/CIA boot compatibility:
   - CIA #1 ICR read/write diagnostics
   - CIA interrupt assertion diagnostics
   - CPU IRQ entry diagnostics
-  - CPU NMI entry path for RESTORE
+- CPU NMI entry path for RESTORE
   - CIA zero-latch timer reload behavior
   - CIA one-shot timer stop behavior
   - normal runtime RUN pacing at roughly 60 Hz frame cadence
@@ -68,7 +78,6 @@ Implemented:
 ## Not Implemented
 
 - Full CIA accuracy.
-- CPU NMI entry path.
 - Sprites.
 - SID.
 - Cycle-perfect video/audio timing.
@@ -90,13 +99,13 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 
 ## Next Phase
 
-Phase 11.
+Phase 11 follow-up.
 
 Goal:
 
 ```text
 BASIC usability polish
-    + keyboard mapping refinements
+    + live BASIC typing validation
     + cursor/repeat timing validation
     + focused CIA behavior fixes as needed
 ```

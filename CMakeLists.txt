@@ -120,6 +120,23 @@ target_link_libraries(test_c64_keyboard PRIVATE
 
 add_test(NAME c64_keyboard COMMAND test_c64_keyboard)
 
+add_executable(test_frontend_input
+    tests/frontend/test_frontend_input.c
+)
+
+target_compile_features(test_frontend_input PRIVATE c_std_99)
+
+target_include_directories(test_frontend_input PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/machine
+)
+
+target_link_libraries(test_frontend_input PRIVATE
+    frontend
+)
+
+add_test(NAME frontend_input COMMAND test_frontend_input)
+
 add_executable(test_c64_cpu_validation
     tests/machine/test_c64_cpu_validation.c
 )

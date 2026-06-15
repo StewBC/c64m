@@ -5,6 +5,8 @@ add_library(frontend STATIC
     c64_layout.h
     frontend.c
     frontend.h
+    frontend_input.c
+    frontend_input.h
     nuklear_impl.c
     nuklear_config.h
     nuklear.h
