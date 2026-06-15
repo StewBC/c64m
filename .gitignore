@@ -4,5 +4,4 @@
 build/
 disks/
 *.ini
-!c64m.ini
 !CMakeLists.txt
