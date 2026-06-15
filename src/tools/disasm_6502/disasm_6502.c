@@ -113,6 +113,11 @@ uint8_t disasm_6502_instruction_length(uint8_t opcode)
     return opcode_table[opcode].length;
 }
 
+bool disasm_6502_opcode_is_valid(uint8_t opcode)
+{
+    return opcode_table[opcode].mnemonic != NULL;
+}
+
 static bool resolve_label(
     const symbol_resolver *symbols,
     uint16_t address,
@@ -235,4 +240,3 @@ disasm_6502_line disasm_6502_decode_line(
     }
     return line;
 }
-

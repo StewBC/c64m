@@ -77,6 +77,7 @@ typedef struct frontend_disassembly_view_state {
     uint16_t top_address;
     uint16_t cursor_address;
     uint16_t cursor_prev_address;
+    uint16_t pc_lock_address;
     uint16_t requested_address;
     uint16_t requested_length;
     runtime_memory_mode mode;
@@ -93,6 +94,7 @@ typedef struct frontend_disassembly_view_state {
     bool active;
     bool address_entry;
     bool follow_pc;
+    bool pc_lock_active;
     bool has_last_pc;
     bool has_user_cursor;
     bool has_snapshot;
@@ -661,8 +663,7 @@ static int frontend_disassembly_snapshot_index(
 
     if (view == NULL ||
         !view->has_snapshot ||
-        view->snapshot.mode != view->mode ||
-        view->snapshot.address != view->top_address) {
+        view->snapshot.mode != view->mode) {
         return -1;
     }
 
@@ -754,40 +755,141 @@ static uint16_t frontend_disassembly_center_top(uint16_t address, uint8_t rows)
     return top;
 }
 
-static bool frontend_disassembly_snapshot_covers(
+static bool frontend_disassembly_previous_address(
     const frontend_disassembly_view_state *view,
-    uint16_t length)
+    uint16_t address,
+    uint16_t *out_previous)
 {
-    if (view == NULL ||
-        !view->has_snapshot ||
-        view->snapshot.mode != view->mode ||
-        view->snapshot.address != view->top_address) {
+    int back;
+    uint16_t invalid_candidate = 0;
+    bool has_invalid_candidate = false;
+
+    if (view == NULL || out_previous == NULL) {
         return false;
     }
 
-    return view->snapshot.length >= length;
+    for (back = 3; back >= 1; --back) {
+        uint16_t candidate = (uint16_t)(address - back);
+        int index = frontend_disassembly_snapshot_index(view, candidate);
+        uint8_t opcode;
+        uint8_t length;
+
+        if (index < 0) {
+            continue;
+        }
+
+        opcode = view->snapshot.bytes[index];
+        length = disasm_6502_instruction_length(opcode);
+        if (length == back &&
+            frontend_disassembly_snapshot_index(view, (uint16_t)(candidate + length - 1u)) >= 0) {
+            if (disasm_6502_opcode_is_valid(opcode)) {
+                *out_previous = candidate;
+                return true;
+            }
+            if (!has_invalid_candidate) {
+                invalid_candidate = candidate;
+                has_invalid_candidate = true;
+            }
+        }
+    }
+
+    if (has_invalid_candidate) {
+        *out_previous = invalid_candidate;
+        return true;
+    }
+
+    if (frontend_disassembly_snapshot_index(view, (uint16_t)(address - 1u)) >= 0) {
+        *out_previous = (uint16_t)(address - 1u);
+        return true;
+    }
+
+    return false;
+}
+
+static bool frontend_disassembly_pc_locked_top(
+    const frontend_disassembly_view_state *view,
+    uint16_t pc,
+    uint16_t *out_top)
+{
+    uint8_t target_row;
+    uint8_t i;
+    uint16_t address;
+
+    if (view == NULL || out_top == NULL || view->rows == 0) {
+        return false;
+    }
+
+    target_row = view->rows / 2;
+    address = pc;
+    for (i = 0; i < target_row; ++i) {
+        uint16_t previous;
+
+        if (!frontend_disassembly_previous_address(view, address, &previous)) {
+            previous = (uint16_t)(address - 1u);
+        }
+        address = previous;
+    }
+
+    *out_top = address;
+    return true;
+}
+
+static bool frontend_disassembly_snapshot_covers(
+    const frontend_disassembly_view_state *view,
+    uint16_t address,
+    uint16_t length)
+{
+    uint16_t end_offset;
+
+    if (view == NULL ||
+        !view->has_snapshot ||
+        view->snapshot.mode != view->mode) {
+        return false;
+    }
+
+    end_offset = (uint16_t)(address - view->snapshot.address + length);
+    return (uint16_t)(address - view->snapshot.address) < view->snapshot.length &&
+        end_offset <= view->snapshot.length;
+}
+
+static uint16_t frontend_disassembly_visible_decode_length(const frontend_disassembly_view_state *view)
+{
+    uint16_t length;
+
+    if (view == NULL) {
+        return 16;
+    }
+
+    length = (uint16_t)((uint16_t)view->rows * 3u + 16u);
+    if (length > FRONTEND_DISASM_FETCH_BYTES) {
+        return FRONTEND_DISASM_FETCH_BYTES;
+    }
+    return length;
 }
 
 static void frontend_disassembly_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
 {
     frontend_disassembly_view_state *view = &ui->disassembly;
     uint16_t length = FRONTEND_DISASM_FETCH_BYTES;
+    uint16_t request_address = view->pc_lock_active ?
+        (uint16_t)(view->pc_lock_address - (uint16_t)(view->rows * 3u + 8u)) :
+        view->top_address;
 
     if (debug_state != NULL &&
         debug_state->has_memory &&
         debug_state->memory.mode == view->mode &&
-        debug_state->memory.address == view->top_address) {
+        debug_state->memory.address == request_address) {
         view->snapshot = debug_state->memory;
         view->has_snapshot = true;
     }
 
     if (!view->request_pending ||
-        view->requested_address != view->top_address ||
+        view->requested_address != request_address ||
         view->requested_length != length ||
         view->requested_mode != view->mode ||
-        !frontend_disassembly_snapshot_covers(view, length)) {
-        frontend_push_memory_request(ui, view->top_address, length, view->mode);
-        view->requested_address = view->top_address;
+        !frontend_disassembly_snapshot_covers(view, request_address, length)) {
+        frontend_push_memory_request(ui, request_address, length, view->mode);
+        view->requested_address = request_address;
         view->requested_length = length;
         view->requested_mode = view->mode;
         view->request_pending = true;
@@ -802,9 +904,13 @@ static void frontend_disassembly_follow_pc(frontend *ui, const frontend_debug_st
         return;
     }
 
-    view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    view->pc_lock_address = debug_state->cpu.pc;
+    if (!frontend_disassembly_pc_locked_top(view, debug_state->cpu.pc, &view->top_address)) {
+        view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    }
     view->address_entry = false;
     view->follow_pc = true;
+    view->pc_lock_active = true;
     view->has_user_cursor = false;
     view->request_pending = false;
 }
@@ -817,7 +923,11 @@ static void frontend_disassembly_center_pc(frontend *ui, const frontend_debug_st
         return;
     }
 
-    view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    view->pc_lock_address = debug_state->cpu.pc;
+    if (!frontend_disassembly_pc_locked_top(view, debug_state->cpu.pc, &view->top_address)) {
+        view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    }
+    view->pc_lock_active = true;
     view->request_pending = false;
 }
 
@@ -872,6 +982,7 @@ static void frontend_disassembly_scroll_to_top(frontend *ui, uint16_t address)
     frontend_disassembly_set_user_cursor(&ui->disassembly, address, 0, 1);
     ui->disassembly.request_pending = false;
     ui->disassembly.follow_pc = false;
+    ui->disassembly.pc_lock_active = false;
 }
 
 static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
@@ -890,6 +1001,7 @@ static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
         (uint16_t)((uint16_t)digit << shift));
     view->top_address = frontend_disassembly_center_top(view->cursor_address, view->rows);
     view->request_pending = false;
+    view->pc_lock_active = false;
 
     if (view->active_address_digit >= 3) {
         view->address_entry = false;
@@ -995,6 +1107,7 @@ static void frontend_disassembly_handle_key(
             view->lines[0].length);
         view->request_pending = false;
         view->follow_pc = false;
+        view->pc_lock_active = false;
         return;
     }
 
@@ -1004,6 +1117,7 @@ static void frontend_disassembly_handle_key(
         frontend_disassembly_set_user_cursor(view, view->top_address, 0, view->lines[last].length);
         view->request_pending = false;
         view->follow_pc = false;
+        view->pc_lock_active = false;
         return;
     }
 
@@ -1026,6 +1140,7 @@ static void frontend_disassembly_handle_key(
                 1);
             view->request_pending = false;
             view->follow_pc = false;
+            view->pc_lock_active = false;
         } else if (view->rows > 0) {
             uint8_t last = view->rows - 1u;
             frontend_disassembly_set_user_cursor(
@@ -1054,6 +1169,7 @@ static void frontend_disassembly_handle_key(
             view->request_pending = false;
         }
         view->follow_pc = false;
+        view->pc_lock_active = false;
         return;
     }
 
@@ -1079,6 +1195,7 @@ static void frontend_disassembly_handle_key(
             view->request_pending = false;
         }
         view->follow_pc = false;
+        view->pc_lock_active = false;
         return;
     }
 
@@ -1262,6 +1379,7 @@ static void frontend_disassembly_draw_scrollbar(
             view->top_address = (uint16_t)(relative * 65535.0f);
             frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
             view->follow_pc = false;
+            view->pc_lock_active = false;
             view->request_pending = false;
         }
     } else if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, track) &&
@@ -1277,6 +1395,7 @@ static void frontend_disassembly_draw_scrollbar(
             }
             frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
             view->follow_pc = false;
+            view->pc_lock_active = false;
             view->request_pending = false;
         }
     }
@@ -1363,6 +1482,7 @@ static void frontend_draw_disassembly_view(
             view->top_address = (uint16_t)(view->top_address + lines);
             view->request_pending = false;
             view->follow_pc = false;
+            view->pc_lock_active = false;
             frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
         }
     }
@@ -1375,7 +1495,18 @@ static void frontend_draw_disassembly_view(
     }
 
     frontend_disassembly_request_if_needed(ui, debug_state);
-    if (frontend_disassembly_snapshot_covers(view, FRONTEND_DISASM_FETCH_BYTES)) {
+    if (view->pc_lock_active) {
+        uint16_t locked_top;
+        if (frontend_disassembly_pc_locked_top(view, view->pc_lock_address, &locked_top) &&
+            locked_top != view->top_address) {
+            view->top_address = locked_top;
+            view->request_pending = false;
+        }
+    }
+    if (frontend_disassembly_snapshot_covers(
+            view,
+            view->top_address,
+            frontend_disassembly_visible_decode_length(view))) {
         frontend_disassembly_decode(ui);
     }
 
@@ -1443,6 +1574,7 @@ static void frontend_draw_disassembly_view(
                         frontend_disassembly_set_user_cursor(view, line->address, row, line->length);
                         view->address_entry = false;
                         view->follow_pc = false;
+                        view->pc_lock_active = false;
                     }
                 }
                 frontend_disassembly_draw_address_cursor(ui, row_bounds, rendered);

@@ -50,4 +50,4 @@ disasm_6502_line disasm_6502_decode_line(
     const symbol_resolver *symbols);
 
 uint8_t disasm_6502_instruction_length(uint8_t opcode);
-
+bool disasm_6502_opcode_is_valid(uint8_t opcode);

@@ -91,7 +91,10 @@ int main(void)
         fprintf(stderr, "forced byte metadata mismatch\n");
         failures++;
     }
+    if (!disasm_6502_opcode_is_valid(0xa9) || disasm_6502_opcode_is_valid(0x02)) {
+        fprintf(stderr, "opcode validity mismatch\n");
+        failures++;
+    }
 
     return failures == 0 ? 0 : 1;
 }
-
