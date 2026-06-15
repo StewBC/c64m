@@ -99,12 +99,23 @@ Implemented:
   - runtime owns and applies memory writes only while paused
   - running memory writes are ignored by runtime
   - regression coverage validates memory snapshots, paused writes, and running-state rejection
+- Phase 12 debugger UI foundation, View 2:
+  - disassembly view renders compact decoded 6502 lines from copied runtime memory snapshots
+  - decoder lives in `src/tools/disasm_6502` and does not own or read machine state
+  - CPU-map and raw RAM disassembly modes are supported
+  - current PC rows are highlighted and drive the view while running or stepping
+  - transient user cursor is created only by paused navigation, is cleared by run, and preserves its address while off-screen
+  - PageUp/PageDown, Home/End, Up/Down, follow-PC, scrollbar, and basic address-entry navigation are wired
+  - running debugger refreshes CPU/machine snapshots at frame cadence
+  - symbol resolver hooks exist and currently default to not found
+  - breakpoint rendering/toggling is intentionally left as a future runtime-backed hook
+  - regression coverage validates core decoder formatting and symbol lookup behavior
 
 ## Not Implemented
 
 - Phase 12 debugger Views still pending:
-  - disassembly view
   - misc/debugger breakpoint/status panel
+- Runtime-backed execute breakpoints and breakpoint snapshots.
 - Full CIA accuracy.
 - Sprites.
 - SID.

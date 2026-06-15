@@ -167,6 +167,18 @@ target_link_libraries(test_app_options PRIVATE
 
 add_test(NAME app_options COMMAND test_app_options)
 
+add_executable(test_disasm_6502
+    tests/tools/test_disasm_6502.c
+)
+
+target_compile_features(test_disasm_6502 PRIVATE c_std_99)
+
+target_link_libraries(test_disasm_6502 PRIVATE
+    disasm_6502
+)
+
+add_test(NAME disasm_6502 COMMAND test_disasm_6502)
+
 add_executable(test_runtime_romboot
     tests/runtime/test_runtime_romboot.c
 )

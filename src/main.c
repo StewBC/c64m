@@ -94,6 +94,7 @@ static void update_debug_state_from_event(
 static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_debug_state *debug_state) {
     runtime_event event;
     c64_frame frame;
+    bool consumed_frame = false;
 
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
@@ -114,7 +115,13 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
             debug_state->frame_number = frame.frame_number;
             debug_state->frame_cycle = frame.machine_cycle;
             debug_state->has_frame = true;
+            consumed_frame = true;
         }
+    }
+
+    if (consumed_frame && debug_state != NULL &&
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        request_debug_state(client);
     }
 }
 

@@ -25,5 +25,6 @@ target_link_libraries(frontend
     PRIVATE
     platform
     SDL2::SDL2
+    tools
     util
 )

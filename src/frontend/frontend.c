@@ -4,6 +4,7 @@
 #include "nuklear_sdl.h"
 
 #include "c64_layout.h"
+#include "disasm_6502.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +67,41 @@ typedef struct frontend_memory_view_state {
     float scrollbar_grab_offset;
 } frontend_memory_view_state;
 
+enum {
+    FRONTEND_DISASM_MAX_ROWS = 128,
+    FRONTEND_DISASM_FETCH_BYTES = RUNTIME_MEMORY_SNAPSHOT_MAX,
+    FRONTEND_DISASM_CENTER_LOOKBACK = 32
+};
+
+typedef struct frontend_disassembly_view_state {
+    uint16_t top_address;
+    uint16_t cursor_address;
+    uint16_t cursor_prev_address;
+    uint16_t requested_address;
+    uint16_t requested_length;
+    runtime_memory_mode mode;
+    runtime_memory_mode requested_mode;
+    uint8_t rows;
+    uint8_t cursor_row;
+    uint8_t cursor_length;
+    uint8_t active_address_digit;
+    uint8_t symbol_display_mode;
+    uint16_t last_pc;
+    frontend_runtime_state last_runtime_state;
+    bool initialized;
+    bool request_pending;
+    bool active;
+    bool address_entry;
+    bool follow_pc;
+    bool has_last_pc;
+    bool has_user_cursor;
+    bool has_snapshot;
+    bool scrollbar_dragging;
+    float scrollbar_grab_offset;
+    runtime_memory_snapshot snapshot;
+    disasm_6502_line lines[FRONTEND_DISASM_MAX_ROWS];
+} frontend_disassembly_view_state;
+
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
@@ -77,14 +113,20 @@ struct frontend {
     c64_layout_limits limits;
     frontend_register_view_state registers;
     frontend_memory_view_state memory;
+    frontend_disassembly_view_state disassembly;
+    symbol_resolver symbols;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
     size_t intent_read;
     size_t intent_write;
     bool cancel_register_edit_requested;
     SDL_KeyboardEvent pending_memory_key;
     bool has_pending_memory_key;
+    SDL_KeyboardEvent pending_disassembly_key;
+    bool has_pending_disassembly_key;
     struct nk_rect memory_scrollbar_bounds;
     bool has_memory_scrollbar_bounds;
+    struct nk_rect disassembly_scrollbar_bounds;
+    bool has_disassembly_scrollbar_bounds;
 };
 
 static const nk_flags pane_flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR;
@@ -270,6 +312,8 @@ static int frontend_hex_digit_value(char ch)
     }
     return -1;
 }
+
+static float frontend_memory_char_width(frontend *ui);
 
 static bool frontend_parse_hex(const char *text, size_t max_digits, uint16_t *out)
 {
@@ -609,16 +653,837 @@ static void frontend_draw_registers(
     nk_end(ui->ctx);
 }
 
-static void frontend_draw_disassembly(struct nk_context *ctx, struct nk_rect bounds)
+static int frontend_disassembly_snapshot_index(
+    const frontend_disassembly_view_state *view,
+    uint16_t address)
 {
-    if (nk_begin(ctx, "Disassembly", bounds, pane_flags)) {
-        nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, "> $0000  -- -- --   pending runtime state", NK_TEXT_LEFT);
-        nk_label(ctx, "  $0001  -- -- --", NK_TEXT_LEFT);
-        nk_label(ctx, "  $0002  -- -- --", NK_TEXT_LEFT);
-        nk_label(ctx, "  $0003  -- -- --", NK_TEXT_LEFT);
+    uint16_t offset;
+
+    if (view == NULL ||
+        !view->has_snapshot ||
+        view->snapshot.mode != view->mode ||
+        view->snapshot.address != view->top_address) {
+        return -1;
     }
-    nk_end(ctx);
+
+    offset = (uint16_t)(address - view->snapshot.address);
+    if (offset >= view->snapshot.length) {
+        return -1;
+    }
+
+    return (int)offset;
+}
+
+static void frontend_disassembly_decode(frontend *ui)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    uint16_t address = view->top_address;
+    uint8_t row;
+
+    for (row = 0; row < view->rows && row < FRONTEND_DISASM_MAX_ROWS; ++row) {
+        int index = frontend_disassembly_snapshot_index(view, address);
+        const uint8_t *bytes = NULL;
+        size_t available = 0;
+
+        if (index >= 0) {
+            bytes = &view->snapshot.bytes[index];
+            available = view->snapshot.length - (size_t)index;
+        }
+
+        view->lines[row] = disasm_6502_decode_line(address, bytes, available, &ui->symbols);
+        address = (uint16_t)(address + view->lines[row].length);
+    }
+}
+
+static int frontend_disassembly_find_row(
+    const frontend_disassembly_view_state *view,
+    uint16_t address)
+{
+    uint8_t row;
+
+    if (view == NULL) {
+        return -1;
+    }
+
+    for (row = 0; row < view->rows && row < FRONTEND_DISASM_MAX_ROWS; ++row) {
+        if (view->lines[row].address == address) {
+            return (int)row;
+        }
+    }
+
+    return -1;
+}
+
+static void frontend_disassembly_set_user_cursor(
+    frontend_disassembly_view_state *view,
+    uint16_t address,
+    uint8_t row,
+    uint8_t length)
+{
+    if (view == NULL) {
+        return;
+    }
+
+    view->has_user_cursor = true;
+    view->cursor_address = address;
+    view->cursor_row = row;
+    view->cursor_length = length == 0 ? 1 : length;
+    if (row > 0 &&
+        row < view->rows &&
+        view->lines[row].address == address) {
+        view->cursor_prev_address = view->lines[row - 1u].address;
+    } else {
+        view->cursor_prev_address = (uint16_t)(address - 1u);
+    }
+}
+
+static uint16_t frontend_disassembly_center_top(uint16_t address, uint8_t rows)
+{
+    uint8_t back = rows > 0 ? rows / 2 : 0;
+    uint8_t i;
+    uint16_t top = address;
+
+    if (back > FRONTEND_DISASM_CENTER_LOOKBACK) {
+        back = FRONTEND_DISASM_CENTER_LOOKBACK;
+    }
+
+    for (i = 0; i < back; ++i) {
+        top = (uint16_t)(top - 1u);
+    }
+
+    return top;
+}
+
+static bool frontend_disassembly_snapshot_covers(
+    const frontend_disassembly_view_state *view,
+    uint16_t length)
+{
+    if (view == NULL ||
+        !view->has_snapshot ||
+        view->snapshot.mode != view->mode ||
+        view->snapshot.address != view->top_address) {
+        return false;
+    }
+
+    return view->snapshot.length >= length;
+}
+
+static void frontend_disassembly_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    uint16_t length = FRONTEND_DISASM_FETCH_BYTES;
+
+    if (debug_state != NULL &&
+        debug_state->has_memory &&
+        debug_state->memory.mode == view->mode &&
+        debug_state->memory.address == view->top_address) {
+        view->snapshot = debug_state->memory;
+        view->has_snapshot = true;
+    }
+
+    if (!view->request_pending ||
+        view->requested_address != view->top_address ||
+        view->requested_length != length ||
+        view->requested_mode != view->mode ||
+        !frontend_disassembly_snapshot_covers(view, length)) {
+        frontend_push_memory_request(ui, view->top_address, length, view->mode);
+        view->requested_address = view->top_address;
+        view->requested_length = length;
+        view->requested_mode = view->mode;
+        view->request_pending = true;
+    }
+}
+
+static void frontend_disassembly_follow_pc(frontend *ui, const frontend_debug_state *debug_state)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+
+    if (debug_state == NULL || !debug_state->has_cpu) {
+        return;
+    }
+
+    view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    view->address_entry = false;
+    view->follow_pc = true;
+    view->has_user_cursor = false;
+    view->request_pending = false;
+}
+
+static void frontend_disassembly_center_pc(frontend *ui, const frontend_debug_state *debug_state)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+
+    if (debug_state == NULL || !debug_state->has_cpu) {
+        return;
+    }
+
+    view->top_address = frontend_disassembly_center_top(debug_state->cpu.pc, view->rows);
+    view->request_pending = false;
+}
+
+static void frontend_disassembly_center_cursor(frontend *ui)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+
+    if (!view->has_user_cursor) {
+        return;
+    }
+
+    view->top_address = frontend_disassembly_center_top(view->cursor_address, view->rows);
+    view->cursor_row = view->rows / 2;
+    view->request_pending = false;
+}
+
+static void frontend_disassembly_ensure_user_cursor(
+    frontend *ui,
+    const frontend_debug_state *debug_state)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    int pc_row;
+
+    if (view->has_user_cursor) {
+        return;
+    }
+
+    if (debug_state != NULL && debug_state->has_cpu) {
+        pc_row = frontend_disassembly_find_row(view, debug_state->cpu.pc);
+        if (pc_row >= 0) {
+            frontend_disassembly_set_user_cursor(
+                view,
+                debug_state->cpu.pc,
+                (uint8_t)pc_row,
+                view->lines[pc_row].length);
+        } else {
+            frontend_disassembly_set_user_cursor(
+                view,
+                debug_state->cpu.pc,
+                view->rows / 2,
+                1);
+        }
+        return;
+    }
+
+    frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
+}
+
+static void frontend_disassembly_scroll_to_top(frontend *ui, uint16_t address)
+{
+    ui->disassembly.top_address = address;
+    frontend_disassembly_set_user_cursor(&ui->disassembly, address, 0, 1);
+    ui->disassembly.request_pending = false;
+    ui->disassembly.follow_pc = false;
+}
+
+static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    int shift;
+    uint16_t mask;
+
+    if (digit < 0 || digit > 15) {
+        return;
+    }
+
+    shift = (3 - view->active_address_digit) * 4;
+    mask = (uint16_t)(0x0fu << shift);
+    view->cursor_address = (uint16_t)((view->cursor_address & (uint16_t)~mask) |
+        (uint16_t)((uint16_t)digit << shift));
+    view->top_address = frontend_disassembly_center_top(view->cursor_address, view->rows);
+    view->request_pending = false;
+
+    if (view->active_address_digit >= 3) {
+        view->address_entry = false;
+        view->active_address_digit = 0;
+    } else {
+        view->active_address_digit++;
+    }
+}
+
+static void frontend_disassembly_handle_key(
+    frontend *ui,
+    const frontend_debug_state *debug_state,
+    const SDL_KeyboardEvent *key)
+{
+    frontend_disassembly_view_state *view;
+    SDL_Keycode sym;
+    SDL_Keymod mod;
+    bool ctrl;
+    int row;
+
+    if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN) {
+        return;
+    }
+
+    view = &ui->disassembly;
+    if (debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        return;
+    }
+
+    sym = key->keysym.sym;
+    mod = key->keysym.mod;
+    ctrl = (mod & KMOD_CTRL) != 0;
+
+    if ((mod & KMOD_ALT) != 0 || sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
+        return;
+    }
+
+    if (ctrl && sym == SDLK_a) {
+        frontend_disassembly_ensure_user_cursor(ui, debug_state);
+        view->address_entry = !view->address_entry;
+        view->active_address_digit = 0;
+        return;
+    }
+
+    if (ctrl && sym == SDLK_s) {
+        if (ui->symbols.enumerate != NULL) {
+            (void)ui->symbols.enumerate(ui->symbols.userdata, NULL, 0);
+        }
+        return;
+    }
+
+    if (sym == SDLK_TAB) {
+        if ((mod & KMOD_SHIFT) != 0) {
+            view->symbol_display_mode = (uint8_t)((view->symbol_display_mode + 2u) % 3u);
+        } else {
+            view->symbol_display_mode = (uint8_t)((view->symbol_display_mode + 1u) % 3u);
+        }
+        return;
+    }
+
+    if (view->address_entry) {
+        if (sym == SDLK_RETURN) {
+            view->address_entry = false;
+            return;
+        }
+        if (sym == SDLK_HOME) {
+            view->active_address_digit = 0;
+            return;
+        }
+        if (sym == SDLK_END) {
+            view->active_address_digit = 3;
+            return;
+        }
+        if (sym == SDLK_LEFT) {
+            if (view->active_address_digit > 0) {
+                view->active_address_digit--;
+            }
+            return;
+        }
+        if (sym == SDLK_RIGHT) {
+            if (view->active_address_digit >= 3) {
+                view->address_entry = false;
+                view->active_address_digit = 0;
+            } else {
+                view->active_address_digit++;
+            }
+            return;
+        }
+        frontend_disassembly_apply_address_digit(ui, frontend_hex_digit_value((char)sym));
+        return;
+    }
+
+    frontend_disassembly_ensure_user_cursor(ui, debug_state);
+    row = frontend_disassembly_find_row(view, view->cursor_address);
+
+    if (sym == SDLK_PAGEUP) {
+        uint16_t old_top = view->lines[0].address;
+        view->top_address = (uint16_t)(old_top - (uint16_t)(view->rows > 0 ? view->rows - 1u : 0u));
+        frontend_disassembly_set_user_cursor(
+            view,
+            old_top,
+            view->rows > 0 ? view->rows - 1u : 0,
+            view->lines[0].length);
+        view->request_pending = false;
+        view->follow_pc = false;
+        return;
+    }
+
+    if (sym == SDLK_PAGEDOWN) {
+        uint8_t last = view->rows > 0 ? view->rows - 1u : 0;
+        view->top_address = view->lines[last].address;
+        frontend_disassembly_set_user_cursor(view, view->top_address, 0, view->lines[last].length);
+        view->request_pending = false;
+        view->follow_pc = false;
+        return;
+    }
+
+    if (sym == SDLK_HOME) {
+        if (ctrl) {
+            frontend_disassembly_scroll_to_top(ui, 0x0000);
+        } else if (view->rows > 0) {
+            frontend_disassembly_set_user_cursor(view, view->lines[0].address, 0, view->lines[0].length);
+        }
+        return;
+    }
+
+    if (sym == SDLK_END) {
+        if (ctrl) {
+            view->top_address = 0xffff;
+            frontend_disassembly_set_user_cursor(
+                view,
+                0xffff,
+                view->rows > 0 ? view->rows - 1u : 0,
+                1);
+            view->request_pending = false;
+            view->follow_pc = false;
+        } else if (view->rows > 0) {
+            uint8_t last = view->rows - 1u;
+            frontend_disassembly_set_user_cursor(
+                view,
+                view->lines[last].address,
+                last,
+                view->lines[last].length);
+        }
+        return;
+    }
+
+    if (sym == SDLK_UP) {
+        if (row > 0) {
+            frontend_disassembly_set_user_cursor(
+                view,
+                view->lines[row - 1].address,
+                (uint8_t)(row - 1),
+                view->lines[row - 1].length);
+        } else if (row < 0) {
+            frontend_disassembly_set_user_cursor(view, view->cursor_prev_address, view->rows / 2, 1);
+            frontend_disassembly_center_cursor(ui);
+        } else {
+            uint16_t previous = view->cursor_prev_address;
+            view->top_address = previous;
+            frontend_disassembly_set_user_cursor(view, previous, 0, 1);
+            view->request_pending = false;
+        }
+        view->follow_pc = false;
+        return;
+    }
+
+    if (sym == SDLK_DOWN) {
+        if (row >= 0 && row + 1 < view->rows) {
+            frontend_disassembly_set_user_cursor(
+                view,
+                view->lines[row + 1].address,
+                (uint8_t)(row + 1),
+                view->lines[row + 1].length);
+        } else if (row < 0) {
+            uint16_t next = (uint16_t)(view->cursor_address + view->cursor_length);
+            frontend_disassembly_set_user_cursor(view, next, view->rows / 2, 1);
+            frontend_disassembly_center_cursor(ui);
+        } else if (view->rows > 0) {
+            view->top_address = view->rows > 1 ? view->lines[1].address :
+                (uint16_t)(view->top_address + 1u);
+            frontend_disassembly_set_user_cursor(
+                view,
+                view->lines[view->rows - 1u].address,
+                view->rows - 1u,
+                view->lines[view->rows - 1u].length);
+            view->request_pending = false;
+        }
+        view->follow_pc = false;
+        return;
+    }
+
+    if (sym == SDLK_LEFT) {
+        if (ctrl && debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+            frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC, view->cursor_address);
+        } else if (row < 0) {
+            frontend_disassembly_center_cursor(ui);
+        }
+        return;
+    }
+
+    if (sym == SDLK_RIGHT) {
+        frontend_disassembly_follow_pc(ui, debug_state);
+        return;
+    }
+}
+
+static char frontend_disassembly_line_char_at(const char *line, int index)
+{
+    size_t length;
+
+    if (line == NULL || index < 0) {
+        return ' ';
+    }
+
+    length = strlen(line);
+    if ((size_t)index >= length) {
+        return ' ';
+    }
+
+    return line[index];
+}
+
+static void frontend_disassembly_draw_address_cursor(
+    frontend *ui,
+    struct nk_rect row_bounds,
+    const char *line)
+{
+    struct nk_command_buffer *canvas;
+    float char_w;
+    struct nk_rect cursor_rect;
+    char text[2];
+    int text_col;
+
+    if (ui == NULL || line == NULL || !ui->disassembly.active || !ui->disassembly.address_entry) {
+        return;
+    }
+
+    text_col = 3 + ui->disassembly.active_address_digit;
+    char_w = frontend_memory_char_width(ui);
+    cursor_rect = nk_rect(
+        row_bounds.x + char_w * (float)text_col,
+        row_bounds.y + 1.0f,
+        char_w,
+        row_bounds.h - 2.0f);
+    text[0] = frontend_disassembly_line_char_at(line, text_col);
+    text[1] = '\0';
+
+    canvas = nk_window_get_canvas(ui->ctx);
+    nk_fill_rect(canvas, cursor_rect, 0.0f, nk_rgb(255, 244, 120));
+    nk_draw_text(
+        canvas,
+        cursor_rect,
+        text,
+        1,
+        ui->ctx->style.font,
+        nk_rgb(255, 244, 120),
+        nk_rgb(20, 24, 28));
+}
+
+static void frontend_disassembly_handle_mouse_row(
+    frontend *ui,
+    const frontend_debug_state *debug_state,
+    struct nk_rect row_bounds,
+    uint8_t row)
+{
+    float char_w;
+    float rel_x;
+    int text_col;
+
+    if (!nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) ||
+        !nk_input_is_mouse_hovering_rect(&ui->ctx->input, row_bounds)) {
+        return;
+    }
+
+    if (debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        ui->disassembly.active = true;
+        ui->memory.active = false;
+        return;
+    }
+
+    ui->disassembly.active = true;
+    ui->memory.active = false;
+    frontend_disassembly_set_user_cursor(
+        &ui->disassembly,
+        ui->disassembly.lines[row].address,
+        row,
+        ui->disassembly.lines[row].length);
+
+    char_w = frontend_memory_char_width(ui);
+    rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
+    if (rel_x < 0.0f) {
+        rel_x = 0.0f;
+    }
+    text_col = (int)(rel_x / char_w);
+    if (text_col >= 3 && text_col <= 6) {
+        ui->disassembly.address_entry = true;
+        ui->disassembly.active_address_digit = (uint8_t)(text_col - 3);
+    } else {
+        ui->disassembly.address_entry = false;
+    }
+}
+
+static void frontend_disassembly_draw_scrollbar(
+    frontend *ui,
+    const frontend_debug_state *debug_state,
+    struct nk_rect bounds)
+{
+    frontend_disassembly_view_state *view;
+    struct nk_command_buffer *canvas;
+    struct nk_rect track;
+    struct nk_rect thumb;
+    const struct nk_mouse *mouse;
+    float visible_fraction;
+    float thumb_h;
+    float thumb_y;
+    float usable_h;
+
+    if (ui == NULL || bounds.h <= 0.0f) {
+        return;
+    }
+
+    ui->disassembly_scrollbar_bounds = bounds;
+    ui->has_disassembly_scrollbar_bounds = true;
+
+    view = &ui->disassembly;
+    canvas = nk_window_get_canvas(ui->ctx);
+    mouse = &ui->ctx->input.mouse;
+    track = nk_rect(bounds.x + 2.0f, bounds.y + 2.0f, bounds.w - 4.0f, bounds.h - 4.0f);
+
+    visible_fraction = ((float)view->rows * 2.0f) / 65536.0f;
+    thumb_h = track.h * visible_fraction;
+    if (thumb_h < 16.0f) {
+        thumb_h = 16.0f;
+    }
+    if (thumb_h > track.h) {
+        thumb_h = track.h;
+    }
+
+    usable_h = track.h - thumb_h;
+    thumb_y = track.y + usable_h * ((float)view->top_address / 65535.0f);
+    thumb = nk_rect(track.x + 2.0f, thumb_y, track.w - 4.0f, thumb_h);
+
+    if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb) &&
+        nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
+        !view->scrollbar_dragging) {
+        view->active = true;
+        ui->memory.active = false;
+        view->scrollbar_dragging = true;
+        view->scrollbar_grab_offset = mouse->pos.y - thumb.y;
+    }
+
+    if (!nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT)) {
+        view->scrollbar_dragging = false;
+    }
+
+    if (view->scrollbar_dragging) {
+        float y = mouse->pos.y - view->scrollbar_grab_offset;
+        float relative;
+
+        if (y < track.y) {
+            y = track.y;
+        }
+        if (y > track.y + usable_h) {
+            y = track.y + usable_h;
+        }
+
+        relative = usable_h > 0.0f ? (y - track.y) / usable_h : 0.0f;
+        if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
+            view->top_address = (uint16_t)(relative * 65535.0f);
+            frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
+            view->follow_pc = false;
+            view->request_pending = false;
+        }
+    } else if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, track) &&
+        nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) &&
+        !nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb)) {
+        view->active = true;
+        ui->memory.active = false;
+        if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
+            if (mouse->pos.y < thumb.y) {
+                view->top_address = (uint16_t)(view->top_address - (uint16_t)(view->rows * 2u));
+            } else {
+                view->top_address = (uint16_t)(view->top_address + (uint16_t)(view->rows * 2u));
+            }
+            frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
+            view->follow_pc = false;
+            view->request_pending = false;
+        }
+    }
+
+    nk_fill_rect(canvas, track, 0.0f, nk_rgb(35, 41, 47));
+    nk_fill_rect(
+        canvas,
+        thumb,
+        2.0f,
+        nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb) || view->scrollbar_dragging ?
+            nk_rgb(160, 174, 186) :
+            nk_rgb(103, 124, 139));
+}
+
+static void frontend_draw_disassembly_view(
+    frontend *ui,
+    struct nk_rect bounds,
+    const frontend_debug_state *debug_state)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    struct nk_style_window saved_window_style;
+    uint8_t row;
+    uint8_t rows;
+    float row_h;
+    float footer_h;
+    float scrollbar_w = 24.0f;
+    float scrollbar_margin = 8.0f;
+    float content_h;
+
+    if (!view->initialized) {
+        view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+        view->follow_pc = true;
+        view->active = false;
+        view->initialized = true;
+        if (debug_state != NULL && debug_state->has_cpu) {
+            view->top_address = debug_state->cpu.pc;
+        }
+    }
+
+    row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height : 13.0f;
+    footer_h = 22.0f;
+    content_h = bounds.h - 28.0f - footer_h;
+    rows = (uint8_t)((content_h > row_h) ? (content_h / row_h) : 1);
+    if (rows == 0) {
+        rows = 1;
+    }
+    if (rows > FRONTEND_DISASM_MAX_ROWS) {
+        rows = FRONTEND_DISASM_MAX_ROWS;
+    }
+    view->rows = rows;
+
+    if (debug_state != NULL && debug_state->has_cpu) {
+        bool pc_changed = !view->has_last_pc || view->last_pc != debug_state->cpu.pc;
+
+        if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+            frontend_disassembly_follow_pc(ui, debug_state);
+        } else if (pc_changed) {
+            frontend_disassembly_center_pc(ui, debug_state);
+        } else if (view->follow_pc) {
+            int pc_row = frontend_disassembly_find_row(view, debug_state->cpu.pc);
+            if (pc_row < 0 || pc_row != rows / 2) {
+                frontend_disassembly_center_pc(ui, debug_state);
+            }
+        }
+
+        view->last_pc = debug_state->cpu.pc;
+        view->has_last_pc = true;
+    }
+    if (debug_state != NULL) {
+        view->last_runtime_state = debug_state->runtime_state;
+    }
+
+    if (nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
+        view->active = nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) ? true : false;
+        if (view->active) {
+            ui->memory.active = false;
+        }
+    }
+
+    if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
+        ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
+        if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
+            int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
+            view->top_address = (uint16_t)(view->top_address + lines);
+            view->request_pending = false;
+            view->follow_pc = false;
+            frontend_disassembly_set_user_cursor(view, view->top_address, 0, 1);
+        }
+    }
+
+    if (ui->has_pending_disassembly_key) {
+        if (view->active) {
+            frontend_disassembly_handle_key(ui, debug_state, &ui->pending_disassembly_key);
+        }
+        ui->has_pending_disassembly_key = false;
+    }
+
+    frontend_disassembly_request_if_needed(ui, debug_state);
+    if (frontend_disassembly_snapshot_covers(view, FRONTEND_DISASM_FETCH_BYTES)) {
+        frontend_disassembly_decode(ui);
+    }
+
+    if (nk_begin(ui->ctx, "Disassembly", bounds, pane_flags)) {
+        saved_window_style = ui->ctx->style.window;
+        ui->ctx->style.window.padding = nk_vec2(0.0f, 0.0f);
+        ui->ctx->style.window.spacing = nk_vec2(0.0f, 0.0f);
+        ui->ctx->style.window.group_padding = nk_vec2(0.0f, 0.0f);
+
+        nk_layout_row_begin(ui->ctx, NK_STATIC, row_h * (float)rows, 3);
+        nk_layout_row_push(ui->ctx, bounds.w - scrollbar_w - scrollbar_margin);
+        if (nk_group_begin(ui->ctx, "disassembly-rows", NK_WINDOW_NO_SCROLLBAR)) {
+            for (row = 0; row < rows; ++row) {
+                disasm_6502_line *line = &view->lines[row];
+                char bytes[16];
+                char rendered[96];
+                struct nk_rect row_bounds;
+                bool is_pc = debug_state != NULL && debug_state->has_cpu && line->address == debug_state->cpu.pc;
+                bool is_cursor = view->has_user_cursor && line->address == view->cursor_address && !is_pc;
+                struct nk_style_selectable saved_selectable = ui->ctx->style.selectable;
+                nk_bool selected = is_cursor ? nk_true : nk_false;
+
+                snprintf(bytes, sizeof(bytes), "%02X %s%s",
+                    line->bytes[0],
+                    line->length > 1 ? "" : "  ",
+                    line->length > 1 ? "" : "  ");
+                if (line->length == 2) {
+                    snprintf(bytes, sizeof(bytes), "%02X %02X   ", line->bytes[0], line->bytes[1]);
+                } else if (line->length >= 3) {
+                    snprintf(bytes, sizeof(bytes), "%02X %02X %02X", line->bytes[0], line->bytes[1], line->bytes[2]);
+                } else {
+                    snprintf(bytes, sizeof(bytes), "%02X      ", line->bytes[0]);
+                }
+
+                snprintf(rendered, sizeof(rendered), "%c  %04X  %-8s  %s",
+                    is_pc ? '>' : ' ',
+                    line->address,
+                    bytes,
+                    line->text);
+
+                if (line->forced_byte) {
+                    ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(30, 34, 38));
+                    ui->ctx->style.selectable.hover = nk_style_item_color(nk_rgb(39, 45, 51));
+                    ui->ctx->style.selectable.normal_active = nk_style_item_color(nk_rgb(49, 78, 94));
+                    ui->ctx->style.selectable.text_normal = nk_rgb(125, 136, 145);
+                }
+                if (is_pc) {
+                    ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(83, 73, 24));
+                    ui->ctx->style.selectable.text_normal = nk_rgb(255, 244, 120);
+                }
+                if (is_cursor) {
+                    ui->ctx->style.selectable.normal_active = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ui->ctx->style.selectable.text_normal_active = nk_rgb(226, 246, 255);
+                    ui->ctx->style.selectable.text_hover_active = nk_rgb(226, 246, 255);
+                    ui->ctx->style.selectable.text_pressed_active = nk_rgb(226, 246, 255);
+                }
+
+                nk_layout_row_dynamic(ui->ctx, row_h, 1);
+                row_bounds = nk_widget_bounds(ui->ctx);
+                frontend_disassembly_handle_mouse_row(ui, debug_state, row_bounds, row);
+                if (nk_selectable_label(ui->ctx, rendered, NK_TEXT_LEFT, &selected)) {
+                    if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
+                        view->active = true;
+                        ui->memory.active = false;
+                        frontend_disassembly_set_user_cursor(view, line->address, row, line->length);
+                        view->address_entry = false;
+                        view->follow_pc = false;
+                    }
+                }
+                frontend_disassembly_draw_address_cursor(ui, row_bounds, rendered);
+                ui->ctx->style.selectable = saved_selectable;
+            }
+            nk_group_end(ui->ctx);
+        }
+        nk_layout_row_push(ui->ctx, scrollbar_w);
+        if (nk_group_begin(ui->ctx, "disassembly-scrollbar", NK_WINDOW_NO_SCROLLBAR)) {
+            struct nk_rect scrollbar_bounds = nk_window_get_content_region(ui->ctx);
+            frontend_disassembly_draw_scrollbar(ui, debug_state, scrollbar_bounds);
+            nk_group_end(ui->ctx);
+        }
+        nk_layout_row_push(ui->ctx, scrollbar_margin);
+        nk_spacing(ui->ctx, 1);
+        nk_layout_row_end(ui->ctx);
+
+        nk_layout_row_begin(ui->ctx, NK_DYNAMIC, footer_h, 4);
+        nk_layout_row_push(ui->ctx, 0.30f);
+        if (nk_button_label(ui->ctx, view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? "CPU map" : "RAM")) {
+            view->mode = view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ?
+                RUNTIME_MEMORY_MODE_RAM :
+                RUNTIME_MEMORY_MODE_CPU_MAP;
+            view->request_pending = false;
+        }
+        nk_layout_row_push(ui->ctx, 0.25f);
+        nk_label(ui->ctx, view->address_entry ? "Address" : "Cursor", NK_TEXT_LEFT);
+        nk_layout_row_push(ui->ctx, 0.25f);
+        {
+            char label[32];
+            snprintf(label, sizeof(label), "PC: %04X", debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0);
+            nk_label(ui->ctx, label, NK_TEXT_LEFT);
+        }
+        nk_layout_row_push(ui->ctx, 0.20f);
+        nk_label(ui->ctx, view->symbol_display_mode == 0 ? "symbols: auto" :
+            (view->symbol_display_mode == 1 ? "symbols: names" : "symbols: raw"), NK_TEXT_LEFT);
+        nk_layout_row_end(ui->ctx);
+
+        ui->ctx->style.window = saved_window_style;
+    }
+    nk_end(ui->ctx);
 }
 
 static uint16_t frontend_memory_visible_count(const frontend_memory_view_state *memory)
@@ -1005,6 +1870,7 @@ static void frontend_memory_handle_mouse_row(
     }
 
     ui->memory.active = true;
+    ui->disassembly.active = false;
     rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
     if (rel_x < 0.0f) {
         rel_x = 0.0f;
@@ -1420,6 +2286,7 @@ frontend *frontend_create(platform_window *window)
     if (font != NULL) {
         nk_style_set_font(ui->ctx, &font->handle);
     }
+    symbol_resolver_null(&ui->symbols);
 
     ui->limits.registers_h_px = 88;
     ui->limits.min_display_w_px = 220;
@@ -1512,6 +2379,8 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
     if (event->type == SDL_KEYDOWN) {
         ui->pending_memory_key = event->key;
         ui->has_pending_memory_key = true;
+        ui->pending_disassembly_key = event->key;
+        ui->has_pending_disassembly_key = true;
     }
 
     nk_sdl_handle_event(event);
@@ -1615,9 +2484,13 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     parent = nk_rect(0.0f, 0.0f, (float)width, (float)height);
     c64_layout_compute(&ui->layout, parent, &ui->limits);
     debugger_scrollbar_active = ui->memory.scrollbar_dragging ||
+        ui->disassembly.scrollbar_dragging ||
         (ui->has_memory_scrollbar_bounds &&
          nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
-         nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->memory_scrollbar_bounds));
+         nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->memory_scrollbar_bounds)) ||
+        (ui->has_disassembly_scrollbar_bounds &&
+         nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
+         nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->disassembly_scrollbar_bounds));
     if (!debugger_scrollbar_active) {
         c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
     } else {
@@ -1626,7 +2499,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
 
     frontend_draw_display_placeholder(ui, ui->layout.display);
     frontend_draw_registers(ui, ui->layout.registers, debug_state);
-    frontend_draw_disassembly(ui->ctx, ui->layout.disassembly);
+    frontend_draw_disassembly_view(ui, ui->layout.disassembly, debug_state);
     frontend_draw_memory(ui, ui->layout.memory, debug_state);
     frontend_draw_misc(ui->ctx, ui->layout.misc);
 
