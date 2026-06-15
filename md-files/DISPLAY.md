@@ -162,14 +162,14 @@ The user should not see the window resize when switching standards.
 Recommended startup size:
 
 ```text
-768 x 544
+1152 x 816
 ```
 
 This is:
 
 ```text
 384 x 272
-scaled by 2
+scaled by 3
 ```
 
 Advantages:
@@ -368,7 +368,7 @@ Fixed Commodore surface:
     384 x 272
 
 Default window:
-    768 x 544
+    1152 x 816
 
 Display-only mode
 

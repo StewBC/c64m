@@ -2,6 +2,8 @@
 
 #include <SDL2/SDL.h>
 
+#define C64M_STARTUP_WINDOW_SCALE 3
+
 struct platform_window {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -39,8 +41,8 @@ platform_window *platform_window_create(const platform_window_config *config)
 
     display_width = config->display_width > 0 ? config->display_width : 384;
     display_height = config->display_height > 0 ? config->display_height : 272;
-    window_width = display_width * 2;
-    window_height = display_height * 2;
+    window_width = display_width * C64M_STARTUP_WINDOW_SCALE;
+    window_height = display_height * C64M_STARTUP_WINDOW_SCALE;
 
     platform = (platform_window *)SDL_calloc(1, sizeof(*platform));
     if (platform == NULL) {
