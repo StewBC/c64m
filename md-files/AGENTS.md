@@ -14,9 +14,9 @@ Reach a visible Commodore 64 BASIC startup screen.
 
 ```text
 1. AGENTS.md
-2. STATUS.md
-3. HIGHLEVEL.md
-4. Current phase document
+2. MASTER.md
+3. STATUS.md
+
 ```
 
 ## Architecture

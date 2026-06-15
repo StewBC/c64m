@@ -29,33 +29,6 @@ Owns:
 CPU, RAM, ROM, memory map, VIC-II, SID, CIA, cartridge,
 keyboard matrix, interrupts, cycle timing, bus behavior.
 ```
-
-Suggested files:
-
-```text
-machine/
-    c64.c
-    c64.h
-    c6510.c
-    c6510.h
-    memory.c
-    memory.h
-    ram.c
-    ram.h
-    rom.c
-    rom.h
-    vicii.c
-    vicii.h
-    sid.c
-    sid.h
-    cia.c
-    cia.h
-    cartridge.c
-    cartridge.h
-    keyboard_matrix.c
-    keyboard_matrix.h
-```
-
 Rules:
 
 ```text
@@ -82,26 +55,6 @@ request/response access to machine state,
 publishing snapshots/events to the UI thread.
 ```
 
-Suggested files:
-
-```text
-runtime/
-    runtime.c
-    runtime.h
-    runtime_thread.c
-    runtime_thread.h
-    runtime_client.c
-    runtime_client.h
-    runtime_command.c
-    runtime_command.h
-    runtime_event.c
-    runtime_event.h
-    breakpoints.c
-    breakpoints.h
-    watchpoints.c
-    watchpoints.h
-```
-
 Rules:
 
 ```text
@@ -121,16 +74,6 @@ Owns:
 ```text
 assembler, disassembler, symbol loading/parsing,
 PRG/CRT parsing if useful as reusable tooling.
-```
-
-Suggested structure (may evolve under development so don't fixate on this):
-
-```text
-tools/
-    assembler/
-    symbols/
-    prg/
-    1541/
 ```
 
 Rules:
@@ -155,14 +98,6 @@ SDL init/shutdown, window, renderer, audio device,
 input polling, filesystem paths, clipboard, host timing.
 ```
 
-Suggested files:
-
-```text
-platform/
-    platform.c
-    platform.h
-```
-
 Rules:
 
 ```text
@@ -184,26 +119,6 @@ Owns:
 menus, memory view, register view, disassembly view,
 video output view, debugger panels, settings UI,
 command dispatch to runtime_client.
-```
-
-Suggested files:
-
-```text
-frontend/
-    frontend.c
-    frontend.h
-    frontend_views.c
-    frontend_views.h
-    view_memory.c
-    view_memory.h
-    view_registers.c
-    view_registers.h
-    view_disasm.c
-    view_disasm.h
-    view_video.c
-    view_video.h
-    nuklear.h
-    nuklear_sdl.h
 ```
 
 Rules:
@@ -246,22 +161,6 @@ Owns:
 ```text
 logging, ring buffers, message queues, strings,
 small containers, assertions, common helpers.
-```
-
-Suggested contents:
-
-```text
-    logging
-    message queues
-    ring buffers
-    dynamic arrays
-    hash tables
-    string helpers
-    path helpers
-    config file helpers
-    CRC/checksum code
-    thread wrappers
-    mutex wrappers
 ```
 
 Rules:
