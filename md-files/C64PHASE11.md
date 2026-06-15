@@ -120,6 +120,49 @@ RUN
 
 Automate only if it can remain stable and not depend on wall-clock timing.
 
+## Validation Transcript
+
+Manual validation was performed at the live BASIC `READY.` prompt after the
+semantic frontend keyboard mapper landed.
+
+```text
+Startup:
+    emulator auto-runs after initialization
+    real 64C ROM reaches READY.
+    cursor is visible and flashes at plausible speed
+
+Typed:
+    10 PRINT "HELLO"
+    20 GOTO 10
+    RUN
+
+Observed:
+    A-Z, 0-9, SPACE, RETURN, and Backspace/DEL are accepted
+    quotes, colon, parentheses, equals, asterisk, plus/minus, comma, period, and slash map semantically
+    cursor arrows move in the expected host directions
+    HOME maps to HOME and Shift+HOME maps to CLR/HOME
+    ESC maps to RUN/STOP
+    host Delete triggers RESTORE
+    host Control maps to C64 CONTROL
+    host Tab maps to Commodore
+    Shift+letter produces the C64 left graphics character set
+    Tab+letter produces the C64 Commodore graphics character set
+```
+
+Regression coverage:
+
+```text
+frontend_input:
+    Shift+2 -> @
+    quote/double quote synthetic chords
+    Shift+letter graphics chord
+    cursor-key synthetic chords
+    Control, Commodore, RESTORE actions
+
+c64_keyboard:
+    matrix positions for RUN/STOP, HOME, cursor keys, CONTROL, Commodore, left-arrow, up-arrow, and pound
+```
+
 ---
 
 # Acceptance Criteria
@@ -132,6 +175,8 @@ Phase 11 is complete when:
 - Incorrect mappings discovered during validation are fixed.
 - Existing tests continue to pass.
 - New focused tests pass.
+
+Status: complete.
 
 ---
 

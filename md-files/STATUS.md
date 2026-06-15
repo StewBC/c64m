@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 11 keyboard mapping pass.
+Completed through Phase 11.
 
 Implemented:
 
@@ -62,6 +62,12 @@ Implemented:
   - emulator controls use Option+R run, Option+S step, and Option+P pause
   - F10/F11/F12 remain available for run/step/pause
   - host quote/double-quote, colon, plus, parentheses, asterisk, @, cursor arrows, HOME/CLR HOME, RUN/STOP, RESTORE, left-arrow, and up-arrow have semantic mappings
+  - Shift+letter preserves the C64 left graphics character set
+  - Tab+letter provides the C64 Commodore graphics character set
+  - manual BASIC validation transcript added for:
+    - `10 PRINT "HELLO"`
+    - `20 GOTO 10`
+    - `RUN`
 - IRQ/CIA boot compatibility:
   - CIA #1 ICR read/write diagnostics
   - CIA interrupt assertion diagnostics
@@ -99,13 +105,10 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 
 ## Next Phase
 
-Phase 11 follow-up.
+Phase 12.
 
 Goal:
 
 ```text
-BASIC usability polish
-    + live BASIC typing validation
-    + cursor/repeat timing validation
-    + focused CIA behavior fixes as needed
+To be defined.
 ```
