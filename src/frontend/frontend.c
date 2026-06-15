@@ -1435,6 +1435,42 @@ frontend *frontend_create(platform_window *window)
     return ui;
 }
 
+void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state)
+{
+    if (ui == NULL || state == NULL) {
+        return;
+    }
+
+    if (state->split_display_right > 0.0f) {
+        ui->layout.split_display_right = state->split_display_right;
+    }
+    if (state->split_top_bottom > 0.0f) {
+        ui->layout.split_top_bottom = state->split_top_bottom;
+    }
+    if (state->split_memory_misc > 0.0f) {
+        ui->layout.split_memory_misc = state->split_memory_misc;
+    }
+    if (state->display_width > 0) {
+        ui->layout.display_px_w = state->display_width;
+    }
+    if (state->display_height > 0) {
+        ui->layout.display_px_h = state->display_height;
+    }
+}
+
+void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state)
+{
+    if (ui == NULL || out_state == NULL) {
+        return;
+    }
+
+    out_state->split_display_right = ui->layout.split_display_right;
+    out_state->split_top_bottom = ui->layout.split_top_bottom;
+    out_state->split_memory_misc = ui->layout.split_memory_misc;
+    out_state->display_width = ui->layout.display_px_w;
+    out_state->display_height = ui->layout.display_px_h;
+}
+
 void frontend_destroy(frontend *ui)
 {
     if (ui == NULL) {

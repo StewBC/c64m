@@ -310,6 +310,7 @@ int main(int argc, char **argv) {
     frontend *ui = NULL;
     platform_window *window;
     platform_window_config window_config;
+    frontend_layout_state layout_state;
     int exit_code = 0;
 
     if (!app_options_load_startup(&options, argc, argv)) {
@@ -350,6 +351,8 @@ int main(int argc, char **argv) {
 
     window_config.display_width = options.display_width;
     window_config.display_height = options.display_height;
+    window_config.window_width = options.window_width;
+    window_config.window_height = options.window_height;
 
     window = platform_window_create(&window_config);
     if (window == NULL) {
@@ -370,6 +373,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    layout_state.split_display_right = options.layout_split_display_right;
+    layout_state.split_top_bottom = options.layout_split_top_bottom;
+    layout_state.split_memory_misc = options.layout_split_memory_misc;
+    layout_state.display_width = options.layout_display_width;
+    layout_state.display_height = options.layout_display_height;
+    frontend_set_layout_state(ui, &layout_state);
+
     send_run_command(client);
 
     if (!run_main_loop(window, client, ui)) {
@@ -379,6 +389,17 @@ int main(int argc, char **argv) {
     runtime_client_quit(client);
     runtime_stop(rt);
     poll_runtime_events(client, NULL, NULL);
+
+    platform_window_get_size(window, &options.window_width, &options.window_height);
+    frontend_get_layout_state(ui, &layout_state);
+    options.layout_split_display_right = layout_state.split_display_right;
+    options.layout_split_top_bottom = layout_state.split_top_bottom;
+    options.layout_split_memory_misc = layout_state.split_memory_misc;
+    options.layout_display_width = layout_state.display_width;
+    options.layout_display_height = layout_state.display_height;
+    if (!app_options_save_shutdown(&options)) {
+        SDL_Log("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
+    }
 
     frontend_destroy(ui);
     platform_window_destroy(window);

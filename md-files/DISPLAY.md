@@ -182,6 +182,27 @@ reasonable desktop footprint
 
 The window is resizable.
 
+When an INI file is in use, shutdown saves the current SDL window size:
+
+```text
+[Window]
+width
+height
+```
+
+The debugger splitter layout is saved separately:
+
+```text
+[Layout]
+split_display_right
+split_top_bottom
+split_memory_misc
+display_width
+display_height
+```
+
+`--nosaveini` disables shutdown persistence.
+
 ---
 
 # Scaling Rules
@@ -386,7 +407,6 @@ Do not implement:
 ```text
 multi-window support
 docking
-layout persistence
 multi-monitor support
 advanced scaling options
 ```

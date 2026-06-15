@@ -23,6 +23,13 @@ typedef struct app_options {
     bool integer_scale;
     bool aspect_correct;
     char *video_filter;
+    int window_width;
+    int window_height;
+    float layout_split_display_right;
+    float layout_split_top_bottom;
+    float layout_split_memory_misc;
+    int layout_display_width;
+    int layout_display_height;
     char *basic_rom_path;
     char *char_rom_path;
     char *kernal_rom_path;
@@ -31,4 +38,5 @@ typedef struct app_options {
 
 void app_options_init(app_options *options);
 bool app_options_load_startup(app_options *options, int argc, char **argv);
+bool app_options_save_shutdown(const app_options *options);
 void app_options_destroy(app_options *options);

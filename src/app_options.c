@@ -10,6 +10,9 @@
 #define C64M_DEFAULT_INI "c64m.ini"
 #define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
 #define C64M_DEFAULT_VIDEO_FILTER "nearest"
+#define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
+#define C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM 0.58f
+#define C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC 0.55f
 
 static char *copy_string(const char *value)
 {
@@ -42,6 +45,33 @@ static bool replace_string(char **target, const char *value)
     free(*target);
     *target = copy;
     return true;
+}
+
+static float config_get_float(config *cfg, const char *section, const char *key, float default_value)
+{
+    const char *value;
+    char *end;
+    float parsed;
+
+    value = config_get(cfg, section, key);
+    if (value == NULL) {
+        return default_value;
+    }
+
+    parsed = strtof(value, &end);
+    if (end == value || *end != '\0') {
+        return default_value;
+    }
+
+    return parsed;
+}
+
+static void config_set_float(config *cfg, const char *section, const char *key, float value)
+{
+    char buffer[32];
+
+    snprintf(buffer, sizeof(buffer), "%.6g", value);
+    config_set(cfg, section, key, buffer);
 }
 
 static int parse_bool_value(const char *value, bool *out)
@@ -109,6 +139,21 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->video_filter, value);
     }
+
+    options->window_width = config_get_int(
+        cfg, "Window", "width", options->window_width);
+    options->window_height = config_get_int(
+        cfg, "Window", "height", options->window_height);
+    options->layout_split_display_right = config_get_float(
+        cfg, "Layout", "split_display_right", options->layout_split_display_right);
+    options->layout_split_top_bottom = config_get_float(
+        cfg, "Layout", "split_top_bottom", options->layout_split_top_bottom);
+    options->layout_split_memory_misc = config_get_float(
+        cfg, "Layout", "split_memory_misc", options->layout_split_memory_misc);
+    options->layout_display_width = config_get_int(
+        cfg, "Layout", "display_width", options->layout_display_width);
+    options->layout_display_height = config_get_int(
+        cfg, "Layout", "display_height", options->layout_display_height);
 
     value = config_get(cfg, "runtime", "turbo");
     if (value != NULL) {
@@ -309,6 +354,13 @@ void app_options_init(app_options *options)
     options->integer_scale = true;
     options->aspect_correct = true;
     replace_string(&options->video_filter, C64M_DEFAULT_VIDEO_FILTER);
+    options->window_width = 0;
+    options->window_height = 0;
+    options->layout_split_display_right = C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT;
+    options->layout_split_top_bottom = C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM;
+    options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
+    options->layout_display_width = C64M_DEFAULT_DISPLAY_WIDTH;
+    options->layout_display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
 }
 
 bool app_options_load_startup(app_options *options, int argc, char **argv)
@@ -335,6 +387,77 @@ bool app_options_load_startup(app_options *options, int argc, char **argv)
 
     config_destroy(cfg);
     return true;
+}
+
+bool app_options_save_shutdown(const app_options *options)
+{
+    config *cfg;
+    bool ok;
+    int drive;
+    char key[8];
+
+    if (options == NULL || !options->use_ini || options->no_save_ini || options->ini_path == NULL) {
+        return true;
+    }
+
+    cfg = config_load(options->ini_path);
+    if (cfg == NULL) {
+        cfg = config_load(NULL);
+    }
+    if (cfg == NULL) {
+        return false;
+    }
+
+    if (options->video_standard != NULL) {
+        config_set(cfg, "Video", "standard", options->video_standard);
+    }
+    config_set_int(cfg, "Video", "display_width", options->display_width);
+    config_set_int(cfg, "Video", "display_height", options->display_height);
+    config_set_bool(cfg, "Video", "integer_scale", options->integer_scale);
+    config_set_bool(cfg, "Video", "aspect_correct", options->aspect_correct);
+    if (options->video_filter != NULL) {
+        config_set(cfg, "Video", "filter", options->video_filter);
+    }
+
+    config_set_bool(cfg, "ui", "leds", options->show_leds);
+    if (options->turbo_multipliers != NULL) {
+        config_set(cfg, "runtime", "turbo", options->turbo_multipliers);
+    }
+
+    if (options->window_width > 0 && options->window_height > 0) {
+        config_set_int(cfg, "Window", "width", options->window_width);
+        config_set_int(cfg, "Window", "height", options->window_height);
+    }
+
+    config_set_float(cfg, "Layout", "split_display_right", options->layout_split_display_right);
+    config_set_float(cfg, "Layout", "split_top_bottom", options->layout_split_top_bottom);
+    config_set_float(cfg, "Layout", "split_memory_misc", options->layout_split_memory_misc);
+    config_set_int(cfg, "Layout", "display_width", options->layout_display_width);
+    config_set_int(cfg, "Layout", "display_height", options->layout_display_height);
+
+    if (options->basic_rom_path != NULL) {
+        config_set(cfg, "roms", "basic", options->basic_rom_path);
+    }
+    if (options->char_rom_path != NULL) {
+        config_set(cfg, "roms", "character", options->char_rom_path);
+    }
+    if (options->kernal_rom_path != NULL) {
+        config_set(cfg, "roms", "kernal", options->kernal_rom_path);
+    }
+    if (options->system_rom_path != NULL) {
+        config_set(cfg, "roms", "system", options->system_rom_path);
+    }
+
+    for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
+        if (options->disk_images[drive] != NULL) {
+            snprintf(key, sizeof(key), "%d", drive);
+            config_set(cfg, "disk", key, options->disk_images[drive]);
+        }
+    }
+
+    ok = config_save(cfg, options->ini_path);
+    config_destroy(cfg);
+    return ok;
 }
 
 void app_options_destroy(app_options *options)

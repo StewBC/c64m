@@ -49,6 +49,14 @@ typedef struct frontend_debugger_intent {
     runtime_memory_mode memory_mode;
 } frontend_debugger_intent;
 
+typedef struct frontend_layout_state {
+    float split_display_right;
+    float split_top_bottom;
+    float split_memory_misc;
+    int display_width;
+    int display_height;
+} frontend_layout_state;
+
 frontend *frontend_create(platform_window *window);
 void frontend_destroy(frontend *ui);
 
@@ -58,3 +66,5 @@ void frontend_end_input(frontend *ui);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
 bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent);
+void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state);
+void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);

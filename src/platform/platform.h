@@ -9,6 +9,8 @@ typedef struct platform_window platform_window;
 typedef struct platform_window_config {
     int display_width;
     int display_height;
+    int window_width;
+    int window_height;
 } platform_window_config;
 
 bool platform_init(void);
