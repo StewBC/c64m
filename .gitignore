@@ -3,5 +3,6 @@
 .cache/
 build/
 disks/
+programs/
 *.ini
 !CMakeLists.txt
