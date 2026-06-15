@@ -27,6 +27,21 @@ typedef struct frontend_debug_state {
     bool has_cpu;
 } frontend_debug_state;
 
+typedef enum frontend_debugger_intent_type {
+    FRONTEND_DEBUGGER_INTENT_NONE = 0,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_SP,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_A,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_X,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_Y,
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS
+} frontend_debugger_intent_type;
+
+typedef struct frontend_debugger_intent {
+    frontend_debugger_intent_type type;
+    uint16_t value;
+} frontend_debugger_intent;
+
 frontend *frontend_create(platform_window *window);
 void frontend_destroy(frontend *ui);
 
@@ -35,3 +50,4 @@ void frontend_handle_event(frontend *ui, SDL_Event *event);
 void frontend_end_input(frontend *ui);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
+bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent);

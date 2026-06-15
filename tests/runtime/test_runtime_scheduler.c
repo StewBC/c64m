@@ -30,6 +30,13 @@ static void expect_u16(const char *name, uint16_t expected, uint16_t actual) {
     }
 }
 
+static void expect_u8(const char *name, uint8_t expected, uint8_t actual) {
+    if (expected != actual) {
+        fprintf(stderr, "%s: expected %02x, got %02x\n", name, expected, actual);
+        exit(1);
+    }
+}
+
 static void expect_u64(const char *name, uint64_t expected, uint64_t actual) {
     if (expected != actual) {
         fprintf(stderr, "%s: expected %llu, got %llu\n", name, (unsigned long long)expected, (unsigned long long)actual);
@@ -125,6 +132,17 @@ static int poll_event(runtime_client *client, runtime_event *event, runtime_even
     return 0;
 }
 
+static void drain_runtime_events(runtime_client *client) {
+    runtime_event event;
+
+    while (runtime_client_poll_event(client, &event)) {
+        if (event.type == RUNTIME_EVENT_ERROR) {
+            fprintf(stderr, "runtime error: %s\n", event.data.error.message);
+            exit(1);
+        }
+    }
+}
+
 static runtime *start_runtime(runtime_client **out_client) {
     runtime_config config = {
         .system_rom_path = "scheduler_64c.bin",
@@ -145,11 +163,22 @@ static runtime *start_runtime(runtime_client **out_client) {
     if (!poll_event(client, &event, RUNTIME_EVENT_STARTED)) {
         fail("STARTED event not received");
     }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("startup RESET_COMPLETE event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("startup CPU state not received");
+    }
+    drain_runtime_events(client);
 
     expect_true("runtime reset", runtime_client_reset(client));
     if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
         fail("RESET_COMPLETE event not received");
     }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("reset CPU state not received");
+    }
+    drain_runtime_events(client);
 
     *out_client = client;
     return rt;
@@ -298,6 +327,74 @@ static void test_runtime_step_instruction_from_running_pauses(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_cpu_register_setters_are_paused_only(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("set PC while paused", runtime_client_set_pc(client, 0xc123));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set PC");
+    }
+    expect_u16("paused set PC", 0xc123, event.data.cpu_state.pc);
+
+    expect_true("set SP while paused", runtime_client_set_sp(client, 0x7e));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set SP");
+    }
+    expect_u8("paused set SP", 0x7e, event.data.cpu_state.sp);
+
+    expect_true("set A while paused", runtime_client_set_a(client, 0x55));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set A");
+    }
+    expect_u8("paused set A", 0x55, event.data.cpu_state.a);
+
+    expect_true("set X while paused", runtime_client_set_x(client, 0x66));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set X");
+    }
+    expect_u8("paused set X", 0x66, event.data.cpu_state.x);
+
+    expect_true("set Y while paused", runtime_client_set_y(client, 0x77));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set Y");
+    }
+    expect_u8("paused set Y", 0x77, event.data.cpu_state.y);
+
+    expect_true("set status while paused", runtime_client_set_status(client, 0xa5));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after set status");
+    }
+    expect_u8("paused set status", 0xa5, event.data.cpu_state.p);
+
+    expect_true("restore PC before running ignore test", runtime_client_set_pc(client, TEST_RESET_VECTOR));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after restoring PC");
+    }
+    expect_u16("restored PC before running ignore test", TEST_RESET_VECTOR, event.data.cpu_state.pc);
+
+    expect_true("run before ignored set A", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received before ignored set A");
+    }
+
+    expect_true("set A while running", runtime_client_set_a(client, 0x99));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state not received after ignored set A");
+    }
+    expect_u8("running set A ignored", 0x55, event.data.cpu_state.a);
+
+    expect_true("pause after ignored set A", runtime_client_pause(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received after ignored set A");
+    }
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
     test_single_machine_cycle();
@@ -306,6 +403,7 @@ int main(void) {
     test_runtime_restore_event_reaches_machine();
     test_runtime_run_pause();
     test_runtime_step_instruction_from_running_pauses();
+    test_runtime_cpu_register_setters_are_paused_only();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");
     return 0;

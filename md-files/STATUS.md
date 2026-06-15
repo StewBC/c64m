@@ -80,9 +80,21 @@ Implemented:
   - reset screen starts clear
   - frontend queues Run automatically after initialization
 - SDL display of machine-generated frames.
+- Phase 12 debugger UI foundation, View 1:
+  - slim CPU/register view renders from copied runtime CPU snapshots
+  - PC, SP, A, X, Y, and `N V - B D I Z C` flags display in fixed-width uppercase/readable form
+  - paused register/status edits emit frontend debugger intents
+  - `main.c` translates debugger intents into runtime_client commands
+  - runtime owns and applies CPU register mutations only while paused
+  - running register mutations are ignored by runtime
+  - regression coverage validates paused CPU register setters and running-state rejection
 
 ## Not Implemented
 
+- Phase 12 debugger Views 2+:
+  - disassembly view
+  - memory view
+  - misc/debugger breakpoint/status panel
 - Full CIA accuracy.
 - Sprites.
 - SID.
@@ -105,10 +117,10 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 
 ## Next Phase
 
-Phase 12.
+Phase 12, View 2.
 
 Goal:
 
 ```text
-To be defined.
+Implement the disassembly view from md-files/C64PHASE12.md.
 ```

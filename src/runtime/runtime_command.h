@@ -20,8 +20,18 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_REQUEST_MACHINE_STATE,
     RUNTIME_COMMAND_REQUEST_FRAME,
     RUNTIME_COMMAND_KEYBOARD_KEY,
-    RUNTIME_COMMAND_RESTORE
+    RUNTIME_COMMAND_RESTORE,
+    RUNTIME_COMMAND_SET_CPU_REGISTER
 } runtime_command_type;
+
+typedef enum runtime_cpu_register {
+    RUNTIME_CPU_REGISTER_PC = 0,
+    RUNTIME_CPU_REGISTER_SP,
+    RUNTIME_CPU_REGISTER_A,
+    RUNTIME_CPU_REGISTER_X,
+    RUNTIME_CPU_REGISTER_Y,
+    RUNTIME_CPU_REGISTER_STATUS
+} runtime_cpu_register;
 
 typedef struct runtime_command {
     runtime_command_type type;
@@ -38,5 +48,10 @@ typedef struct runtime_command {
             c64_key key;
             uint8_t pressed;
         } keyboard_key;
+
+        struct {
+            runtime_cpu_register reg;
+            uint16_t value;
+        } set_cpu_register;
     } data;
 } runtime_command;

@@ -7,6 +7,38 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+enum {
+    FRONTEND_DEBUGGER_INTENT_CAPACITY = 32
+};
+
+typedef enum frontend_register_field {
+    FRONTEND_REGISTER_FIELD_NONE = 0,
+    FRONTEND_REGISTER_FIELD_PC,
+    FRONTEND_REGISTER_FIELD_SP,
+    FRONTEND_REGISTER_FIELD_A,
+    FRONTEND_REGISTER_FIELD_X,
+    FRONTEND_REGISTER_FIELD_Y,
+    FRONTEND_REGISTER_FIELD_STATUS_N,
+    FRONTEND_REGISTER_FIELD_STATUS_V,
+    FRONTEND_REGISTER_FIELD_STATUS_UNUSED,
+    FRONTEND_REGISTER_FIELD_STATUS_B,
+    FRONTEND_REGISTER_FIELD_STATUS_D,
+    FRONTEND_REGISTER_FIELD_STATUS_I,
+    FRONTEND_REGISTER_FIELD_STATUS_Z,
+    FRONTEND_REGISTER_FIELD_STATUS_C
+} frontend_register_field;
+
+typedef struct frontend_register_view_state {
+    frontend_register_field active_field;
+    char pc[5];
+    char sp[3];
+    char a[3];
+    char x[3];
+    char y[3];
+    char flags[8][2];
+} frontend_register_view_state;
 
 struct frontend {
     platform_window *window;
@@ -17,6 +49,11 @@ struct frontend {
     bool has_frame;
     c64_layout layout;
     c64_layout_limits limits;
+    frontend_register_view_state registers;
+    frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
+    size_t intent_read;
+    size_t intent_write;
+    bool cancel_register_edit_requested;
 };
 
 static const nk_flags pane_flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR;
@@ -62,16 +99,6 @@ static struct nk_rect frontend_fit_nk_rect(
     return nk_rect((float)fit.x, (float)fit.y, (float)fit.w, (float)fit.h);
 }
 
-static void frontend_label_value(struct nk_context *ctx, const char *label, const char *value)
-{
-    nk_layout_row_begin(ctx, NK_STATIC, 18.0f, 2);
-    nk_layout_row_push(ctx, 42.0f);
-    nk_label(ctx, label, NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 90.0f);
-    nk_label(ctx, value, NK_TEXT_LEFT);
-    nk_layout_row_end(ctx);
-}
-
 static const char *frontend_runtime_state_name(frontend_runtime_state state)
 {
     switch (state) {
@@ -85,6 +112,211 @@ static const char *frontend_runtime_state_name(frontend_runtime_state state)
         default:
             return "UNKNOWN";
     }
+}
+
+static void frontend_push_debugger_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    uint16_t value)
+{
+    size_t next;
+
+    if (ui == NULL || type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+
+    ui->intents[ui->intent_write].type = type;
+    ui->intents[ui->intent_write].value = value;
+    ui->intent_write = next;
+}
+
+static void frontend_format_register_buffers(
+    frontend_register_view_state *state,
+    const runtime_cpu_snapshot *cpu,
+    frontend_register_field except)
+{
+    static const uint8_t flag_bits[8] = {7, 6, 5, 4, 3, 2, 1, 0};
+    size_t i;
+
+    if (state == NULL || cpu == NULL) {
+        return;
+    }
+
+    if (except != FRONTEND_REGISTER_FIELD_PC) {
+        snprintf(state->pc, sizeof(state->pc), "%04X", cpu->pc);
+    }
+    if (except != FRONTEND_REGISTER_FIELD_SP) {
+        snprintf(state->sp, sizeof(state->sp), "%02X", cpu->sp);
+    }
+    if (except != FRONTEND_REGISTER_FIELD_A) {
+        snprintf(state->a, sizeof(state->a), "%02X", cpu->a);
+    }
+    if (except != FRONTEND_REGISTER_FIELD_X) {
+        snprintf(state->x, sizeof(state->x), "%02X", cpu->x);
+    }
+    if (except != FRONTEND_REGISTER_FIELD_Y) {
+        snprintf(state->y, sizeof(state->y), "%02X", cpu->y);
+    }
+
+    for (i = 0; i < 8; ++i) {
+        frontend_register_field field = (frontend_register_field)(
+            FRONTEND_REGISTER_FIELD_STATUS_N + (int)i);
+
+        if (except == field) {
+            continue;
+        }
+
+        state->flags[i][0] = (cpu->p & (uint8_t)(1u << flag_bits[i])) ? '1' : '0';
+        state->flags[i][1] = '\0';
+    }
+}
+
+static int frontend_hex_digit_value(char ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool frontend_parse_hex(const char *text, size_t max_digits, uint16_t *out)
+{
+    uint16_t value = 0;
+    size_t i;
+    size_t length;
+
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+
+    length = strlen(text);
+    if (length == 0 || length > max_digits) {
+        return false;
+    }
+
+    for (i = 0; i < length; ++i) {
+        int digit = frontend_hex_digit_value(text[i]);
+
+        if (digit < 0) {
+            return false;
+        }
+
+        value = (uint16_t)((value << 4) | (uint16_t)digit);
+    }
+
+    *out = value;
+    return true;
+}
+
+static bool frontend_parse_flag(const char *text, uint8_t *out)
+{
+    if (text == NULL || out == NULL || text[0] == '\0' || text[1] != '\0') {
+        return false;
+    }
+    if (text[0] != '0' && text[0] != '1') {
+        return false;
+    }
+
+    *out = (uint8_t)(text[0] - '0');
+    return true;
+}
+
+static void frontend_commit_register_edit(
+    frontend *ui,
+    frontend_register_field field,
+    const frontend_debug_state *debug_state)
+{
+    static const uint8_t flag_bits[8] = {7, 6, 5, 4, 3, 2, 1, 0};
+    frontend_register_view_state *state;
+    uint16_t value;
+    uint8_t flag_value;
+
+    if (ui == NULL || debug_state == NULL || !debug_state->has_cpu) {
+        return;
+    }
+
+    state = &ui->registers;
+    if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
+        frontend_format_register_buffers(state, &debug_state->cpu, FRONTEND_REGISTER_FIELD_NONE);
+        return;
+    }
+
+    switch (field) {
+        case FRONTEND_REGISTER_FIELD_PC:
+            if (frontend_parse_hex(state->pc, 4, &value)) {
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC, value);
+                return;
+            }
+            break;
+
+        case FRONTEND_REGISTER_FIELD_SP:
+            if (frontend_parse_hex(state->sp, 2, &value)) {
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_SP, value);
+                return;
+            }
+            break;
+
+        case FRONTEND_REGISTER_FIELD_A:
+            if (frontend_parse_hex(state->a, 2, &value)) {
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_A, value);
+                return;
+            }
+            break;
+
+        case FRONTEND_REGISTER_FIELD_X:
+            if (frontend_parse_hex(state->x, 2, &value)) {
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_X, value);
+                return;
+            }
+            break;
+
+        case FRONTEND_REGISTER_FIELD_Y:
+            if (frontend_parse_hex(state->y, 2, &value)) {
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_Y, value);
+                return;
+            }
+            break;
+
+        case FRONTEND_REGISTER_FIELD_STATUS_N:
+        case FRONTEND_REGISTER_FIELD_STATUS_V:
+        case FRONTEND_REGISTER_FIELD_STATUS_UNUSED:
+        case FRONTEND_REGISTER_FIELD_STATUS_B:
+        case FRONTEND_REGISTER_FIELD_STATUS_D:
+        case FRONTEND_REGISTER_FIELD_STATUS_I:
+        case FRONTEND_REGISTER_FIELD_STATUS_Z:
+        case FRONTEND_REGISTER_FIELD_STATUS_C: {
+            size_t flag_index = (size_t)(field - FRONTEND_REGISTER_FIELD_STATUS_N);
+
+            if (frontend_parse_flag(state->flags[flag_index], &flag_value)) {
+                uint8_t mask = (uint8_t)(1u << flag_bits[flag_index]);
+                uint8_t status = (uint8_t)(debug_state->cpu.p & (uint8_t)~mask);
+
+                if (flag_value != 0) {
+                    status = (uint8_t)(status | mask);
+                }
+                frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS, status);
+                return;
+            }
+            break;
+        }
+
+        case FRONTEND_REGISTER_FIELD_NONE:
+        default:
+            break;
+    }
+
+    frontend_format_register_buffers(state, &debug_state->cpu, FRONTEND_REGISTER_FIELD_NONE);
 }
 
 static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bounds)
@@ -122,52 +354,178 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
     nk_end(ui->ctx);
 }
 
+static void frontend_draw_register_edit(
+    frontend *ui,
+    frontend_register_field field,
+    char *buffer,
+    int max,
+    nk_plugin_filter filter,
+    const frontend_debug_state *debug_state,
+    bool editable)
+{
+    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SIG_ENTER;
+    nk_flags result;
+
+    if (!editable) {
+        edit_flags |= NK_EDIT_READ_ONLY;
+    }
+
+    result = nk_edit_string_zero_terminated(ui->ctx, edit_flags, buffer, max, filter);
+    if ((result & NK_EDIT_ACTIVATED) != 0 && editable) {
+        ui->registers.active_field = field;
+    }
+    if ((result & NK_EDIT_COMMITED) != 0) {
+        frontend_commit_register_edit(ui, field, debug_state);
+        ui->registers.active_field = FRONTEND_REGISTER_FIELD_NONE;
+    }
+}
+
+static void frontend_draw_register_pair(
+    frontend *ui,
+    const char *label,
+    frontend_register_field field,
+    char *buffer,
+    int max,
+    float label_w,
+    float edit_w,
+    const frontend_debug_state *debug_state,
+    bool editable)
+{
+    nk_layout_row_push(ui->ctx, label_w);
+    nk_label(ui->ctx, label, NK_TEXT_LEFT);
+    nk_layout_row_push(ui->ctx, edit_w);
+    frontend_draw_register_edit(ui, field, buffer, max, nk_filter_hex, debug_state, editable);
+}
+
+static void frontend_draw_flag_pair(
+    frontend *ui,
+    const char *label,
+    size_t index,
+    const frontend_debug_state *debug_state,
+    bool editable)
+{
+    nk_layout_row_push(ui->ctx, 0.055f);
+    nk_label(ui->ctx, label, NK_TEXT_LEFT);
+    nk_layout_row_push(ui->ctx, 0.070f);
+    frontend_draw_register_edit(
+        ui,
+        (frontend_register_field)(FRONTEND_REGISTER_FIELD_STATUS_N + (int)index),
+        ui->registers.flags[index],
+        (int)sizeof(ui->registers.flags[index]),
+        nk_filter_binary,
+        debug_state,
+        editable);
+}
+
 static void frontend_draw_registers(
-    struct nk_context *ctx,
+    frontend *ui,
     struct nk_rect bounds,
     const frontend_debug_state *debug_state)
 {
-    if (nk_begin(ctx, "CPU Registers", bounds, pane_flags)) {
-        char value[32];
+    bool editable;
 
-        nk_layout_row_dynamic(ctx, 18.0f, 1);
-        nk_label(ctx, frontend_runtime_state_name(debug_state->runtime_state), NK_TEXT_LEFT);
+    if (debug_state == NULL) {
+        return;
+    }
 
+    editable = debug_state->has_cpu &&
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED;
+
+    if (!editable) {
+        ui->registers.active_field = FRONTEND_REGISTER_FIELD_NONE;
+    }
+
+    if (debug_state->has_cpu) {
+        frontend_format_register_buffers(
+            &ui->registers,
+            &debug_state->cpu,
+            ui->registers.active_field);
+    }
+
+    if (ui->cancel_register_edit_requested) {
         if (debug_state->has_cpu) {
-            snprintf(value, sizeof(value), "$%04X", debug_state->cpu.pc);
-            frontend_label_value(ctx, "PC", value);
-            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.a);
-            frontend_label_value(ctx, "A", value);
-            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.x);
-            frontend_label_value(ctx, "X", value);
-            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.y);
-            frontend_label_value(ctx, "Y", value);
-            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.sp);
-            frontend_label_value(ctx, "SP", value);
-            snprintf(value, sizeof(value), "$%02X", debug_state->cpu.p);
-            frontend_label_value(ctx, "P", value);
-            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->cpu.cycles);
-            frontend_label_value(ctx, "CYC", value);
-            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->frame_number);
-            frontend_label_value(ctx, "FRM", debug_state->has_frame ? value : "--");
-            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->frame_cycle);
-            frontend_label_value(ctx, "FCYC", debug_state->has_frame ? value : "--");
-            snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->dropped_frames);
-            frontend_label_value(ctx, "DROP", value);
+            frontend_format_register_buffers(
+                &ui->registers,
+                &debug_state->cpu,
+                FRONTEND_REGISTER_FIELD_NONE);
+        }
+        ui->registers.active_field = FRONTEND_REGISTER_FIELD_NONE;
+        ui->cancel_register_edit_requested = false;
+    }
+
+    if (nk_begin(ui->ctx, "CPU", bounds, pane_flags)) {
+        if (!debug_state->has_cpu) {
+            nk_layout_row_dynamic(ui->ctx, 20.0f, 1);
+            nk_label(ui->ctx, frontend_runtime_state_name(debug_state->runtime_state), NK_TEXT_LEFT);
+            nk_label(ui->ctx, "PC ----  SP --  A --  X --  Y --", NK_TEXT_LEFT);
+            nk_label(ui->ctx, "N -  V -  - -  B -  D -  I -  Z -  C -", NK_TEXT_LEFT);
         } else {
-            frontend_label_value(ctx, "PC", "--");
-            frontend_label_value(ctx, "A", "--");
-            frontend_label_value(ctx, "X", "--");
-            frontend_label_value(ctx, "Y", "--");
-            frontend_label_value(ctx, "SP", "--");
-            frontend_label_value(ctx, "P", "--");
-            frontend_label_value(ctx, "CYC", "--");
-            frontend_label_value(ctx, "FRM", "--");
-            frontend_label_value(ctx, "FCYC", "--");
-            frontend_label_value(ctx, "DROP", "--");
+            nk_layout_row_begin(ui->ctx, NK_DYNAMIC, 22.0f, 10);
+            frontend_draw_register_pair(
+                ui,
+                "PC",
+                FRONTEND_REGISTER_FIELD_PC,
+                ui->registers.pc,
+                (int)sizeof(ui->registers.pc),
+                0.07f,
+                0.19f,
+                debug_state,
+                editable);
+            frontend_draw_register_pair(
+                ui,
+                "SP",
+                FRONTEND_REGISTER_FIELD_SP,
+                ui->registers.sp,
+                (int)sizeof(ui->registers.sp),
+                0.07f,
+                0.13f,
+                debug_state,
+                editable);
+            frontend_draw_register_pair(
+                ui,
+                "A",
+                FRONTEND_REGISTER_FIELD_A,
+                ui->registers.a,
+                (int)sizeof(ui->registers.a),
+                0.05f,
+                0.12f,
+                debug_state,
+                editable);
+            frontend_draw_register_pair(
+                ui,
+                "X",
+                FRONTEND_REGISTER_FIELD_X,
+                ui->registers.x,
+                (int)sizeof(ui->registers.x),
+                0.05f,
+                0.12f,
+                debug_state,
+                editable);
+            frontend_draw_register_pair(
+                ui,
+                "Y",
+                FRONTEND_REGISTER_FIELD_Y,
+                ui->registers.y,
+                (int)sizeof(ui->registers.y),
+                0.05f,
+                0.12f,
+                debug_state,
+                editable);
+            nk_layout_row_end(ui->ctx);
+
+            nk_layout_row_begin(ui->ctx, NK_DYNAMIC, 22.0f, 16);
+            frontend_draw_flag_pair(ui, "N", 0, debug_state, editable);
+            frontend_draw_flag_pair(ui, "V", 1, debug_state, editable);
+            frontend_draw_flag_pair(ui, "-", 2, debug_state, editable);
+            frontend_draw_flag_pair(ui, "B", 3, debug_state, editable);
+            frontend_draw_flag_pair(ui, "D", 4, debug_state, editable);
+            frontend_draw_flag_pair(ui, "I", 5, debug_state, editable);
+            frontend_draw_flag_pair(ui, "Z", 6, debug_state, editable);
+            frontend_draw_flag_pair(ui, "C", 7, debug_state, editable);
+            nk_layout_row_end(ui->ctx);
         }
     }
-    nk_end(ctx);
+    nk_end(ui->ctx);
 }
 
 static void frontend_draw_disassembly(struct nk_context *ctx, struct nk_rect bounds)
@@ -285,7 +643,7 @@ frontend *frontend_create(platform_window *window)
     nk_sdl_font_stash_begin(&atlas);
     nk_sdl_font_stash_end();
 
-    ui->limits.registers_h_px = 178;
+    ui->limits.registers_h_px = 88;
     ui->limits.min_display_w_px = 220;
     ui->limits.min_right_w_px = 220;
     ui->limits.min_disassembly_h_px = 120;
@@ -329,6 +687,12 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
 {
     if (ui == NULL || ui->ctx == NULL || event == NULL) {
         return;
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.repeat == 0 &&
+        event->key.keysym.sym == SDLK_ESCAPE) {
+        ui->cancel_register_edit_requested = true;
     }
 
     nk_sdl_handle_event(event);
@@ -433,7 +797,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
 
     frontend_draw_display_placeholder(ui, ui->layout.display);
-    frontend_draw_registers(ui->ctx, ui->layout.registers, debug_state);
+    frontend_draw_registers(ui, ui->layout.registers, debug_state);
     frontend_draw_disassembly(ui->ctx, ui->layout.disassembly);
     frontend_draw_memory(ui->ctx, ui->layout.memory);
     frontend_draw_misc(ui->ctx, ui->layout.misc);
@@ -452,4 +816,15 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_splitter(ui->ctx, "split-memory-misc", ui->layout.hit_split_memory_misc, split_memory_misc_active);
     frontend_draw_corner_handle(ui->ctx, ui->layout.hit_display_corner, display_corner_active);
     nk_sdl_render(NK_ANTI_ALIASING_ON);
+}
+
+bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent)
+{
+    if (ui == NULL || out_intent == NULL || ui->intent_read == ui->intent_write) {
+        return false;
+    }
+
+    *out_intent = ui->intents[ui->intent_read];
+    ui->intent_read = (ui->intent_read + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    return true;
 }

@@ -24,6 +24,12 @@ bool runtime_client_request_machine_state(runtime_client *client);
 bool runtime_client_request_frame(runtime_client *client);
 bool runtime_client_keyboard_key(runtime_client *client, c64_key key, bool pressed);
 bool runtime_client_restore(runtime_client *client);
+bool runtime_client_set_pc(runtime_client *client, uint16_t value);
+bool runtime_client_set_sp(runtime_client *client, uint8_t value);
+bool runtime_client_set_a(runtime_client *client, uint8_t value);
+bool runtime_client_set_x(runtime_client *client, uint8_t value);
+bool runtime_client_set_y(runtime_client *client, uint8_t value);
+bool runtime_client_set_status(runtime_client *client, uint8_t value);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 
 bool runtime_client_poll_event(

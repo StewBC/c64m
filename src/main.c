@@ -161,6 +161,52 @@ static void dispatch_input_actions(
     }
 }
 
+static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
+    frontend_debugger_intent intent;
+
+    if (client == NULL || ui == NULL) {
+        return;
+    }
+
+    while (frontend_poll_debugger_intent(ui, &intent)) {
+        bool sent = false;
+
+        switch (intent.type) {
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC:
+                sent = runtime_client_set_pc(client, intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_SP:
+                sent = runtime_client_set_sp(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_A:
+                sent = runtime_client_set_a(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_X:
+                sent = runtime_client_set_x(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_Y:
+                sent = runtime_client_set_y(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS:
+                sent = runtime_client_set_status(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_NONE:
+            default:
+                break;
+        }
+
+        if (sent) {
+            request_debug_state(client);
+        }
+    }
+}
+
 static void handle_keyboard_input(
     frontend_input_mapper *mapper,
     runtime_client *client,
@@ -228,6 +274,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
             return false;
         }
         frontend_render(ui, ui_visible, &debug_state);
+        dispatch_debugger_intents(client, ui);
         platform_window_present(window);
     }
 

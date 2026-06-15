@@ -301,6 +301,45 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     return true;
 }
 
+static void runtime_set_cpu_register(runtime *rt, const runtime_command *command) {
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_cpu_state(rt);
+        return;
+    }
+
+    switch (command->data.set_cpu_register.reg) {
+        case RUNTIME_CPU_REGISTER_PC:
+            rt->machine.cpu.cpu.pc = command->data.set_cpu_register.value;
+            break;
+
+        case RUNTIME_CPU_REGISTER_SP:
+            rt->machine.cpu.cpu.sp = 0x0100u + (command->data.set_cpu_register.value & 0x00ffu);
+            break;
+
+        case RUNTIME_CPU_REGISTER_A:
+            rt->machine.cpu.cpu.A = (uint8_t)command->data.set_cpu_register.value;
+            break;
+
+        case RUNTIME_CPU_REGISTER_X:
+            rt->machine.cpu.cpu.X = (uint8_t)command->data.set_cpu_register.value;
+            break;
+
+        case RUNTIME_CPU_REGISTER_Y:
+            rt->machine.cpu.cpu.Y = (uint8_t)command->data.set_cpu_register.value;
+            break;
+
+        case RUNTIME_CPU_REGISTER_STATUS:
+            rt->machine.cpu.cpu.flags = (uint8_t)command->data.set_cpu_register.value;
+            break;
+
+        default:
+            runtime_publish_error(rt, "unsupported CPU register set command");
+            return;
+    }
+
+    runtime_publish_cpu_state(rt);
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -368,6 +407,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_RESTORE:
             c64_restore(&rt->machine);
+            break;
+
+        case RUNTIME_COMMAND_SET_CPU_REGISTER:
+            runtime_set_cpu_register(rt, command);
             break;
 
         case RUNTIME_COMMAND_NONE:

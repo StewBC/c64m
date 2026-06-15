@@ -103,6 +103,47 @@ bool runtime_client_restore(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_RESTORE);
 }
 
+static bool runtime_client_set_cpu_register(
+    runtime_client *client,
+    runtime_cpu_register reg,
+    uint16_t value) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_CPU_REGISTER,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.set_cpu_register.reg = reg;
+    command.data.set_cpu_register.value = value;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_set_pc(runtime_client *client, uint16_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_PC, value);
+}
+
+bool runtime_client_set_sp(runtime_client *client, uint8_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_SP, value);
+}
+
+bool runtime_client_set_a(runtime_client *client, uint8_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_A, value);
+}
+
+bool runtime_client_set_x(runtime_client *client, uint8_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_X, value);
+}
+
+bool runtime_client_set_y(runtime_client *client, uint8_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_Y, value);
+}
+
+bool runtime_client_set_status(runtime_client *client, uint8_t value) {
+    return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_STATUS, value);
+}
+
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
     runtime_frame_slot *slot;
 
