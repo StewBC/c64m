@@ -15,8 +15,18 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_RUN_COMPLETE,
     RUNTIME_EVENT_CPU_STATE_RESPONSE,
     RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
+    RUNTIME_EVENT_MEMORY_RESPONSE,
     RUNTIME_EVENT_FRAME_READY
 } runtime_event_type;
+
+typedef enum runtime_memory_mode {
+    RUNTIME_MEMORY_MODE_CPU_MAP = 0,
+    RUNTIME_MEMORY_MODE_RAM
+} runtime_memory_mode;
+
+enum {
+    RUNTIME_MEMORY_SNAPSHOT_MAX = 1024
+};
 
 typedef struct runtime_cpu_snapshot {
     uint16_t pc;
@@ -60,6 +70,13 @@ typedef struct runtime_machine_snapshot {
     uint8_t cia2_nmi_pending;
 } runtime_machine_snapshot;
 
+typedef struct runtime_memory_snapshot {
+    uint16_t address;
+    runtime_memory_mode mode;
+    uint16_t length;
+    uint8_t bytes[RUNTIME_MEMORY_SNAPSHOT_MAX];
+} runtime_memory_snapshot;
+
 typedef struct runtime_event {
     runtime_event_type type;
 
@@ -80,5 +97,6 @@ typedef struct runtime_event {
 
         runtime_cpu_snapshot cpu_state;
         runtime_machine_snapshot machine_state;
+        runtime_memory_snapshot memory;
     } data;
 } runtime_event;

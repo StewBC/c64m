@@ -395,6 +395,66 @@ static void test_runtime_cpu_register_setters_are_paused_only(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_memory_snapshots_and_writes_are_paused_only(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("request CPU-map memory", runtime_client_request_memory(
+        client,
+        TEST_RESET_VECTOR,
+        1,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("CPU-map memory response not received");
+    }
+    expect_u8("CPU-map sees KERNAL ROM", 0xea, event.data.memory.bytes[0]);
+
+    expect_true("request RAM memory", runtime_client_request_memory(
+        client,
+        TEST_RESET_VECTOR,
+        1,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("RAM memory response not received");
+    }
+    expect_u8("RAM mode sees underlying RAM", 0x00, event.data.memory.bytes[0]);
+
+    expect_true("write RAM while paused", runtime_client_write_memory_byte(
+        client,
+        0x2000,
+        0x42,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("paused RAM write response not received");
+    }
+    expect_u8("paused RAM write value", 0x42, event.data.memory.bytes[0]);
+
+    expect_true("run before ignored memory write", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received before ignored memory write");
+    }
+
+    expect_true("write RAM while running", runtime_client_write_memory_byte(
+        client,
+        0x2000,
+        0x99,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("running RAM write response not received");
+    }
+    expect_u8("running RAM write ignored", 0x42, event.data.memory.bytes[0]);
+
+    expect_true("pause after ignored memory write", runtime_client_pause(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received after ignored memory write");
+    }
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
     test_single_machine_cycle();
@@ -404,6 +464,7 @@ int main(void) {
     test_runtime_run_pause();
     test_runtime_step_instruction_from_running_pauses();
     test_runtime_cpu_register_setters_are_paused_only();
+    test_runtime_memory_snapshots_and_writes_are_paused_only();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");
     return 0;

@@ -88,12 +88,22 @@ Implemented:
   - runtime owns and applies CPU register mutations only while paused
   - running register mutations are ignored by runtime
   - regression coverage validates paused CPU register setters and running-state rejection
+- Phase 12 debugger UI foundation, View 3:
+  - memory view renders copied runtime memory snapshots in compact uppercase 16-byte hex rows plus ASCII
+  - CPU-map and raw RAM memory modes are supported
+  - CPU-map snapshots use debugger-safe peeks that do not perform side-effecting CIA reads
+  - cursor movement, PageUp/PageDown, Home/End, and hex/ASCII/address modes are wired
+  - custom visible cursor is drawn for address, hex-nibble, and ASCII edit positions while paused
+  - custom scrollbar thumb can be dragged across the 64K address space
+  - paused hex and ASCII byte edits emit frontend debugger intents and accept key repeat
+  - runtime owns and applies memory writes only while paused
+  - running memory writes are ignored by runtime
+  - regression coverage validates memory snapshots, paused writes, and running-state rejection
 
 ## Not Implemented
 
-- Phase 12 debugger Views 2+:
+- Phase 12 debugger Views still pending:
   - disassembly view
-  - memory view
   - misc/debugger breakpoint/status panel
 - Full CIA accuracy.
 - Sprites.
@@ -114,6 +124,18 @@ CIA #1 ICR reads = 0
 ```
 
 The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the CPU interrupt-disable flag remains set during the trace.
+
+## Phase 12 UI Notes
+
+- Compact debugger text views should use the small Nuklear default font currently installed in `frontend_create` and row heights based on `ctx->style.font->height`, not oversized fixed row heights.
+- For dense text views, temporarily zero Nuklear window padding, spacing, and group padding inside the view body, then restore the saved style before leaving the window.
+- Custom scrollbars should live in their own layout column/group, not as an overlay drawn on top of the text area or near splitter hit zones.
+- Scrollbar drag state must be exclusive with layout splitter drag state. `frontend_render` suppresses layout dragging while the memory scrollbar owns the mouse.
+- Scrollbar thumb dragging should start only from the thumb, track grab offset, and map thumb movement back to the debugger view address. Track clicks may page-jump separately.
+- Avoid `nk_input_has_mouse_click_in_rect` for row selection in custom text views; it can keep matching the original click position while mouse state is tracked. Use a press-edge plus current hover test instead.
+- Artificial cursors for debugger text views should be drawn on the window canvas at computed font-cell coordinates. Do not rely on Nuklear edit widgets for hex dump/disassembly cursors.
+- Editable debugger cursors should be hidden while the runtime is running if edits are gated to paused state.
+- Repeated keydown events are allowed for focused debugger text editing, while global emulator controls and Option/F-key commands remain owned by the master input layer.
 
 ## Next Phase
 

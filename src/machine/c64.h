@@ -89,3 +89,7 @@ void c64_restore(c64_t *machine);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
+uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
+uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
+void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
+void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);

@@ -81,6 +81,25 @@ bool runtime_client_request_machine_state(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_MACHINE_STATE);
 }
 
+bool runtime_client_request_memory(
+    runtime_client *client,
+    uint16_t address,
+    uint16_t length,
+    runtime_memory_mode mode) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_REQUEST_MEMORY,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.request_memory.address = address;
+    command.data.request_memory.length = length;
+    command.data.request_memory.mode = (uint8_t)mode;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_request_frame(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_FRAME);
 }
@@ -142,6 +161,25 @@ bool runtime_client_set_y(runtime_client *client, uint8_t value) {
 
 bool runtime_client_set_status(runtime_client *client, uint8_t value) {
     return runtime_client_set_cpu_register(client, RUNTIME_CPU_REGISTER_STATUS, value);
+}
+
+bool runtime_client_write_memory_byte(
+    runtime_client *client,
+    uint16_t address,
+    uint8_t value,
+    runtime_memory_mode mode) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_WRITE_MEMORY_BYTE,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.write_memory_byte.address = address;
+    command.data.write_memory_byte.value = value;
+    command.data.write_memory_byte.mode = (uint8_t)mode;
+    return message_queue_push(client->command_queue, &command);
 }
 
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {

@@ -275,3 +275,96 @@ void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out) {
 
     vicii_copy_snapshot(&machine->vic, out);
 }
+
+static bool c64_debug_basic_visible(const c64_t *machine) {
+    return (machine->bus.cpu_port_data & 0x03u) == 0x03u;
+}
+
+static bool c64_debug_kernal_visible(const c64_t *machine) {
+    return (machine->bus.cpu_port_data & 0x02u) != 0;
+}
+
+static bool c64_debug_io_or_char_visible(const c64_t *machine) {
+    return (machine->bus.cpu_port_data & 0x03u) != 0;
+}
+
+static bool c64_debug_io_visible(const c64_t *machine) {
+    return c64_debug_io_or_char_visible(machine) && (machine->bus.cpu_port_data & 0x04u) != 0;
+}
+
+static bool c64_debug_char_visible(const c64_t *machine) {
+    return c64_debug_io_or_char_visible(machine) && (machine->bus.cpu_port_data & 0x04u) == 0;
+}
+
+static uint8_t c64_debug_peek_io(const c64_t *machine, uint16_t address) {
+    if (address >= 0xd000 && address <= 0xd3ff) {
+        return machine->vic.registers[address & 0x3fu];
+    }
+
+    if (address >= 0xd800 && address <= 0xdbff) {
+        return (uint8_t)(machine->bus.color_ram[address - 0xd800u] & 0x0fu);
+    }
+
+    if (address >= 0xdc00 && address <= 0xdcff) {
+        return machine->cia1.registers[address & 0x0fu];
+    }
+
+    if (address >= 0xdd00 && address <= 0xddff) {
+        return machine->cia2.registers[address & 0x0fu];
+    }
+
+    return 0xff;
+}
+
+uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {
+    assert(machine);
+
+    if (address == 0x0000u) {
+        return machine->bus.cpu_port_direction;
+    }
+
+    if (address == 0x0001u) {
+        return machine->bus.cpu_port_data;
+    }
+
+    if (address >= 0xa000 && address <= 0xbfff && c64_debug_basic_visible(machine)) {
+        return machine->bus.basic_rom[address - 0xa000u];
+    }
+
+    if (address >= 0xd000 && address <= 0xdfff) {
+        if (c64_debug_io_visible(machine)) {
+            return c64_debug_peek_io(machine, address);
+        }
+
+        if (c64_debug_char_visible(machine)) {
+            return machine->bus.char_rom[address - 0xd000u];
+        }
+    }
+
+    if (address >= 0xe000 && c64_debug_kernal_visible(machine)) {
+        return machine->bus.kernal_rom[address - 0xe000u];
+    }
+
+    return machine->bus.ram[address];
+}
+
+uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address) {
+    assert(machine);
+
+    return machine->bus.ram[address];
+}
+
+void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value) {
+    assert(machine);
+
+    c64_bus_write(&machine->bus, address, value);
+}
+
+void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value) {
+    assert(machine);
+
+    machine->bus.ram[address] = value;
+    if (address >= 0x0400u && address < 0x0400u + 1000u) {
+        machine->bus.screen_ram_writes++;
+    }
+}

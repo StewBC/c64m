@@ -61,6 +61,11 @@ static void update_debug_state_from_event(
             }
             break;
 
+        case RUNTIME_EVENT_MEMORY_RESPONSE:
+            debug_state->memory = event->data.memory;
+            debug_state->has_memory = true;
+            break;
+
         case RUNTIME_EVENT_FRAME_READY:
             debug_state->frame_number = event->data.frame_ready.frame_number;
             debug_state->frame_cycle = event->data.frame_ready.machine_cycle;
@@ -194,6 +199,22 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
 
             case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS:
                 sent = runtime_client_set_status(client, (uint8_t)intent.value);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY:
+                sent = runtime_client_request_memory(
+                    client,
+                    intent.address,
+                    intent.length,
+                    intent.memory_mode);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_MEMORY_WRITE_BYTE:
+                sent = runtime_client_write_memory_byte(
+                    client,
+                    intent.address,
+                    (uint8_t)intent.value,
+                    intent.memory_mode);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:

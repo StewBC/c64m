@@ -139,6 +139,38 @@ static void runtime_publish_machine_state(runtime *rt) {
     runtime_publish_event(rt, &event);
 }
 
+static bool runtime_memory_mode_is_valid(uint8_t mode) {
+    return mode == RUNTIME_MEMORY_MODE_CPU_MAP || mode == RUNTIME_MEMORY_MODE_RAM;
+}
+
+static void runtime_publish_memory(
+    runtime *rt,
+    uint16_t address,
+    uint16_t length,
+    runtime_memory_mode mode) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_MEMORY_RESPONSE,
+    };
+    uint16_t i;
+
+    if (length > RUNTIME_MEMORY_SNAPSHOT_MAX) {
+        length = RUNTIME_MEMORY_SNAPSHOT_MAX;
+    }
+
+    event.data.memory.address = address;
+    event.data.memory.mode = mode;
+    event.data.memory.length = length;
+
+    for (i = 0; i < length; ++i) {
+        uint16_t current = (uint16_t)(address + i);
+        event.data.memory.bytes[i] = mode == RUNTIME_MEMORY_MODE_RAM ?
+            c64_debug_read_ram(&rt->machine, current) :
+            c64_debug_read_cpu_map(&rt->machine, current);
+    }
+
+    runtime_publish_event(rt, &event);
+}
+
 static bool runtime_publish_frame(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_FRAME_READY,
@@ -340,6 +372,35 @@ static void runtime_set_cpu_register(runtime *rt, const runtime_command *command
     runtime_publish_cpu_state(rt);
 }
 
+static void runtime_write_memory_byte(runtime *rt, const runtime_command *command) {
+    runtime_memory_mode mode;
+
+    if (!runtime_memory_mode_is_valid(command->data.write_memory_byte.mode)) {
+        runtime_publish_error(rt, "unsupported memory write mode");
+        return;
+    }
+
+    mode = (runtime_memory_mode)command->data.write_memory_byte.mode;
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
+        return;
+    }
+
+    if (mode == RUNTIME_MEMORY_MODE_RAM) {
+        c64_debug_write_ram(
+            &rt->machine,
+            command->data.write_memory_byte.address,
+            command->data.write_memory_byte.value);
+    } else {
+        c64_debug_write_cpu_map(
+            &rt->machine,
+            command->data.write_memory_byte.address,
+            command->data.write_memory_byte.value);
+    }
+
+    runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -397,6 +458,18 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_publish_machine_state(rt);
             break;
 
+        case RUNTIME_COMMAND_REQUEST_MEMORY:
+            if (runtime_memory_mode_is_valid(command->data.request_memory.mode)) {
+                runtime_publish_memory(
+                    rt,
+                    command->data.request_memory.address,
+                    command->data.request_memory.length,
+                    (runtime_memory_mode)command->data.request_memory.mode);
+            } else {
+                runtime_publish_error(rt, "unsupported memory request mode");
+            }
+            break;
+
         case RUNTIME_COMMAND_REQUEST_FRAME:
             runtime_publish_frame(rt);
             break;
@@ -411,6 +484,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_SET_CPU_REGISTER:
             runtime_set_cpu_register(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_WRITE_MEMORY_BYTE:
+            runtime_write_memory_byte(rt, command);
             break;
 
         case RUNTIME_COMMAND_NONE:

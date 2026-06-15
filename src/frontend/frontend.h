@@ -20,11 +20,13 @@ typedef enum frontend_runtime_state {
 typedef struct frontend_debug_state {
     frontend_runtime_state runtime_state;
     runtime_cpu_snapshot cpu;
+    runtime_memory_snapshot memory;
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
     bool has_frame;
     bool has_cpu;
+    bool has_memory;
 } frontend_debug_state;
 
 typedef enum frontend_debugger_intent_type {
@@ -34,12 +36,17 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_REGISTER_SET_A,
     FRONTEND_DEBUGGER_INTENT_REGISTER_SET_X,
     FRONTEND_DEBUGGER_INTENT_REGISTER_SET_Y,
-    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS
+    FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS,
+    FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY,
+    FRONTEND_DEBUGGER_INTENT_MEMORY_WRITE_BYTE
 } frontend_debugger_intent_type;
 
 typedef struct frontend_debugger_intent {
     frontend_debugger_intent_type type;
+    uint16_t address;
+    uint16_t length;
     uint16_t value;
+    runtime_memory_mode memory_mode;
 } frontend_debugger_intent;
 
 frontend *frontend_create(platform_window *window);

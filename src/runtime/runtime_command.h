@@ -21,7 +21,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_REQUEST_FRAME,
     RUNTIME_COMMAND_KEYBOARD_KEY,
     RUNTIME_COMMAND_RESTORE,
-    RUNTIME_COMMAND_SET_CPU_REGISTER
+    RUNTIME_COMMAND_SET_CPU_REGISTER,
+    RUNTIME_COMMAND_REQUEST_MEMORY,
+    RUNTIME_COMMAND_WRITE_MEMORY_BYTE
 } runtime_command_type;
 
 typedef enum runtime_cpu_register {
@@ -53,5 +55,17 @@ typedef struct runtime_command {
             runtime_cpu_register reg;
             uint16_t value;
         } set_cpu_register;
+
+        struct {
+            uint16_t address;
+            uint16_t length;
+            uint8_t mode;
+        } request_memory;
+
+        struct {
+            uint16_t address;
+            uint8_t value;
+            uint8_t mode;
+        } write_memory_byte;
     } data;
 } runtime_command;
