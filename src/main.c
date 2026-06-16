@@ -80,6 +80,16 @@ static c64_config machine_config_from_options(const app_options *options) {
     return config;
 }
 
+static runtime_config runtime_config_from_options(const app_options *options) {
+    runtime_config config = {0};
+
+    runtime_config_set_turbo_defaults(&config);
+    if (options != NULL) {
+        runtime_config_set_turbo_csv(&config, options->turbo_multipliers);
+    }
+    return config;
+}
+
 static void request_debug_state(runtime_client *client) {
     runtime_client_request_cpu_state(client);
     runtime_client_request_machine_state(client);
@@ -366,6 +376,7 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
             case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
                 {
                     c64_config machine_config = machine_config_from_options(&intent.config);
+                    runtime_config runtime_options = runtime_config_from_options(&intent.config);
                     app_options_destroy(options);
                     *options = intent.config;
                     memset(&intent.config, 0, sizeof(intent.config));
@@ -373,6 +384,7 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     sent = runtime_client_apply_machine_config(
                         client,
                         &machine_config,
+                        &runtime_options,
                         options->ini_path,
                         intent.config_result.needs_reboot,
                         options->save_ini && !options->no_save_ini);
@@ -502,6 +514,12 @@ int main(int argc, char **argv) {
     runtime_cfg.use_ini = options.use_ini;
     runtime_cfg.save_ini = (options.save_ini || options.remember) && !options.no_save_ini;
     runtime_cfg.machine_config = machine_config_from_options(&options);
+    {
+        runtime_config turbo_cfg = runtime_config_from_options(&options);
+        memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));
+        runtime_cfg.turbo_speed_count = turbo_cfg.turbo_speed_count;
+        runtime_cfg.active_turbo_multiplier = turbo_cfg.active_turbo_multiplier;
+    }
 
     rt = runtime_create(&runtime_cfg);
     if (rt == NULL) {

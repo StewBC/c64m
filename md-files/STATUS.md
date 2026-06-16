@@ -153,6 +153,7 @@ Implemented:
   - OK applies immediate frontend/app settings, sends copied machine config through runtime_client, and reboots on PAL/NTSC changes
   - VIC-II timing now supports NTSC and PAL line/frame timing selected from machine configuration
   - `[config]` INI keys now persist scroll wheel speed, turbo speeds, symbol files, and `Save=yes`
+  - turbo speed CSV is parsed into runtime-owned available multipliers; the first entry becomes the active paced multiplier
   - symbol file changes currently trigger view refresh plumbing only; real symbol unload/load remains future work
 
 ## Not Implemented

@@ -75,6 +75,9 @@ struct runtime {
     bool use_ini;
     bool save_ini;
     c64_config machine_config;
+    uint32_t turbo_speeds[16];
+    uint8_t turbo_speed_count;
+    uint32_t active_turbo_multiplier;
     runtime_exec_state exec_state;
     runtime_stop_reason last_stop_reason;
     runtime_speed_mode speed_mode;

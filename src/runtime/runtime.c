@@ -9,6 +9,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+
+enum {
+    RUNTIME_TURBO_DEFAULT_MULTIPLIER = 1,
+    RUNTIME_TURBO_MAX_MULTIPLIER = 256,
+};
 
 static char *runtime_copy_string(const char *value) {
     char *copy;
@@ -33,6 +39,69 @@ bool runtime_init() {
 }
 
 void runtime_shutdown() {
+}
+
+void runtime_config_set_turbo_defaults(runtime_config *config) {
+    if (config == NULL) {
+        return;
+    }
+
+    config->turbo_speeds[0] = RUNTIME_TURBO_DEFAULT_MULTIPLIER;
+    config->turbo_speed_count = 1;
+    config->active_turbo_multiplier = RUNTIME_TURBO_DEFAULT_MULTIPLIER;
+}
+
+bool runtime_config_set_turbo_csv(runtime_config *config, const char *csv) {
+    const char *cursor;
+    uint8_t count = 0;
+
+    if (config == NULL) {
+        return false;
+    }
+
+    runtime_config_set_turbo_defaults(config);
+    if (csv == NULL || csv[0] == '\0') {
+        return true;
+    }
+
+    cursor = csv;
+    while (*cursor != '\0') {
+        char *end;
+        unsigned long value;
+
+        while (isspace((unsigned char)*cursor)) {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        value = strtoul(cursor, &end, 10);
+        if (end == cursor || value == 0 || value > RUNTIME_TURBO_MAX_MULTIPLIER) {
+            runtime_config_set_turbo_defaults(config);
+            return false;
+        }
+        while (isspace((unsigned char)*end)) {
+            end++;
+        }
+        if (*end != '\0' && *end != ',') {
+            runtime_config_set_turbo_defaults(config);
+            return false;
+        }
+        if (count < (uint8_t)(sizeof(config->turbo_speeds) / sizeof(config->turbo_speeds[0]))) {
+            config->turbo_speeds[count++] = (uint32_t)value;
+        }
+        cursor = *end == ',' ? end + 1 : end;
+    }
+
+    if (count == 0) {
+        runtime_config_set_turbo_defaults(config);
+        return false;
+    }
+
+    config->turbo_speed_count = count;
+    config->active_turbo_multiplier = config->turbo_speeds[0];
+    return true;
 }
 
 runtime *runtime_create(const runtime_config *config) {
@@ -68,6 +137,16 @@ runtime *runtime_create(const runtime_config *config) {
         rt->use_ini = config->use_ini;
         rt->save_ini = config->save_ini;
         rt->machine_config = config->machine_config;
+        memcpy(rt->turbo_speeds, config->turbo_speeds, sizeof(rt->turbo_speeds));
+        rt->turbo_speed_count = config->turbo_speed_count;
+        rt->active_turbo_multiplier = config->active_turbo_multiplier;
+        if (rt->turbo_speed_count == 0 || rt->active_turbo_multiplier == 0) {
+            runtime_config defaults = {0};
+            runtime_config_set_turbo_defaults(&defaults);
+            memcpy(rt->turbo_speeds, defaults.turbo_speeds, sizeof(rt->turbo_speeds));
+            rt->turbo_speed_count = defaults.turbo_speed_count;
+            rt->active_turbo_multiplier = defaults.active_turbo_multiplier;
+        }
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||

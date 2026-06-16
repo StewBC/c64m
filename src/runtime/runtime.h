@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "c64.h"
 
@@ -16,7 +17,13 @@ typedef struct runtime_config {
     bool use_ini;
     bool save_ini;
     c64_config machine_config;
+    uint32_t turbo_speeds[16];
+    uint8_t turbo_speed_count;
+    uint32_t active_turbo_multiplier;
 } runtime_config;
+
+void runtime_config_set_turbo_defaults(runtime_config *config);
+bool runtime_config_set_turbo_csv(runtime_config *config, const char *csv);
 
 bool runtime_init();
 void runtime_shutdown();

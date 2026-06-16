@@ -52,6 +52,26 @@ static void expect_u64_gt(const char *name, uint64_t lhs, uint64_t rhs) {
     }
 }
 
+static void test_runtime_turbo_csv_config(void) {
+    runtime_config config = {0};
+
+    expect_true("parse turbo csv", runtime_config_set_turbo_csv(&config, "2, 4,8"));
+    expect_u8("turbo count", 3, config.turbo_speed_count);
+    expect_u64("turbo first speed", 2, config.turbo_speeds[0]);
+    expect_u64("turbo second speed", 4, config.turbo_speeds[1]);
+    expect_u64("turbo active", 2, config.active_turbo_multiplier);
+
+    expect_true("parse empty turbo csv", runtime_config_set_turbo_csv(&config, ""));
+    expect_u8("empty turbo count", 1, config.turbo_speed_count);
+    expect_u64("empty turbo active", 1, config.active_turbo_multiplier);
+
+    if (runtime_config_set_turbo_csv(&config, "2,nope,8")) {
+        fail("invalid turbo csv accepted");
+    }
+    expect_u8("invalid turbo count fallback", 1, config.turbo_speed_count);
+    expect_u64("invalid turbo active fallback", 1, config.active_turbo_multiplier);
+}
+
 static uint32_t first_breakpoint_id(const runtime_event *event) {
     if (event->data.breakpoints.count == 0) {
         fail("expected at least one breakpoint");
@@ -1112,6 +1132,7 @@ static void test_runtime_load_prg_writes_ram(void) {
 }
 
 int main(void) {
+    test_runtime_turbo_csv_config();
     write_runtime_roms();
     write_test_prg();
     test_single_machine_cycle();

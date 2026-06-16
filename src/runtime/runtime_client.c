@@ -6,6 +6,7 @@
 #include "mutex.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static bool runtime_client_send_command(
     runtime_client *client,
@@ -294,6 +295,7 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
 bool runtime_client_apply_machine_config(
     runtime_client *client,
     const c64_config *config,
+    const runtime_config *runtime_options,
     const char *ini_path,
     bool reset,
     bool save_ini) {
@@ -306,6 +308,15 @@ bool runtime_client_apply_machine_config(
     }
 
     command.data.apply_machine_config.config = *config;
+    if (runtime_options != NULL) {
+        memcpy(
+            command.data.apply_machine_config.turbo_speeds,
+            runtime_options->turbo_speeds,
+            sizeof(command.data.apply_machine_config.turbo_speeds));
+        command.data.apply_machine_config.turbo_speed_count = runtime_options->turbo_speed_count;
+        command.data.apply_machine_config.active_turbo_multiplier =
+            runtime_options->active_turbo_multiplier;
+    }
     if (ini_path != NULL) {
         snprintf(command.data.apply_machine_config.ini_path, sizeof(command.data.apply_machine_config.ini_path), "%s", ini_path);
     }

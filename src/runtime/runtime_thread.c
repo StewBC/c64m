@@ -17,9 +17,11 @@ enum {
 
 static void runtime_reset_pacer(runtime *rt) {
     uint64_t frequency;
+    uint32_t multiplier;
 
     frequency = SDL_GetPerformanceFrequency();
-    rt->frame_counter_step = frequency / RUNTIME_TARGET_FPS;
+    multiplier = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
+    rt->frame_counter_step = frequency / ((uint64_t)RUNTIME_TARGET_FPS * multiplier);
     if (rt->frame_counter_step == 0) {
         rt->frame_counter_step = 1;
     }
@@ -320,6 +322,17 @@ static bool runtime_replace_string(char **target, const char *value) {
 static void runtime_apply_machine_config(runtime *rt, const runtime_command *command) {
     rt->machine_config = command->data.apply_machine_config.config;
     rt->save_ini = command->data.apply_machine_config.save_ini != 0;
+    memcpy(rt->turbo_speeds, command->data.apply_machine_config.turbo_speeds, sizeof(rt->turbo_speeds));
+    rt->turbo_speed_count = command->data.apply_machine_config.turbo_speed_count;
+    rt->active_turbo_multiplier = command->data.apply_machine_config.active_turbo_multiplier;
+    if (rt->turbo_speed_count == 0 || rt->active_turbo_multiplier == 0) {
+        runtime_config defaults = {0};
+        runtime_config_set_turbo_defaults(&defaults);
+        memcpy(rt->turbo_speeds, defaults.turbo_speeds, sizeof(rt->turbo_speeds));
+        rt->turbo_speed_count = defaults.turbo_speed_count;
+        rt->active_turbo_multiplier = defaults.active_turbo_multiplier;
+    }
+    rt->pace_initialized = false;
     if (!runtime_replace_string(&rt->ini_path, command->data.apply_machine_config.ini_path)) {
         runtime_publish_error(rt, "failed to update runtime INI path");
         return;

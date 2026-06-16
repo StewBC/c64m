@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime_event.h"
+#include "runtime.h"
 
 #include "c64_frame.h"
 #include "c64.h"
@@ -58,6 +59,7 @@ bool runtime_client_load_prg(runtime_client *client, const char *path);
 bool runtime_client_apply_machine_config(
     runtime_client *client,
     const c64_config *config,
+    const runtime_config *runtime_options,
     const char *ini_path,
     bool reset,
     bool save_ini);
