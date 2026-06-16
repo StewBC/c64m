@@ -122,6 +122,10 @@ Implemented:
   - disassembly View 2 shows copied breakpoint snapshots in the gutter and Option+B toggles an execute breakpoint at the cursor while paused
   - misc/debugger view shows debug status, stop reason, cycle/frame counters, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
   - no read/write watchpoints or advanced breakpoint actions are implemented yet
+- Debugger input routing:
+  - C64 display input is the initial/default focus, including the first time the debugger UI is opened
+  - clicking the C64 display while the debugger UI is visible returns ordinary key input to the emulated C64
+  - clicking debugger views returns ordinary key input to the focused debugger view, and that choice survives UI hide/show toggles
 
 ## Not Implemented
 

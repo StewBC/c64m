@@ -341,6 +341,8 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
 
         frontend_begin_input(ui);
         while (SDL_PollEvent(&event)) {
+            bool send_event_to_frontend = ui_visible;
+
             if (event.type == SDL_QUIT) {
                 running = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
@@ -361,14 +363,17 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                            (event.key.keysym.sym == SDLK_p &&
                             frontend_input_has_option_modifier(&event.key))) {
                     send_pause_command(client);
-                } else if (!ui_visible) {
+                } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {
                     handle_keyboard_input(&input_mapper, client, &event.key);
+                    send_event_to_frontend = false;
                 }
-            } else if (event.type == SDL_KEYUP && !ui_visible) {
+            } else if (event.type == SDL_KEYUP &&
+                       (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                 handle_keyboard_input(&input_mapper, client, &event.key);
+                send_event_to_frontend = false;
             }
 
-            if (ui_visible) {
+            if (send_event_to_frontend) {
                 frontend_handle_event(ui, &event);
             }
         }

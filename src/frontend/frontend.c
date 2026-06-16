@@ -125,6 +125,8 @@ struct frontend {
     bool has_frame;
     c64_layout layout;
     c64_layout_limits limits;
+    bool c64_input_active;
+    bool input_focus_initialized;
     frontend_register_view_state registers;
     frontend_memory_view_state memory;
     frontend_disassembly_view_state disassembly;
@@ -185,6 +187,12 @@ static struct nk_rect frontend_fit_nk_rect(
         (int)source_h);
 
     return nk_rect((float)fit.x, (float)fit.y, (float)fit.w, (float)fit.h);
+}
+
+static bool frontend_point_in_rect(float x, float y, struct nk_rect rect)
+{
+    return x >= rect.x && x < rect.x + rect.w &&
+        y >= rect.y && y < rect.y + rect.h;
 }
 
 static const char *frontend_runtime_state_name(frontend_runtime_state state)
@@ -1402,11 +1410,13 @@ static void frontend_disassembly_handle_mouse_row(
     }
 
     if (debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        ui->c64_input_active = false;
         ui->disassembly.active = true;
         ui->memory.active = false;
         return;
     }
 
+    ui->c64_input_active = false;
     ui->disassembly.active = true;
     ui->memory.active = false;
     frontend_disassembly_set_user_cursor(
@@ -2130,6 +2140,7 @@ static void frontend_memory_handle_mouse_row(
         return;
     }
 
+    ui->c64_input_active = false;
     ui->memory.active = true;
     ui->disassembly.active = false;
     rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
@@ -2883,13 +2894,29 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         return;
     }
 
+    if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT) {
+        float x = (float)event->button.x;
+        float y = (float)event->button.y;
+
+        if (frontend_point_in_rect(x, y, ui->layout.display)) {
+            ui->c64_input_active = true;
+            ui->memory.active = false;
+            ui->disassembly.active = false;
+        } else if (frontend_point_in_rect(x, y, ui->layout.registers) ||
+                   frontend_point_in_rect(x, y, ui->layout.disassembly) ||
+                   frontend_point_in_rect(x, y, ui->layout.memory) ||
+                   frontend_point_in_rect(x, y, ui->layout.misc)) {
+            ui->c64_input_active = false;
+        }
+    }
+
     if (event->type == SDL_KEYDOWN &&
         event->key.repeat == 0 &&
         event->key.keysym.sym == SDLK_ESCAPE) {
         ui->cancel_register_edit_requested = true;
     }
 
-    if (event->type == SDL_KEYDOWN) {
+    if (event->type == SDL_KEYDOWN && !ui->c64_input_active) {
         ui->pending_memory_key = event->key;
         ui->has_pending_memory_key = true;
         ui->pending_disassembly_key = event->key;
@@ -2897,6 +2924,11 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
     }
 
     nk_sdl_handle_event(event);
+}
+
+bool frontend_routes_keyboard_to_c64(const frontend *ui)
+{
+    return ui != NULL && ui->c64_input_active;
 }
 
 void frontend_end_input(frontend *ui)
@@ -2978,6 +3010,11 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
 
     if (ui == NULL || ui->ctx == NULL) {
         return;
+    }
+
+    if (!ui->input_focus_initialized) {
+        ui->c64_input_active = true;
+        ui->input_focus_initialized = true;
     }
 
     if (!ui_visible) {

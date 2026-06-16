@@ -77,6 +77,7 @@ void frontend_destroy(frontend *ui);
 void frontend_begin_input(frontend *ui);
 void frontend_handle_event(frontend *ui, SDL_Event *event);
 void frontend_end_input(frontend *ui);
+bool frontend_routes_keyboard_to_c64(const frontend *ui);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
 bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent);
