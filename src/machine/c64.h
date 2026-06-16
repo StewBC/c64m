@@ -29,6 +29,15 @@ typedef struct c64_clock {
     uint64_t cia_cycles;
 } c64_clock;
 
+typedef enum c64_video_standard {
+    C64_VIDEO_STANDARD_NTSC = 0,
+    C64_VIDEO_STANDARD_PAL
+} c64_video_standard;
+
+typedef struct c64_config {
+    c64_video_standard video_standard;
+} c64_config;
+
 typedef struct c64_machine_snapshot {
     uint64_t cycle;
     uint64_t cpu_cycles;
@@ -93,9 +102,11 @@ typedef struct c64_t {
     bool has_kernal_rom;
     bool has_character_rom;
     bool ready;
+    c64_config config;
 } c64_t;
 
 void c64_init(c64_t *machine);
+void c64_set_config(c64_t *machine, const c64_config *config);
 bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size_t error_size);
 bool c64_reset(c64_t *machine, char *error, size_t error_size);
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);

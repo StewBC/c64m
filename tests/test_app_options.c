@@ -30,6 +30,16 @@ static void expect_int(const char *name, int expected, int actual) {
     }
 }
 
+static void expect_bool(const char *name, int expected, int actual) {
+    if ((expected != 0) != (actual != 0)) {
+        fprintf(stderr, "%s: expected %s, got %s\n",
+            name,
+            expected ? "true" : "false",
+            actual ? "true" : "false");
+        exit(1);
+    }
+}
+
 static void expect_float_near(const char *name, float expected, float actual) {
     float diff = expected - actual;
 
@@ -90,6 +100,31 @@ static void write_window_layout_ini(const char *path) {
     fputs("split_memory_misc=0.4\n", file);
     fputs("display_width=500\n", file);
     fputs("display_height=360\n", file);
+    fclose(file);
+}
+
+static void write_phase14_ini(const char *path) {
+    FILE *file = fopen(path, "w");
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    fputs("[Video]\n", file);
+    fputs("standard=PAL\n", file);
+    fputs("display_width=400\n", file);
+    fputs("display_height=300\n", file);
+    fputs("integer_scale=false\n", file);
+    fputs("aspect_correct=false\n", file);
+    fputs("filter=linear\n", file);
+    fputs("\n[ui]\n", file);
+    fputs("leds=false\n", file);
+    fputs("\n[config]\n", file);
+    fputs("Save=yes\n", file);
+    fputs("scroll_wheel_lines=7\n", file);
+    fputs("turbo_speeds=3,6,12\n", file);
+    fputs("symbol_files=symbols/kernel.sym,symbols/basic.sym\n", file);
     fclose(file);
 }
 
@@ -279,11 +314,104 @@ static void test_window_layout_saved_to_ini(void) {
     remove("test_window_layout_save.ini");
 }
 
+static void test_phase14_config_from_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_phase14.ini",
+    };
+
+    write_phase14_ini("test_phase14.ini");
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string("video standard", "PAL", options.video_standard);
+    expect_int("display width", 400, options.display_width);
+    expect_int("display height", 300, options.display_height);
+    expect_bool("integer scale", 0, options.integer_scale);
+    expect_bool("aspect correct", 0, options.aspect_correct);
+    expect_string("filter", "linear", options.video_filter);
+    expect_bool("leds", 0, options.show_leds);
+    expect_bool("remember", 1, options.remember);
+    expect_int("scroll wheel lines", 7, options.scroll_wheel_lines);
+    expect_string("turbo speeds", "3,6,12", options.turbo_multipliers);
+    expect_string("symbol files", "symbols/kernel.sym,symbols/basic.sym", options.symbol_files);
+
+    app_options_destroy(&options);
+    remove("test_phase14.ini");
+}
+
+static void test_phase14_config_saved_to_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--noini",
+        "--saveini",
+        "--inifile",
+        "test_phase14_save.ini",
+    };
+    char *load_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_phase14_save.ini",
+    };
+
+    remove("test_phase14_save.ini");
+    if (!app_options_load_startup(&options, 5, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    app_options_set_string(&options.video_standard, "PAL");
+    options.display_width = 401;
+    options.display_height = 301;
+    options.integer_scale = false;
+    options.aspect_correct = false;
+    app_options_set_string(&options.video_filter, "linear");
+    options.show_leds = false;
+    options.remember = true;
+    options.scroll_wheel_lines = 9;
+    app_options_set_string(&options.turbo_multipliers, "5,10");
+    app_options_set_string(&options.symbol_files, "symbols/main.sym");
+
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "app_options_save_shutdown failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, load_argv)) {
+        fprintf(stderr, "app_options_load_startup after save failed\n");
+        exit(1);
+    }
+
+    expect_string("saved video standard", "PAL", options.video_standard);
+    expect_int("saved display width", 401, options.display_width);
+    expect_int("saved display height", 301, options.display_height);
+    expect_bool("saved integer scale", 0, options.integer_scale);
+    expect_bool("saved aspect correct", 0, options.aspect_correct);
+    expect_string("saved filter", "linear", options.video_filter);
+    expect_bool("saved leds", 0, options.show_leds);
+    expect_bool("saved remember", 1, options.remember);
+    expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
+    expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);
+    expect_string("saved symbol files", "symbols/main.sym", options.symbol_files);
+
+    app_options_destroy(&options);
+    remove("test_phase14_save.ini");
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
     test_rom_paths_discovered_without_ini();
     test_window_layout_from_ini();
     test_window_layout_saved_to_ini();
+    test_phase14_config_from_ini();
+    test_phase14_config_saved_to_ini();
     return 0;
 }

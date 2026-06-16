@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 
+#include "c64.h"
+
 typedef struct runtime runtime;
 typedef struct runtime_client runtime_client;
 
@@ -13,6 +15,7 @@ typedef struct runtime_config {
     const char *ini_path;
     bool use_ini;
     bool save_ini;
+    c64_config machine_config;
 } runtime_config;
 
 bool runtime_init();

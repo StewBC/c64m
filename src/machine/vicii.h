@@ -24,7 +24,14 @@ enum {
     VICII_ACTIVE_H = 200,
     VICII_NTSC_CYCLES_PER_LINE = 65,
     VICII_NTSC_LINES_PER_FRAME = 263,
+    VICII_PAL_CYCLES_PER_LINE = 63,
+    VICII_PAL_LINES_PER_FRAME = 312,
 };
+
+typedef enum vicii_video_standard {
+    VICII_VIDEO_STANDARD_NTSC = 0,
+    VICII_VIDEO_STANDARD_PAL
+} vicii_video_standard;
 
 typedef struct vicii_timing {
     uint32_t cycles_per_line;
@@ -33,6 +40,7 @@ typedef struct vicii_timing {
     uint32_t raster_line;
     uint64_t frame_number;
     bool frame_complete;
+    vicii_video_standard standard;
 } vicii_timing;
 
 typedef struct c64_vicii_snapshot {
@@ -51,6 +59,7 @@ struct vicii {
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
+void vicii_set_video_standard(vicii *v, vicii_video_standard standard);
 void vicii_step_cycle(vicii *v);
 void vicii_destroy(vicii *v);
 

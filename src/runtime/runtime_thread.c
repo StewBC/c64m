@@ -299,6 +299,39 @@ static bool runtime_reset_machine(runtime *rt) {
     return true;
 }
 
+static bool runtime_replace_string(char **target, const char *value) {
+    char *copy = NULL;
+    size_t length;
+
+    if (value != NULL && value[0] != '\0') {
+        length = strlen(value);
+        copy = malloc(length + 1u);
+        if (copy == NULL) {
+            return false;
+        }
+        memcpy(copy, value, length + 1u);
+    }
+
+    free(*target);
+    *target = copy;
+    return true;
+}
+
+static void runtime_apply_machine_config(runtime *rt, const runtime_command *command) {
+    rt->machine_config = command->data.apply_machine_config.config;
+    rt->save_ini = command->data.apply_machine_config.save_ini != 0;
+    if (!runtime_replace_string(&rt->ini_path, command->data.apply_machine_config.ini_path)) {
+        runtime_publish_error(rt, "failed to update runtime INI path");
+        return;
+    }
+    c64_set_config(&rt->machine, &rt->machine_config);
+    if (command->data.apply_machine_config.reset != 0) {
+        runtime_reset_machine(rt);
+    } else {
+        runtime_publish_machine_state(rt);
+    }
+}
+
 static int runtime_find_breakpoint_by_id(const runtime *rt, uint32_t id) {
     size_t i;
 
@@ -1054,6 +1087,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_load_prg(rt, command);
             break;
 
+        case RUNTIME_COMMAND_APPLY_MACHINE_CONFIG:
+            runtime_apply_machine_config(rt, command);
+            break;
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -1068,6 +1105,7 @@ int runtime_thread_main(void *userdata) {
     bool alive = true;
 
     c64_init(&rt->machine);
+    c64_set_config(&rt->machine, &rt->machine_config);
     c64_set_memory_access_callback(&rt->machine, runtime_memory_access, rt);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;

@@ -2,6 +2,7 @@
 
 #include "platform.h"
 #include "runtime_event.h"
+#include "app_options.h"
 
 #include "c64_frame.h"
 
@@ -52,8 +53,18 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CREATE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_UPDATE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT,
-    FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG
+    FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY
 } frontend_debugger_intent_type;
+
+typedef struct frontend_config_apply_result {
+    bool accepted;
+    bool needs_reboot;
+    bool save_ini_on_quit;
+    bool symbols_changed;
+} frontend_config_apply_result;
 
 typedef struct frontend_debugger_intent {
     frontend_debugger_intent_type type;
@@ -64,6 +75,8 @@ typedef struct frontend_debugger_intent {
     bool enabled;
     runtime_memory_mode memory_mode;
     runtime_breakpoint_definition breakpoint;
+    app_options config;
+    frontend_config_apply_result config_result;
 } frontend_debugger_intent;
 
 typedef struct frontend_layout_state {
@@ -86,3 +99,6 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
 bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent);
 void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state);
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);
+void frontend_set_config_state(frontend *ui, const app_options *options);
+bool frontend_apply_selected_ini(frontend *ui, const app_options *options);
+void frontend_append_symbol_file(frontend *ui, const char *path);

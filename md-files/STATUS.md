@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 13.
+Completed through Phase 14.
 
 Implemented:
 
@@ -142,6 +142,18 @@ Implemented:
   - C64 display input is the initial/default focus, including the first time the debugger UI is opened
   - clicking the C64 display while the debugger UI is visible returns ordinary key input to the emulated C64
   - clicking debugger views returns ordinary key input to the focused debugger view, and that choice survives UI hide/show toggles
+- Phase 14 INI configuration system and configure dialog:
+  - Misc view Programs tab has been renamed to Machine and now opens a Configure dialog
+  - Configure dialog owns original and edited configuration copies; edits are temporary until OK and Cancel discards them
+  - Machine tab exposes video standard, display width/height, integer scaling, aspect correction, and filter settings
+  - Emulator tab exposes scroll wheel speed, turbo speeds, disk LED visibility, symbol file paths, and persistent auto-save
+  - global INI file path editing and native picker flow are wired, including existing-file Yes/No/Cancel parse behavior
+  - changing the INI filename automatically enables the one-shot Save INI on Quit flag when saving is allowed
+  - `--nosaveini` disables save controls; `--noini` skips startup INI loading without disabling later saves
+  - OK applies immediate frontend/app settings, sends copied machine config through runtime_client, and reboots on PAL/NTSC changes
+  - VIC-II timing now supports NTSC and PAL line/frame timing selected from machine configuration
+  - `[config]` INI keys now persist scroll wheel speed, turbo speeds, symbol files, and `Save=yes`
+  - symbol file changes currently trigger view refresh plumbing only; real symbol unload/load remains future work
 
 ## Not Implemented
 
@@ -180,13 +192,3 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 - Artificial cursors for debugger text views should be drawn on the window canvas at computed font-cell coordinates. Do not rely on Nuklear edit widgets for hex dump/disassembly cursors.
 - Editable debugger cursors should be hidden while the runtime is running if edits are gated to paused state.
 - Repeated keydown events are allowed for focused debugger text editing, while global emulator controls and Option/F-key commands remain owned by the master input layer.
-
-## Next Phase
-
-Post-Phase 13 debugger follow-up.
-
-Goal:
-
-```text
-Implement the deferred Type, Swap, and trace action details on top of the runtime-owned breakpoint manager.
-```

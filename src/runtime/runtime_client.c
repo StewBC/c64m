@@ -291,6 +291,29 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_apply_machine_config(
+    runtime_client *client,
+    const c64_config *config,
+    const char *ini_path,
+    bool reset,
+    bool save_ini) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
+    };
+
+    if (!client || !config) {
+        return false;
+    }
+
+    command.data.apply_machine_config.config = *config;
+    if (ini_path != NULL) {
+        snprintf(command.data.apply_machine_config.ini_path, sizeof(command.data.apply_machine_config.ini_path), "%s", ini_path);
+    }
+    command.data.apply_machine_config.reset = reset ? 1u : 0u;
+    command.data.apply_machine_config.save_ini = save_ini ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
     runtime_frame_slot *slot;
 

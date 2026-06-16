@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32
@@ -116,6 +117,29 @@ typedef struct frontend_misc_view_state {
     bool initialized;
 } frontend_misc_view_state;
 
+typedef enum frontend_config_tab {
+    FRONTEND_CONFIG_TAB_MACHINE = 0,
+    FRONTEND_CONFIG_TAB_EMULATOR
+} frontend_config_tab;
+
+typedef enum frontend_ini_prompt_state {
+    FRONTEND_INI_PROMPT_NONE = 0,
+    FRONTEND_INI_PROMPT_EXISTING
+} frontend_ini_prompt_state;
+
+typedef struct frontend_config_dialog_state {
+    bool open;
+    bool initialized;
+    frontend_config_tab active_tab;
+    frontend_ini_prompt_state prompt;
+    app_options original;
+    app_options edited;
+    char previous_ini_path[1024];
+    bool previous_save_ini;
+    bool save_ini_on_quit;
+    char error[160];
+} frontend_config_dialog_state;
+
 typedef enum frontend_breakpoint_dialog_mode {
     FRONTEND_BREAKPOINT_DIALOG_CREATE = 0,
     FRONTEND_BREAKPOINT_DIALOG_EDIT
@@ -161,6 +185,7 @@ struct frontend {
     frontend_memory_view_state memory;
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
+    frontend_config_dialog_state config_dialog;
     frontend_breakpoint_dialog_state breakpoint_dialog;
     symbol_resolver symbols;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
@@ -500,6 +525,128 @@ static void frontend_checkbox_bool(struct nk_context *ctx, const char *label, bo
     *value = active != 0;
 }
 
+static bool frontend_file_exists(const char *path)
+{
+    struct stat st;
+
+    return path != NULL && path[0] != '\0' && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static bool frontend_string_equal(const char *a, const char *b)
+{
+    if (a == NULL) {
+        a = "";
+    }
+    if (b == NULL) {
+        b = "";
+    }
+    return strcmp(a, b) == 0;
+}
+
+static void frontend_copy_text(char *out, size_t out_size, const char *value)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    snprintf(out, out_size, "%s", value != NULL ? value : "");
+}
+
+static bool frontend_config_reserve_string(char **target, size_t capacity)
+{
+    char *buffer;
+
+    if (target == NULL || capacity == 0) {
+        return false;
+    }
+
+    buffer = calloc(1, capacity);
+    if (buffer == NULL) {
+        return false;
+    }
+
+    if (*target != NULL) {
+        snprintf(buffer, capacity, "%s", *target);
+    }
+    free(*target);
+    *target = buffer;
+    return true;
+}
+
+static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *dialog)
+{
+    return
+        frontend_config_reserve_string(&dialog->edited.ini_path, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
+        frontend_config_reserve_string(&dialog->edited.video_filter, 64) &&
+        frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
+        frontend_config_reserve_string(&dialog->edited.symbol_files, 1024);
+}
+
+static void frontend_config_dialog_reset(frontend_config_dialog_state *dialog)
+{
+    app_options_destroy(&dialog->original);
+    app_options_destroy(&dialog->edited);
+    memset(dialog, 0, sizeof(*dialog));
+}
+
+static bool frontend_config_dialog_open(frontend *ui)
+{
+    if (ui == NULL) {
+        return false;
+    }
+
+    ui->config_dialog.open = true;
+    ui->config_dialog.active_tab = FRONTEND_CONFIG_TAB_MACHINE;
+    ui->config_dialog.error[0] = '\0';
+    return true;
+}
+
+static bool frontend_push_config_apply_intent(
+    frontend *ui,
+    const app_options *options,
+    const frontend_config_apply_result *result)
+{
+    size_t next;
+
+    if (ui == NULL || options == NULL || result == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY;
+    ui->intents[ui->intent_write].config_result = *result;
+    if (!app_options_copy(&ui->intents[ui->intent_write].config, options)) {
+        ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_NONE;
+        return false;
+    }
+    ui->intent_write = next;
+    return true;
+}
+
+static bool frontend_push_simple_intent(frontend *ui, frontend_debugger_intent_type type)
+{
+    size_t next;
+
+    if (ui == NULL || type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = type;
+    ui->intent_write = next;
+    return true;
+}
+
 static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
 {
     frontend_breakpoint_dialog_state *dialog;
@@ -644,6 +791,303 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
     nk_end(ctx);
 }
 
+static bool frontend_config_validate(frontend_config_dialog_state *dialog)
+{
+    if (dialog->edited.display_width < 160 || dialog->edited.display_width > 2048) {
+        snprintf(dialog->error, sizeof(dialog->error), "Display width must be 160..2048");
+        return false;
+    }
+    if (dialog->edited.display_height < 120 || dialog->edited.display_height > 2048) {
+        snprintf(dialog->error, sizeof(dialog->error), "Display height must be 120..2048");
+        return false;
+    }
+    if (dialog->edited.scroll_wheel_lines < 1 || dialog->edited.scroll_wheel_lines > 100) {
+        snprintf(dialog->error, sizeof(dialog->error), "Scroll wheel speed must be 1..100");
+        return false;
+    }
+    if (dialog->edited.ini_path == NULL || dialog->edited.ini_path[0] == '\0') {
+        snprintf(dialog->error, sizeof(dialog->error), "INI file path is required");
+        return false;
+    }
+    dialog->error[0] = '\0';
+    return true;
+}
+
+static bool frontend_config_standard_changed(const app_options *a, const app_options *b)
+{
+    return !frontend_string_equal(a->video_standard, b->video_standard);
+}
+
+static bool frontend_config_symbols_changed(const app_options *a, const app_options *b)
+{
+    return !frontend_string_equal(a->symbol_files, b->symbol_files);
+}
+
+static void frontend_config_commit_ini_path(frontend_config_dialog_state *dialog)
+{
+    const char *original;
+    const char *edited;
+
+    original = dialog->original.ini_path != NULL ? dialog->original.ini_path : "";
+    edited = dialog->edited.ini_path != NULL ? dialog->edited.ini_path : "";
+    if (strcmp(original, edited) != 0 && !dialog->edited.no_save_ini) {
+        dialog->save_ini_on_quit = true;
+    }
+}
+
+static void frontend_draw_config_tab_button(frontend *ui, frontend_config_tab tab, const char *label)
+{
+    struct nk_style_button saved_button = ui->ctx->style.button;
+
+    if (ui->config_dialog.active_tab == tab) {
+        ui->ctx->style.button.normal = nk_style_item_color(nk_rgb(49, 78, 94));
+        ui->ctx->style.button.hover = nk_style_item_color(nk_rgb(58, 93, 112));
+        ui->ctx->style.button.text_normal = nk_rgb(226, 246, 255);
+    }
+
+    if (nk_button_label(ui->ctx, label)) {
+        ui->config_dialog.active_tab = tab;
+    }
+
+    ui->ctx->style.button = saved_button;
+}
+
+static void frontend_draw_config_machine_tab(frontend_config_dialog_state *dialog, struct nk_context *ctx)
+{
+    nk_layout_row_dynamic(ctx, 20.0f, 2);
+    if (nk_option_label(ctx, "NTSC", frontend_string_equal(dialog->edited.video_standard, "NTSC"))) {
+        app_options_set_string(&dialog->edited.video_standard, "NTSC");
+    }
+    if (nk_option_label(ctx, "PAL", frontend_string_equal(dialog->edited.video_standard, "PAL"))) {
+        app_options_set_string(&dialog->edited.video_standard, "PAL");
+    }
+
+    nk_layout_row_dynamic(ctx, 22.0f, 2);
+    nk_label(ctx, "Display Width", NK_TEXT_LEFT);
+    nk_property_int(ctx, "#W", 160, &dialog->edited.display_width, 2048, 1, 8.0f);
+    nk_label(ctx, "Display Height", NK_TEXT_LEFT);
+    nk_property_int(ctx, "#H", 120, &dialog->edited.display_height, 2048, 1, 8.0f);
+
+    nk_layout_row_dynamic(ctx, 20.0f, 2);
+    frontend_checkbox_bool(ctx, "Integer Scale", &dialog->edited.integer_scale);
+    frontend_checkbox_bool(ctx, "Aspect Correct", &dialog->edited.aspect_correct);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+    nk_layout_row_push(ctx, 0.30f);
+    nk_label(ctx, "Filter", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.70f);
+    if (dialog->edited.video_filter == NULL) {
+        app_options_set_string(&dialog->edited.video_filter, "nearest");
+    }
+    nk_edit_string_zero_terminated(
+        ctx,
+        NK_EDIT_FIELD,
+        dialog->edited.video_filter,
+        64,
+        nk_filter_default);
+    nk_layout_row_end(ctx);
+}
+
+static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dialog_state *dialog, struct nk_context *ctx)
+{
+    if (dialog->edited.turbo_multipliers == NULL) {
+        app_options_set_string(&dialog->edited.turbo_multipliers, "2,4,8,16");
+    }
+    if (dialog->edited.symbol_files == NULL) {
+        app_options_set_string(&dialog->edited.symbol_files, "");
+    }
+
+    nk_layout_row_dynamic(ctx, 22.0f, 2);
+    nk_label(ctx, "Scroll Wheel Speed", NK_TEXT_LEFT);
+    nk_property_int(ctx, "#L", 1, &dialog->edited.scroll_wheel_lines, 100, 1, 4.0f);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+    nk_layout_row_push(ctx, 0.30f);
+    nk_label(ctx, "Turbo Speeds", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.70f);
+    nk_edit_string_zero_terminated(
+        ctx,
+        NK_EDIT_FIELD,
+        dialog->edited.turbo_multipliers,
+        256,
+        nk_filter_default);
+    nk_layout_row_end(ctx);
+
+    nk_layout_row_dynamic(ctx, 20.0f, 2);
+    frontend_checkbox_bool(ctx, "Show Disk LEDs", &dialog->edited.show_leds);
+    if (dialog->edited.no_save_ini) {
+        nk_label(ctx, "Saving disabled", NK_TEXT_LEFT);
+    } else {
+        frontend_checkbox_bool(ctx, "Auto-save INI on Quit", &dialog->edited.remember);
+    }
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Symbol Files", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    nk_edit_string_zero_terminated(
+        ctx,
+        NK_EDIT_FIELD,
+        dialog->edited.symbol_files,
+        1024,
+        nk_filter_default);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Add...")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG);
+    }
+}
+
+static void frontend_draw_config_existing_ini_prompt(frontend *ui, frontend_config_dialog_state *dialog, struct nk_context *ctx)
+{
+    if (dialog->prompt != FRONTEND_INI_PROMPT_EXISTING) {
+        return;
+    }
+
+    if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Parse selected INI file now?", NK_WINDOW_BORDER, nk_rect(220, 160, 360, 130))) {
+        nk_layout_row_dynamic(ctx, 20.0f, 1);
+        nk_label(ctx, "Parse selected INI file now?", NK_TEXT_LEFT);
+        nk_layout_row_dynamic(ctx, 24.0f, 3);
+        if (nk_button_label(ctx, "Yes")) {
+            app_options parsed;
+            memset(&parsed, 0, sizeof(parsed));
+            if (app_options_copy(&parsed, &dialog->edited) &&
+                app_options_apply_ini_file(&parsed, dialog->edited.ini_path)) {
+                bool save_once = dialog->save_ini_on_quit;
+                char path[1024];
+                frontend_copy_text(path, sizeof(path), dialog->edited.ini_path);
+                app_options_destroy(&dialog->edited);
+                dialog->edited = parsed;
+                app_options_set_string(&dialog->edited.ini_path, path);
+                frontend_config_prepare_edit_buffers(dialog);
+                dialog->save_ini_on_quit = save_once;
+            } else {
+                snprintf(dialog->error, sizeof(dialog->error), "Could not parse selected INI");
+                app_options_destroy(&parsed);
+            }
+            dialog->prompt = FRONTEND_INI_PROMPT_NONE;
+            nk_popup_close(ctx);
+        }
+        if (nk_button_label(ctx, "No")) {
+            dialog->prompt = FRONTEND_INI_PROMPT_NONE;
+            nk_popup_close(ctx);
+        }
+        if (nk_button_label(ctx, "Cancel")) {
+            app_options_set_string(&dialog->edited.ini_path, dialog->previous_ini_path);
+            frontend_config_reserve_string(&dialog->edited.ini_path, 1024);
+            dialog->save_ini_on_quit = dialog->previous_save_ini;
+            dialog->prompt = FRONTEND_INI_PROMPT_NONE;
+            nk_popup_close(ctx);
+        }
+        nk_popup_end(ctx);
+    }
+    (void)ui;
+}
+
+static void frontend_draw_config_dialog(frontend *ui, int width, int height)
+{
+    frontend_config_dialog_state *dialog;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+
+    if (ui == NULL || !ui->config_dialog.open || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    dialog = &ui->config_dialog;
+    bounds = nk_rect((float)(width - 560) * 0.5f, (float)(height - 500) * 0.5f, 560.0f, 500.0f);
+    if (bounds.x < 8.0f) {
+        bounds.x = 8.0f;
+    }
+    if (bounds.y < 8.0f) {
+        bounds.y = 8.0f;
+    }
+
+    if (nk_begin(ctx, "Configure", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        if (!nk_window_is_closed(ctx, "Configure")) {
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_MACHINE, "Machine");
+            frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_EMULATOR, "Emulator");
+
+            nk_layout_row_dynamic(ctx, 250.0f, 1);
+            if (nk_group_begin(ctx, "config-tab-body", NK_WINDOW_BORDER)) {
+                if (dialog->active_tab == FRONTEND_CONFIG_TAB_MACHINE) {
+                    frontend_draw_config_machine_tab(dialog, ctx);
+                } else {
+                    frontend_draw_config_emulator_tab(ui, dialog, ctx);
+                }
+                nk_group_end(ctx);
+            }
+
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+            nk_layout_row_push(ctx, 0.18f);
+            nk_label(ctx, "INI File", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.68f);
+            if (dialog->edited.ini_path == NULL) {
+                app_options_set_string(&dialog->edited.ini_path, "");
+            }
+            if (dialog->prompt == FRONTEND_INI_PROMPT_NONE) {
+                frontend_copy_text(dialog->previous_ini_path, sizeof(dialog->previous_ini_path), dialog->edited.ini_path);
+                dialog->previous_save_ini = dialog->save_ini_on_quit;
+            }
+            if (nk_edit_string_zero_terminated(
+                    ctx,
+                    NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+                    dialog->edited.ini_path,
+                    1024,
+                    nk_filter_default) & NK_EDIT_COMMITED) {
+                frontend_config_commit_ini_path(dialog);
+                if (frontend_file_exists(dialog->edited.ini_path)) {
+                    dialog->prompt = FRONTEND_INI_PROMPT_EXISTING;
+                }
+            }
+            nk_layout_row_push(ctx, 0.14f);
+            if (nk_button_label(ctx, "...")) {
+                frontend_copy_text(dialog->previous_ini_path, sizeof(dialog->previous_ini_path), dialog->edited.ini_path);
+                dialog->previous_save_ini = dialog->save_ini_on_quit;
+                frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG);
+            }
+            nk_layout_row_end(ctx);
+
+            nk_layout_row_dynamic(ctx, 20.0f, 1);
+            if (dialog->edited.no_save_ini) {
+                nk_label(ctx, "Save INI on Quit disabled by --nosaveini", NK_TEXT_LEFT);
+            } else {
+                frontend_checkbox_bool(ctx, "Save INI on Quit", &dialog->save_ini_on_quit);
+            }
+
+            if (dialog->error[0] != '\0') {
+                nk_layout_row_dynamic(ctx, 18.0f, 1);
+                nk_label_colored(ctx, dialog->error, NK_TEXT_LEFT, nk_rgb(255, 128, 118));
+            } else {
+                nk_layout_row_dynamic(ctx, 8.0f, 1);
+                nk_spacing(ctx, 1);
+            }
+
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            if (nk_button_label(ctx, "OK") && frontend_config_validate(dialog)) {
+                frontend_config_apply_result result = {
+                    .accepted = true,
+                    .needs_reboot = frontend_config_standard_changed(&dialog->original, &dialog->edited),
+                    .save_ini_on_quit = dialog->save_ini_on_quit,
+                    .symbols_changed = frontend_config_symbols_changed(&dialog->original, &dialog->edited),
+                };
+                if (frontend_push_config_apply_intent(ui, &dialog->edited, &result)) {
+                    dialog->open = false;
+                }
+            }
+            if (nk_button_label(ctx, "Cancel")) {
+                dialog->open = false;
+            }
+            frontend_draw_config_existing_ini_prompt(ui, dialog, ctx);
+        } else {
+            dialog->open = false;
+        }
+    } else if (nk_window_is_closed(ctx, "Configure")) {
+        dialog->open = false;
+    }
+    nk_end(ctx);
+}
+
 static void frontend_push_debugger_intent(
     frontend *ui,
     frontend_debugger_intent_type type,
@@ -660,6 +1104,7 @@ static void frontend_push_debugger_intent(
         return;
     }
 
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
     ui->intents[ui->intent_write].type = type;
     ui->intents[ui->intent_write].value = value;
     ui->intent_write = next;
@@ -682,6 +1127,7 @@ static void frontend_push_breakpoint_id_intent(
         return;
     }
 
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
     ui->intents[ui->intent_write].type = type;
     ui->intents[ui->intent_write].id = id;
     ui->intents[ui->intent_write].enabled = enabled;
@@ -2856,7 +3302,11 @@ static void frontend_draw_misc_programs(frontend *ui)
 
     ctx = ui->ctx;
     nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Programs", NK_TEXT_LEFT);
+    nk_label(ctx, "Machine", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Configure...")) {
+        frontend_config_dialog_open(ui);
+    }
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "Load PRG...")) {
         frontend_push_debugger_intent(
@@ -3103,7 +3553,7 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
     ctx = ui->ctx;
     if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
         nk_layout_row_dynamic(ctx, tab_h, 4);
-        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_PROGRAMS, "Programs");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_PROGRAMS, "Machine");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_DEBUGGER, "Debugger");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_BREAKPOINTS, "Breakpoints");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_HARDWARE, "Hardware");
@@ -3271,6 +3721,73 @@ void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state)
     out_state->display_height = ui->layout.display_px_h;
 }
 
+void frontend_set_config_state(frontend *ui, const app_options *options)
+{
+    if (ui == NULL || options == NULL) {
+        return;
+    }
+
+    frontend_config_dialog_reset(&ui->config_dialog);
+    if (!app_options_copy(&ui->config_dialog.original, options) ||
+        !app_options_copy(&ui->config_dialog.edited, options) ||
+        !frontend_config_prepare_edit_buffers(&ui->config_dialog)) {
+        frontend_config_dialog_reset(&ui->config_dialog);
+        return;
+    }
+
+    ui->config_dialog.initialized = true;
+}
+
+bool frontend_apply_selected_ini(frontend *ui, const app_options *options)
+{
+    frontend_config_dialog_state *dialog;
+
+    if (ui == NULL || options == NULL) {
+        return false;
+    }
+
+    dialog = &ui->config_dialog;
+    if (!dialog->initialized) {
+        return false;
+    }
+
+    app_options_destroy(&dialog->edited);
+    if (!app_options_copy(&dialog->edited, options) ||
+        !frontend_config_prepare_edit_buffers(dialog)) {
+        frontend_config_dialog_reset(dialog);
+        return false;
+    }
+
+    frontend_config_commit_ini_path(dialog);
+    if (frontend_file_exists(dialog->edited.ini_path)) {
+        dialog->prompt = FRONTEND_INI_PROMPT_EXISTING;
+    }
+    return true;
+}
+
+void frontend_append_symbol_file(frontend *ui, const char *path)
+{
+    frontend_config_dialog_state *dialog;
+    char merged[1024];
+
+    if (ui == NULL || path == NULL || path[0] == '\0') {
+        return;
+    }
+
+    dialog = &ui->config_dialog;
+    if (!dialog->initialized) {
+        return;
+    }
+
+    if (dialog->edited.symbol_files != NULL && dialog->edited.symbol_files[0] != '\0') {
+        snprintf(merged, sizeof(merged), "%s,%s", dialog->edited.symbol_files, path);
+    } else {
+        snprintf(merged, sizeof(merged), "%s", path);
+    }
+    frontend_config_reserve_string(&dialog->edited.symbol_files, 1024);
+    snprintf(dialog->edited.symbol_files, 1024, "%s", merged);
+}
+
 void frontend_destroy(frontend *ui)
 {
     if (ui == NULL) {
@@ -3285,6 +3802,7 @@ void frontend_destroy(frontend *ui)
         SDL_DestroyTexture(ui->display_texture);
     }
 
+    frontend_config_dialog_reset(&ui->config_dialog);
     free(ui);
 }
 
@@ -3475,6 +3993,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_splitter(ui->ctx, "split-top-bottom", ui->layout.hit_split_top_bottom, split_top_bottom_active);
     frontend_draw_splitter(ui->ctx, "split-memory-misc", ui->layout.hit_split_memory_misc, split_memory_misc_active);
     frontend_draw_corner_handle(ui->ctx, ui->layout.hit_display_corner, display_corner_active);
+    frontend_draw_config_dialog(ui, width, height);
     frontend_draw_breakpoint_editor(ui, width, height);
     nk_sdl_render(NK_ANTI_ALIASING_ON);
 }
@@ -3486,6 +4005,7 @@ bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_i
     }
 
     *out_intent = ui->intents[ui->intent_read];
+    memset(&ui->intents[ui->intent_read], 0, sizeof(ui->intents[ui->intent_read]));
     ui->intent_read = (ui->intent_read + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
     return true;
 }

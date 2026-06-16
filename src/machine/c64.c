@@ -71,6 +71,7 @@ void c64_init(c64_t *machine) {
     assert(machine);
 
     memset(machine, 0, sizeof(*machine));
+    machine->config.video_standard = C64_VIDEO_STANDARD_NTSC;
     c64_bus_init(&machine->bus);
     (void)vicii_init(&machine->vic, error, sizeof(error));
     (void)cia_init(&machine->cia1, error, sizeof(error));
@@ -82,6 +83,16 @@ void c64_init(c64_t *machine) {
     c6510_init(&machine->cpu, machine, c64_cpu_read, c64_cpu_write);
     c6510_set_irq_pending_callback(&machine->cpu, c64_cpu_irq_pending);
     c6510_set_nmi_pending_callback(&machine->cpu, c64_cpu_nmi_pending);
+}
+
+void c64_set_config(c64_t *machine, const c64_config *config) {
+    assert(machine);
+
+    if (config == NULL) {
+        return;
+    }
+
+    machine->config = *config;
 }
 
 bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size_t error_size) {
@@ -137,6 +148,11 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
 
     c64_bus_reset(&machine->bus);
     vicii_reset(&machine->vic);
+    vicii_set_video_standard(
+        &machine->vic,
+        machine->config.video_standard == C64_VIDEO_STANDARD_PAL ?
+            VICII_VIDEO_STANDARD_PAL :
+            VICII_VIDEO_STANDARD_NTSC);
     vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x10);
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);

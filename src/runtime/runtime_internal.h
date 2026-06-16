@@ -74,6 +74,7 @@ struct runtime {
     char *ini_path;
     bool use_ini;
     bool save_ini;
+    c64_config machine_config;
     runtime_exec_state exec_state;
     runtime_stop_reason last_stop_reason;
     runtime_speed_mode speed_mode;

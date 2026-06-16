@@ -2,6 +2,7 @@
 
 #include "runtime_event.h"
 #include "keyboard.h"
+#include "c64.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,7 +34,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_UPDATE_BREAKPOINT,
     RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
     RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
-    RUNTIME_COMMAND_LOAD_PRG
+    RUNTIME_COMMAND_LOAD_PRG,
+    RUNTIME_COMMAND_APPLY_MACHINE_CONFIG
 } runtime_command_type;
 
 enum {
@@ -112,5 +114,12 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
         } load_prg;
+
+        struct {
+            c64_config config;
+            char ini_path[RUNTIME_COMMAND_PATH_MAX];
+            uint8_t reset;
+            uint8_t save_ini;
+        } apply_machine_config;
     } data;
 } runtime_command;

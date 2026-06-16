@@ -67,6 +67,7 @@ runtime *runtime_create(const runtime_config *config) {
         rt->ini_path = runtime_copy_string(config->ini_path);
         rt->use_ini = config->use_ini;
         rt->save_ini = config->save_ini;
+        rt->machine_config = config->machine_config;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||

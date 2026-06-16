@@ -11,19 +11,24 @@
 #include <stdio.h>
 #include <string.h>
 
-static bool choose_prg_path(char *out_path, size_t out_size) {
+static bool choose_file_path(char *out_path, size_t out_size, const char *prompt, const char *types) {
 #if defined(__APPLE__)
     FILE *pipe;
     char *newline;
+    char command[512];
 
     if (out_path == NULL || out_size == 0) {
         return false;
     }
 
     out_path[0] = '\0';
-    pipe = popen(
-        "osascript -e 'POSIX path of (choose file with prompt \"Load PRG\" of type {\"prg\"})'",
-        "r");
+    snprintf(
+        command,
+        sizeof(command),
+        "osascript -e 'POSIX path of (choose file with prompt \"%s\"%s)'",
+        prompt,
+        types != NULL ? types : "");
+    pipe = popen(command, "r");
     if (pipe == NULL) {
         return false;
     }
@@ -44,8 +49,35 @@ static bool choose_prg_path(char *out_path, size_t out_size) {
 #else
     (void)out_path;
     (void)out_size;
+    (void)prompt;
+    (void)types;
     return false;
 #endif
+}
+
+static bool choose_prg_path(char *out_path, size_t out_size) {
+    return choose_file_path(out_path, out_size, "Load PRG", " of type {\"prg\"}");
+}
+
+static bool choose_ini_path(char *out_path, size_t out_size) {
+    return choose_file_path(out_path, out_size, "Select INI File", " of type {\"ini\"}");
+}
+
+static bool choose_symbol_path(char *out_path, size_t out_size) {
+    return choose_file_path(out_path, out_size, "Select Symbol File", NULL);
+}
+
+static c64_config machine_config_from_options(const app_options *options) {
+    c64_config config = {
+        .video_standard = C64_VIDEO_STANDARD_NTSC,
+    };
+
+    if (options != NULL &&
+        options->video_standard != NULL &&
+        strcmp(options->video_standard, "PAL") == 0) {
+        config.video_standard = C64_VIDEO_STANDARD_PAL;
+    }
+    return config;
 }
 
 static void request_debug_state(runtime_client *client) {
@@ -222,7 +254,7 @@ static void dispatch_input_actions(
     }
 }
 
-static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
+static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_options *options) {
     frontend_debugger_intent intent;
 
     if (client == NULL || ui == NULL) {
@@ -310,6 +342,47 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
                 }
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
+                {
+                    char path[1024];
+                    app_options selected;
+                    if (choose_ini_path(path, sizeof(path)) && app_options_copy(&selected, options)) {
+                        app_options_set_string(&selected.ini_path, path);
+                        frontend_apply_selected_ini(ui, &selected);
+                        app_options_destroy(&selected);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
+                {
+                    char path[1024];
+                    if (choose_symbol_path(path, sizeof(path))) {
+                        frontend_append_symbol_file(ui, path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
+                {
+                    c64_config machine_config = machine_config_from_options(&intent.config);
+                    app_options_destroy(options);
+                    *options = intent.config;
+                    memset(&intent.config, 0, sizeof(intent.config));
+                    options->save_ini = intent.config_result.save_ini_on_quit || options->remember;
+                    sent = runtime_client_apply_machine_config(
+                        client,
+                        &machine_config,
+                        options->ini_path,
+                        intent.config_result.needs_reboot,
+                        options->save_ini && !options->no_save_ini);
+                    frontend_set_config_state(ui, options);
+                    if (intent.config_result.symbols_changed) {
+                        runtime_client_request_memory(client, 0, 1, RUNTIME_MEMORY_MODE_CPU_MAP);
+                    }
+                }
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_NONE:
             default:
                 break;
@@ -318,6 +391,7 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
         if (sent) {
             request_debug_state(client);
         }
+        app_options_destroy(&intent.config);
     }
 }
 
@@ -332,7 +406,7 @@ static void handle_keyboard_input(
     dispatch_input_actions(client, actions, count);
 }
 
-static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui) {
+static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui, app_options *options) {
     bool running = true;
     bool ui_visible = false;
     frontend_input_mapper input_mapper;
@@ -393,7 +467,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
             return false;
         }
         frontend_render(ui, ui_visible, &debug_state);
-        dispatch_debugger_intents(client, ui);
+        dispatch_debugger_intents(client, ui, options);
         platform_window_present(window);
     }
 
@@ -426,7 +500,8 @@ int main(int argc, char **argv) {
     runtime_cfg.system_rom_path = options.system_rom_path;
     runtime_cfg.ini_path = options.ini_path;
     runtime_cfg.use_ini = options.use_ini;
-    runtime_cfg.save_ini = options.save_ini && !options.no_save_ini;
+    runtime_cfg.save_ini = (options.save_ini || options.remember) && !options.no_save_ini;
+    runtime_cfg.machine_config = machine_config_from_options(&options);
 
     rt = runtime_create(&runtime_cfg);
     if (rt == NULL) {
@@ -480,10 +555,11 @@ int main(int argc, char **argv) {
     layout_state.display_width = options.layout_display_width;
     layout_state.display_height = options.layout_display_height;
     frontend_set_layout_state(ui, &layout_state);
+    frontend_set_config_state(ui, &options);
 
     send_run_command(client);
 
-    if (!run_main_loop(window, client, ui)) {
+    if (!run_main_loop(window, client, ui, &options)) {
         exit_code = 1;
     }
 
@@ -501,7 +577,7 @@ int main(int argc, char **argv) {
     options.layout_split_memory_misc = layout_state.split_memory_misc;
     options.layout_display_width = layout_state.display_width;
     options.layout_display_height = layout_state.display_height;
-    if (!app_options_save_shutdown(&options)) {
+    if ((options.save_ini || options.remember) && !app_options_save_shutdown(&options)) {
         SDL_Log("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
     }
 

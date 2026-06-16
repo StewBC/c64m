@@ -54,22 +54,40 @@ bool vicii_init(vicii *v, char *error, size_t error_size) {
     }
 
     memset(v, 0, sizeof(*v));
+    v->timing.standard = VICII_VIDEO_STANDARD_NTSC;
     vicii_reset(v);
     vicii_set_error(error, error_size, "");
     return true;
 }
 
 void vicii_reset(vicii *v) {
+    vicii_video_standard standard;
+
     assert(v);
 
+    standard = v->timing.standard;
     memset(v->registers, 0, sizeof(v->registers));
     memset(&v->timing, 0, sizeof(v->timing));
     memset(&v->working_frame, 0, sizeof(v->working_frame));
 
-    v->timing.cycles_per_line = VICII_NTSC_CYCLES_PER_LINE;
-    v->timing.lines_per_frame = VICII_NTSC_LINES_PER_FRAME;
+    v->timing.standard = standard;
+    vicii_set_video_standard(v, standard);
     v->registers[VICII_REG_BORDER_COLOR] = VICII_DEFAULT_BORDER_COLOR;
     v->registers[VICII_REG_BACKGROUND_COLOR_0] = VICII_DEFAULT_BACKGROUND_COLOR;
+}
+
+void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
+    assert(v);
+
+    v->timing.standard = standard;
+    if (standard == VICII_VIDEO_STANDARD_PAL) {
+        v->timing.cycles_per_line = VICII_PAL_CYCLES_PER_LINE;
+        v->timing.lines_per_frame = VICII_PAL_LINES_PER_FRAME;
+        return;
+    }
+
+    v->timing.cycles_per_line = VICII_NTSC_CYCLES_PER_LINE;
+    v->timing.lines_per_frame = VICII_NTSC_LINES_PER_FRAME;
 }
 
 void vicii_step_cycle(vicii *v) {

@@ -422,7 +422,7 @@ bool runtime_save_breakpoints_to_ini(runtime *rt) {
     size_t i;
     bool ok;
 
-    if (rt == NULL || !rt->use_ini || !rt->save_ini || rt->ini_path == NULL) {
+    if (rt == NULL || !rt->save_ini || rt->ini_path == NULL) {
         return true;
     }
 

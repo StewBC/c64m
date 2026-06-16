@@ -13,10 +13,12 @@ typedef struct app_options {
     bool defaults;
     bool show_leds;
     bool no_save_ini;
+    int scroll_wheel_lines;
     char *ini_path;
     char *disk_images[C64M_DRIVE_COUNT];
     char *breakpoint;
     char *turbo_multipliers;
+    char *symbol_files;
     char *video_standard;
     int display_width;
     int display_height;
@@ -39,4 +41,7 @@ typedef struct app_options {
 void app_options_init(app_options *options);
 bool app_options_load_startup(app_options *options, int argc, char **argv);
 bool app_options_save_shutdown(const app_options *options);
+bool app_options_copy(app_options *dest, const app_options *src);
+bool app_options_apply_ini_file(app_options *options, const char *path);
+bool app_options_set_string(char **target, const char *value);
 void app_options_destroy(app_options *options);
