@@ -27,6 +27,16 @@ enum {
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
+
+    /* PAL border compare values (pixel/line units within 384×272 frame) */
+    VICII_PAL_VBORDER_TOP_25    = 51,
+    VICII_PAL_VBORDER_BOTTOM_25 = 251,
+    VICII_PAL_VBORDER_TOP_24    = 55,
+    VICII_PAL_VBORDER_BOTTOM_24 = 247,
+    VICII_HBORDER_LEFT_40       = 24,
+    VICII_HBORDER_RIGHT_40      = 344,
+    VICII_HBORDER_LEFT_38       = 31,
+    VICII_HBORDER_RIGHT_38      = 335,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -306,58 +316,97 @@ bool vicii_consume_frame_complete(vicii *v) {
     return complete;
 }
 
+typedef struct vicii_border_geometry {
+    uint32_t top;
+    uint32_t bottom;
+    uint32_t left;
+    uint32_t right;
+} vicii_border_geometry;
+
+static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
+    vicii_border_geometry g;
+    bool rsel = (v->registers[0x11] & 0x08u) != 0;
+    bool csel = (v->registers[0x16] & 0x08u) != 0;
+
+    g.top    = rsel ? (uint32_t)VICII_PAL_VBORDER_TOP_25    : (uint32_t)VICII_PAL_VBORDER_TOP_24;
+    g.bottom = rsel ? (uint32_t)VICII_PAL_VBORDER_BOTTOM_25 : (uint32_t)VICII_PAL_VBORDER_BOTTOM_24;
+    g.left   = csel ? (uint32_t)VICII_HBORDER_LEFT_40       : (uint32_t)VICII_HBORDER_LEFT_38;
+    g.right  = csel ? (uint32_t)VICII_HBORDER_RIGHT_40      : (uint32_t)VICII_HBORDER_RIGHT_38;
+    return g;
+}
+
 bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
-    uint8_t border_index;
-    uint8_t background_index;
-    uint32_t border_color;
-    uint32_t background_color;
-    uint32_t x;
-    uint32_t y;
-    uint16_t screen_base;
-    uint16_t character_base;
+    vicii_border_geometry g;
+    bool     vborder, hborder;
+    uint8_t  xscroll, yscroll;
+    uint8_t  border_index, background_index;
+    uint32_t border_color, background_color;
+    uint16_t screen_base, char_base;
+    uint32_t x, y;
 
     assert(v);
     assert(bus);
     assert(out_frame);
 
-    border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
-    background_index = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
-    screen_base = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    character_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-    border_color = vicii_palette_argb[border_index];
-    background_color = vicii_palette_argb[background_index];
+    g = vicii_get_border_geometry(v);
 
-    v->working_frame.width = C64_FRAME_WIDTH;
-    v->working_frame.height = C64_FRAME_HEIGHT;
+    xscroll          = v->registers[0x16] & 0x07u;
+    yscroll          = v->registers[0x11] & 0x07u;
+    border_index     = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR]       & 0x0fu);
+    background_index = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+    border_color     = vicii_palette_argb[border_index];
+    background_color = vicii_palette_argb[background_index];
+    screen_base      = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    char_base        = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+
+    v->working_frame.width        = C64_FRAME_WIDTH;
+    v->working_frame.height       = C64_FRAME_HEIGHT;
     v->working_frame.stride_bytes = C64_FRAME_WIDTH * sizeof(v->working_frame.pixels[0]);
     v->working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     v->working_frame.frame_number = v->timing.frame_number;
     v->working_frame.machine_cycle = machine_cycle;
 
+    vborder = true;   /* border active until the top compare fires */
+    hborder = true;
+
     for (y = 0; y < C64_FRAME_HEIGHT; y++) {
+        /* Vertical flip-flop transitions (Bauer §3.9) */
+        if (y == g.top)    vborder = false;
+        if (y == g.bottom) vborder = true;
+
         for (x = 0; x < C64_FRAME_WIDTH; x++) {
-            bool active = x >= VICII_ACTIVE_X && x < VICII_ACTIVE_X + VICII_ACTIVE_W &&
-                y >= VICII_ACTIVE_Y && y < VICII_ACTIVE_Y + VICII_ACTIVE_H;
-            uint32_t pixel = border_color;
+            uint32_t pixel;
 
-            if (active) {
-                uint32_t active_x = x - VICII_ACTIVE_X;
-                uint32_t active_y = y - VICII_ACTIVE_Y;
-                uint32_t column = active_x / VICII_CHARACTER_WIDTH;
-                uint32_t row = active_y / VICII_CHARACTER_HEIGHT;
-                uint16_t cell = (uint16_t)(row * VICII_TEXT_COLUMNS + column);
-                uint8_t character_code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint8_t glyph_row = c64_bus_vic_read_char_glyph_at(
-                    bus,
-                    character_base,
-                    character_code,
-                    (uint8_t)(active_y & 0x07u));
-                uint8_t foreground_index = c64_bus_vic_read_color(bus, cell);
-                uint8_t bit = (uint8_t)(0x80u >> (active_x & 0x07u));
+            /* Horizontal flip-flop transitions (Bauer §3.9) */
+            if (x == g.right) hborder = true;
+            if (x == g.left && !vborder) hborder = false;
 
-                pixel = background_color;
-                if ((glyph_row & bit) != 0) {
-                    pixel = vicii_palette_argb[foreground_index & 0x0fu];
+            if (vborder || hborder) {
+                pixel = border_color;
+            } else {
+                uint32_t sx_raw = x - g.left;
+                uint32_t sy     = y - g.top;
+
+                /* XSCROLL shifts content right; pixels past column 39 show background */
+                uint32_t sx = sx_raw + xscroll;
+
+                /* YSCROLL shifts content down (Bauer §3.7.2): the first character row
+                   starts at sy=YSCROLL. Lines before that show background (idle state).
+                   The vc/rc path is deferred to the future per-cycle renderer. */
+                if (sx >= 320u || sy < (uint32_t)yscroll) {
+                    pixel = background_color;
+                } else {
+                    uint32_t adjusted    = sy - yscroll;
+                    uint32_t row_in_cell = adjusted & 7u;
+                    uint32_t char_row    = adjusted / 8u;
+                    uint32_t col   = sx / 8u;
+                    uint8_t  bit   = (uint8_t)(0x80u >> (sx & 7u));
+                    uint16_t cell  = (uint16_t)(char_row * 40u + col);
+                    uint8_t  code  = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                    uint8_t  glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
+                                                                     (uint8_t)row_in_cell);
+                    uint8_t  fg    = c64_bus_vic_read_color(bus, cell);
+                    pixel = (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : background_color;
                 }
             }
 

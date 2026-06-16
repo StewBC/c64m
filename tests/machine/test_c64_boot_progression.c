@@ -83,9 +83,16 @@ static void copy_to_kernal(c64_rom_set *roms, uint16_t address, const uint8_t *p
 }
 
 static void reset_machine(c64_t *machine, const c64_rom_set *roms) {
+    c64_config cfg;
     char error[256];
 
     c64_init(machine);
+
+    /* PAL is the canonical video standard for all tests: the 384×272 pixel
+       buffer matches PAL dimensions and border compare values (top=51, left=24). */
+    cfg.video_standard = C64_VIDEO_STANDARD_PAL;
+    c64_set_config(machine, &cfg);
+
     expect_true("install ROMs", c64_install_roms(machine, roms, error, sizeof(error)));
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
 }
@@ -196,8 +203,11 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
     expect_u8("color memory changed", 0x05, c64_bus_vic_read_color(&machine.bus, 0));
 
     expect_true("make frame", c64_make_frame_snapshot(&machine, &frame));
-    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X]);
-    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X + 1]);
+    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0 → glyph row 0 at sy=0 (y=55).
+       $D016=0 → CSEL=0 (left=31). Character 1 glyph row 0=0x80 → bit 7 set at sx=0.
+       First display pixel: x=31 (left compare). Foreground at (y=55, x=31). */
+    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 31]);
+    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[55 * C64_FRAME_WIDTH + 32]);
 }
 
 static void test_d018_selects_screen_memory(void) {
@@ -215,7 +225,9 @@ static void test_d018_selects_screen_memory(void) {
     c64_bus_write(&machine.bus, 0xd018, 0x20);
 
     expect_true("make d018 frame", c64_make_frame_snapshot(&machine, &frame));
-    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[VICII_ACTIVE_Y * C64_FRAME_WIDTH + VICII_ACTIVE_X]);
+    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0; $D016=0 → CSEL=0 (left=31).
+       Glyph row 0 at sy=0 (y=55), bit 7 at sx=0 → x=31. */
+    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 31]);
 }
 
 static void test_real_rom_progresses_to_device_checkpoints(void) {
