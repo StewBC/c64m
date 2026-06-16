@@ -49,6 +49,8 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR_ALL,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_ENABLED,
+    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CREATE,
+    FRONTEND_DEBUGGER_INTENT_BREAKPOINT_UPDATE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT,
     FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG
 } frontend_debugger_intent_type;
@@ -61,6 +63,7 @@ typedef struct frontend_debugger_intent {
     uint32_t id;
     bool enabled;
     runtime_memory_mode memory_mode;
+    runtime_breakpoint_definition breakpoint;
 } frontend_debugger_intent;
 
 typedef struct frontend_layout_state {

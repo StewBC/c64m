@@ -41,8 +41,39 @@ enum {
 };
 
 typedef enum runtime_breakpoint_access {
-    RUNTIME_BREAKPOINT_ACCESS_EXECUTE = 0
+    RUNTIME_BREAKPOINT_ACCESS_EXECUTE = 1u << 0,
+    RUNTIME_BREAKPOINT_ACCESS_READ = 1u << 1,
+    RUNTIME_BREAKPOINT_ACCESS_WRITE = 1u << 2
 } runtime_breakpoint_access;
+
+typedef enum runtime_breakpoint_mapping {
+    RUNTIME_BREAKPOINT_MAPPING_MAP = 0,
+    RUNTIME_BREAKPOINT_MAPPING_ROM,
+    RUNTIME_BREAKPOINT_MAPPING_RAM
+} runtime_breakpoint_mapping;
+
+typedef enum runtime_breakpoint_action {
+    RUNTIME_BREAKPOINT_ACTION_BREAK = 1u << 0,
+    RUNTIME_BREAKPOINT_ACTION_FAST = 1u << 1,
+    RUNTIME_BREAKPOINT_ACTION_SLOW = 1u << 2,
+    RUNTIME_BREAKPOINT_ACTION_TRON = 1u << 3,
+    RUNTIME_BREAKPOINT_ACTION_TROFF = 1u << 4,
+    RUNTIME_BREAKPOINT_ACTION_TYPE = 1u << 5,
+    RUNTIME_BREAKPOINT_ACTION_SWAP = 1u << 6
+} runtime_breakpoint_action;
+
+typedef struct runtime_breakpoint_definition {
+    uint8_t enabled;
+    uint16_t start_address;
+    uint16_t end_address;
+    uint8_t has_end_address;
+    uint32_t access;
+    runtime_breakpoint_mapping mapping;
+    uint32_t actions;
+    uint8_t use_counter;
+    uint32_t initial_count;
+    uint32_t reset_count;
+} runtime_breakpoint_definition;
 
 typedef struct runtime_cpu_snapshot {
     uint16_t pc;
@@ -96,10 +127,21 @@ typedef struct runtime_memory_snapshot {
 
 typedef struct runtime_breakpoint_snapshot_entry {
     uint32_t id;
-    uint16_t address;
+    uint16_t start_address;
+    uint16_t end_address;
+    uint8_t has_end_address;
     runtime_breakpoint_access access;
+    runtime_breakpoint_mapping mapping;
+    uint32_t actions;
     uint8_t enabled;
+    uint8_t use_counter;
     uint32_t current_hits;
+    uint32_t initial_count;
+    uint32_t reset_count;
+    uint32_t counter;
+
+    /* Phase 12 compatibility aliases. Prefer start_address and initial_count. */
+    uint16_t address;
     uint32_t target_hits;
 } runtime_breakpoint_snapshot_entry;
 

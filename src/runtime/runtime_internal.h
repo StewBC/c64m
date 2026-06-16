@@ -22,6 +22,11 @@ typedef enum runtime_exec_state {
     RUNTIME_EXEC_RUNNING
 } runtime_exec_state;
 
+typedef enum runtime_speed_mode {
+    RUNTIME_SPEED_MODE_SLOW = 0,
+    RUNTIME_SPEED_MODE_FAST
+} runtime_speed_mode;
+
 struct runtime_client {
     message_queue *command_queue;
     message_queue *event_queue;
@@ -40,10 +45,18 @@ typedef struct runtime_frame_slot {
 
 typedef struct runtime_breakpoint {
     uint32_t id;
-    uint16_t address;
     bool enabled;
+    uint16_t start_address;
+    uint16_t end_address;
+    bool has_end_address;
+    uint32_t access_mask;
+    runtime_breakpoint_mapping mapping;
+    uint32_t action_mask;
+    bool use_counter;
+    uint32_t initial_count;
+    uint32_t reset_count;
+    uint32_t counter;
     uint32_t current_hits;
-    uint32_t target_hits;
 } runtime_breakpoint;
 
 struct runtime {
@@ -58,11 +71,17 @@ struct runtime {
     char *char_rom_path;
     char *kernal_rom_path;
     char *system_rom_path;
+    char *ini_path;
+    bool use_ini;
+    bool save_ini;
     runtime_exec_state exec_state;
     runtime_stop_reason last_stop_reason;
+    runtime_speed_mode speed_mode;
+    bool trace_enabled;
     runtime_breakpoint breakpoints[RUNTIME_BREAKPOINT_CAPACITY];
     size_t breakpoint_count;
     uint32_t next_breakpoint_id;
+    bool breakpoint_hit_pending;
     uint64_t next_frame_cycle;
     uint64_t next_frame_counter;
     uint64_t frame_counter_step;

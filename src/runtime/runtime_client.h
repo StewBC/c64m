@@ -41,6 +41,14 @@ bool runtime_client_write_memory_byte(
     uint8_t value,
     runtime_memory_mode mode);
 bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t address);
+bool runtime_client_create_breakpoint(
+    runtime_client *client,
+    const runtime_breakpoint_definition *definition);
+bool runtime_client_update_breakpoint(
+    runtime_client *client,
+    uint32_t id,
+    const runtime_breakpoint_definition *definition);
+bool runtime_client_duplicate_breakpoint(runtime_client *client, uint32_t id);
 bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id);
 bool runtime_client_clear_all_breakpoints(runtime_client *client);
 bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, bool enabled);

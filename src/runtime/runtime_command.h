@@ -1,5 +1,6 @@
 #pragma once
 
+#include "runtime_event.h"
 #include "keyboard.h"
 
 #include <stddef.h>
@@ -28,6 +29,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_CLEAR_BREAKPOINT,
     RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS,
     RUNTIME_COMMAND_SET_BREAKPOINT_ENABLED,
+    RUNTIME_COMMAND_CREATE_BREAKPOINT,
+    RUNTIME_COMMAND_UPDATE_BREAKPOINT,
+    RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
     RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
     RUNTIME_COMMAND_LOAD_PRG
 } runtime_command_type;
@@ -91,6 +95,19 @@ typedef struct runtime_command {
             uint32_t id;
             uint8_t enabled;
         } set_breakpoint_enabled;
+
+        struct {
+            runtime_breakpoint_definition definition;
+        } create_breakpoint;
+
+        struct {
+            uint32_t id;
+            runtime_breakpoint_definition definition;
+        } update_breakpoint;
+
+        struct {
+            uint32_t id;
+        } duplicate_breakpoint;
 
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];

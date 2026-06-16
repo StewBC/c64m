@@ -130,6 +130,41 @@ const char *config_get(config *cfg, const char *section, const char *key)
     return cfg->entries[index].value;
 }
 
+int config_entry_count(config *cfg)
+{
+    if (cfg == NULL) {
+        return 0;
+    }
+
+    return arrlen(cfg->entries);
+}
+
+bool config_entry_at(
+    config *cfg,
+    int index,
+    const char **out_section,
+    const char **out_key,
+    const char **out_value)
+{
+    config_entry *entry;
+
+    if (cfg == NULL || index < 0 || index >= arrlen(cfg->entries)) {
+        return false;
+    }
+
+    entry = &cfg->entries[index];
+    if (out_section != NULL) {
+        *out_section = entry->section;
+    }
+    if (out_key != NULL) {
+        *out_key = entry->key;
+    }
+    if (out_value != NULL) {
+        *out_value = entry->value;
+    }
+    return true;
+}
+
 int config_get_int(config *cfg, const char *section, const char *key, int default_value)
 {
     const char *value;
@@ -224,6 +259,30 @@ void config_set_int(config *cfg, const char *section, const char *key, int value
 void config_set_bool(config *cfg, const char *section, const char *key, bool value)
 {
     config_set(cfg, section, key, value ? "true" : "false");
+}
+
+void config_remove_prefix(config *cfg, const char *section, const char *key_prefix)
+{
+    int i;
+    size_t prefix_length;
+
+    if (cfg == NULL || section == NULL || key_prefix == NULL) {
+        return;
+    }
+
+    prefix_length = strlen(key_prefix);
+    for (i = 0; i < arrlen(cfg->entries);) {
+        config_entry *entry = &cfg->entries[i];
+        if (strcmp(entry->section, section) == 0 &&
+            strncmp(entry->key, key_prefix, prefix_length) == 0) {
+            free(entry->section);
+            free(entry->key);
+            free(entry->value);
+            arrdel(cfg->entries, i);
+            continue;
+        }
+        i++;
+    }
 }
 
 void config_destroy(config *cfg)

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 enum {
@@ -140,6 +141,22 @@ static void write_runtime_roms(void) {
     fclose(character);
 }
 
+static void patch_runtime_kernal_reset_code(const uint8_t *bytes, size_t count) {
+    FILE *system = fopen("scheduler_64c.bin", "r+b");
+    size_t i;
+
+    if (!system) {
+        fail("failed to patch scheduler test ROM");
+    }
+
+    fseek(system, (long)C64_BASIC_ROM_SIZE, SEEK_SET);
+    for (i = 0; i < count; ++i) {
+        fputc(bytes[i], system);
+    }
+
+    fclose(system);
+}
+
 static void write_test_prg(void) {
     FILE *prg = fopen("scheduler_test.prg", "wb");
 
@@ -220,6 +237,40 @@ static runtime *start_runtime(runtime_client **out_client) {
         fail("reset CPU state not received");
     }
     drain_runtime_events(client);
+
+    *out_client = client;
+    return rt;
+}
+
+static runtime *start_runtime_with_ini(runtime_client **out_client, const char *ini_path, bool save_ini) {
+    runtime_config config = {
+        .system_rom_path = "scheduler_64c.bin",
+        .char_rom_path = "scheduler_character.bin",
+        .ini_path = ini_path,
+        .use_ini = true,
+        .save_ini = save_ini,
+    };
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    expect_true("runtime init", runtime_init());
+    rt = runtime_create(&config);
+    if (!rt) {
+        fail("runtime_create failed");
+    }
+
+    expect_true("runtime start", runtime_start(rt));
+    client = runtime_get_client(rt);
+    if (!poll_event(client, &event, RUNTIME_EVENT_STARTED)) {
+        fail("STARTED event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("startup RESET_COMPLETE event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("startup CPU_STATE_RESPONSE event not received");
+    }
 
     *out_client = client;
     return rt;
@@ -607,6 +658,428 @@ static void test_runtime_clear_all_breakpoints_removes_all(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_create_update_duplicate_breakpoint_definitions(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+    uint32_t id;
+
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = 0xd000;
+    definition.end_address = 0xd0ff;
+    definition.has_end_address = 1;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK | RUNTIME_BREAKPOINT_ACTION_SWAP | RUNTIME_BREAKPOINT_ACTION_TYPE;
+    definition.use_counter = 1;
+    definition.initial_count = 10;
+    definition.reset_count = 2;
+
+    expect_true("create general breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    id = first_breakpoint_id(&event);
+    expect_u16("breakpoint start address", 0xd000, event.data.breakpoints.entries[0].start_address);
+    expect_u16("breakpoint end address", 0xd0ff, event.data.breakpoints.entries[0].end_address);
+    expect_u8("breakpoint has range", 1, event.data.breakpoints.entries[0].has_end_address);
+    expect_u64("breakpoint access mask", definition.access, event.data.breakpoints.entries[0].access);
+    expect_u64("breakpoint mapping", RUNTIME_BREAKPOINT_MAPPING_RAM, event.data.breakpoints.entries[0].mapping);
+    expect_u64("breakpoint actions", definition.actions, event.data.breakpoints.entries[0].actions);
+    expect_u8("breakpoint uses counter", 1, event.data.breakpoints.entries[0].use_counter);
+    expect_u64("breakpoint initial count", 10, event.data.breakpoints.entries[0].initial_count);
+    expect_u64("breakpoint reset count", 2, event.data.breakpoints.entries[0].reset_count);
+    expect_u64("breakpoint counter starts at initial", 10, event.data.breakpoints.entries[0].counter);
+
+    expect_true("duplicate general breakpoint", runtime_client_duplicate_breakpoint(client, id));
+    poll_breakpoint_count(client, &event, 2);
+    expect_u16("duplicate start address", 0xd000, event.data.breakpoints.entries[1].start_address);
+    if (event.data.breakpoints.entries[0].id == event.data.breakpoints.entries[1].id) {
+        fail("duplicate breakpoint reused runtime id");
+    }
+
+    definition.enabled = 0;
+    definition.start_address = 0xc000;
+    definition.end_address = 0xc000;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("update breakpoint by id", runtime_client_update_breakpoint(client, id, &definition));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after update");
+    }
+    expect_u16("updated breakpoint start address", 0xc000, event.data.breakpoints.entries[0].start_address);
+    expect_u8("updated breakpoint disabled", 0, event.data.breakpoints.entries[0].enabled);
+    expect_u64("updated breakpoint access", RUNTIME_BREAKPOINT_ACCESS_EXECUTE, event.data.breakpoints.entries[0].access);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_execute_breakpoint_supports_ranges_and_mapping(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = 0xe000;
+    definition.end_address = 0xe0ff;
+    definition.has_end_address = 1;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("create ROM execute range breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("run into ROM execute range breakpoint", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received before ROM range breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for ROM range breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for ROM range breakpoint");
+    }
+    expect_u16("ROM range breakpoint PC", TEST_RESET_VECTOR, event.data.machine_state.pc);
+    expect_u64("ROM range breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+    const uint8_t lda_abs_2000[] = { 0xad, 0x00, 0x20 };
+    const uint8_t sta_abs_2000[] = { 0x8d, 0x00, 0x20 };
+
+    write_runtime_roms();
+    patch_runtime_kernal_reset_code(lda_abs_2000, sizeof(lda_abs_2000));
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = 0x2000;
+    definition.end_address = 0x2000;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_READ;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("create RAM read watchpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("step into RAM read watchpoint", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for RAM read watchpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for RAM read watchpoint");
+    }
+    expect_u64("RAM read watchpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received for RAM read watchpoint");
+    }
+    expect_u64("RAM read watchpoint hit count", 1, event.data.breakpoints.entries[0].current_hits);
+
+    stop_runtime(rt, client);
+
+    write_runtime_roms();
+    patch_runtime_kernal_reset_code(sta_abs_2000, sizeof(sta_abs_2000));
+    rt = start_runtime(&client);
+
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_WRITE;
+    expect_true("create RAM write watchpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("step into RAM write watchpoint", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for RAM write watchpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for RAM write watchpoint");
+    }
+    expect_u64("RAM write watchpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received for RAM write watchpoint");
+    }
+    expect_u64("RAM write watchpoint hit count", 1, event.data.breakpoints.entries[0].current_hits);
+
+    stop_runtime(rt, client);
+    write_runtime_roms();
+}
+
+static void test_runtime_breakpoint_counters_gate_triggers(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = 0xe000;
+    definition.end_address = 0xe0ff;
+    definition.has_end_address = 1;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 1;
+    definition.initial_count = 2;
+    definition.reset_count = 2;
+
+    expect_true("create counted execute breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+
+    expect_true("first counted step does not break", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
+        fail("STEP_COMPLETE not received for first counted step");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU snapshot not received for first counted step");
+    }
+    expect_true("request counted breakpoint after first hit", runtime_client_request_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after first counted hit");
+    }
+    expect_u64("first counted hit count", 1, event.data.breakpoints.entries[0].current_hits);
+    expect_u64("first counted counter", 1, event.data.breakpoints.entries[0].counter);
+
+    expect_true("second counted step breaks", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for counted breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for counted breakpoint");
+    }
+    expect_u64("counted breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received for counted breakpoint");
+    }
+    expect_u64("second counted hit count", 2, event.data.breakpoints.entries[0].current_hits);
+    expect_u64("counted counter reloads", 2, event.data.breakpoints.entries[0].counter);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_breakpoint_counter_zero_and_disabled_rules(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+    uint32_t id;
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = TEST_RESET_VECTOR;
+    definition.end_address = TEST_RESET_VECTOR;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 1;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("create count zero breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("count zero step breaks immediately", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for count zero breakpoint");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for count zero breakpoint");
+    }
+    expect_u64("count zero breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
+
+    stop_runtime(rt, client);
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    definition.enabled = 0;
+    definition.initial_count = 2;
+    definition.reset_count = 2;
+    expect_true("create disabled counted breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    id = first_breakpoint_id(&event);
+    expect_true("run cycles with disabled counted breakpoint", runtime_client_run_cycles(client, 8));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("RUN_COMPLETE not received for disabled counted breakpoint");
+    }
+    expect_true("request disabled counted breakpoint", runtime_client_request_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received for disabled counted breakpoint");
+    }
+    expect_u64("disabled counted breakpoint hits", 0, event.data.breakpoints.entries[0].current_hits);
+    expect_u64("disabled counted breakpoint counter", 2, event.data.breakpoints.entries[0].counter);
+    expect_true("enable disabled counted breakpoint", runtime_client_set_breakpoint_enabled(client, id, true));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after enabling counted breakpoint");
+    }
+    expect_u64("enabled counted breakpoint counter preserved", 2, event.data.breakpoints.entries[0].counter);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_non_break_actions_do_not_pause(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    definition.enabled = 1;
+    definition.start_address = TEST_RESET_VECTOR;
+    definition.end_address = TEST_RESET_VECTOR;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_TRON;
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("create tron-only breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("step over tron-only breakpoint", runtime_client_step_instruction(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
+        fail("STEP_COMPLETE not received for tron-only breakpoint");
+    }
+    expect_true("request tron-only breakpoint snapshot", runtime_client_request_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received for tron-only breakpoint");
+    }
+    expect_u64("tron-only breakpoint hit count", 1, event.data.breakpoints.entries[0].current_hits);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_loads_breakpoints_from_ini(void) {
+    FILE *file;
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    write_runtime_roms();
+    file = fopen("scheduler_debug.ini", "w");
+    if (!file) {
+        fail("failed to create scheduler debug ini");
+    }
+    fprintf(file, "[DEBUG]\n");
+    fprintf(file, "break.C000=execute,map,break\n");
+    fprintf(file, "break.C000.1=write,ram,break\n");
+    fprintf(file, "break.D000-D0FF=read,rom,tron,count=3\n");
+    fprintf(file, "break.GGGG=execute,map,break\n");
+    fprintf(file, "break.C100=execute,map,break,count=-1\n");
+    fclose(file);
+
+    rt = start_runtime_with_ini(&client, "scheduler_debug.ini", false);
+    poll_breakpoint_count(client, &event, 3);
+
+    expect_u16("ini breakpoint 0 start", 0xc000, event.data.breakpoints.entries[0].start_address);
+    expect_u64("ini breakpoint 0 access", RUNTIME_BREAKPOINT_ACCESS_EXECUTE, event.data.breakpoints.entries[0].access);
+    expect_u16("ini duplicate breakpoint start", 0xc000, event.data.breakpoints.entries[1].start_address);
+    expect_u64("ini duplicate access", RUNTIME_BREAKPOINT_ACCESS_WRITE, event.data.breakpoints.entries[1].access);
+    expect_u64("ini duplicate mapping", RUNTIME_BREAKPOINT_MAPPING_RAM, event.data.breakpoints.entries[1].mapping);
+    expect_u16("ini range start", 0xd000, event.data.breakpoints.entries[2].start_address);
+    expect_u16("ini range end", 0xd0ff, event.data.breakpoints.entries[2].end_address);
+    expect_u8("ini range flag", 1, event.data.breakpoints.entries[2].has_end_address);
+    expect_u64("ini reset defaults to count", 3, event.data.breakpoints.entries[2].reset_count);
+
+    stop_runtime(rt, client);
+    remove("scheduler_debug.ini");
+}
+
+static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
+    FILE *file;
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+    char contents[2048];
+    size_t length;
+
+    write_runtime_roms();
+    file = fopen("scheduler_save_debug.ini", "w");
+    if (!file) {
+        fail("failed to create scheduler save debug ini");
+    }
+    fprintf(file, "[Video]\nstandard=NTSC\n\n[DEBUG]\nbreak.1234=execute,map,break\n");
+    fclose(file);
+
+    rt = start_runtime_with_ini(&client, "scheduler_save_debug.ini", true);
+    poll_breakpoint_count(client, &event, 1);
+    expect_true("clear loaded breakpoint before save test", runtime_client_clear_all_breakpoints(client));
+    poll_breakpoint_count(client, &event, 0);
+
+    definition.enabled = 1;
+    definition.start_address = 0xc000;
+    definition.end_address = 0xc000;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+    expect_true("create save breakpoint 1", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+
+    definition.enabled = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+    definition.actions = RUNTIME_BREAKPOINT_ACTION_BREAK | RUNTIME_BREAKPOINT_ACTION_SWAP | RUNTIME_BREAKPOINT_ACTION_TYPE;
+    definition.use_counter = 1;
+    definition.initial_count = 10;
+    definition.reset_count = 2;
+    expect_true("create save breakpoint duplicate", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 2);
+
+    runtime_client_quit(client);
+    runtime_stop(rt);
+    expect_true("save runtime debug ini", runtime_save_debug_ini(rt));
+    runtime_destroy(rt);
+    runtime_shutdown();
+
+    file = fopen("scheduler_save_debug.ini", "r");
+    if (!file) {
+        fail("failed to read saved scheduler debug ini");
+    }
+    length = fread(contents, 1, sizeof(contents) - 1u, file);
+    contents[length] = '\0';
+    fclose(file);
+
+    if (strstr(contents, "standard=NTSC") == NULL ||
+        strstr(contents, "break.1234") != NULL ||
+        strstr(contents, "break.C000=execute,map,break") == NULL ||
+        strstr(contents, "break.C000.1=disabled,read,write,ram,break,swap,type,count=10,reset=2") == NULL) {
+        fprintf(stderr, "saved ini contents unexpected:\n%s\n", contents);
+        exit(1);
+    }
+
+    remove("scheduler_save_debug.ini");
+}
+
 static void test_runtime_load_prg_writes_ram(void) {
     runtime *rt;
     runtime_client *client;
@@ -653,6 +1126,14 @@ int main(void) {
     test_runtime_ignores_disabled_execute_breakpoint();
     test_runtime_clear_breakpoint_removes_it();
     test_runtime_clear_all_breakpoints_removes_all();
+    test_runtime_create_update_duplicate_breakpoint_definitions();
+    test_runtime_execute_breakpoint_supports_ranges_and_mapping();
+    test_runtime_read_write_watchpoints_use_access_and_mapping();
+    test_runtime_breakpoint_counters_gate_triggers();
+    test_runtime_breakpoint_counter_zero_and_disabled_rules();
+    test_runtime_non_break_actions_do_not_pause();
+    test_runtime_loads_breakpoints_from_ini();
+    test_runtime_saves_breakpoints_to_ini_with_suffixes();
     test_runtime_load_prg_writes_ram();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");

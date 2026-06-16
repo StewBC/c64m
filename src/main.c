@@ -289,6 +289,14 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui) {
                 sent = runtime_client_set_breakpoint_enabled(client, intent.id, intent.enabled);
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CREATE:
+                sent = runtime_client_create_breakpoint(client, &intent.breakpoint);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_UPDATE:
+                sent = runtime_client_update_breakpoint(client, intent.id, &intent.breakpoint);
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT:
                 sent = runtime_client_request_breakpoints(client);
                 break;
@@ -416,6 +424,9 @@ int main(int argc, char **argv) {
     runtime_cfg.char_rom_path = options.char_rom_path;
     runtime_cfg.kernal_rom_path = options.kernal_rom_path;
     runtime_cfg.system_rom_path = options.system_rom_path;
+    runtime_cfg.ini_path = options.ini_path;
+    runtime_cfg.use_ini = options.use_ini;
+    runtime_cfg.save_ini = options.save_ini && !options.no_save_ini;
 
     rt = runtime_create(&runtime_cfg);
     if (rt == NULL) {
@@ -479,6 +490,9 @@ int main(int argc, char **argv) {
     runtime_client_quit(client);
     runtime_stop(rt);
     poll_runtime_events(client, NULL, NULL);
+    if (!runtime_save_debug_ini(rt)) {
+        SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
+    }
 
     platform_window_get_size(window, &options.window_width, &options.window_height);
     frontend_get_layout_state(ui, &layout_state);

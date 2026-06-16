@@ -57,6 +57,23 @@ typedef struct c64_machine_snapshot {
     bool cia2_nmi_pending;
 } c64_machine_snapshot;
 
+typedef enum c64_memory_access_type {
+    C64_MEMORY_ACCESS_READ = 0,
+    C64_MEMORY_ACCESS_WRITE
+} c64_memory_access_type;
+
+typedef enum c64_memory_visibility {
+    C64_MEMORY_VISIBILITY_RAM = 0,
+    C64_MEMORY_VISIBILITY_ROM,
+    C64_MEMORY_VISIBILITY_IO
+} c64_memory_visibility;
+
+typedef void (*c64_memory_access_fn)(
+    void *user,
+    c64_memory_access_type access,
+    uint16_t address,
+    uint8_t value);
+
 typedef struct c64_t {
     c64_bus_t bus;
     C6510 cpu;
@@ -68,6 +85,8 @@ typedef struct c64_t {
     c64_frame working_frame;
     uint64_t keyboard_events;
     uint64_t restore_requests;
+    c64_memory_access_fn memory_access;
+    void *memory_access_user;
     bool restore_pending;
     size_t cpu_cycles_remaining;
     bool has_basic_rom;
@@ -86,6 +105,7 @@ bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
 void c64_restore(c64_t *machine);
+void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
@@ -93,3 +113,4 @@ uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);
+c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address);

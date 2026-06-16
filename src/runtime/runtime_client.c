@@ -198,6 +198,51 @@ bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t addr
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_create_breakpoint(
+    runtime_client *client,
+    const runtime_breakpoint_definition *definition) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_CREATE_BREAKPOINT,
+    };
+
+    if (!client || !definition) {
+        return false;
+    }
+
+    command.data.create_breakpoint.definition = *definition;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_update_breakpoint(
+    runtime_client *client,
+    uint32_t id,
+    const runtime_breakpoint_definition *definition) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_UPDATE_BREAKPOINT,
+    };
+
+    if (!client || !definition) {
+        return false;
+    }
+
+    command.data.update_breakpoint.id = id;
+    command.data.update_breakpoint.definition = *definition;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_duplicate_breakpoint(runtime_client *client, uint32_t id) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.duplicate_breakpoint.id = id;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_CLEAR_BREAKPOINT,

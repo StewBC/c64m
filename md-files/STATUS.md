@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 11.
+Completed through Phase 13.
 
 Implemented:
 
@@ -80,6 +80,8 @@ Implemented:
   - reset screen starts clear
   - frontend queues Run automatically after initialization
 - SDL display of machine-generated frames.
+- Phase 12 debugger UI foundation is complete:
+  - CPU/register, disassembly, memory, misc/debugger, breakpoint list, debugger input routing, and runtime snapshot/command plumbing are implemented
 - Phase 12 debugger UI foundation, View 1:
   - slim CPU/register view renders from copied runtime CPU snapshots
   - PC, SP, A, X, Y, and `N V - B D I Z C` flags display in fixed-width uppercase/readable form
@@ -121,7 +123,21 @@ Implemented:
   - frontend renders breakpoint snapshots only, with disabled breakpoints kept visible as bookmarks
   - disassembly View 2 shows copied breakpoint snapshots in the gutter and Option+B toggles an execute breakpoint at the cursor while paused
   - misc/debugger view shows debug status, stop reason, cycle/frame counters, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
-  - no read/write watchpoints or advanced breakpoint actions are implemented yet
+  - Phase 12 execute-only breakpoint behavior is retained as the quick-toggle path
+- Phase 13 breakpoint/watchpoint system:
+  - runtime breakpoint model supports stable runtime IDs, duplicate addresses/ranges, enabled state, start/end address ranges, access masks, mapping filters, action masks, hit counts, and counters
+  - runtime_client supports create, update, duplicate, clear, clear-all, enable/disable, and copied breakpoint snapshot commands
+  - runtime evaluates execute/read/write breakpoints and watchpoints, including inclusive ranges and Map/ROM/RAM filters
+  - machine reports generic CPU memory access events to runtime; machine does not know debugger UI concepts
+  - runtime uses machine-side visibility decoding for ROM/RAM filters, with IO matching Map only
+  - counters are runtime-owned; count zero triggers immediately, reset zero triggers every later match, and disabled breakpoints do not decrement counters
+  - runtime action framework supports Break, Fast, Slow, Tron, Troff, Type, and Swap action masks
+  - Break pauses before later state-changing actions; non-Break actions do not pause
+  - Fast switches runtime pacing to maximum turbo mode; Slow restores normal paced mode
+  - Tron/Troff update runtime trace state; Type and Swap are Phase 13 no-ops pending later implementation
+  - `[DEBUG]` INI persistence loads and saves `break.<address>` entries, supports duplicate suffixes such as `.1` and `.2`, and skips invalid entries while loading remaining valid breakpoints
+  - breakpoint editor modal supports create, edit, duplicate, access checkboxes, start/end range, mapping selection, counters, action checkboxes, validation, cancel, and apply
+  - frontend renders copied breakpoint snapshots only and sends edits through runtime_client
 - Debugger input routing:
   - C64 display input is the initial/default focus, including the first time the debugger UI is opened
   - clicking the C64 display while the debugger UI is visible returns ordinary key input to the emulated C64
@@ -129,9 +145,10 @@ Implemented:
 
 ## Not Implemented
 
-- Phase 12 advanced breakpoint actions are pending:
-  - no read/write watchpoints
-  - no Type/Swap/speed/trace/paste breakpoint actions
+- Phase 13 deferred breakpoint action details:
+  - Type text injection is not implemented yet
+  - Swap disk behavior is not implemented yet
+  - Trace output/details are not implemented yet
 - Full CIA accuracy.
 - Sprites.
 - SID.
@@ -166,10 +183,10 @@ The pending CIA #1 IRQ is not currently observed as a CPU IRQ entry because the 
 
 ## Next Phase
 
-Phase 12, debugger follow-up.
+Post-Phase 13 debugger follow-up.
 
 Goal:
 
 ```text
-Implement advanced breakpoint/watchpoint actions after the runtime-backed execute breakpoint manager.
+Implement the deferred Type, Swap, and trace action details on top of the runtime-owned breakpoint manager.
 ```

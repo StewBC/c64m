@@ -2,6 +2,7 @@
 
 #include "message_queue.h"
 #include "mutex.h"
+#include "runtime_breakpoint_ini.h"
 #include "runtime_command.h"
 #include "runtime_internal.h"
 #include "thread.h"
@@ -63,11 +64,15 @@ runtime *runtime_create(const runtime_config *config) {
         rt->char_rom_path = runtime_copy_string(config->char_rom_path);
         rt->kernal_rom_path = runtime_copy_string(config->kernal_rom_path);
         rt->system_rom_path = runtime_copy_string(config->system_rom_path);
+        rt->ini_path = runtime_copy_string(config->ini_path);
+        rt->use_ini = config->use_ini;
+        rt->save_ini = config->save_ini;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||
             (config->kernal_rom_path && !rt->kernal_rom_path) ||
-            (config->system_rom_path && !rt->system_rom_path)) {
+            (config->system_rom_path && !rt->system_rom_path) ||
+            (config->ini_path && !rt->ini_path)) {
             runtime_destroy(rt);
             return NULL;
         }
@@ -86,6 +91,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->char_rom_path);
     free(rt->kernal_rom_path);
     free(rt->system_rom_path);
+    free(rt->ini_path);
     mutex_destroy(rt->frame_slot.mutex);
     message_queue_destroy(rt->event_queue);
     message_queue_destroy(rt->command_queue);
@@ -125,6 +131,10 @@ void runtime_stop(runtime *rt) {
     thread_destroy(rt->thread);
     rt->thread = NULL;
     rt->started = false;
+}
+
+bool runtime_save_debug_ini(runtime *rt) {
+    return runtime_save_breakpoints_to_ini(rt);
 }
 
 runtime_client *runtime_get_client(runtime *rt) {

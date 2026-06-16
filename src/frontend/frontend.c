@@ -116,6 +116,36 @@ typedef struct frontend_misc_view_state {
     bool initialized;
 } frontend_misc_view_state;
 
+typedef enum frontend_breakpoint_dialog_mode {
+    FRONTEND_BREAKPOINT_DIALOG_CREATE = 0,
+    FRONTEND_BREAKPOINT_DIALOG_EDIT
+} frontend_breakpoint_dialog_mode;
+
+typedef struct frontend_breakpoint_dialog_state {
+    bool open;
+    frontend_breakpoint_dialog_mode mode;
+    uint32_t id;
+    bool enabled;
+    bool execute;
+    bool read;
+    bool write;
+    bool range;
+    int mapping;
+    bool use_counter;
+    bool action_break;
+    bool action_fast;
+    bool action_slow;
+    bool action_tron;
+    bool action_troff;
+    bool action_type;
+    bool action_swap;
+    char start_address[5];
+    char end_address[5];
+    char initial_count[11];
+    char reset_count[11];
+    char error[96];
+} frontend_breakpoint_dialog_state;
+
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
@@ -131,6 +161,7 @@ struct frontend {
     frontend_memory_view_state memory;
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
+    frontend_breakpoint_dialog_state breakpoint_dialog;
     symbol_resolver symbols;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
     size_t intent_read;
@@ -242,6 +273,12 @@ static void frontend_push_breakpoint_id_intent(
     uint32_t id,
     bool enabled);
 
+static void frontend_push_breakpoint_definition_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    uint32_t id,
+    const runtime_breakpoint_definition *definition);
+
 static const runtime_breakpoint_snapshot_entry *frontend_find_execute_breakpoint(
     const frontend_debug_state *debug_state,
     uint16_t address)
@@ -254,7 +291,7 @@ static const runtime_breakpoint_snapshot_entry *frontend_find_execute_breakpoint
 
     for (i = 0; i < debug_state->breakpoints.count; ++i) {
         const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
-        if (entry->access == RUNTIME_BREAKPOINT_ACCESS_EXECUTE && entry->address == address) {
+        if ((entry->access & RUNTIME_BREAKPOINT_ACCESS_EXECUTE) != 0 && entry->address == address) {
             return entry;
         }
     }
@@ -285,6 +322,326 @@ static void frontend_toggle_execute_breakpoint_at_cursor(
     }
 
     frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_EXECUTE, address);
+}
+
+static bool frontend_parse_hex16_text(const char *text, uint16_t *out)
+{
+    char *end;
+    unsigned long value;
+
+    if (text == NULL || *text == '\0') {
+        return false;
+    }
+
+    value = strtoul(text, &end, 16);
+    if (end == text || *end != '\0' || value > 0xfffful) {
+        return false;
+    }
+
+    *out = (uint16_t)value;
+    return true;
+}
+
+static bool frontend_parse_u32_text(const char *text, uint32_t *out)
+{
+    char *end;
+    unsigned long value;
+
+    if (text == NULL || *text == '\0' || *text == '-') {
+        return false;
+    }
+
+    value = strtoul(text, &end, 10);
+    if (end == text || *end != '\0' || value > 0xfffffffful) {
+        return false;
+    }
+
+    *out = (uint32_t)value;
+    return true;
+}
+
+static void frontend_open_breakpoint_dialog_default(frontend *ui)
+{
+    frontend_breakpoint_dialog_state *dialog;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    dialog = &ui->breakpoint_dialog;
+    memset(dialog, 0, sizeof(*dialog));
+    dialog->open = true;
+    dialog->mode = FRONTEND_BREAKPOINT_DIALOG_CREATE;
+    dialog->enabled = true;
+    dialog->execute = true;
+    dialog->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+    dialog->action_break = true;
+    snprintf(dialog->start_address, sizeof(dialog->start_address), "%04X", ui->disassembly.cursor_address);
+    snprintf(dialog->end_address, sizeof(dialog->end_address), "%04X", ui->disassembly.cursor_address);
+    snprintf(dialog->initial_count, sizeof(dialog->initial_count), "0");
+    snprintf(dialog->reset_count, sizeof(dialog->reset_count), "0");
+}
+
+static void frontend_open_breakpoint_dialog_from_entry(
+    frontend *ui,
+    const runtime_breakpoint_snapshot_entry *entry,
+    bool duplicate)
+{
+    frontend_breakpoint_dialog_state *dialog;
+
+    if (ui == NULL || entry == NULL) {
+        return;
+    }
+
+    dialog = &ui->breakpoint_dialog;
+    memset(dialog, 0, sizeof(*dialog));
+    dialog->open = true;
+    dialog->mode = duplicate ? FRONTEND_BREAKPOINT_DIALOG_CREATE : FRONTEND_BREAKPOINT_DIALOG_EDIT;
+    dialog->id = duplicate ? 0 : entry->id;
+    dialog->enabled = entry->enabled != 0;
+    dialog->execute = (entry->access & RUNTIME_BREAKPOINT_ACCESS_EXECUTE) != 0;
+    dialog->read = (entry->access & RUNTIME_BREAKPOINT_ACCESS_READ) != 0;
+    dialog->write = (entry->access & RUNTIME_BREAKPOINT_ACCESS_WRITE) != 0;
+    dialog->range = entry->has_end_address != 0;
+    dialog->mapping = entry->mapping;
+    dialog->use_counter = entry->use_counter != 0;
+    dialog->action_break = (entry->actions & RUNTIME_BREAKPOINT_ACTION_BREAK) != 0;
+    dialog->action_fast = (entry->actions & RUNTIME_BREAKPOINT_ACTION_FAST) != 0;
+    dialog->action_slow = (entry->actions & RUNTIME_BREAKPOINT_ACTION_SLOW) != 0;
+    dialog->action_tron = (entry->actions & RUNTIME_BREAKPOINT_ACTION_TRON) != 0;
+    dialog->action_troff = (entry->actions & RUNTIME_BREAKPOINT_ACTION_TROFF) != 0;
+    dialog->action_type = (entry->actions & RUNTIME_BREAKPOINT_ACTION_TYPE) != 0;
+    dialog->action_swap = (entry->actions & RUNTIME_BREAKPOINT_ACTION_SWAP) != 0;
+    snprintf(dialog->start_address, sizeof(dialog->start_address), "%04X", entry->start_address);
+    snprintf(dialog->end_address, sizeof(dialog->end_address), "%04X", entry->end_address);
+    snprintf(dialog->initial_count, sizeof(dialog->initial_count), "%u", entry->initial_count);
+    snprintf(dialog->reset_count, sizeof(dialog->reset_count), "%u", entry->reset_count);
+}
+
+static bool frontend_breakpoint_dialog_build_definition(
+    frontend_breakpoint_dialog_state *dialog,
+    runtime_breakpoint_definition *definition)
+{
+    uint16_t start;
+    uint16_t end;
+
+    memset(definition, 0, sizeof(*definition));
+    if (!frontend_parse_hex16_text(dialog->start_address, &start)) {
+        snprintf(dialog->error, sizeof(dialog->error), "Invalid start address");
+        return false;
+    }
+    if (dialog->range && !frontend_parse_hex16_text(dialog->end_address, &end)) {
+        snprintf(dialog->error, sizeof(dialog->error), "Invalid end address");
+        return false;
+    }
+    if (!dialog->execute && !dialog->read && !dialog->write) {
+        snprintf(dialog->error, sizeof(dialog->error), "Select at least one access type");
+        return false;
+    }
+    if (!dialog->action_break && !dialog->action_fast && !dialog->action_slow &&
+        !dialog->action_tron && !dialog->action_troff && !dialog->action_type && !dialog->action_swap) {
+        snprintf(dialog->error, sizeof(dialog->error), "Select at least one action");
+        return false;
+    }
+
+    definition->enabled = dialog->enabled ? 1u : 0u;
+    definition->start_address = start;
+    definition->end_address = dialog->range ? end : start;
+    definition->has_end_address = dialog->range ? 1u : 0u;
+    definition->mapping = (runtime_breakpoint_mapping)dialog->mapping;
+    if (dialog->execute) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    }
+    if (dialog->read) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_READ;
+    }
+    if (dialog->write) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_WRITE;
+    }
+    if (dialog->action_break) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_BREAK;
+    }
+    if (dialog->action_fast) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_FAST;
+    }
+    if (dialog->action_slow) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_SLOW;
+    }
+    if (dialog->action_tron) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+    }
+    if (dialog->action_troff) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TROFF;
+    }
+    if (dialog->action_type) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+    }
+    if (dialog->action_swap) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+    }
+
+    if (dialog->use_counter) {
+        definition->use_counter = 1;
+        if (!frontend_parse_u32_text(dialog->initial_count, &definition->initial_count) ||
+            !frontend_parse_u32_text(dialog->reset_count, &definition->reset_count)) {
+            snprintf(dialog->error, sizeof(dialog->error), "Invalid counter value");
+            return false;
+        }
+    }
+
+    dialog->error[0] = '\0';
+    return true;
+}
+
+static void frontend_checkbox_bool(struct nk_context *ctx, const char *label, bool *value)
+{
+    nk_bool active = *value ? nk_true : nk_false;
+    nk_checkbox_label(ctx, label, &active);
+    *value = active != 0;
+}
+
+static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
+{
+    frontend_breakpoint_dialog_state *dialog;
+    runtime_breakpoint_definition definition;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+    nk_flags edit_flags = NK_EDIT_FIELD;
+
+    if (ui == NULL || !ui->breakpoint_dialog.open || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    dialog = &ui->breakpoint_dialog;
+    bounds = nk_rect((float)(width - 430) * 0.5f, (float)(height - 430) * 0.5f, 430.0f, 430.0f);
+    if (bounds.x < 8.0f) {
+        bounds.x = 8.0f;
+    }
+    if (bounds.y < 8.0f) {
+        bounds.y = 8.0f;
+    }
+
+    if (nk_begin(
+            ctx,
+            "Breakpoint Editor",
+            bounds,
+            NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        if (!nk_window_is_closed(ctx, "Breakpoint Editor")) {
+            nk_layout_row_dynamic(ctx, 20.0f, 1);
+            frontend_checkbox_bool(ctx, "Enabled", &dialog->enabled);
+
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "Access", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ctx, 20.0f, 3);
+            frontend_checkbox_bool(ctx, "Execute", &dialog->execute);
+            frontend_checkbox_bool(ctx, "Read", &dialog->read);
+            frontend_checkbox_bool(ctx, "Write", &dialog->write);
+
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "Address", NK_TEXT_LEFT);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 4);
+            nk_layout_row_push(ctx, 0.20f);
+            nk_label(ctx, "Start", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.25f);
+            nk_edit_string_zero_terminated(ctx, edit_flags, dialog->start_address, sizeof(dialog->start_address), nk_filter_hex);
+            nk_layout_row_push(ctx, 0.20f);
+            frontend_checkbox_bool(ctx, "Range", &dialog->range);
+            nk_layout_row_push(ctx, 0.25f);
+            if (!dialog->range) {
+                edit_flags |= NK_EDIT_READ_ONLY;
+            }
+            nk_edit_string_zero_terminated(ctx, edit_flags, dialog->end_address, sizeof(dialog->end_address), nk_filter_hex);
+            nk_layout_row_end(ctx);
+            edit_flags = NK_EDIT_FIELD;
+
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "Mapping", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ctx, 20.0f, 3);
+            if (nk_option_label(ctx, "Map", dialog->mapping == RUNTIME_BREAKPOINT_MAPPING_MAP)) {
+                dialog->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+            }
+            if (nk_option_label(ctx, "ROM", dialog->mapping == RUNTIME_BREAKPOINT_MAPPING_ROM)) {
+                dialog->mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+            }
+            if (nk_option_label(ctx, "RAM", dialog->mapping == RUNTIME_BREAKPOINT_MAPPING_RAM)) {
+                dialog->mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+            }
+
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "Counter", NK_TEXT_LEFT);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 5);
+            nk_layout_row_push(ctx, 0.28f);
+            frontend_checkbox_bool(ctx, "Use Counter", &dialog->use_counter);
+            nk_layout_row_push(ctx, 0.16f);
+            nk_label(ctx, "Initial", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.20f);
+            nk_edit_string_zero_terminated(
+                ctx,
+                dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->initial_count,
+                sizeof(dialog->initial_count),
+                nk_filter_decimal);
+            nk_layout_row_push(ctx, 0.14f);
+            nk_label(ctx, "Reset", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.20f);
+            nk_edit_string_zero_terminated(
+                ctx,
+                dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->reset_count,
+                sizeof(dialog->reset_count),
+                nk_filter_decimal);
+            nk_layout_row_end(ctx);
+
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label(ctx, "Actions", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ctx, 20.0f, 4);
+            frontend_checkbox_bool(ctx, "Break", &dialog->action_break);
+            frontend_checkbox_bool(ctx, "Fast", &dialog->action_fast);
+            frontend_checkbox_bool(ctx, "Slow", &dialog->action_slow);
+            frontend_checkbox_bool(ctx, "Tron", &dialog->action_tron);
+            nk_layout_row_dynamic(ctx, 20.0f, 4);
+            frontend_checkbox_bool(ctx, "Troff", &dialog->action_troff);
+            frontend_checkbox_bool(ctx, "Swap", &dialog->action_swap);
+            frontend_checkbox_bool(ctx, "Type", &dialog->action_type);
+            nk_label(ctx, "", NK_TEXT_LEFT);
+
+            if (dialog->error[0] != '\0') {
+                nk_layout_row_dynamic(ctx, 18.0f, 1);
+                nk_label_colored(ctx, dialog->error, NK_TEXT_LEFT, nk_rgb(255, 128, 118));
+            } else {
+                nk_layout_row_dynamic(ctx, 8.0f, 1);
+                nk_spacing(ctx, 1);
+            }
+
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            if (nk_button_label(ctx, "Cancel")) {
+                dialog->open = false;
+            }
+            if (nk_button_label(ctx, "Apply") &&
+                frontend_breakpoint_dialog_build_definition(dialog, &definition)) {
+                if (dialog->mode == FRONTEND_BREAKPOINT_DIALOG_EDIT) {
+                    frontend_push_breakpoint_definition_intent(
+                        ui,
+                        FRONTEND_DEBUGGER_INTENT_BREAKPOINT_UPDATE,
+                        dialog->id,
+                        &definition);
+                } else {
+                    frontend_push_breakpoint_definition_intent(
+                        ui,
+                        FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CREATE,
+                        0,
+                        &definition);
+                }
+                dialog->open = false;
+            }
+        } else {
+            dialog->open = false;
+        }
+    } else if (nk_window_is_closed(ctx, "Breakpoint Editor")) {
+        dialog->open = false;
+    }
+    nk_end(ctx);
 }
 
 static void frontend_push_debugger_intent(
@@ -328,6 +685,29 @@ static void frontend_push_breakpoint_id_intent(
     ui->intents[ui->intent_write].type = type;
     ui->intents[ui->intent_write].id = id;
     ui->intents[ui->intent_write].enabled = enabled;
+    ui->intent_write = next;
+}
+
+static void frontend_push_breakpoint_definition_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    uint32_t id,
+    const runtime_breakpoint_definition *definition)
+{
+    size_t next;
+
+    if (ui == NULL || definition == NULL || type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+
+    ui->intents[ui->intent_write].type = type;
+    ui->intents[ui->intent_write].id = id;
+    ui->intents[ui->intent_write].breakpoint = *definition;
     ui->intent_write = next;
 }
 
@@ -2558,6 +2938,10 @@ static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_st
 
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "Breakpoints", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "New")) {
+        frontend_open_breakpoint_dialog_default(ui);
+    }
 
     if (count == 0) {
         nk_layout_row_dynamic(ctx, 18.0f, 1);
@@ -2567,43 +2951,68 @@ static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_st
     for (i = 0; i < count; ++i) {
         const runtime_breakpoint_snapshot_entry *entry = &debug_state->breakpoints.entries[i];
         struct nk_style_button saved_button = ctx->style.button;
-        char label[32];
+        char label[96];
+        char access[4];
+        size_t access_len = 0;
 
         if (entry->enabled == 0) {
             ctx->style.button.text_normal = nk_rgb(180, 142, 210);
             ctx->style.button.normal = nk_style_item_color(nk_rgb(40, 34, 48));
         }
 
-        if (entry->current_hits > 0 || entry->target_hits > 0) {
-            if (entry->target_hits > 0) {
+        if ((entry->access & RUNTIME_BREAKPOINT_ACCESS_EXECUTE) != 0) {
+            access[access_len++] = 'X';
+        }
+        if ((entry->access & RUNTIME_BREAKPOINT_ACCESS_READ) != 0) {
+            access[access_len++] = 'R';
+        }
+        if ((entry->access & RUNTIME_BREAKPOINT_ACCESS_WRITE) != 0) {
+            access[access_len++] = 'W';
+        }
+        access[access_len] = '\0';
+
+        if (entry->use_counter != 0) {
+            if (entry->has_end_address) {
                 snprintf(
                     label,
                     sizeof(label),
-                    "X Break [%04X] (%u/%u)",
-                    entry->address,
+                    "%s [%04X-%04X] (%u:%u)",
+                    access,
+                    entry->start_address,
+                    entry->end_address,
                     entry->current_hits,
-                    entry->target_hits);
+                    entry->counter);
             } else {
                 snprintf(
                     label,
                     sizeof(label),
-                    "X Break [%04X] (%u)",
-                    entry->address,
-                    entry->current_hits);
+                    "%s [%04X] (%u:%u)",
+                    access,
+                    entry->start_address,
+                    entry->current_hits,
+                    entry->counter);
             }
+        } else if (entry->has_end_address) {
+            snprintf(label, sizeof(label), "%s [%04X-%04X] (%u)", access, entry->start_address, entry->end_address, entry->current_hits);
         } else {
-            snprintf(label, sizeof(label), "X Break [%04X]", entry->address);
+            snprintf(label, sizeof(label), "%s [%04X] (%u)", access, entry->start_address, entry->current_hits);
         }
-        nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
-        nk_layout_row_push(ctx, 0.30f);
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 6);
+        nk_layout_row_push(ctx, 0.28f);
         nk_label_colored(
             ctx,
             label,
             NK_TEXT_LEFT,
             entry->enabled != 0 ? nk_rgb(232, 235, 238) : nk_rgb(180, 142, 210));
-        nk_layout_row_push(ctx, 0.15f);
-        nk_button_label(ctx, "Edit");
-        nk_layout_row_push(ctx, 0.17f);
+        nk_layout_row_push(ctx, 0.13f);
+        if (nk_button_label(ctx, "Edit")) {
+            frontend_open_breakpoint_dialog_from_entry(ui, entry, false);
+        }
+        nk_layout_row_push(ctx, 0.16f);
+        if (nk_button_label(ctx, "Duplicate")) {
+            frontend_open_breakpoint_dialog_from_entry(ui, entry, true);
+        }
+        nk_layout_row_push(ctx, 0.14f);
         if (nk_button_label(ctx, entry->enabled != 0 ? "Disable" : "Enable")) {
             frontend_push_breakpoint_id_intent(
                 ui,
@@ -2611,10 +3020,10 @@ static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_st
                 entry->id,
                 entry->enabled == 0);
         }
-        nk_layout_row_push(ctx, 0.18f);
+        nk_layout_row_push(ctx, 0.15f);
         if (nk_button_label(ctx, "View PC")) {
-            frontend_disassembly_scroll_to_top(ui, frontend_disassembly_center_top(entry->address, ui->disassembly.rows));
-            frontend_disassembly_set_user_cursor(&ui->disassembly, entry->address, ui->disassembly.rows / 2, 1);
+            frontend_disassembly_scroll_to_top(ui, frontend_disassembly_center_top(entry->start_address, ui->disassembly.rows));
+            frontend_disassembly_set_user_cursor(&ui->disassembly, entry->start_address, ui->disassembly.rows / 2, 1);
         }
         nk_layout_row_push(ctx, 0.14f);
         if (nk_button_label(ctx, "Clear")) {
@@ -3066,6 +3475,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_splitter(ui->ctx, "split-top-bottom", ui->layout.hit_split_top_bottom, split_top_bottom_active);
     frontend_draw_splitter(ui->ctx, "split-memory-misc", ui->layout.hit_split_memory_misc, split_memory_misc_active);
     frontend_draw_corner_handle(ui->ctx, ui->layout.hit_display_corner, display_corner_active);
+    frontend_draw_breakpoint_editor(ui, width, height);
     nk_sdl_render(NK_ANTI_ALIASING_ON);
 }
 

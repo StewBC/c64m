@@ -18,12 +18,21 @@ static void c64_set_error(char *error, size_t error_size, const char *message) {
 
 static uint8_t c64_cpu_read(void *user, uint16_t address) {
     c64_t *machine = user;
-    return c64_bus_read(&machine->bus, address);
+    uint8_t value = c64_bus_read(&machine->bus, address);
+
+    if (machine->memory_access) {
+        machine->memory_access(machine->memory_access_user, C64_MEMORY_ACCESS_READ, address, value);
+    }
+
+    return value;
 }
 
 static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     c64_t *machine = user;
     c64_bus_write(&machine->bus, address, value);
+    if (machine->memory_access) {
+        machine->memory_access(machine->memory_access_user, C64_MEMORY_ACCESS_WRITE, address, value);
+    }
 }
 
 static uint8_t c64_cpu_irq_pending(void *user) {
@@ -225,6 +234,13 @@ void c64_restore(c64_t *machine) {
     machine->restore_pending = true;
 }
 
+void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user) {
+    assert(machine);
+
+    machine->memory_access = callback;
+    machine->memory_access_user = user;
+}
+
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out) {
     assert(machine);
     assert(out);
@@ -314,6 +330,30 @@ static uint8_t c64_debug_peek_io(const c64_t *machine, uint16_t address) {
     }
 
     return 0xff;
+}
+
+c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address) {
+    assert(machine);
+
+    if (address >= 0xa000 && address <= 0xbfff && c64_debug_basic_visible(machine)) {
+        return C64_MEMORY_VISIBILITY_ROM;
+    }
+
+    if (address >= 0xd000 && address <= 0xdfff) {
+        if (c64_debug_io_visible(machine)) {
+            return C64_MEMORY_VISIBILITY_IO;
+        }
+
+        if (c64_debug_char_visible(machine)) {
+            return C64_MEMORY_VISIBILITY_ROM;
+        }
+    }
+
+    if (address >= 0xe000 && c64_debug_kernal_visible(machine)) {
+        return C64_MEMORY_VISIBILITY_ROM;
+    }
+
+    return C64_MEMORY_VISIBILITY_RAM;
 }
 
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {

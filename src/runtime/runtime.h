@@ -10,6 +10,9 @@ typedef struct runtime_config {
     const char *char_rom_path;
     const char *kernal_rom_path;
     const char *system_rom_path;
+    const char *ini_path;
+    bool use_ini;
+    bool save_ini;
 } runtime_config;
 
 bool runtime_init();
@@ -20,5 +23,6 @@ void runtime_destroy(runtime *rt);
 
 bool runtime_start(runtime *rt);
 void runtime_stop(runtime *rt);
+bool runtime_save_debug_ini(runtime *rt);
 
 runtime_client *runtime_get_client(runtime *rt);
