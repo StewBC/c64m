@@ -1,8 +1,11 @@
 #include "app_options.h"
 
+#include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "argparse.h"
 #include "config.h"
@@ -13,6 +16,10 @@
 #define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
 #define C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM 0.58f
 #define C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC 0.55f
+#define C64M_SYSTEM_ROM_SIZE 16384
+#define C64M_BASIC_ROM_SIZE 8192
+#define C64M_KERNAL_ROM_SIZE 8192
+#define C64M_CHARACTER_ROM_SIZE 4096
 
 static char *copy_string(const char *value)
 {
@@ -44,6 +51,142 @@ static bool replace_string(char **target, const char *value)
 
     free(*target);
     *target = copy;
+    return true;
+}
+
+static bool string_equal_ignore_case(const char *a, const char *b)
+{
+    unsigned char ca;
+    unsigned char cb;
+
+    while (*a != '\0' && *b != '\0') {
+        ca = (unsigned char)*a++;
+        cb = (unsigned char)*b++;
+        if (tolower(ca) != tolower(cb)) {
+            return false;
+        }
+    }
+
+    return *a == '\0' && *b == '\0';
+}
+
+static bool rom_candidate_name_matches(const char *filename, const char *rom_name)
+{
+    char stem[256];
+    const char *dot;
+    size_t length;
+
+    if (string_equal_ignore_case(filename, rom_name)) {
+        return true;
+    }
+
+    dot = strrchr(filename, '.');
+    if (dot == NULL || dot == filename) {
+        return false;
+    }
+
+    length = (size_t)(dot - filename);
+    if (length >= sizeof(stem)) {
+        return false;
+    }
+
+    memcpy(stem, filename, length);
+    stem[length] = '\0';
+    return string_equal_ignore_case(stem, rom_name);
+}
+
+static bool path_has_size(const char *path, size_t expected_size)
+{
+    struct stat st;
+
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return false;
+    }
+
+    return st.st_size >= 0 && (size_t)st.st_size == expected_size;
+}
+
+static bool join_path(char *out, size_t out_size, const char *dir, const char *filename)
+{
+    int written;
+
+    if (strcmp(dir, ".") == 0) {
+        written = snprintf(out, out_size, "%s", filename);
+    } else {
+        written = snprintf(out, out_size, "%s/%s", dir, filename);
+    }
+
+    return written >= 0 && (size_t)written < out_size;
+}
+
+static bool discover_rom_path(
+    const char *dir,
+    const char *rom_name,
+    size_t expected_size,
+    char **target)
+{
+    DIR *handle;
+    struct dirent *entry;
+    char path[1024];
+
+    if (*target != NULL) {
+        return true;
+    }
+
+    handle = opendir(dir);
+    if (handle == NULL) {
+        return true;
+    }
+
+    while ((entry = readdir(handle)) != NULL) {
+        if (!rom_candidate_name_matches(entry->d_name, rom_name)) {
+            continue;
+        }
+        if (!join_path(path, sizeof(path), dir, entry->d_name)) {
+            continue;
+        }
+        if (!path_has_size(path, expected_size)) {
+            continue;
+        }
+
+        closedir(handle);
+        return replace_string(target, path);
+    }
+
+    closedir(handle);
+    return true;
+}
+
+static bool discover_default_rom_paths(app_options *options)
+{
+    static const char *const dirs[] = { ".", "rom", "roms" };
+    size_t i;
+
+    for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        if (!discover_rom_path(
+                dirs[i],
+                "system",
+                C64M_SYSTEM_ROM_SIZE,
+                &options->system_rom_path) ||
+            !discover_rom_path(
+                dirs[i],
+                "basic",
+                C64M_BASIC_ROM_SIZE,
+                &options->basic_rom_path) ||
+            !discover_rom_path(
+                dirs[i],
+                "character",
+                C64M_CHARACTER_ROM_SIZE,
+                &options->char_rom_path) ||
+            !discover_rom_path(
+                dirs[i],
+                "kernal",
+                C64M_KERNAL_ROM_SIZE,
+                &options->kernal_rom_path)) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -381,6 +524,11 @@ bool app_options_load_startup(app_options *options, int argc, char **argv)
     }
 
     if (!parse_command_line_overrides(options, argc, argv)) {
+        config_destroy(cfg);
+        return false;
+    }
+
+    if (!options->use_ini && !options->defaults && !discover_default_rom_paths(options)) {
         config_destroy(cfg);
         return false;
     }

@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static void expect_string(const char *name, const char *expected, const char *actual) {
     if (!actual || strcmp(expected, actual) != 0) {
@@ -56,6 +58,21 @@ static void write_ini(const char *path) {
     fclose(file);
 }
 
+static void write_sized_file(const char *path, size_t size) {
+    FILE *file = fopen(path, "wb");
+    size_t i;
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    for (i = 0; i < size; ++i) {
+        fputc((int)(i & 0xff), file);
+    }
+    fclose(file);
+}
+
 static void write_window_layout_ini(const char *path) {
     FILE *file = fopen(path, "w");
 
@@ -102,10 +119,22 @@ static void test_rom_paths_from_ini(void) {
 
 static void test_rom_paths_empty_without_ini(void) {
     app_options options;
+    char cwd[1024];
     char *argv[] = {
         "test_app_options",
         "--noini",
     };
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+
+    mkdir("test_noini_empty", 0777);
+    if (chdir("test_noini_empty") != 0) {
+        fprintf(stderr, "failed to enter test_noini_empty\n");
+        exit(1);
+    }
 
     if (!app_options_load_startup(&options, 2, argv)) {
         fprintf(stderr, "app_options_load_startup failed\n");
@@ -118,6 +147,64 @@ static void test_rom_paths_empty_without_ini(void) {
     expect_null("system rom path", options.system_rom_path);
 
     app_options_destroy(&options);
+
+    if (chdir(cwd) != 0) {
+        fprintf(stderr, "failed to restore cwd\n");
+        exit(1);
+    }
+    rmdir("test_noini_empty");
+}
+
+static void test_rom_paths_discovered_without_ini(void) {
+    app_options options;
+    char cwd[1024];
+    char *argv[] = {
+        "test_app_options",
+        "--noini",
+    };
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+
+    mkdir("test_noini_discovery", 0777);
+    if (chdir("test_noini_discovery") != 0) {
+        fprintf(stderr, "failed to enter test_noini_discovery\n");
+        exit(1);
+    }
+
+    mkdir("roms", 0777);
+    write_sized_file("roms/SYSTEM.rom", 16384);
+    write_sized_file("roms/basic.bin", 8192);
+    write_sized_file("roms/Character", 4096);
+    write_sized_file("roms/KERNAL.BIN", 8192);
+    write_sized_file("roms/system.bad", 1);
+
+    if (!app_options_load_startup(&options, 2, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string("discovered system rom path", "roms/SYSTEM.rom", options.system_rom_path);
+    expect_string("discovered basic rom path", "roms/basic.bin", options.basic_rom_path);
+    expect_string("discovered char rom path", "roms/Character", options.char_rom_path);
+    expect_string("discovered kernal rom path", "roms/KERNAL.BIN", options.kernal_rom_path);
+
+    app_options_destroy(&options);
+
+    remove("roms/SYSTEM.rom");
+    remove("roms/basic.bin");
+    remove("roms/Character");
+    remove("roms/KERNAL.BIN");
+    remove("roms/system.bad");
+    rmdir("roms");
+
+    if (chdir(cwd) != 0) {
+        fprintf(stderr, "failed to restore cwd\n");
+        exit(1);
+    }
+    rmdir("test_noini_discovery");
 }
 
 static void test_window_layout_from_ini(void) {
@@ -195,6 +282,7 @@ static void test_window_layout_saved_to_ini(void) {
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
+    test_rom_paths_discovered_without_ini();
     test_window_layout_from_ini();
     test_window_layout_saved_to_ini();
     return 0;

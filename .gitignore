@@ -4,5 +4,7 @@
 build/
 disks/
 programs/
+[rR][oO][mM]/
+[rR][oO][mM][sS]/
 *.ini
 !CMakeLists.txt
