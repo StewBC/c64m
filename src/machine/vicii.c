@@ -17,6 +17,16 @@ enum {
     VICII_TEXT_COLUMNS = 40,
     VICII_CHARACTER_WIDTH = 8,
     VICII_CHARACTER_HEIGHT = 8,
+
+    /* Phase A additions */
+    VICII_BADLINE_FIRST        = 0x30,
+    VICII_BADLINE_LAST         = 0xF7,
+    VICII_CACCESS_FIRST_CYCLE  = 15,
+    VICII_CACCESS_LAST_CYCLE   = 54,
+    VICII_BA_ASSERT_CYCLE      = 12,
+    VICII_VC_MAX               = 1023,
+    VICII_RC_MAX               = 7,
+    VICII_IRQ_RASTER           = 0x01,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -74,6 +84,19 @@ void vicii_reset(vicii *v) {
     vicii_set_video_standard(v, standard);
     v->registers[VICII_REG_BORDER_COLOR] = VICII_DEFAULT_BORDER_COLOR;
     v->registers[VICII_REG_BACKGROUND_COLOR_0] = VICII_DEFAULT_BACKGROUND_COLOR;
+
+    v->vc                        = 0;
+    v->vc_base                   = 0;
+    v->rc                        = 0;
+    v->display_state             = false;
+    v->bad_line                  = false;
+    v->timing.raster_compare     = 0;
+    v->timing.ba_low             = false;
+    v->timing.ba_low_until_cycle = 0;
+    v->irq_status                = 0;
+    v->irq_enable                = 0;
+    memset(v->video_matrix, 0, sizeof(v->video_matrix));
+    memset(v->color_line,   0, sizeof(v->color_line));
 }
 
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
@@ -90,22 +113,118 @@ void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
     v->timing.lines_per_frame = VICII_NTSC_LINES_PER_FRAME;
 }
 
-void vicii_step_cycle(vicii *v) {
+static bool vicii_is_bad_line(const vicii *v) {
+    uint32_t y       = v->timing.raster_line;
+    uint8_t  yscroll = v->registers[0x11] & 0x07u;
+    bool     den     = (v->registers[0x11] & 0x10u) != 0;
+
+    if (!den) return false;
+    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) return false;
+    return (uint8_t)(y & 0x07u) == yscroll;
+}
+
+static void vicii_assert_raster_irq(vicii *v) {
+    v->irq_status      |= VICII_IRQ_RASTER;
+    v->registers[0x19]  = v->irq_status;
+}
+
+void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
+    uint32_t cycle;
+    uint16_t screen_base;
+    uint32_t col;
+    uint16_t screen_addr;
+
     assert(v);
 
+    cycle = v->timing.cycle_in_line;
+
+    /* ------------------------------------------------------------------
+     * Start-of-line events (cycle 0 of the current raster line)
+     * ------------------------------------------------------------------ */
+    if (cycle == 0) {
+        if (v->timing.raster_line == v->timing.raster_compare) {
+            vicii_assert_raster_irq(v);
+        }
+
+        v->bad_line = vicii_is_bad_line(v);
+
+        if (v->bad_line) {
+            v->rc            = 0;
+            v->vc            = v->vc_base;
+            v->display_state = true;
+            v->timing.ba_low             = true;
+            v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * c-access window (cycles 15-54) on Bad Lines
+     * ------------------------------------------------------------------ */
+    if (bus &&
+        v->bad_line &&
+        cycle >= (uint32_t)VICII_CACCESS_FIRST_CYCLE &&
+        cycle <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
+
+        col         = cycle - (uint32_t)VICII_CACCESS_FIRST_CYCLE;
+        screen_base = (uint16_t)((v->registers[0x18] >> 4) * 0x0400u);
+        screen_addr = (uint16_t)(screen_base + v->vc + col);
+
+        v->video_matrix[col] = c64_bus_vic_read_ram(bus, screen_addr);
+        v->color_line[col]   = c64_bus_vic_read_color(bus, (uint16_t)(v->vc + col));
+    }
+
+    /* ------------------------------------------------------------------
+     * BA signal: release when the c-access window is over
+     * ------------------------------------------------------------------ */
+    if (v->timing.ba_low && cycle >= v->timing.ba_low_until_cycle) {
+        v->timing.ba_low = false;
+    }
+
+    /* ------------------------------------------------------------------
+     * Advance cycle counter
+     * ------------------------------------------------------------------ */
     v->timing.cycle_in_line++;
     if (v->timing.cycle_in_line < v->timing.cycles_per_line) {
         return;
     }
 
+    /* ------------------------------------------------------------------
+     * End-of-line events
+     * ------------------------------------------------------------------ */
     v->timing.cycle_in_line = 0;
-    v->timing.raster_line++;
 
-    if (v->timing.raster_line >= v->timing.lines_per_frame) {
-        v->timing.raster_line = 0;
-        v->timing.frame_number++;
-        v->timing.frame_complete = true;
+    if (v->display_state) {
+        v->vc = (uint16_t)((v->vc + VICII_TEXT_COLUMNS) & (uint16_t)VICII_VC_MAX);
+
+        if (v->rc == VICII_RC_MAX) {
+            v->vc_base       = v->vc;
+            v->display_state = false;
+        }
+        v->rc = (uint8_t)((v->rc + 1u) & 0x07u);
     }
+
+    v->timing.raster_line++;
+    if (v->timing.raster_line < v->timing.lines_per_frame) {
+        return;
+    }
+
+    /* ------------------------------------------------------------------
+     * End-of-frame events
+     * ------------------------------------------------------------------ */
+    v->timing.raster_line  = 0;
+    v->timing.frame_number++;
+    v->timing.frame_complete = true;
+
+    v->vc            = 0;
+    v->vc_base       = 0;
+    v->rc            = 0;
+    v->display_state = false;
+    v->bad_line      = false;
+}
+
+bool vicii_ba_active(const vicii *v) {
+    assert(v);
+    return v->timing.ba_low;
 }
 
 void vicii_destroy(vicii *v) {
@@ -129,13 +248,52 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
         return value;
     }
 
+    if (reg == 0x19) {
+        return (uint8_t)(v->irq_status | 0xF0u);
+    }
+
+    if (reg == 0x1A) {
+        return (uint8_t)(v->irq_enable | 0xF0u);
+    }
+
     return v->registers[reg];
 }
 
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
-    assert(v);
+    uint8_t reg;
 
-    v->registers[addr & 0x3fu] = value;
+    assert(v);
+    reg = (uint8_t)(addr & 0x3Fu);
+
+    switch (reg) {
+    case 0x11: /* CONTROL_1: bit 7 is RST8, updates raster_compare bit 8 */
+        v->registers[reg] = value & 0x7Fu;
+        if (value & 0x80u) {
+            v->timing.raster_compare |= 0x100u;
+        } else {
+            v->timing.raster_compare &= 0x00FFu;
+        }
+        break;
+
+    case 0x12: /* RASTER compare low byte */
+        v->timing.raster_compare =
+            (v->timing.raster_compare & 0x100u) | (uint16_t)value;
+        break;
+
+    case 0x19: /* IRQ_STATUS: write-1-to-clear */
+        v->irq_status &= (uint8_t)(~value & 0x0Fu);
+        v->registers[reg] = v->irq_status;
+        break;
+
+    case 0x1A: /* IRQ_ENABLE */
+        v->irq_enable     = value & 0x0Fu;
+        v->registers[reg] = v->irq_enable;
+        break;
+
+    default:
+        v->registers[reg] = value;
+        break;
+    }
 }
 
 bool vicii_consume_frame_complete(vicii *v) {

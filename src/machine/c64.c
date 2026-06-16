@@ -37,7 +37,9 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
 
 static uint8_t c64_cpu_irq_pending(void *user) {
     c64_t *machine = user;
-    return cia_irq_pending(&machine->cia1) ? 1u : 0u;
+    bool cia_irq = cia_irq_pending(&machine->cia1);
+    bool vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
+    return (cia_irq || vic_irq) ? 1u : 0u;
 }
 
 static uint8_t c64_cpu_nmi_pending(void *user) {
@@ -48,7 +50,7 @@ static uint8_t c64_cpu_nmi_pending(void *user) {
 }
 
 static void c64_step_vic(c64_t *machine) {
-    vicii_step_cycle(&machine->vic);
+    vicii_step_cycle(&machine->vic, &machine->bus);
     machine->clock.vic_cycles++;
 }
 
@@ -200,20 +202,24 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
         return false;
     }
 
-    if (machine->cpu_cycles_remaining == 0) {
-        machine->cpu_cycles_remaining = c6510_step(&machine->cpu);
-        if (machine->cpu_cycles_remaining == 0) {
-            machine->cpu_cycles_remaining = 1;
-        }
-    }
-
-    machine->cpu_cycles_remaining--;
-    machine->clock.cpu_cycles++;
+    /* Tick VIC and CIAs first so BA state is valid for this cycle */
     c64_step_vic(machine);
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
     machine->clock.cycle++;
+
+    /* Stall CPU if BA is low (VIC is stealing cycles for c-accesses) */
+    if (!vicii_ba_active(&machine->vic)) {
+        if (machine->cpu_cycles_remaining == 0) {
+            machine->cpu_cycles_remaining = c6510_step(&machine->cpu);
+            if (machine->cpu_cycles_remaining == 0) {
+                machine->cpu_cycles_remaining = 1;
+            }
+        }
+        machine->cpu_cycles_remaining--;
+        machine->clock.cpu_cycles++;
+    }
 
     c64_set_error(error, error_size, "");
     return true;

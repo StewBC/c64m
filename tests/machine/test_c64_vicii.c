@@ -95,13 +95,13 @@ static void test_raster_progression(void) {
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
 
     for (i = 0; i < VICII_NTSC_CYCLES_PER_LINE; i++) {
-        vicii_step_cycle(&v);
+        vicii_step_cycle(&v, NULL);
     }
     expect_u32("line cycle wraps", 0, v.timing.cycle_in_line);
     expect_u32("raster increments", 1, v.timing.raster_line);
 
     for (i = 0; i < VICII_NTSC_CYCLES_PER_LINE * (VICII_NTSC_LINES_PER_FRAME - 1); i++) {
-        vicii_step_cycle(&v);
+        vicii_step_cycle(&v, NULL);
     }
     expect_u64("frame increments", 1, v.timing.frame_number);
     expect_true("frame complete set", v.timing.frame_complete);

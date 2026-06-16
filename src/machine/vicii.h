@@ -39,8 +39,13 @@ typedef struct vicii_timing {
     uint32_t cycle_in_line;
     uint32_t raster_line;
     uint64_t frame_number;
-    bool frame_complete;
+    bool     frame_complete;
     vicii_video_standard standard;
+
+    /* Phase A additions */
+    uint16_t raster_compare;       /* 9-bit: 0-311 PAL, 0-262 NTSC */
+    bool     ba_low;               /* true while VIC holds BA low */
+    uint32_t ba_low_until_cycle;   /* cycle_in_line at which BA returns high */
 } vicii_timing;
 
 typedef struct c64_vicii_snapshot {
@@ -55,12 +60,24 @@ struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
     c64_frame working_frame;
+
+    /* Phase A additions */
+    uint16_t vc;               /* Video Counter, 10-bit, 0-1023 */
+    uint16_t vc_base;          /* VCBASE: latched copy of vc at Bad Line row start */
+    uint8_t  rc;               /* Row Counter, 3-bit, 0-7 */
+    bool     display_state;    /* true while a character row is in progress */
+    bool     bad_line;         /* true if the current raster line is a Bad Line */
+    uint8_t  video_matrix[40]; /* character codes fetched on Bad Lines */
+    uint8_t  color_line[40];   /* color nibbles fetched on Bad Lines */
+    uint8_t  irq_status;       /* live shadow of $D019 low nibble */
+    uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard);
-void vicii_step_cycle(vicii *v);
+void vicii_step_cycle(vicii *v, const c64_bus_t *bus);
+bool vicii_ba_active(const vicii *v);
 void vicii_destroy(vicii *v);
 
 uint8_t vicii_read_register(vicii *v, uint16_t addr);
