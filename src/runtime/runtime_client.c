@@ -355,3 +355,21 @@ bool runtime_client_poll_event(
 
     return message_queue_try_pop(client->event_queue, out_event);
 }
+
+bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_PASTE_TEXT,
+    };
+
+    if (!client || !text || length == 0) {
+        return false;
+    }
+
+    if (length > RUNTIME_PASTE_TEXT_MAX) {
+        length = RUNTIME_PASTE_TEXT_MAX;
+    }
+
+    memcpy(command.data.paste_text.text, text, length);
+    command.data.paste_text.length = length;
+    return message_queue_push(client->command_queue, &command);
+}

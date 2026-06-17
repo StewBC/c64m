@@ -35,11 +35,13 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
     RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
     RUNTIME_COMMAND_LOAD_PRG,
-    RUNTIME_COMMAND_APPLY_MACHINE_CONFIG
+    RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
+    RUNTIME_COMMAND_PASTE_TEXT
 } runtime_command_type;
 
 enum {
-    RUNTIME_COMMAND_PATH_MAX = 1024
+    RUNTIME_COMMAND_PATH_MAX = 1024,
+    RUNTIME_PASTE_TEXT_MAX = 4096
 };
 
 typedef enum runtime_cpu_register {
@@ -124,5 +126,10 @@ typedef struct runtime_command {
             uint8_t reset;
             uint8_t save_ini;
         } apply_machine_config;
+
+        struct {
+            char text[RUNTIME_PASTE_TEXT_MAX];
+            size_t length;
+        } paste_text;
     } data;
 } runtime_command;

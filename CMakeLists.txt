@@ -34,6 +34,11 @@ target_link_libraries(c64m PRIVATE
     frontend
     tools
     util
+    SDL2::SDL2
+)
+
+target_include_directories(c64m PRIVATE
+    ${SDL2_INCLUDE_DIRS}
 )
 
 add_executable(test_c64_bus
@@ -101,6 +106,10 @@ add_executable(test_c64_boot_progression
 )
 
 target_compile_features(test_c64_boot_progression PRIVATE c_std_99)
+
+target_compile_definitions(test_c64_boot_progression PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 
 target_link_libraries(test_c64_boot_progression PRIVATE
     machine
@@ -178,6 +187,18 @@ target_link_libraries(test_disasm_6502 PRIVATE
 )
 
 add_test(NAME disasm_6502 COMMAND test_disasm_6502)
+
+add_executable(test_assembler_conditionals
+    tests/tools/test_assembler_conditionals.c
+)
+
+target_compile_features(test_assembler_conditionals PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_conditionals PRIVATE
+    assembler
+)
+
+add_test(NAME assembler_conditionals COMMAND test_assembler_conditionals)
 
 add_executable(test_runtime_romboot
     tests/runtime/test_runtime_romboot.c

@@ -13,6 +13,8 @@
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
     RUNTIME_TARGET_FPS = 60,
+    PASTE_HOLD_CYCLES = 39400,  /* ~40ms at PAL 985248 Hz */
+    PASTE_GAP_CYCLES  =  9852,  /* ~10ms at PAL 985248 Hz */
 };
 
 static void runtime_reset_pacer(runtime *rt) {
@@ -1120,6 +1122,22 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_apply_machine_config(rt, command);
             break;
 
+        case RUNTIME_COMMAND_PASTE_TEXT: {
+            paste_state *p = &rt->paste;
+            size_t len = command->data.paste_text.length;
+            if (len > RUNTIME_PASTE_TEXT_MAX) {
+                len = RUNTIME_PASTE_TEXT_MAX;
+            }
+            memcpy(p->text, command->data.paste_text.text, len);
+            p->length = len;
+            p->position = 0;
+            p->shift_needed = false;
+            p->in_gap = true;
+            p->phase_end_cycle = rt->machine.clock.cycle;
+            rt->paste_active = true;
+            break;
+        }
+
         case RUNTIME_COMMAND_NONE:
         default:
             runtime_publish_error(rt, "unsupported runtime command");
@@ -1127,6 +1145,154 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
     }
 
     return *alive;
+}
+
+typedef struct paste_key_entry {
+    c64_key key;
+    bool shift;
+    bool valid;
+} paste_key_entry;
+
+/* Maps ASCII codes 0-127 to C64 key + shift state.
+   Letters map without shift; uppercase letters in the host string still press
+   the unshifted key because the C64 shows uppercase by default in its standard
+   character mode. Shifted symbols match the C64 keyboard layout. */
+static const paste_key_entry paste_ascii_map[128] = {
+    ['\n'] = { C64_KEY_RETURN,     false, true },
+    ['\r'] = { C64_KEY_RETURN,     false, true },
+    [' ']  = { C64_KEY_SPACE,      false, true },
+    ['!']  = { C64_KEY_1,          true,  true },
+    ['"']  = { C64_KEY_2,          true,  true },
+    ['#']  = { C64_KEY_3,          true,  true },
+    ['$']  = { C64_KEY_4,          true,  true },
+    ['%']  = { C64_KEY_5,          true,  true },
+    ['&']  = { C64_KEY_6,          true,  true },
+    ['\''] = { C64_KEY_7,          true,  true },
+    ['(']  = { C64_KEY_8,          true,  true },
+    [')']  = { C64_KEY_9,          true,  true },
+    ['*']  = { C64_KEY_ASTERISK,   false, true },
+    ['+']  = { C64_KEY_PLUS,       false, true },
+    [',']  = { C64_KEY_COMMA,      false, true },
+    ['-']  = { C64_KEY_MINUS,      false, true },
+    ['.']  = { C64_KEY_PERIOD,     false, true },
+    ['/']  = { C64_KEY_SLASH,      false, true },
+    ['<']  = { C64_KEY_COMMA,      true,  true },
+    ['>']  = { C64_KEY_PERIOD,     true,  true },
+    ['?']  = { C64_KEY_SLASH,      true,  true },
+    ['0']  = { C64_KEY_0,          false, true },
+    ['1']  = { C64_KEY_1,          false, true },
+    ['2']  = { C64_KEY_2,          false, true },
+    ['3']  = { C64_KEY_3,          false, true },
+    ['4']  = { C64_KEY_4,          false, true },
+    ['5']  = { C64_KEY_5,          false, true },
+    ['6']  = { C64_KEY_6,          false, true },
+    ['7']  = { C64_KEY_7,          false, true },
+    ['8']  = { C64_KEY_8,          false, true },
+    ['9']  = { C64_KEY_9,          false, true },
+    [':']  = { C64_KEY_COLON,      false, true },
+    [';']  = { C64_KEY_SEMICOLON,  false, true },
+    ['=']  = { C64_KEY_EQUALS,     false, true },
+    ['@']  = { C64_KEY_AT,         false, true },
+    ['[']  = { C64_KEY_COLON,      true,  true },
+    [']']  = { C64_KEY_SEMICOLON,  true,  true },
+    ['^']  = { C64_KEY_UP_ARROW,   false, true },
+    ['A']  = { C64_KEY_A,          false, true },
+    ['B']  = { C64_KEY_B,          false, true },
+    ['C']  = { C64_KEY_C,          false, true },
+    ['D']  = { C64_KEY_D,          false, true },
+    ['E']  = { C64_KEY_E,          false, true },
+    ['F']  = { C64_KEY_F,          false, true },
+    ['G']  = { C64_KEY_G,          false, true },
+    ['H']  = { C64_KEY_H,          false, true },
+    ['I']  = { C64_KEY_I,          false, true },
+    ['J']  = { C64_KEY_J,          false, true },
+    ['K']  = { C64_KEY_K,          false, true },
+    ['L']  = { C64_KEY_L,          false, true },
+    ['M']  = { C64_KEY_M,          false, true },
+    ['N']  = { C64_KEY_N,          false, true },
+    ['O']  = { C64_KEY_O,          false, true },
+    ['P']  = { C64_KEY_P,          false, true },
+    ['Q']  = { C64_KEY_Q,          false, true },
+    ['R']  = { C64_KEY_R,          false, true },
+    ['S']  = { C64_KEY_S,          false, true },
+    ['T']  = { C64_KEY_T,          false, true },
+    ['U']  = { C64_KEY_U,          false, true },
+    ['V']  = { C64_KEY_V,          false, true },
+    ['W']  = { C64_KEY_W,          false, true },
+    ['X']  = { C64_KEY_X,          false, true },
+    ['Y']  = { C64_KEY_Y,          false, true },
+    ['Z']  = { C64_KEY_Z,          false, true },
+    ['a']  = { C64_KEY_A,          false, true },
+    ['b']  = { C64_KEY_B,          false, true },
+    ['c']  = { C64_KEY_C,          false, true },
+    ['d']  = { C64_KEY_D,          false, true },
+    ['e']  = { C64_KEY_E,          false, true },
+    ['f']  = { C64_KEY_F,          false, true },
+    ['g']  = { C64_KEY_G,          false, true },
+    ['h']  = { C64_KEY_H,          false, true },
+    ['i']  = { C64_KEY_I,          false, true },
+    ['j']  = { C64_KEY_J,          false, true },
+    ['k']  = { C64_KEY_K,          false, true },
+    ['l']  = { C64_KEY_L,          false, true },
+    ['m']  = { C64_KEY_M,          false, true },
+    ['n']  = { C64_KEY_N,          false, true },
+    ['o']  = { C64_KEY_O,          false, true },
+    ['p']  = { C64_KEY_P,          false, true },
+    ['q']  = { C64_KEY_Q,          false, true },
+    ['r']  = { C64_KEY_R,          false, true },
+    ['s']  = { C64_KEY_S,          false, true },
+    ['t']  = { C64_KEY_T,          false, true },
+    ['u']  = { C64_KEY_U,          false, true },
+    ['v']  = { C64_KEY_V,          false, true },
+    ['w']  = { C64_KEY_W,          false, true },
+    ['x']  = { C64_KEY_X,          false, true },
+    ['y']  = { C64_KEY_Y,          false, true },
+    ['z']  = { C64_KEY_Z,          false, true },
+};
+
+static void runtime_advance_paste(runtime *rt) {
+    paste_state *p = &rt->paste;
+    uint64_t now = rt->machine.clock.cycle;
+    paste_key_entry entry;
+    unsigned char ch;
+
+    if (now < p->phase_end_cycle) {
+        return;
+    }
+
+    if (!p->in_gap) {
+        /* hold phase ended — release the key */
+        entry = paste_ascii_map[(unsigned char)p->text[p->position] & 0x7f];
+        c64_set_key(&rt->machine, entry.key, false);
+        if (p->shift_needed) {
+            c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, false);
+        }
+        p->position++;
+        p->in_gap = true;
+        p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+        return;
+    }
+
+    /* gap phase ended — press the next mappable character */
+    while (p->position < p->length) {
+        ch = (unsigned char)p->text[p->position];
+        if (ch >= 128 || !paste_ascii_map[ch].valid) {
+            p->position++;
+            continue;
+        }
+
+        entry = paste_ascii_map[ch];
+        p->shift_needed = entry.shift;
+        if (entry.shift) {
+            c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, true);
+        }
+        c64_set_key(&rt->machine, entry.key, true);
+        p->in_gap = false;
+        p->phase_end_cycle = now + PASTE_HOLD_CYCLES;
+        return;
+    }
+
+    rt->paste_active = false;
 }
 
 int runtime_thread_main(void *userdata) {
@@ -1171,6 +1337,9 @@ int runtime_thread_main(void *userdata) {
                 }
                 if (!runtime_step_cycle(rt)) {
                     break;
+                }
+                if (rt->paste_active) {
+                    runtime_advance_paste(rt);
                 }
                 if (runtime_pause_if_breakpoint_pending(rt)) {
                     break;

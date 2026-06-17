@@ -2,6 +2,7 @@
 
 #include "runtime.h"
 #include "runtime_client.h"
+#include "runtime_command.h"
 
 #include "c64.h"
 #include "c64_rom.h"
@@ -32,6 +33,15 @@ struct runtime_client {
     message_queue *event_queue;
     struct runtime_frame_slot *frame_slot;
 };
+
+typedef struct paste_state {
+    char text[RUNTIME_PASTE_TEXT_MAX];
+    size_t length;
+    size_t position;
+    uint64_t phase_end_cycle;
+    bool shift_needed;
+    bool in_gap;
+} paste_state;
 
 typedef struct runtime_frame_slot {
     mutex *mutex;
@@ -91,6 +101,8 @@ struct runtime {
     uint64_t frame_counter_step;
     bool pace_initialized;
     bool started;
+    bool paste_active;
+    paste_state paste;
 };
 
 int runtime_thread_main(void *userdata);

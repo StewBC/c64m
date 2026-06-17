@@ -457,6 +457,13 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                            (event.key.keysym.sym == SDLK_p &&
                             frontend_input_has_option_modifier(&event.key))) {
                     send_pause_command(client);
+                } else if (event.key.keysym.sym == SDLK_INSERT &&
+                           (event.key.keysym.mod & KMOD_SHIFT)) {
+                    char *text = SDL_GetClipboardText();
+                    if (text && text[0] != '\0') {
+                        runtime_client_paste_text(client, text, strlen(text));
+                    }
+                    SDL_free(text);
                 } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {
                     handle_keyboard_input(&input_mapper, client, &event.key);
                     send_event_to_frontend = false;
