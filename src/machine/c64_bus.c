@@ -224,12 +224,19 @@ uint8_t c64_bus_vic_read_char_glyph_at(
     uint16_t character_base,
     uint8_t character_code,
     uint8_t glyph_row) {
-    uint16_t offset;
+    uint16_t full_addr;
 
     assert(bus);
 
-    offset = (uint16_t)((character_base + (uint16_t)character_code * 8u + (glyph_row & 0x07u)) % C64_CHAR_ROM_SIZE);
-    return bus->char_rom[offset];
+    /* character_base is already a full absolute VIC address (vic_bank + within-bank offset). */
+    full_addr = (uint16_t)(character_base + (uint16_t)character_code * 8u + (glyph_row & 0x07u));
+
+    /* Char ROM appears at $1000-$1FFF (VIC bank 0) and $9000-$9FFF (VIC bank 2). */
+    if ((full_addr & 0xF000u) == 0x1000u || (full_addr & 0xF000u) == 0x9000u) {
+        return bus->char_rom[full_addr & 0x0FFFu];
+    }
+
+    return bus->ram[full_addr];
 }
 
 bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {

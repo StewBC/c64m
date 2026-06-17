@@ -240,6 +240,7 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     uint8_t mode;
     uint8_t xscroll;
     uint8_t yscroll;
+    uint16_t vic_bank;
     uint16_t screen_base;
     uint16_t char_base;
     uint16_t bitmap_base;
@@ -277,9 +278,10 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
         char_row = adjusted / 8u;
         col = sx / 8u;
         cell = (uint16_t)(char_row * 40u + col);
-        screen_base = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-        char_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-        bitmap_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+        vic_bank    = c64_bus_vic_bank_base(bus);
+        screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+        char_base   = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+        bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
 
         switch (mode) {
         case 0u:
@@ -531,7 +533,7 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
         cycle <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
 
         col         = cycle - (uint32_t)VICII_CACCESS_FIRST_CYCLE;
-        screen_base = (uint16_t)((v->registers[0x18] >> 4) * 0x0400u);
+        screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) + (v->registers[0x18] >> 4) * 0x0400u);
         screen_addr = (uint16_t)(screen_base + v->vc + col);
 
         v->video_matrix[col] = c64_bus_vic_read_ram(bus, screen_addr);
@@ -754,6 +756,7 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     uint8_t  xscroll, yscroll;
     uint8_t  border_index;
     uint32_t border_color;
+    uint16_t vic_bank;
     uint16_t screen_base, char_base;
     uint8_t  mode;
     uint16_t bitmap_base;
@@ -774,12 +777,13 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     yscroll     = v->registers[0x11] & 0x07u;
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     border_color = vicii_palette_argb[border_index];
-    screen_base  = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    char_base    = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+    vic_bank     = c64_bus_vic_bank_base(bus);
+    screen_base  = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    char_base    = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
     mode        = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
                             ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
                             ((v->registers[0x16] & 0x10u) ? 1u : 0u));
-    bitmap_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+    bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
     b0c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
     b1c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
     b2c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];

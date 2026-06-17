@@ -178,7 +178,7 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
         0x8d, 0x00, 0xd8, /* STA $D800 */
         0xa9, 0x06,       /* LDA #$06 */
         0x8d, 0x21, 0xd0, /* STA $D021 */
-        0xa9, 0x10,       /* LDA #$10 */
+        0xa9, 0x15,       /* LDA #$15 */
         0x8d, 0x18, 0xd0, /* STA $D018 */
         0xa9, 0x34,       /* LDA #$34 */
         0x8d, 0x04, 0xdc, /* STA $DC04 */
@@ -222,7 +222,7 @@ static void test_d018_selects_screen_memory(void) {
     machine.bus.ram[0x0800] = 0x01;
     machine.bus.color_ram[0] = 0x05;
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    c64_bus_write(&machine.bus, 0xd018, 0x20);
+    c64_bus_write(&machine.bus, 0xd018, 0x24); /* screen=$0800, char=$1000 (ROM) */
 
     expect_true("make d018 frame", c64_make_frame_snapshot(&machine, &frame));
     /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0; $D016=0 → CSEL=0 (left=31).

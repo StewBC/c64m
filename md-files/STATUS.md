@@ -231,6 +231,20 @@ Implemented:
   - regression test `test_sprite_hires_appears_at_position` confirms yellow pixels
     appear at the correct frame coordinates for a fully-opaque hires sprite
 
+- VIC-II bank-aware character and screen rendering:
+  - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
+    full absolute VIC address: `vic_bank + within-bank offset`
+  - `vic_bank` is derived from CIA 2 port A bits 1–0 (inverted) via
+    `c64_bus_vic_bank_base()` and applied in `vicii_live_pixel()`,
+    `vicii_make_frame_snapshot()`, and the Bad Line c-access fetch in
+    `vicii_step_cycle()`
+  - character glyph fetch routes to char ROM when the full address falls in
+    `$1000–$1FFF` (VIC bank 0) or `$9000–$9FFF` (VIC bank 2); all other
+    addresses read from RAM, enabling user-redefined character sets
+  - `c64_reset()` initialises `$D018 = $15` (screen at `$0400`, charset at
+    `$1000`) matching the KERNAL default, so the ROM character set is visible
+    before any game or KERNAL init code writes `$D018`
+
 ## Not Implemented
 
 - VIC-II remaining accuracy/features:

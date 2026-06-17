@@ -388,7 +388,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
         machine->config.video_standard == C64_VIDEO_STANDARD_PAL ?
             VICII_VIDEO_STANDARD_PAL :
             VICII_VIDEO_STANDARD_NTSC);
-    vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x10);
+    vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x15);
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);
     c64_keyboard_reset(&machine->keyboard);

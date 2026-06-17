@@ -391,7 +391,7 @@ static void test_ecm_text_mode(void) {
     cyan  = 0xff75cec8u; /* palette index 3 */
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, char=$0000 */
+    c64_bus_write(&machine.bus, 0xd018, 0x15); /* screen=$0400, char=$1000 (ROM) */
     /* ECM=1, DEN=1, RSEL=1, YSCROLL=0.  0x58 = 0101 1000 */
     c64_bus_write(&machine.bus, 0xd011, 0x58);
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
@@ -499,7 +499,7 @@ static void test_mcm_text_mode(void) {
     blue  = TEST_PALETTE_6;
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, char=$0000 */
+    c64_bus_write(&machine.bus, 0xd018, 0x15); /* screen=$0400, char=$1000 (ROM) */
     c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, ECM=0, BMM=0, YSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
