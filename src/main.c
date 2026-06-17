@@ -352,6 +352,10 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 }
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_MACHINE_RESET:
+                sent = runtime_client_reset(client);
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
                 {
                     char path[1024];

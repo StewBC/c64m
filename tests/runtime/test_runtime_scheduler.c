@@ -401,6 +401,35 @@ static void test_runtime_run_pause(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_reset_resumes_running(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("run before reset", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event before reset not received");
+    }
+
+    expect_true("reset while running", runtime_client_reset(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("running reset complete event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event after reset not received");
+    }
+
+    expect_true("request machine state after running reset", runtime_client_request_machine_state(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine state after running reset not received");
+    }
+    expect_u64("reset restored running state", 1, event.data.machine_state.running);
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_step_instruction_from_running_pauses(void) {
     runtime *rt;
     runtime_client *client;
@@ -1107,7 +1136,19 @@ static void test_runtime_load_prg_writes_ram(void) {
 
     rt = start_runtime(&client);
 
+    expect_true("dirty RAM before PRG reset", runtime_client_write_memory_byte(
+        client,
+        0x2003,
+        0x99,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("dirty RAM write response not received");
+    }
+
     expect_true("load PRG", runtime_client_load_prg(client, "scheduler_test.prg"));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("PRG load reset event not received");
+    }
     if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
         fail("PRG load memory response not received");
     }
@@ -1128,6 +1169,50 @@ static void test_runtime_load_prg_writes_ram(void) {
     expect_u8("loaded RAM byte 1", 0x02, event.data.memory.bytes[1]);
     expect_u8("loaded RAM byte 2", 0x03, event.data.memory.bytes[2]);
 
+    expect_true("request reset-cleared RAM after PRG load", runtime_client_request_memory(
+        client,
+        0x2003,
+        1,
+        RUNTIME_MEMORY_MODE_RAM));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("reset-cleared RAM response after PRG load not received");
+    }
+    expect_u8("PRG load reset cleared RAM", 0x00, event.data.memory.bytes[0]);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_load_prg_resumes_running(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("run before PRG load", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event before PRG load not received");
+    }
+
+    expect_true("load PRG while running", runtime_client_load_prg(client, "scheduler_test.prg"));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("running PRG load reset event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("running PRG load memory response not received");
+    }
+    expect_u16("running PRG load address", 0x2000, event.data.memory.address);
+    expect_u8("running PRG byte 0", 0x01, event.data.memory.bytes[0]);
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event after PRG load not received");
+    }
+
+    expect_true("request machine state after running PRG load", runtime_client_request_machine_state(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine state after running PRG load not received");
+    }
+    expect_u64("PRG load restored running state", 1, event.data.machine_state.running);
+
     stop_runtime(rt, client);
 }
 
@@ -1140,6 +1225,7 @@ int main(void) {
     test_runtime_keyboard_event_reaches_machine();
     test_runtime_restore_event_reaches_machine();
     test_runtime_run_pause();
+    test_runtime_reset_resumes_running();
     test_runtime_step_instruction_from_running_pauses();
     test_runtime_cpu_register_setters_are_paused_only();
     test_runtime_memory_snapshots_and_writes_are_paused_only();
@@ -1156,6 +1242,7 @@ int main(void) {
     test_runtime_loads_breakpoints_from_ini();
     test_runtime_saves_breakpoints_to_ini_with_suffixes();
     test_runtime_load_prg_writes_ram();
+    test_runtime_load_prg_resumes_running();
     remove("scheduler_64c.bin");
     remove("scheduler_character.bin");
     remove("scheduler_test.prg");

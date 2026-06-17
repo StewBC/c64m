@@ -33,7 +33,7 @@ static uint64_t c64_current_cycle(const c64_t *machine) {
 }
 
 static void c64_step_vic(c64_t *machine) {
-    vicii_step_cycle(&machine->vic, &machine->bus);
+    vicii_step_cycle(&machine->vic, &machine->bus, machine->clock.cycle);
     machine->clock.vic_cycles++;
 }
 
@@ -175,7 +175,7 @@ static bool c64_pending_cpu_elapsed_has_write_event(const c64_t *machine) {
 }
 
 static bool c64_cpu_cycle_stalled_by_ba(const c64_t *machine) {
-    if (!vicii_ba_active(&machine->vic)) {
+    if (!vicii_ba_active(&machine->vic, machine->clock.cycle)) {
         return false;
     }
 
@@ -214,7 +214,7 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
 }
 
 static bool c64_step_cycle_internal(c64_t *machine) {
-    if (!machine->pending_cpu_trace_active && !vicii_ba_active(&machine->vic)) {
+    if (!machine->pending_cpu_trace_active && !vicii_ba_active(&machine->vic, machine->clock.cycle)) {
         c64_prepare_deferred_cpu_trace(machine);
     }
 

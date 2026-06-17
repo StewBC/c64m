@@ -48,6 +48,13 @@ enum {
     VICII_IRQ_IMBC             = 0x02,
     VICII_IRQ_IMMC             = 0x04,
 
+    /* Phase H: sprite BA window width (cycles). Formula: ba_start = p_cycle - 3,
+       ba_end = p_cycle + 2 (exclusive), so the window is always 5 cycles wide.
+       Applies to both the early group (sprites 3-7) and late group (sprites 0-2).
+       NTSC sprite timing differs; see vicii_pal_sprite_ba_assert below for PAL only.
+       TODO: add NTSC table when NTSC timing is formally supported. */
+    VICII_SPRITE_BA_WINDOW     = 5,
+
     /* PAL border compare values (pixel/line units within 384×272 frame) */
     VICII_PAL_VBORDER_TOP_25    = 51,
     VICII_PAL_VBORDER_BOTTOM_25 = 251,
@@ -77,6 +84,18 @@ static const uint32_t vicii_palette_argb[16] = {
     0xffa9ff9fu,
     0xff706debu,
     0xffb2b2b2u,
+};
+
+/* Phase H: PAL 6569 sprite BA-assert cycle (0-based within the line where BA is
+   asserted). Derived from Bauer: ba_start = p_cycle_1based - 1 - 3 = p_cycle_0based - 3.
+
+   Sprites 0-2 and 5-7: BA is asserted during the SAME line as the sprite fetch.
+   Sprites 3-4: their fetches occur on the NEXT line (p_cycle_0based 0 and 2), so
+   BA must be asserted during the PREVIOUS line at 0-based cycles 60 and 62. */
+static const uint32_t vicii_pal_sprite_ba_assert[8] = {
+    54, 56, 58,   /* sprites 0-2: asserted in current line  (fetch at 0-based 57,59,61) */
+    60, 62,       /* sprites 3-4: asserted in PREVIOUS line (fetch at 0-based  0, 2)    */
+     1,  3,  5    /* sprites 5-7: asserted in current line  (fetch at 0-based  4, 6, 8) */
 };
 
 static void vicii_set_error(char *error, size_t error_size, const char *message) {
@@ -146,9 +165,9 @@ void vicii_reset(vicii *v) {
     v->rc                        = 0;
     v->display_state             = false;
     v->bad_line                  = false;
-    v->timing.raster_compare     = 0;
-    v->timing.ba_low             = false;
-    v->timing.ba_low_until_cycle = 0;
+    v->timing.raster_compare          = 0;
+    v->timing.ba_low_until_abs        = 0;
+    v->timing.sprite_ba_low_until_abs = 0;
     v->irq_status                = 0;
     v->irq_enable                = 0;
     memset(v->video_matrix, 0, sizeof(v->video_matrix));
@@ -637,7 +656,28 @@ static void vicii_assert_raster_irq(vicii *v) {
     vicii_set_irq_flag(v, VICII_IRQ_RASTER);
 }
 
-void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
+/* Returns true if sprite n will perform a DMA fetch on the NEXT raster line.
+   Called during the previous line (at the sprite's BA-assert cycle) to determine
+   whether to open a sprite BA window that spans the line boundary. Reuses the
+   per-sprite active flag set by vicii_fetch_sprites() rather than redoing the
+   Y-range/enable check independently. */
+static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
+    uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
+    uint8_t  spr_y    = v->registers[1 + n * 2];
+    uint32_t next_y   = (v->timing.raster_line + 1u) % v->timing.lines_per_frame;
+
+    if (v->sprite_active[n]) {
+        return true;
+    }
+    if ((enable >> n) & 1u) {
+        if (next_y == vicii_sprite_display_y(spr_y)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     uint32_t cycle;
     uint16_t screen_base;
     uint32_t col;
@@ -666,9 +706,14 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
         vicii_fetch_sprites(v, bus);
     }
 
+    /* Bad-line BA: assert at cycle 12 for the 43-cycle c-access window (12-54
+       inclusive). Window = [abs_cycle_at_12, abs_cycle_at_12 + 44). */
     if (v->bad_line && cycle == (uint32_t)VICII_BA_ASSERT_CYCLE) {
-        v->timing.ba_low             = true;
-        v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
+        uint64_t new_until = abs_cycle +
+            (uint64_t)(VICII_CACCESS_LAST_CYCLE - VICII_BA_ASSERT_CYCLE + 2u);
+        if (new_until > v->timing.ba_low_until_abs) {
+            v->timing.ba_low_until_abs = new_until;
+        }
     }
 
     /* ------------------------------------------------------------------
@@ -688,10 +733,46 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     /* ------------------------------------------------------------------
-     * BA signal: release when the c-access window is over
+     * Phase H: Sprite BA windows (PAL 6569 only).
+     *
+     * Each active sprite contributes a 5-cycle BA-low window starting at
+     * vicii_pal_sprite_ba_assert[n].  Sprites 0-2 and 5-7 are asserted
+     * during the same line as their fetch.  Sprites 3-4 are asserted
+     * during the PREVIOUS line (cycles 60 and 62) for the next line's
+     * fetch, so vicii_sprite_dma_next_line() is used for those two.
+     *
+     * sprite_ba_low_until_abs is a running high-water mark: each new
+     * assertion takes max(current, abs_cycle + WINDOW) so overlapping
+     * windows within a group merge automatically without over-extending
+     * into the gap between the early group (sprites 3-7) and the late
+     * group (sprites 0-2).
+     *
+     * TODO: add NTSC sprite timing table when NTSC is formally supported.
      * ------------------------------------------------------------------ */
-    if (v->timing.ba_low && cycle >= v->timing.ba_low_until_cycle) {
-        v->timing.ba_low = false;
+    if (v->timing.standard == VICII_VIDEO_STANDARD_PAL) {
+        int sn;
+        for (sn = 0; sn < 8; sn++) {
+            if (cycle != vicii_pal_sprite_ba_assert[sn]) {
+                continue;
+            }
+            if (sn == 3 || sn == 4) {
+                /* Cross-line: assert for the NEXT line's fetch. */
+                if (vicii_sprite_dma_next_line(v, sn)) {
+                    uint64_t new_until = abs_cycle + (uint64_t)VICII_SPRITE_BA_WINDOW;
+                    if (new_until > v->timing.sprite_ba_low_until_abs) {
+                        v->timing.sprite_ba_low_until_abs = new_until;
+                    }
+                }
+            } else {
+                /* Same-line: assert for the current line's fetch. */
+                if (v->sprite_active[sn]) {
+                    uint64_t new_until = abs_cycle + (uint64_t)VICII_SPRITE_BA_WINDOW;
+                    if (new_until > v->timing.sprite_ba_low_until_abs) {
+                        v->timing.sprite_ba_low_until_abs = new_until;
+                    }
+                }
+            }
+        }
     }
 
     vicii_render_live_cycle(v, bus);
@@ -742,9 +823,10 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_begin_live_frame(v);
 }
 
-bool vicii_ba_active(const vicii *v) {
+bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {
     assert(v);
-    return v->timing.ba_low;
+    return abs_cycle < v->timing.ba_low_until_abs ||
+           abs_cycle < v->timing.sprite_ba_low_until_abs;
 }
 
 void vicii_destroy(vicii *v) {

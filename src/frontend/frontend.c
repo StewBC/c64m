@@ -3326,6 +3326,10 @@ static void frontend_draw_misc_programs(frontend *ui)
             FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
             0);
     }
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "RESET")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_MACHINE_RESET);
+    }
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "D64 and CRT support deferred", NK_TEXT_LEFT);
 }

@@ -122,12 +122,35 @@ Do not infer sprite BA timing from the current `vicii_fetch_sprites()` call bein
 once per line at cycle 0. That call may remain where it is for data availability, but
 BA must be evaluated against the actual VIC-II sprite bus-takeover schedule.
 
-The implementation should make the sprite fetch timing explicit in one place, either
-by reusing an existing Phase D timing table or by adding small named constants/table
-entries for the Bauer sprite p-access/s-access cycle assignment. Avoid magic numbers
-inside the BA predicate. Tests should refer to the same documented schedule, or to a
-test-local copy with comments naming the Bauer/Phase D source, so failures are
-diagnosable as timing errors rather than undocumented expectations.
+The implementation must encode the sprite fetch timing explicitly using the following
+PAL 6569 schedule (Bauer). 1-based VIC cycle numbers; 0-based absolute line index
+= cycle_number − 1; line length = 63.
+
+```
+  sprite 0: p-access cycle 58, steal [57, 59), BA [54, 59)
+  sprite 1: p-access cycle 60, steal [59, 61), BA [56, 61)
+  sprite 2: p-access cycle 62, steal [61, 63), BA [58, 63)
+  sprite 3: p-access cycle  1, steal [ 0,  2), BA [-3,  2)  ← BA starts prev-line cycle 60
+  sprite 4: p-access cycle  3, steal [ 2,  4), BA [-1,  4)  ← BA starts prev-line cycle 62
+  sprite 5: p-access cycle  5, steal [ 4,  6), BA [ 1,  6)
+  sprite 6: p-access cycle  7, steal [ 6,  8), BA [ 3,  8)
+  sprite 7: p-access cycle  9, steal [ 8, 10), BA [ 5, 10)
+```
+
+Formula (all sprites): `ba_start = p_cycle_0based − 3`, `ba_end = p_cycle_0based + 2`
+(exclusive). Window width is always 5 cycles.
+
+NTSC must be implemented through a per-standard table (cycles_per_line,
+sprite_p_access_cycle[8], sprite_ba_start_cycle[8]). Do not guess NTSC values from
+PAL offsets. If the project currently only targets PAL, implement the PAL table and
+leave NTSC as an explicit TODO/unsupported timing variant.
+
+Tests must refer to these explicit constants/table entries (not inline magic numbers)
+so failures are diagnosable as timing errors rather than undocumented expectations.
+
+Cross-line BA windows (sprites 3 and 4) require absolute-cycle representation — see
+"BA as a single per-cycle predicate" below. Tests must cover the sprite 2→3 and
+sprite 4 boundary cases because those catch premature BA clearing at line wrap.
 
 ### BA as a single per-cycle predicate
 
@@ -137,9 +160,28 @@ function (extending, not duplicating, the existing Bad Line BA logic) that answe
 
 - Bad Line c-access window (existing, unchanged).
 - Sprite fetch windows (new): for each enabled, DMA-active sprite, the pointer fetch
-  plus the sprite data fetches use the fixed per-sprite cycle assignment from Bauer /
-  Phase D. BA goes low 3 cycles before the first CPU-phase bus takeover in that
-  assignment and remains low whenever the unified bus-takeover schedule requires it.
+  plus the sprite data fetches use the PAL timing table above. BA goes low 3 cycles
+  before the first CPU-phase bus takeover (i.e., at `p_cycle_0based − 3`) and
+  remains low for 5 cycles (`ba_end = p_cycle_0based + 2`, exclusive).
+
+BA windows for sprites 3 and 4 start during the *previous* raster line (at 0-based
+line cycles 60 and 62 respectively). These cross-line windows must be represented
+with absolute cycles, not line-relative cycle numbers:
+
+```c
+uint64_t ba_low_until_abs;         /* bad-line BA: abs cycle at which window expires */
+uint64_t sprite_ba_low_until_abs;  /* sprite BA:   abs cycle at which window expires */
+```
+
+`vicii_ba_active(v, abs_cycle)` returns true when:
+  `abs_cycle < ba_low_until_abs || abs_cycle < sprite_ba_low_until_abs`
+
+The sprite BA window for each sprite is asserted at its specific BA-start cycle
+(not all at cycle 0), and `sprite_ba_low_until_abs` is updated by taking the
+maximum of its current value and the new window end. This naturally handles
+overlapping windows within the early group (sprites 3–7) and the late group
+(sprites 0–2), while preserving the gap between those groups without
+over-asserting BA.
 
 Multiple simultaneous causes (e.g. a Bad Line and an active sprite both wanting the
 bus) must still resolve to a single low/not-low answer per cycle — BA is a wired-OR
@@ -219,6 +261,12 @@ Add or extend regression tests to cover at least these cases:
    DMA-active Y range contribute no sprite BA window.
 6. **Bad Line plus sprites**: overlapping/adjacent Bad Line and sprite windows produce
    one unified BA-low answer with no gap and no double counting.
+6a. **Sprite 2→3 boundary** (cross-line): sprite 2's window ends at cycle 63 of line N;
+    sprite 3's BA starts at cycle 60 of line N for a fetch on line N+1. Verify that BA
+    is correctly asserted across the line boundary and not prematurely cleared.
+6b. **Sprite 4 boundary** (cross-line): sprite 4's BA starts at cycle 62 of the previous
+    line. Verify that the two-cycle lead into the next line is correctly asserted and
+    that `sprite_ba_low_until_abs` extends past the line wrap.
 7. **Write-cycle escape**: a write-only CPU cycle proceeds while BA is low for a
    sprite-caused stall, matching the existing Bad Line behavior.
 8. **AEC absence**: a codebase grep or equivalent test/check confirms no AEC-named

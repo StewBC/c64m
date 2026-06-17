@@ -439,8 +439,7 @@ static void test_ba_allows_pending_write_cycle(void) {
     expect_u64("sta write elapsed", 3, machine.pending_cpu_elapsed);
     expect_u8("ram before ba write", 0x00, c64_bus_read(&machine.bus, 0x1234));
 
-    machine.vic.timing.ba_low = true;
-    machine.vic.timing.ba_low_until_cycle = 255;
+    machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 1000u;
     before_cpu_cycles = machine.clock.cpu_cycles;
     before_machine_cycles = machine.clock.cycle;
 
@@ -471,8 +470,7 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_true("lda read pending", machine.pending_cpu_trace_active);
     expect_u64("lda read elapsed", 3, machine.pending_cpu_elapsed);
 
-    machine.vic.timing.ba_low = true;
-    machine.vic.timing.ba_low_until_cycle = 255;
+    machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 1000u;
     before_cpu_cycles = machine.clock.cpu_cycles;
     before_machine_cycles = machine.clock.cycle;
     before_elapsed = machine.pending_cpu_elapsed;

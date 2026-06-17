@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), and VIC-II Phase G (open bus / unused register reads). Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), and VIC-II Phase H (sprite-fetch BA cycle stealing). Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -313,6 +313,34 @@ Implemented:
     `test_color_register_high_nibble_reads_as_1`, `test_unused_register_block_reads_ff`,
     `test_unused_register_block_mirrored_reads_ff`, `test_d018_no_phase_g_masking`
 
+- VIC-II Phase H — Sprite-Fetch BA Cycle Stealing:
+  - sprite p-access/s-access windows now contribute BA-low periods that stall the CPU,
+    using the same read/write classification the Bad Line BA path already uses
+  - BA is represented as absolute-cycle expiry fields (`ba_low_until_abs`,
+    `sprite_ba_low_until_abs` in `vicii_timing`) so that cross-line sprite windows
+    (sprites 3 and 4, whose BA starts at cycles 60 and 62 of the previous raster line)
+    are handled correctly without line-relative wrap arithmetic
+  - `vicii_step_cycle()` and `vicii_ba_active()` now receive the absolute machine cycle
+    as a parameter; all callers in `c64.c` pass `machine->clock.cycle`
+  - PAL 6569 sprite BA schedule encoded in `vicii_pal_sprite_ba_assert[8]`: sprites 0–2
+    assert at current-line cycles 54, 56, 58; sprites 3–4 assert at previous-line cycles
+    60, 62 (cross-line via `vicii_sprite_dma_next_line()`); sprites 5–7 at cycles 1, 3, 5
+  - BA window width is always 5 cycles (`ba_start = p_cycle − 3`, `ba_end = p_cycle + 2`)
+  - `sprite_ba_low_until_abs` is a rolling high-water mark; each new assertion takes
+    `max(current, abs_cycle + 5)` so overlapping windows within the early (sprites 3–7)
+    or late (sprites 0–2) group merge without over-extending into the gap between groups
+  - AEC is not modeled as emulator state by design; `vicii_ba_active()` is the sole
+    stall predicate consumed by the CPU stall path — no AEC-named field, function,
+    or snapshot surface was added
+  - NTSC sprite timing is deferred: PAL table only; NTSC requires a separate
+    `sprite_ba_assert` table entry and is left as an explicit TODO in `vicii.c`
+  - no debugger visibility was added for BA/sprite-fetch state; the existing stall
+    mechanism is sufficient for correct emulation without additional snapshot fields
+  - regression tests added: `test_sprite5_ba_window_within_line`,
+    `test_sprites567_adjacent_ba_union`, `test_6sprite_ba_early_and_late_windows`,
+    `test_inactive_sprites_no_ba`, `test_sprite3_cross_line_ba`,
+    `test_sprite4_cross_line_ba`, `test_aec_absent_ba_is_sole_stall_predicate`
+
 - VIC-II bank-aware character and screen rendering:
   - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
     full absolute VIC address: `vic_bank + within-bank offset`
@@ -333,10 +361,10 @@ Implemented:
   - light pen is not implemented (Phase F skipped)
   - open-bus / last-byte-on-bus (last fetched byte returned for open addresses) is not
     implemented; unused register addresses return fixed $FF per Phase G
-  - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA handling
-    distinguishes CPU read and write event kinds, but sprite-fetch BA events and
-    exact AEC/RDY timing remain deferred
-  - sprite fetch BA events are not implemented
+  - BA now covers both Bad Line c-access windows and sprite p-access/s-access
+    windows (Phase H); AEC is not modeled and is intentionally absent by design —
+    it is a documentation/hardware concept only, not an emulator predicate
+  - exact RDY/AEC sub-cycle timing (CPU pin-level accuracy) is not modeled
   - idle-state g-access fetch behavior from `$3FFF` / `$39FF` is not modeled in the
     renderer
 - Phase 13 deferred breakpoint action details:

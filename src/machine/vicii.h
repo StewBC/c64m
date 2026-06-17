@@ -39,9 +39,12 @@ typedef struct vicii_timing {
     vicii_video_standard standard;
 
     /* Phase A additions */
-    uint16_t raster_compare;       /* 9-bit: 0-311 PAL, 0-262 NTSC */
-    bool     ba_low;               /* true while VIC holds BA low */
-    uint32_t ba_low_until_cycle;   /* cycle_in_line at which BA returns high */
+    uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
+
+    /* Phase H: BA represented as absolute-cycle expiry so cross-line sprite
+       windows (sprites 3 and 4) are handled correctly without line-relative math. */
+    uint64_t ba_low_until_abs;        /* abs cycle at which bad-line BA expires */
+    uint64_t sprite_ba_low_until_abs; /* abs cycle at which sprite BA expires */
 } vicii_timing;
 
 typedef struct c64_vicii_snapshot {
@@ -86,8 +89,8 @@ struct vicii {
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard);
-void vicii_step_cycle(vicii *v, const c64_bus_t *bus);
-bool vicii_ba_active(const vicii *v);
+void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
+bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
 void vicii_destroy(vicii *v);
 
 uint8_t vicii_read_register(vicii *v, uint16_t addr);

@@ -320,6 +320,21 @@ static bool runtime_reset_machine(runtime *rt) {
     return true;
 }
 
+static void runtime_reset_command(runtime *rt) {
+    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+
+    if (!runtime_reset_machine(rt)) {
+        return;
+    }
+
+    if (was_running) {
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    }
+}
+
 static bool runtime_replace_string(char **target, const char *value) {
     char *copy = NULL;
     size_t length;
@@ -931,7 +946,7 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
     runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
 }
 
-static void runtime_load_prg(runtime *rt, const runtime_command *command) {
+static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
     FILE *file;
     uint8_t *bytes;
     size_t length;
@@ -939,41 +954,36 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
     uint16_t load_address;
     size_t i;
 
-    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
-        runtime_publish_error(rt, "PRG load requires paused runtime");
-        return;
-    }
-
-    file = fopen(command->data.load_prg.path, "rb");
+    file = fopen(path, "rb");
     if (file == NULL) {
         runtime_publish_error(rt, "failed to open PRG file");
-        return;
+        return false;
     }
 
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
         runtime_publish_error(rt, "failed to inspect PRG file");
-        return;
+        return false;
     }
     length = (size_t)ftell(file);
     if (fseek(file, 0, SEEK_SET) != 0 || length < 2 || length > 65538u) {
         fclose(file);
         runtime_publish_error(rt, "invalid PRG file");
-        return;
+        return false;
     }
 
     bytes = malloc(length);
     if (bytes == NULL) {
         fclose(file);
         runtime_publish_error(rt, "failed to allocate PRG buffer");
-        return;
+        return false;
     }
 
     if (fread(bytes, 1, length, file) != length) {
         free(bytes);
         fclose(file);
         runtime_publish_error(rt, "failed to read PRG file");
-        return;
+        return false;
     }
     fclose(file);
 
@@ -990,6 +1000,26 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
         payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
         RUNTIME_MEMORY_MODE_RAM);
     runtime_publish_machine_state(rt);
+    return true;
+}
+
+static void runtime_load_prg(runtime *rt, const runtime_command *command) {
+    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+
+    if (!runtime_reset_machine(rt)) {
+        return;
+    }
+
+    if (!runtime_load_prg_bytes(rt, command->data.load_prg.path)) {
+        return;
+    }
+
+    if (was_running) {
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    }
 }
 
 static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
@@ -1039,7 +1069,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_RESET:
-            runtime_reset_machine(rt);
+            runtime_reset_command(rt);
             break;
 
         case RUNTIME_COMMAND_RUN:
