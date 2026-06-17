@@ -1,7 +1,21 @@
-# src/assembler/CMakeLists.txt
+# src/tools/assembler/CMakeLists.txt
 
 add_library(assembler STATIC
-    assembler.c
+    asm.c
+    define.c
+    dynarray.c
+    emit.c
+    errorlog.c
+    err.c
+    expr.c
+    file.c
+    gperf.c
+    opcode.c
+    parse.c
+    scope.c
+    segment.c
+    symbol.c
+    token.c
 )
 
 target_include_directories(assembler PUBLIC
@@ -9,7 +23,3 @@ target_include_directories(assembler PUBLIC
 )
 
 target_compile_features(assembler PUBLIC c_std_99)
-
-target_link_libraries(assembler PRIVATE
-    util
-)
