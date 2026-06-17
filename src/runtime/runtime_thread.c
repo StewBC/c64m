@@ -209,10 +209,28 @@ static void runtime_publish_breakpoints(runtime *rt) {
     runtime_publish_event(rt, &event);
 }
 
-static bool runtime_publish_frame(runtime *rt) {
+static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
     runtime_event event = {
         .type = RUNTIME_EVENT_FRAME_READY,
     };
+
+    mutex_lock(rt->frame_slot.mutex);
+    if (rt->frame_slot.has_frame) {
+        rt->frame_slot.dropped_frames++;
+    }
+    rt->frame_slot.frame = *frame;
+    rt->frame_slot.has_frame = true;
+    rt->frame_slot.published_frames++;
+    event.data.frame_ready.frame_number = frame->frame_number;
+    event.data.frame_ready.machine_cycle = frame->machine_cycle;
+    event.data.frame_ready.dropped_frames = rt->frame_slot.dropped_frames;
+    mutex_unlock(rt->frame_slot.mutex);
+
+    runtime_publish_event(rt, &event);
+    return true;
+}
+
+static bool runtime_publish_debug_frame(runtime *rt) {
     c64_frame frame;
 
     if (!c64_make_frame_snapshot(&rt->machine, &frame)) {
@@ -220,20 +238,18 @@ static bool runtime_publish_frame(runtime *rt) {
         return false;
     }
 
-    mutex_lock(rt->frame_slot.mutex);
-    if (rt->frame_slot.has_frame) {
-        rt->frame_slot.dropped_frames++;
-    }
-    rt->frame_slot.frame = frame;
-    rt->frame_slot.has_frame = true;
-    rt->frame_slot.published_frames++;
-    event.data.frame_ready.frame_number = frame.frame_number;
-    event.data.frame_ready.machine_cycle = frame.machine_cycle;
-    event.data.frame_ready.dropped_frames = rt->frame_slot.dropped_frames;
-    mutex_unlock(rt->frame_slot.mutex);
+    return runtime_publish_frame_copy(rt, &frame);
+}
 
-    runtime_publish_event(rt, &event);
-    return true;
+static bool runtime_publish_completed_frame(runtime *rt) {
+    c64_frame frame;
+
+    if (!c64_copy_completed_frame(&rt->machine, &frame)) {
+        runtime_publish_error(rt, "no completed live frame available");
+        return false;
+    }
+
+    return runtime_publish_frame_copy(rt, &frame);
 }
 
 static bool runtime_load_rom(
@@ -1045,7 +1061,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_REQUEST_FRAME:
-            runtime_publish_frame(rt);
+            runtime_publish_debug_frame(rt);
             break;
 
         case RUNTIME_COMMAND_KEYBOARD_KEY:
@@ -1160,7 +1176,7 @@ int runtime_thread_main(void *userdata) {
                     break;
                 }
                 if (c64_consume_frame_complete(&rt->machine)) {
-                    runtime_publish_frame(rt);
+                    runtime_publish_completed_frame(rt);
                     rt->next_frame_cycle = rt->machine.clock.cycle;
                     runtime_pace_after_frame(rt);
                 }

@@ -19,6 +19,11 @@ enum {
 #define TEST_PALETTE_10  0xffc46c71u  /* light red  */
 #define TEST_PALETTE_11  0xff4a4a4au  /* dark gray  */
 
+static void fail(const char *message) {
+    fprintf(stderr, "%s\n", message);
+    exit(1);
+}
+
 static void expect_true(const char *name, bool value) {
     if (!value) {
         fprintf(stderr, "%s: expected true\n", name);
@@ -68,12 +73,23 @@ static void build_roms(c64_rom_set *roms) {
     roms->character[1 * 8 + 3] = 0x10;
 }
 
-static void reset_machine(c64_t *machine) {
-    c64_rom_set roms;
+static void copy_to_kernal(c64_rom_set *roms, uint16_t address, const uint8_t *program, size_t size) {
+    size_t offset = address - 0xe000u;
+    size_t i;
+
+    if (address < 0xe000u || offset + size > C64_KERNAL_ROM_SIZE) {
+        fail("test program does not fit in KERNAL ROM");
+    }
+
+    for (i = 0; i < size; i++) {
+        roms->kernal[offset + i] = program[i];
+    }
+}
+
+static void reset_machine_with_roms(c64_t *machine, const c64_rom_set *roms) {
     c64_config  cfg;
     char error[256];
 
-    build_roms(&roms);
     c64_init(machine);
 
     /* PAL is the canonical video standard for all tests: the 384×272 pixel
@@ -82,8 +98,36 @@ static void reset_machine(c64_t *machine) {
     cfg.video_standard = C64_VIDEO_STANDARD_PAL;
     c64_set_config(machine, &cfg);
 
-    expect_true("install synthetic ROMs", c64_install_roms(machine, &roms, error, sizeof(error)));
+    expect_true("install synthetic ROMs", c64_install_roms(machine, roms, error, sizeof(error)));
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
+}
+
+static void reset_machine(c64_t *machine) {
+    c64_rom_set roms;
+
+    build_roms(&roms);
+    reset_machine_with_roms(machine, &roms);
+}
+
+static void step_until_frame_complete(c64_t *machine) {
+    char error[256];
+    uint32_t i;
+    uint32_t max_cycles = VICII_PAL_CYCLES_PER_LINE * VICII_PAL_LINES_PER_FRAME + 1000u;
+
+    for (i = 0; i < max_cycles; i++) {
+        if (c64_consume_frame_complete(machine)) {
+            return;
+        }
+        expect_true("step live frame cycle", c64_step_cycle(machine, error, sizeof(error)));
+    }
+
+    fail("live frame did not complete");
+}
+
+static void make_live_frame(c64_t *machine, c64_frame *frame, const char *name) {
+    (void)c64_consume_frame_complete(machine);
+    step_until_frame_complete(machine);
+    expect_true(name, c64_make_frame_snapshot(machine, frame));
 }
 
 static void test_vicii_reset_state(void) {
@@ -363,7 +407,7 @@ static void test_ecm_text_mode(void) {
     machine.bus.ram[0x0401] = 0xC1;
     machine.bus.color_ram[1] = 0x05; /* fg = green */
 
-    expect_true("make ecm frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live ecm frame");
 
     /* Cell 0, sx=0 (x=24): glyph bit7 set → fg (green) */
     expect_u32("ecm cell0 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
@@ -388,7 +432,7 @@ static void test_standard_bitmap_mode(void) {
     machine.bus.ram[0x2000] = 0x80; /* cell 0, row 0: bit 7 set */
     machine.bus.ram[0x0400] = 0xAB; /* vm_byte: fg=palette[10], bg=palette[11] */
 
-    expect_true("make bitmap frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live bitmap frame");
 
     /* sx=0 (x=24): bitmap bit7=1 → fg = palette[10] */
     expect_u32("bitmap fg at x=24", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
@@ -410,7 +454,7 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
     machine.bus.ram[0x0400] = 0x10;
     machine.bus.ram[0x2000] = 0x80; /* YSCROLL=3: sy=3 maps to bitmap row 0. */
 
-    expect_true("make basic hires setup frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live basic hires setup frame");
     expect_u32("basic hires setup foreground", 0xffffffffu,
                frame.pixels[54 * C64_FRAME_WIDTH + 31]);
     expect_u32("basic hires setup background", TEST_PALETTE_0,
@@ -434,7 +478,7 @@ static void test_multicolor_bitmap_mode(void) {
     machine.bus.ram[0x0400] = 0xAB; /* vm_byte: high=0xA→palette[10], low=0xB→palette[11] */
     machine.bus.color_ram[0] = 0x05; /* pair 11 → palette[5] = green */
 
-    expect_true("make mcm bitmap frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live mcm bitmap frame");
 
     /* sx=0 (x=24): pair=3 → palette[color_ram[0]] = palette[5] = green */
     expect_u32("mcmbm pair11 at x=24", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
@@ -472,7 +516,7 @@ static void test_mcm_text_mode(void) {
     machine.bus.ram[0x0401] = 0x01;
     machine.bus.color_ram[1] = 0x0D;
 
-    expect_true("make mcm text frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live mcm text frame");
 
     /* Cell 0 hires: sx=0 (x=24) → glyph bit7=1 → fg = palette[5] = green */
     expect_u32("mcm hires fg at x=24", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
@@ -498,7 +542,7 @@ static void test_invalid_mode_forces_black(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02); /* border = red (not black) */
 
-    expect_true("make invalid frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live invalid frame");
 
     border_color = frame.pixels[0]; /* top-left is always border */
     expect_not_u32("invalid border not black", black, border_color);
@@ -515,8 +559,37 @@ static void test_invalid_mode_forces_black(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
 
-    expect_true("make mode5 frame", c64_make_frame_snapshot(&machine, &frame));
+    make_live_frame(&machine, &frame, "make live mode5 frame");
     expect_u32("mode5 display black", black, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+}
+
+static void test_live_raster_border_change_and_text(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x05,       /* LDA #$05 */
+        0x8d, 0x20, 0xd0, /* STA $D020 */
+        0x4c, 0x05, 0xe0  /* JMP $E005 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_frame frame;
+
+    build_roms(&roms);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_with_roms(&machine, &roms);
+
+    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+
+    step_until_frame_complete(&machine);
+    expect_true("live frame snapshot", c64_make_frame_snapshot(&machine, &frame));
+
+    expect_u32("live border before d020 write", TEST_PALETTE_6, frame.pixels[8]);
+    expect_u32("live border after d020 write", TEST_PALETTE_5, frame.pixels[32]);
+    expect_u32("live standard text foreground", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("live standard text background", TEST_PALETTE_6, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
 int main(void) {
@@ -536,5 +609,6 @@ int main(void) {
     test_multicolor_bitmap_mode();
     test_mcm_text_mode();
     test_invalid_mode_forces_black();
+    test_live_raster_border_change_and_text();
     return 0;
 }

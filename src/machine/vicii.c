@@ -71,6 +71,30 @@ static void vicii_set_error(char *error, size_t error_size, const char *message)
     snprintf(error, error_size, "%s", message);
 }
 
+static void vicii_prepare_frame(c64_frame *frame, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
+    assert(frame);
+
+    frame->width = C64_FRAME_WIDTH;
+    frame->height = C64_FRAME_HEIGHT;
+    frame->stride_bytes = C64_FRAME_WIDTH * sizeof(frame->pixels[0]);
+    frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    frame->frame_number = frame_number;
+    frame->machine_cycle = machine_cycle;
+
+    for (uint32_t i = 0; i < C64_FRAME_WIDTH * C64_FRAME_HEIGHT; i++) {
+        frame->pixels[i] = fill_color;
+    }
+}
+
+static void vicii_begin_live_frame(vicii *v) {
+    uint32_t fill_color;
+
+    assert(v);
+
+    fill_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
+    vicii_prepare_frame(&v->working_frame, v->timing.frame_number, 0, fill_color);
+}
+
 bool vicii_init(vicii *v, char *error, size_t error_size) {
     if (!v) {
         vicii_set_error(error, error_size, "VIC-II pointer is null");
@@ -93,11 +117,13 @@ void vicii_reset(vicii *v) {
     memset(v->registers, 0, sizeof(v->registers));
     memset(&v->timing, 0, sizeof(v->timing));
     memset(&v->working_frame, 0, sizeof(v->working_frame));
+    memset(&v->completed_frame, 0, sizeof(v->completed_frame));
 
     v->timing.standard = standard;
     vicii_set_video_standard(v, standard);
     v->registers[VICII_REG_BORDER_COLOR] = VICII_DEFAULT_BORDER_COLOR;
     v->registers[VICII_REG_BACKGROUND_COLOR_0] = VICII_DEFAULT_BACKGROUND_COLOR;
+    v->completed_frame_ready = false;
 
     v->vc                        = 0;
     v->vc_base                   = 0;
@@ -111,6 +137,7 @@ void vicii_reset(vicii *v) {
     v->irq_enable                = 0;
     memset(v->video_matrix, 0, sizeof(v->video_matrix));
     memset(v->color_line,   0, sizeof(v->color_line));
+    vicii_begin_live_frame(v);
 }
 
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
@@ -135,6 +162,186 @@ static bool vicii_is_bad_line(const vicii *v) {
     if (!den) return false;
     if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) return false;
     return (uint8_t)(y & 0x07u) == yscroll;
+}
+
+typedef struct vicii_border_geometry {
+    uint32_t top;
+    uint32_t bottom;
+    uint32_t left;
+    uint32_t right;
+} vicii_border_geometry;
+
+static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
+    vicii_border_geometry g;
+    bool rsel = (v->registers[0x11] & 0x08u) != 0;
+    bool csel = (v->registers[0x16] & 0x08u) != 0;
+
+    g.top    = rsel ? (uint32_t)VICII_PAL_VBORDER_TOP_25    : (uint32_t)VICII_PAL_VBORDER_TOP_24;
+    g.bottom = rsel ? (uint32_t)VICII_PAL_VBORDER_BOTTOM_25 : (uint32_t)VICII_PAL_VBORDER_BOTTOM_24;
+    g.left   = csel ? (uint32_t)VICII_HBORDER_LEFT_40       : (uint32_t)VICII_HBORDER_LEFT_38;
+    g.right  = csel ? (uint32_t)VICII_HBORDER_RIGHT_40      : (uint32_t)VICII_HBORDER_RIGHT_38;
+    return g;
+}
+
+static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, uint32_t x, uint32_t y) {
+    bool vborder = y < g->top || y >= g->bottom;
+    bool hborder = x < g->left || x >= g->right;
+    uint8_t border = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+    uint32_t b0c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    uint32_t b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
+    uint32_t b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
+    uint32_t b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
+    uint8_t mode;
+    uint8_t xscroll;
+    uint8_t yscroll;
+    uint16_t screen_base;
+    uint16_t char_base;
+    uint16_t bitmap_base;
+    uint32_t sx_raw;
+    uint32_t sy;
+    uint32_t sx;
+    uint32_t adjusted;
+    uint32_t row_in_cell;
+    uint32_t char_row;
+    uint32_t col;
+    uint16_t cell;
+
+    if (vborder || hborder) {
+        return vicii_palette_argb[border];
+    }
+
+    mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                     ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                     ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+    if (mode >= 5u) {
+        return vicii_palette_argb[0];
+    }
+
+    xscroll = v->registers[0x16] & 0x07u;
+    yscroll = v->registers[0x11] & 0x07u;
+    sx_raw = x - g->left;
+    sy = y - g->top;
+    if (sx_raw < (uint32_t)xscroll || sy < (uint32_t)yscroll) {
+        return b0c;
+    }
+
+    sx = sx_raw - (uint32_t)xscroll;
+    adjusted = sy - (uint32_t)yscroll;
+    row_in_cell = adjusted & 7u;
+    char_row = adjusted / 8u;
+    col = sx / 8u;
+    cell = (uint16_t)(char_row * 40u + col);
+    screen_base = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    char_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+    bitmap_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+
+    switch (mode) {
+    case 0u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+            uint8_t fg = c64_bus_vic_read_color(bus, cell);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            return (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : b0c;
+        }
+
+    case 1u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+
+            if ((color_nib & 0x08u) == 0u) {
+                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+                return (glyph & bit) ? vicii_palette_argb[color_nib & 0x0fu] : b0c;
+            } else {
+                uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
+                switch (pair) {
+                case 0u:  return b0c;
+                case 1u:  return b1c;
+                case 2u:  return b2c;
+                default:  return vicii_palette_argb[color_nib & 0x07u];
+                }
+            }
+        }
+
+    case 2u:
+        {
+            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            return (bdata & bit) ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
+                                 : vicii_palette_argb[vm_byte & 0x0fu];
+        }
+
+    case 3u:
+        {
+            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
+            switch (pair) {
+            case 0u:  return b0c;
+            case 1u:  return vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
+            case 2u:  return vicii_palette_argb[vm_byte & 0x0fu];
+            default:  return vicii_palette_argb[color_nib & 0x0fu];
+            }
+        }
+
+    case 4u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t ecm_sel = (code >> 6) & 3u;
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code & 0x3fu, (uint8_t)row_in_cell);
+            uint8_t fg_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            uint32_t ecm_bg;
+
+            switch (ecm_sel) {
+            case 0u:  ecm_bg = b0c; break;
+            case 1u:  ecm_bg = b1c; break;
+            case 2u:  ecm_bg = b2c; break;
+            default:  ecm_bg = b3c; break;
+            }
+            return (glyph & bit) ? vicii_palette_argb[fg_nib & 0x0fu] : ecm_bg;
+        }
+
+    default:
+        return vicii_palette_argb[0];
+    }
+}
+
+static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
+    vicii_border_geometry g;
+    uint32_t y;
+    uint32_t x0;
+    uint32_t x1;
+    uint32_t x;
+
+    if (!bus) {
+        return;
+    }
+
+    y = v->timing.raster_line;
+    if (y >= C64_FRAME_HEIGHT) {
+        return;
+    }
+
+    g = vicii_get_border_geometry(v);
+    x0 = (v->timing.cycle_in_line * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
+    x1 = ((v->timing.cycle_in_line + 1u) * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
+    if (x1 <= x0) {
+        x1 = x0 + 1u;
+    }
+    if (x1 > C64_FRAME_WIDTH) {
+        x1 = C64_FRAME_WIDTH;
+    }
+
+    for (x = x0; x < x1; x++) {
+        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = vicii_live_pixel(v, bus, &g, x, y);
+    }
 }
 
 static void vicii_assert_raster_irq(vicii *v) {
@@ -197,6 +404,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
         v->timing.ba_low = false;
     }
 
+    vicii_render_live_cycle(v, bus);
+
     /* ------------------------------------------------------------------
      * Advance cycle counter
      * ------------------------------------------------------------------ */
@@ -230,6 +439,9 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
      * ------------------------------------------------------------------ */
     v->timing.raster_line  = 0;
     v->timing.frame_number++;
+    v->working_frame.frame_number = v->timing.frame_number;
+    memcpy(&v->completed_frame, &v->working_frame, sizeof(v->completed_frame));
+    v->completed_frame_ready = true;
     v->timing.frame_complete = true;
 
     v->vc            = 0;
@@ -237,6 +449,7 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
     v->rc            = 0;
     v->display_state = false;
     v->bad_line      = false;
+    vicii_begin_live_frame(v);
 }
 
 bool vicii_ba_active(const vicii *v) {
@@ -325,23 +538,17 @@ bool vicii_consume_frame_complete(vicii *v) {
     return complete;
 }
 
-typedef struct vicii_border_geometry {
-    uint32_t top;
-    uint32_t bottom;
-    uint32_t left;
-    uint32_t right;
-} vicii_border_geometry;
+bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle) {
+    assert(v);
+    assert(out_frame);
 
-static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
-    vicii_border_geometry g;
-    bool rsel = (v->registers[0x11] & 0x08u) != 0;
-    bool csel = (v->registers[0x16] & 0x08u) != 0;
+    if (!v->completed_frame_ready) {
+        return false;
+    }
 
-    g.top    = rsel ? (uint32_t)VICII_PAL_VBORDER_TOP_25    : (uint32_t)VICII_PAL_VBORDER_TOP_24;
-    g.bottom = rsel ? (uint32_t)VICII_PAL_VBORDER_BOTTOM_25 : (uint32_t)VICII_PAL_VBORDER_BOTTOM_24;
-    g.left   = csel ? (uint32_t)VICII_HBORDER_LEFT_40       : (uint32_t)VICII_HBORDER_LEFT_38;
-    g.right  = csel ? (uint32_t)VICII_HBORDER_RIGHT_40      : (uint32_t)VICII_HBORDER_RIGHT_38;
-    return g;
+    memcpy(out_frame, &v->completed_frame, sizeof(*out_frame));
+    out_frame->machine_cycle = machine_cycle;
+    return true;
 }
 
 bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
@@ -359,6 +566,10 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     assert(v);
     assert(bus);
     assert(out_frame);
+
+    if (vicii_copy_completed_frame(v, out_frame, machine_cycle)) {
+        return true;
+    }
 
     g = vicii_get_border_geometry(v);
 

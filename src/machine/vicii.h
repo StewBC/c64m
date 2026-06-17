@@ -56,6 +56,8 @@ struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
     c64_frame working_frame;
+    c64_frame completed_frame;
+    bool completed_frame_ready;
 
     /* Phase A additions */
     uint16_t vc;               /* Video Counter, 10-bit, 0-1023 */
@@ -79,5 +81,6 @@ void vicii_destroy(vicii *v);
 uint8_t vicii_read_register(vicii *v, uint16_t addr);
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value);
 bool vicii_consume_frame_complete(vicii *v);
+bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);
 bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle);
 void vicii_copy_snapshot(const vicii *v, c64_vicii_snapshot *out);

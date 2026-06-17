@@ -29,6 +29,32 @@ typedef struct c64_clock {
     uint64_t cia_cycles;
 } c64_clock;
 
+typedef enum c64_cpu_bus_event_kind {
+    C64_CPU_BUS_EVENT_INTERNAL = 0,
+    C64_CPU_BUS_EVENT_READ,
+    C64_CPU_BUS_EVENT_WRITE
+} c64_cpu_bus_event_kind;
+
+typedef struct c64_cpu_bus_event {
+    uint8_t cycle_offset;
+    c64_cpu_bus_event_kind kind;
+    uint16_t address;
+    uint8_t value;
+    uint8_t is_io;
+    uint64_t absolute_cycle;
+} c64_cpu_bus_event;
+
+enum {
+    C64_CPU_TRACE_MAX_EVENTS = 64
+};
+
+typedef struct c64_cpu_instruction_trace {
+    uint16_t opcode_pc;
+    size_t event_count;
+    size_t total_cycles;
+    c64_cpu_bus_event events[C64_CPU_TRACE_MAX_EVENTS];
+} c64_cpu_instruction_trace;
+
 typedef enum c64_video_standard {
     C64_VIDEO_STANDARD_NTSC = 0,
     C64_VIDEO_STANDARD_PAL
@@ -96,6 +122,14 @@ typedef struct c64_t {
     uint64_t restore_requests;
     c64_memory_access_fn memory_access;
     void *memory_access_user;
+    c64_cpu_instruction_trace last_cpu_trace;
+    c64_cpu_instruction_trace pending_cpu_trace;
+    uint64_t cpu_trace_start_cycle;
+    uint64_t cpu_trace_start_cpu_cycle;
+    size_t pending_cpu_event_index;
+    size_t pending_cpu_elapsed;
+    uint8_t cpu_bus_mode;
+    bool pending_cpu_trace_active;
     bool restore_pending;
     size_t cpu_cycles_remaining;
     bool has_basic_rom;
@@ -113,6 +147,7 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);
 bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
 bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
+bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
 void c64_restore(c64_t *machine);
@@ -125,3 +160,4 @@ uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);
 c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address);
+size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_trace *out);

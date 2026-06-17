@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 14.
+Completed through Phase 16.
 
 Implemented:
 
@@ -185,6 +185,26 @@ Implemented:
   - `[config]` INI keys now persist scroll wheel speed, turbo speeds, symbol files, and `Save=yes`
   - turbo speed CSV is parsed into runtime-owned available multipliers; the first entry becomes the active paced multiplier
   - symbol file changes currently trigger view refresh plumbing only; real symbol unload/load remains future work
+- Phase 16 timed bus event and live VIC-II raster foundation:
+  - machine owns a monotonic master cycle and advances VIC-II/CIA/SID hooks to
+    timestamped CPU bus event cycles before applying CPU-visible side effects
+  - CPU instruction stepping remains the external runtime/debugger API, while
+    bus-visible reads/writes are classified and timestamped within each opcode
+  - CPU writes are not applied twice: deferred/timed paths record writes first and
+    apply RAM/I/O/device side effects only when machine time reaches the event
+  - VIC-visible writes to registers such as `$D020` take effect at their event cycle
+    rather than only after opcode completion or at whole-frame snapshot time
+  - runtime running-frame publication now copies completed live VIC-II frame buffers;
+    the old whole-frame snapshot renderer remains only as a compatibility/debug path
+    before a live frame has completed
+  - live raster rendering emits border/background and current Phase C display pixels
+    as VIC time advances, including standard text, multicolor text, standard bitmap,
+    multicolor bitmap, ECM text, and invalid modes 5/6/7
+  - mid-frame border color changes are visible in completed/published frame output;
+    regression coverage proves a timed `$D020` write changes only later border pixels
+  - current Bad Line BA handling now routes through CPU event read/write
+    classification: read cycles stall while BA is low, write-only cycles continue,
+    and unknown/internal cycles remain conservatively stalled
 
 ## Not Implemented
 
@@ -192,13 +212,12 @@ Implemented:
   - hardware sprites, sprite priority, and sprite collision detection are not implemented
   - light pen is not implemented
   - open-bus / last-byte-on-bus behavior is not implemented
-  - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA stalls do
-    not distinguish CPU read cycles from write cycles
+  - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA handling
+    distinguishes CPU read and write event kinds, but sprite-fetch BA events and
+    exact AEC/RDY timing remain deferred
   - sprite fetch BA events are not implemented
-  - per-cycle/mid-frame pixel rendering effects are not implemented; the renderer is
-    still a whole-frame snapshot using current register state
   - idle-state g-access fetch behavior from `$3FFF` / `$39FF` is not modeled in the
-    snapshot renderer
+    renderer
 - Phase 13 deferred breakpoint action details:
   - Type text injection is not implemented yet
   - Swap disk behavior is not implemented yet

@@ -37,6 +37,13 @@ static void expect_u16(const char *name, uint16_t expected, uint16_t actual) {
     }
 }
 
+static void expect_u64(const char *name, uint64_t expected, uint64_t actual) {
+    if (expected != actual) {
+        fprintf(stderr, "%s: expected %llu, got %llu\n", name, (unsigned long long)expected, (unsigned long long)actual);
+        exit(1);
+    }
+}
+
 static void expect_u64_gt(const char *name, uint64_t lhs, uint64_t rhs) {
     if (lhs <= rhs) {
         fprintf(stderr, "%s: expected %llu > %llu\n", name, (unsigned long long)lhs, (unsigned long long)rhs);
@@ -94,6 +101,15 @@ static void step_machine(c64_t *machine, size_t count) {
 
     for (i = 0; i < count; i++) {
         expect_true("step instruction", c64_step_instruction(machine, error, sizeof(error)));
+    }
+}
+
+static void step_machine_cycles(c64_t *machine, size_t count) {
+    char error[256];
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        expect_true("step cycle", c64_step_cycle(machine, error, sizeof(error)));
     }
 }
 
@@ -341,6 +357,134 @@ static void test_banking_affects_execution(void) {
     expect_u8("execution follows banked RAM", 0x42, snapshot(&machine).a);
 }
 
+static void test_sta_abs_bus_event_trace(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x8d, 0x34, 0x12  /* STA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    step_machine(&machine, 1);
+    step_machine(&machine, 1);
+    expect_u64("copy trace event count", 4, c64_debug_copy_last_cpu_trace(&machine, &trace));
+
+    expect_u16("trace opcode pc", (uint16_t)(TEST_RESET_VECTOR + 2), trace.opcode_pc);
+    expect_u64("trace total cycles", 4, trace.total_cycles);
+    expect_u8("opcode fetch kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[0].kind);
+    expect_u8("opcode fetch offset", 0, trace.events[0].cycle_offset);
+    expect_u16("opcode fetch address", (uint16_t)(TEST_RESET_VECTOR + 2), trace.events[0].address);
+    expect_u8("addr lo kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[1].kind);
+    expect_u8("addr lo offset", 1, trace.events[1].cycle_offset);
+    expect_u16("addr lo address", (uint16_t)(TEST_RESET_VECTOR + 3), trace.events[1].address);
+    expect_u8("addr hi kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[2].kind);
+    expect_u8("addr hi offset", 2, trace.events[2].cycle_offset);
+    expect_u16("addr hi address", (uint16_t)(TEST_RESET_VECTOR + 4), trace.events[2].address);
+    expect_u8("sta write kind", C64_CPU_BUS_EVENT_WRITE, (uint8_t)trace.events[3].kind);
+    expect_u8("sta write offset", 3, trace.events[3].cycle_offset);
+    expect_u16("sta write address", 0x1234, trace.events[3].address);
+    expect_u8("sta write value", 0x5a, trace.events[3].value);
+    expect_u8("sta write not io", 0, trace.events[3].is_io);
+}
+
+static void test_sta_d020_applies_at_event_cycle(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x0b,       /* LDA #$0b */
+        0x8d, 0x20, 0xd0  /* STA $D020 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+    uint64_t start_cycle;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    step_machine(&machine, 1);
+    start_cycle = machine.clock.cycle;
+    step_machine(&machine, 1);
+    c64_debug_copy_last_cpu_trace(&machine, &trace);
+
+    expect_u8("d020 write kind", C64_CPU_BUS_EVENT_WRITE, (uint8_t)trace.events[3].kind);
+    expect_u16("d020 write address", 0xd020, trace.events[3].address);
+    expect_u8("d020 write io", 1, trace.events[3].is_io);
+    expect_u8("d020 final register", 0x0b, c64_bus_read(&machine.bus, 0xd020));
+    expect_u64("d020 write absolute cycle", start_cycle + 3, trace.events[3].absolute_cycle);
+    expect_u64("sta advances machine cycles", start_cycle + 4, machine.clock.cycle);
+}
+
+static void test_ba_allows_pending_write_cycle(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x8d, 0x34, 0x12  /* STA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    uint64_t before_cpu_cycles;
+    uint64_t before_machine_cycles;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    step_machine_cycles(&machine, 2); /* LDA #$5a */
+    step_machine_cycles(&machine, 3); /* STA opcode, low address, high address reads */
+    expect_true("sta write pending", machine.pending_cpu_trace_active);
+    expect_u64("sta write elapsed", 3, machine.pending_cpu_elapsed);
+    expect_u8("ram before ba write", 0x00, c64_bus_read(&machine.bus, 0x1234));
+
+    machine.vic.timing.ba_low = true;
+    machine.vic.timing.ba_low_until_cycle = 255;
+    before_cpu_cycles = machine.clock.cpu_cycles;
+    before_machine_cycles = machine.clock.cycle;
+
+    step_machine_cycles(&machine, 1);
+
+    expect_u8("ba write completed", 0x5a, c64_bus_read(&machine.bus, 0x1234));
+    expect_u64("ba write advances cpu", before_cpu_cycles + 1, machine.clock.cpu_cycles);
+    expect_u64("ba write advances machine", before_machine_cycles + 1, machine.clock.cycle);
+    expect_true("sta trace complete", !machine.pending_cpu_trace_active);
+}
+
+static void test_ba_stalls_pending_read_cycle(void) {
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    uint64_t before_cpu_cycles;
+    uint64_t before_machine_cycles;
+    size_t before_elapsed;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1234] = 0x5a;
+
+    step_machine_cycles(&machine, 3); /* opcode, low address, high address reads */
+    expect_true("lda read pending", machine.pending_cpu_trace_active);
+    expect_u64("lda read elapsed", 3, machine.pending_cpu_elapsed);
+
+    machine.vic.timing.ba_low = true;
+    machine.vic.timing.ba_low_until_cycle = 255;
+    before_cpu_cycles = machine.clock.cpu_cycles;
+    before_machine_cycles = machine.clock.cycle;
+    before_elapsed = machine.pending_cpu_elapsed;
+
+    step_machine_cycles(&machine, 1);
+
+    expect_u64("ba read stalls cpu", before_cpu_cycles, machine.clock.cpu_cycles);
+    expect_u64("ba read advances machine", before_machine_cycles + 1, machine.clock.cycle);
+    expect_u64("ba read keeps elapsed", before_elapsed, machine.pending_cpu_elapsed);
+    expect_true("lda trace still pending", machine.pending_cpu_trace_active);
+}
+
 static void write_runtime_roms(void) {
     FILE *system = fopen("cpu_validation_64c.bin", "wb");
     FILE *character = fopen("cpu_validation_character.bin", "wb");
@@ -449,6 +593,10 @@ int main(void) {
     test_page_crossing_branch();
     test_page_wrap();
     test_banking_affects_execution();
+    test_sta_abs_bus_event_trace();
+    test_sta_d020_applies_at_event_cycle();
+    test_ba_allows_pending_write_cycle();
+    test_ba_stalls_pending_read_cycle();
     test_runtime_run_instructions();
     return 0;
 }

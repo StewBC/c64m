@@ -6,6 +6,9 @@
 
 enum {
     C64_VICII_REG_MEMORY_POINTER = 0x18,
+    C64_CPU_BUS_MODE_IMMEDIATE = 0,
+    C64_CPU_BUS_MODE_TIMED_IMMEDIATE,
+    C64_CPU_BUS_MODE_DEFER_WRITES,
 };
 
 static void c64_set_error(char *error, size_t error_size, const char *message) {
@@ -16,37 +19,17 @@ static void c64_set_error(char *error, size_t error_size, const char *message) {
     snprintf(error, error_size, "%s", message);
 }
 
-static uint8_t c64_cpu_read(void *user, uint16_t address) {
-    c64_t *machine = user;
-    uint8_t value = c64_bus_read(&machine->bus, address);
-
-    if (machine->memory_access) {
-        machine->memory_access(machine->memory_access_user, C64_MEMORY_ACCESS_READ, address, value);
-    }
-
-    return value;
+static bool c64_cpu_io_visible(const c64_t *machine) {
+    uint8_t port = machine->bus.cpu_port_data;
+    return (port & 0x03u) != 0 && (port & 0x04u) != 0;
 }
 
-static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
-    c64_t *machine = user;
-    c64_bus_write(&machine->bus, address, value);
-    if (machine->memory_access) {
-        machine->memory_access(machine->memory_access_user, C64_MEMORY_ACCESS_WRITE, address, value);
-    }
+static bool c64_cpu_address_is_io(const c64_t *machine, uint16_t address) {
+    return address >= 0xd000u && address <= 0xdfffu && c64_cpu_io_visible(machine);
 }
 
-static uint8_t c64_cpu_irq_pending(void *user) {
-    c64_t *machine = user;
-    bool cia_irq = cia_irq_pending(&machine->cia1);
-    bool vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
-    return (cia_irq || vic_irq) ? 1u : 0u;
-}
-
-static uint8_t c64_cpu_nmi_pending(void *user) {
-    c64_t *machine = user;
-    bool pending = machine->restore_pending;
-    machine->restore_pending = false;
-    return pending ? 1u : 0u;
+static uint64_t c64_current_cycle(const c64_t *machine) {
+    return machine->clock.cycle;
 }
 
 static void c64_step_vic(c64_t *machine) {
@@ -65,6 +48,256 @@ static void c64_step_cia2(c64_t *machine) {
 
 static void c64_step_sid(c64_t *machine) {
     (void)machine;
+}
+
+static void c64_advance_one_cycle(c64_t *machine) {
+    c64_step_vic(machine);
+    c64_step_cia1(machine);
+    c64_step_cia2(machine);
+    c64_step_sid(machine);
+    machine->clock.cycle++;
+}
+
+static void c64_advance_devices_to(c64_t *machine, uint64_t target_cycle) {
+    assert(machine);
+    assert(target_cycle >= machine->clock.cycle);
+
+    while (machine->clock.cycle < target_cycle) {
+        c64_advance_one_cycle(machine);
+    }
+}
+
+static void c64_trace_reset(c64_cpu_instruction_trace *trace) {
+    memset(trace, 0, sizeof(*trace));
+}
+
+static c64_cpu_bus_event *c64_trace_append_event(
+    c64_t *machine,
+    c64_cpu_bus_event_kind kind,
+    uint16_t address,
+    uint8_t value) {
+    c64_cpu_instruction_trace *trace = &machine->last_cpu_trace;
+    c64_cpu_bus_event *event;
+    uint64_t offset64;
+
+    if (trace->event_count >= C64_CPU_TRACE_MAX_EVENTS) {
+        return NULL;
+    }
+
+    event = &trace->events[trace->event_count++];
+    offset64 = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
+    event->cycle_offset = offset64 > 0xffu ? 0xffu : (uint8_t)offset64;
+    event->kind = kind;
+    event->address = address;
+    event->value = value;
+    event->is_io = c64_cpu_address_is_io(machine, address) ? 1u : 0u;
+    event->absolute_cycle = c64_current_cycle(machine);
+    return event;
+}
+
+static void c64_report_memory_access(
+    c64_t *machine,
+    c64_memory_access_type access,
+    uint16_t address,
+    uint8_t value) {
+    if (machine->memory_access) {
+        machine->memory_access(machine->memory_access_user, access, address, value);
+    }
+}
+
+static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
+    assert(machine);
+    assert(event);
+
+    event->absolute_cycle = c64_current_cycle(machine);
+
+    switch (event->kind) {
+    case C64_CPU_BUS_EVENT_READ:
+        c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, event->address, event->value);
+        break;
+
+    case C64_CPU_BUS_EVENT_WRITE:
+        c64_bus_write(&machine->bus, event->address, event->value);
+        c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
+        break;
+
+    case C64_CPU_BUS_EVENT_INTERNAL:
+    default:
+        break;
+    }
+}
+
+static void c64_apply_pending_cpu_events_at_elapsed(c64_t *machine) {
+    while (machine->pending_cpu_event_index < machine->pending_cpu_trace.event_count) {
+        c64_cpu_bus_event *event = &machine->pending_cpu_trace.events[machine->pending_cpu_event_index];
+
+        if (event->cycle_offset != machine->pending_cpu_elapsed) {
+            break;
+        }
+
+        c64_apply_cpu_bus_event(machine, event);
+        machine->pending_cpu_event_index++;
+    }
+}
+
+static bool c64_pending_cpu_elapsed_has_read_event(const c64_t *machine) {
+    size_t i;
+
+    for (i = machine->pending_cpu_event_index; i < machine->pending_cpu_trace.event_count; i++) {
+        const c64_cpu_bus_event *event = &machine->pending_cpu_trace.events[i];
+
+        if (event->cycle_offset != machine->pending_cpu_elapsed) {
+            break;
+        }
+        if (event->kind == C64_CPU_BUS_EVENT_READ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool c64_pending_cpu_elapsed_has_write_event(const c64_t *machine) {
+    size_t i;
+
+    for (i = machine->pending_cpu_event_index; i < machine->pending_cpu_trace.event_count; i++) {
+        const c64_cpu_bus_event *event = &machine->pending_cpu_trace.events[i];
+
+        if (event->cycle_offset != machine->pending_cpu_elapsed) {
+            break;
+        }
+        if (event->kind == C64_CPU_BUS_EVENT_WRITE) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool c64_cpu_cycle_stalled_by_ba(const c64_t *machine) {
+    if (!vicii_ba_active(&machine->vic)) {
+        return false;
+    }
+
+    if (!machine->pending_cpu_trace_active) {
+        return true;
+    }
+
+    if (c64_pending_cpu_elapsed_has_read_event(machine)) {
+        return true;
+    }
+
+    if (c64_pending_cpu_elapsed_has_write_event(machine)) {
+        return false;
+    }
+
+    return true;
+}
+
+static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
+    c64_trace_reset(&machine->last_cpu_trace);
+    machine->cpu_trace_start_cycle = machine->clock.cycle;
+    machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_DEFER_WRITES;
+
+    machine->last_cpu_trace.total_cycles = c6510_step(&machine->cpu);
+    machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
+    if (machine->last_cpu_trace.total_cycles == 0) {
+        machine->last_cpu_trace.total_cycles = 1;
+    }
+
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
+    machine->pending_cpu_trace = machine->last_cpu_trace;
+    machine->pending_cpu_event_index = 0;
+    machine->pending_cpu_elapsed = 0;
+    machine->pending_cpu_trace_active = true;
+}
+
+static bool c64_step_cycle_internal(c64_t *machine) {
+    if (!machine->pending_cpu_trace_active && !vicii_ba_active(&machine->vic)) {
+        c64_prepare_deferred_cpu_trace(machine);
+    }
+
+    if (machine->pending_cpu_trace_active && !c64_cpu_cycle_stalled_by_ba(machine)) {
+        c64_apply_pending_cpu_events_at_elapsed(machine);
+        c64_advance_one_cycle(machine);
+        machine->pending_cpu_elapsed++;
+        machine->clock.cpu_cycles++;
+
+        if (machine->pending_cpu_elapsed >= machine->pending_cpu_trace.total_cycles) {
+            c64_apply_pending_cpu_events_at_elapsed(machine);
+            machine->pending_cpu_trace_active = false;
+            machine->pending_cpu_event_index = 0;
+            machine->pending_cpu_elapsed = 0;
+        }
+        return true;
+    }
+
+    c64_advance_one_cycle(machine);
+    return true;
+}
+
+static void c64_finish_pending_cpu_trace(c64_t *machine) {
+    while (machine->pending_cpu_trace_active) {
+        c64_step_cycle_internal(machine);
+    }
+}
+
+static uint8_t c64_cpu_read(void *user, uint16_t address) {
+    c64_t *machine = user;
+    uint8_t value;
+
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_TIMED_IMMEDIATE) {
+        uint64_t offset = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
+        c64_advance_devices_to(machine, machine->cpu_trace_start_cycle + offset);
+    }
+
+    value = c64_bus_read(&machine->bus, address);
+
+    if (machine->cpu_bus_mode != C64_CPU_BUS_MODE_IMMEDIATE) {
+        c64_trace_append_event(machine, C64_CPU_BUS_EVENT_READ, address, value);
+        if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
+            return value;
+        }
+    }
+
+    c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, address, value);
+    return value;
+}
+
+static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
+    c64_t *machine = user;
+
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_TIMED_IMMEDIATE) {
+        uint64_t offset = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
+        c64_advance_devices_to(machine, machine->cpu_trace_start_cycle + offset);
+        c64_bus_write(&machine->bus, address, value);
+        c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
+        c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
+        return;
+    }
+
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
+        c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
+        return;
+    }
+
+    c64_bus_write(&machine->bus, address, value);
+    c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
+}
+
+static uint8_t c64_cpu_irq_pending(void *user) {
+    c64_t *machine = user;
+    bool cia_irq = cia_irq_pending(&machine->cia1);
+    bool vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
+    return (cia_irq || vic_irq) ? 1u : 0u;
+}
+
+static uint8_t c64_cpu_nmi_pending(void *user) {
+    c64_t *machine = user;
+    bool pending = machine->restore_pending;
+    machine->restore_pending = false;
+    return pending ? 1u : 0u;
 }
 
 void c64_init(c64_t *machine) {
@@ -163,10 +396,18 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     c6510_reset(&machine->cpu);
     memset(&machine->clock, 0, sizeof(machine->clock));
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
+    c64_trace_reset(&machine->last_cpu_trace);
+    c64_trace_reset(&machine->pending_cpu_trace);
     machine->keyboard_events = 0;
     machine->restore_requests = 0;
     machine->restore_pending = false;
     machine->cpu_cycles_remaining = 0;
+    machine->cpu_trace_start_cycle = 0;
+    machine->cpu_trace_start_cpu_cycle = 0;
+    machine->pending_cpu_event_index = 0;
+    machine->pending_cpu_elapsed = 0;
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
+    machine->pending_cpu_trace_active = false;
     vector = (uint16_t)c64_bus_read(&machine->bus, 0xfffc) |
         ((uint16_t)c64_bus_read(&machine->bus, 0xfffd) << 8);
 
@@ -180,6 +421,9 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
 }
 
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
+    uint64_t start_cycle;
+    size_t total_cycles;
+
     assert(machine);
 
     if (!machine->ready) {
@@ -187,7 +431,21 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
         return false;
     }
 
-    c6510_step(&machine->cpu);
+    c64_finish_pending_cpu_trace(machine);
+
+    start_cycle = machine->clock.cycle;
+    c64_trace_reset(&machine->last_cpu_trace);
+    machine->cpu_trace_start_cycle = start_cycle;
+    machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_TIMED_IMMEDIATE;
+    total_cycles = c6510_step(&machine->cpu);
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
+    if (total_cycles == 0) {
+        total_cycles = 1;
+    }
+    machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
+    machine->last_cpu_trace.total_cycles = total_cycles;
+    c64_advance_devices_to(machine, start_cycle + total_cycles);
     machine->clock.cpu_cycles = machine->cpu.cpu.cycles;
     machine->cpu_cycles_remaining = 0;
     c64_set_error(error, error_size, "");
@@ -202,25 +460,10 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
         return false;
     }
 
-    /* Tick VIC and CIAs first so BA state is valid for this cycle */
-    c64_step_vic(machine);
-    c64_step_cia1(machine);
-    c64_step_cia2(machine);
-    c64_step_sid(machine);
-    machine->clock.cycle++;
-
-    /* Stall CPU if BA is low (VIC is stealing cycles for c-accesses) */
-    if (!vicii_ba_active(&machine->vic)) {
-        if (machine->cpu_cycles_remaining == 0) {
-            machine->cpu_cycles_remaining = c6510_step(&machine->cpu);
-            if (machine->cpu_cycles_remaining == 0) {
-                machine->cpu_cycles_remaining = 1;
-            }
-        }
-        machine->cpu_cycles_remaining--;
-        machine->clock.cpu_cycles++;
-    }
-
+    c64_step_cycle_internal(machine);
+    machine->cpu_cycles_remaining = machine->pending_cpu_trace_active ?
+        machine->pending_cpu_trace.total_cycles - machine->pending_cpu_elapsed :
+        0;
     c64_set_error(error, error_size, "");
     return true;
 }
@@ -234,6 +477,13 @@ bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame) {
     assert(out_frame);
 
     return vicii_make_frame_snapshot(&machine->vic, &machine->bus, out_frame, machine->clock.cycle);
+}
+
+bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame) {
+    assert(machine);
+    assert(out_frame);
+
+    return vicii_copy_completed_frame(&machine->vic, out_frame, machine->clock.cycle);
 }
 
 bool c64_consume_frame_complete(c64_t *machine) {
@@ -376,6 +626,14 @@ c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t ad
     }
 
     return C64_MEMORY_VISIBILITY_RAM;
+}
+
+size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_trace *out) {
+    assert(machine);
+    assert(out);
+
+    *out = machine->last_cpu_trace;
+    return out->event_count;
 }
 
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {
