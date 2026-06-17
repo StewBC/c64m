@@ -703,3 +703,8 @@ real ROM bytes -> installed into machine -> reset vector fetched through bus -> 
 ```
 
 The next phases will add deeper CPU validation, timing, VIC-II, CIA, character rendering, and eventually visible BASIC startup.
+
+# Final Note
+I, Stefan Wesseks, decided to add the roms to github in the roms/ folder and to remove the assets/ folder.  The roms now also have the names:
+system.rom = 64c.251913-01.bin
+character.rom = characters.901225-01.bin
