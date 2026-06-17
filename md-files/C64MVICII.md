@@ -28,14 +28,14 @@ Already implemented:
 - 40×25 text rendering: screen RAM fetch, character ROM glyph fetch, color RAM fetch
 - $D018 screen/charset pointer support
 - Raster IRQ via $D011/$D012 (raster compare, RST8 bit)
-- IRQ status/enable registers ($D019/$D020)
+- IRQ status/enable registers ($D019/$D01A)
 - DEN, RSEL, CSEL, XSCROLL, YSCROLL stored but scroll not yet pixel-accurate
 - VIC bank register wired through CIA 2 port A
 
 Not yet implemented (scope of this plan):
 
 - Accurate Bad Line detection and CPU cycle stealing
-- Accurate c-access / g-access / s-access / p-access / r-access timing
+- Accurate g-access / s-access / p-access / r-access timing
 - Pixel-accurate smooth scrolling (XSCROLL/YSCROLL)
 - 24/25 row and 38/40 column border clamping (RSEL/CSEL)
 - All graphics modes beyond standard text (MCM text, bitmap, ECM, invalid modes)
@@ -86,8 +86,8 @@ for all subsequent timing-dependent features.
 - Active when: DEN=1 AND (raster_y & 7) == YSCROLL AND raster_y is in the visible display range (first bad line is raster 0x30 for PAL)
 - On a Bad Line, the VIC performs 40 c-accesses to fetch the video matrix (character
   pointers from screen RAM and color nibbles from color RAM)
-- The CPU is stalled: BA goes low 3 cycles before the c-access window begins; AEC
-  stays low throughout the 40-cycle window
+- The c-access window is cycles 15-54 (40 cycles). BA goes low 3 cycles before the
+  window begins; exact CPU RDY/read-vs-write behavior is completed in Phase H.
 - The fetched 40 bytes are stored in the internal 40×12-bit video matrix / color line buffer
 
 **VC and RC (internal counters):**
@@ -108,7 +108,8 @@ for all subsequent timing-dependent features.
 
 - Raster IRQ fires at the correct cycle within the correct raster line
 - Bad Lines occur at the correct Y positions for both PAL and NTSC
-- CPU is stalled for exactly 40 cycles on each Bad Line (BA/RDY model)
+- Bad Line c-accesses occupy exactly 40 cycles; Phase A may expose a conservative
+  stall predicate, while Phase H owns exact BA/AEC/RDY integration.
 - VC increments correctly across a frame; VCBASE/RC track character rows correctly
 - A test program that reads $D012 in a busy loop produces the correct raster progression
 
@@ -198,9 +199,9 @@ Mode bits are ECM ($D011 bit 6), BMM ($D011 bit 5), MCM ($D016 bit 4).
 - Glyph address: only lower 6 bits of character code used; upper 2 bits select BG color
 
 **Invalid modes (ECM=1 with BMM or MCM set):**
-- All pixel output is forced to black (color index 0)
-- Memory accesses still occur normally (bus timing unchanged)
-- Collision detection still operates on the (black) pixel data
+- In the background/display layer, display pixels are forced to black (color index 0)
+- Memory accesses still occur normally in the timing path (bus timing unchanged)
+- Sprite behavior and collision handling are specified in Phase D/E
 - Three invalid combinations: 101, 110, 111
 
 ### Acceptance Criteria
@@ -223,7 +224,8 @@ detection yet (that is Phase E).
 
 **Data:**
 - Each sprite is 24×21 pixels = 63 bytes, stored as 3 bytes per row, 21 rows
-- Sprite data pointer: fetched from the top of the video matrix area at offset $3F8–$3FF
+- Sprite data pointer: fetched from offsets $3F8–$3FF at the end of the current
+  video matrix page
   (relative to the current VIC bank), one pointer per sprite
 - Pointer × 64 = address of sprite data within the VIC bank
 - p-access: 1 fetch per sprite (pointer byte)
@@ -376,7 +378,8 @@ Full last-byte-on-bus tracking is optional for now.
 ### Acceptance Criteria
 
 - Reading $D02F through $D03F returns $FF
-- Unused bits within valid registers (e.g. bits 7–4 of $D020–$D02E) read back as 1
+- Unused bits within valid registers (e.g. bits 7–4 of $D020–$D02E) read back as 1.
+  For $D019, bits 6–4 read as 1, while bit 7 reflects the aggregate VIC IRQ state.
 - $D01E and $D01F clear on read and cannot be written
 
 ---

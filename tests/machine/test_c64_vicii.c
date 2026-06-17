@@ -5,12 +5,19 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_COLOR_GREEN = 0xff56ac4du,
     TEST_COLOR_BLUE = 0xff2e2c9bu,
 };
+
+#define TEST_PALETTE_0   0xff000000u  /* black      */
+#define TEST_PALETTE_5   0xff56ac4du  /* green      */
+#define TEST_PALETTE_6   0xff2e2c9bu  /* blue       */
+#define TEST_PALETTE_10  0xffc46c71u  /* light red  */
+#define TEST_PALETTE_11  0xff4a4a4au  /* dark gray  */
 
 static void expect_true(const char *name, bool value) {
     if (!value) {
@@ -71,6 +78,7 @@ static void reset_machine(c64_t *machine) {
 
     /* PAL is the canonical video standard for all tests: the 384×272 pixel
        buffer matches PAL dimensions and border compare values (top=51, left=24). */
+    memset(&cfg, 0, sizeof(cfg));
     cfg.video_standard = C64_VIDEO_STANDARD_PAL;
     c64_set_config(machine, &cfg);
 
@@ -114,6 +122,50 @@ static void test_raster_progression(void) {
     expect_true("frame complete set", v.timing.frame_complete);
     expect_true("frame complete consumed", vicii_consume_frame_complete(&v));
     expect_true("frame complete cleared", !vicii_consume_frame_complete(&v));
+}
+
+static void test_irq_status_high_bit_reports_enabled_pending_irq(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd012, 0x00);
+    vicii_step_cycle(&v, NULL);
+    expect_u8("d019 pending disabled irq", 0x71, vicii_read_register(&v, 0xd019));
+
+    vicii_write_register(&v, 0xd01a, 0x01);
+    expect_u8("d019 pending enabled irq", 0xf1, vicii_read_register(&v, 0xd019));
+
+    vicii_write_register(&v, 0xd019, 0x01);
+    expect_u8("d019 cleared irq", 0x70, vicii_read_register(&v, 0xd019));
+    expect_u8("d01a high nibble", 0xf1, vicii_read_register(&v, 0xd01a));
+}
+
+static void test_bad_line_ba_asserts_at_cycle_12(void) {
+    vicii v;
+    char error[256];
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_write_register(&v, 0xd011, 0x13); /* DEN=1, YSCROLL=3 */
+    v.timing.raster_line = 0x33;
+
+    for (i = 0; i < 12; i++) {
+        expect_true("ba high before cycle 12", !vicii_ba_active(&v));
+        vicii_step_cycle(&v, NULL);
+    }
+
+    vicii_step_cycle(&v, NULL);
+    expect_true("ba asserts at cycle 12", vicii_ba_active(&v));
+
+    while (v.timing.cycle_in_line <= 54) {
+        expect_true("ba remains low through c-access window", vicii_ba_active(&v));
+        vicii_step_cycle(&v, NULL);
+    }
+
+    vicii_step_cycle(&v, NULL);
+    expect_true("ba released after cycle 54", !vicii_ba_active(&v));
 }
 
 static void test_frame_snapshot_geometry_and_regions(void) {
@@ -167,7 +219,7 @@ static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
        place glyph row 5 at sy=0, and the synthetic ROM has no data in row 5. */
     c64_bus_write(&machine.bus, 0xd011, 0x18);
     /* CSEL=1 so the display window left edge is at x=24 (default $D016=0 gives CSEL=0, left=31). */
-    c64_bus_write(&machine.bus, 0xd016, 0x18);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
     machine.bus.ram[0x0400] = 1;
     machine.bus.color_ram[0] = 5;
 
@@ -240,23 +292,21 @@ static void test_xscroll_shifts_content(void) {
        YSCROLL=0 so glyph row 0 is at sy=0 (y=51). */
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
-    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
     machine.bus.color_ram[0] = 5;
     expect_true("xscroll0 frame", c64_make_frame_snapshot(&machine, &frame0));
 
-    c64_bus_write(&machine.bus, 0xd016, 0x19); /* XSCROLL=1 */
+    c64_bus_write(&machine.bus, 0xd016, 0x09); /* CSEL=1, MCM=0, XSCROLL=1 */
     expect_true("xscroll1 frame", c64_make_frame_snapshot(&machine, &frame1));
 
-    /* XSCROLL=0: foreground at x=24 (left=24, sx=(24-24)+0=0, glyph bit 7 set) */
+    /* XSCROLL=0: foreground at x=24 (left=24, sx=0, glyph bit 7 set) */
     expect_u32("xscroll0 fg at x=24", green, frame0.pixels[51 * C64_FRAME_WIDTH + 24]);
 
-    /* XSCROLL=1: sx=(x-24)+1. At x=24: sx=1 → bit 6 of glyph=0 → background.
-       The only set bit (bit 7) would need sx=0 → x=23, which is in the border.
-       The foreground pixel is shifted off the left edge of the display window. */
+    /* XSCROLL=1: output is delayed by one pixel, so the same glyph bit moves to x=25. */
     expect_not_u32("xscroll1 no fg at x=24", green, frame1.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_not_u32("xscroll1 no fg at x=25", green, frame1.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("xscroll1 fg at x=25", green, frame1.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
 static void test_yscroll_shifts_content(void) {
@@ -270,7 +320,7 @@ static void test_yscroll_shifts_content(void) {
        YSCROLL=0: row_in_cell at sy=0 = (0+8-0)&7 = 0 → glyph row 0 at y=51. */
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
-    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
     machine.bus.color_ram[0] = 5;
@@ -282,20 +332,187 @@ static void test_yscroll_shifts_content(void) {
     /* YSCROLL=0: glyph row 0 at y=51 */
     expect_u32("yscroll0 fg at y=51", green, frame0.pixels[51 * C64_FRAME_WIDTH + 24]);
 
-    /* YSCROLL=1: sy=0 < yscroll=1 → background (first char row starts at sy=1).
-       Glyph row 0 appears at adjusted=sy-yscroll=0 → sy=1 → y=52. */
+    /* YSCROLL=1: sy=0 samples glyph row 7, and glyph row 0 appears at sy=1. */
     expect_not_u32("yscroll1 no fg at y=51", green, frame1.pixels[51 * C64_FRAME_WIDTH + 24]);
     expect_u32("yscroll1 fg at y=52", green, frame1.pixels[52 * C64_FRAME_WIDTH + 24]);
+}
+
+static void test_ecm_text_mode(void) {
+    c64_t    machine;
+    c64_frame frame;
+    uint32_t green, blue, cyan;
+
+    green = TEST_PALETTE_5;
+    blue  = TEST_PALETTE_6;
+    cyan  = 0xff75cec8u; /* palette index 3 */
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, char=$0000 */
+    /* ECM=1, DEN=1, RSEL=1, YSCROLL=0.  0x58 = 0101 1000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x58);
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
+    c64_bus_write(&machine.bus, 0xd022, 0x05); /* B1C = green */
+    c64_bus_write(&machine.bus, 0xd024, 0x03); /* B3C = cyan */
+
+    /* Cell 0: code=0x01 → ecm_sel=0 (B0C), char 1.  char[1*8+0]=0x80 → bit7 at sx=0. */
+    machine.bus.ram[0x0400] = 0x01;
+    machine.bus.color_ram[0] = 0x05; /* fg = green */
+
+    /* Cell 1: code=0xC1 → ecm_sel=3 (B3C), char 1 (0xC1&0x3F=1).  Same glyph. */
+    machine.bus.ram[0x0401] = 0xC1;
+    machine.bus.color_ram[1] = 0x05; /* fg = green */
+
+    expect_true("make ecm frame", c64_make_frame_snapshot(&machine, &frame));
+
+    /* Cell 0, sx=0 (x=24): glyph bit7 set → fg (green) */
+    expect_u32("ecm cell0 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    /* Cell 0, sx=1 (x=25): glyph bit6 clear → B0C (blue) */
+    expect_u32("ecm cell0 bg is b0c", blue, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+
+    /* Cell 1, sx=8 (x=32): glyph bit7 set → fg (green) */
+    expect_u32("ecm cell1 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+    /* Cell 1, sx=9 (x=33): glyph bit6 clear → B3C (cyan) */
+    expect_u32("ecm cell1 bg is b3c", cyan, frame.pixels[51 * C64_FRAME_WIDTH + 33]);
+}
+
+static void test_standard_bitmap_mode(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, bitmap=$2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x38); /* BMM=1, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+
+    machine.bus.ram[0x2000] = 0x80; /* cell 0, row 0: bit 7 set */
+    machine.bus.ram[0x0400] = 0xAB; /* vm_byte: fg=palette[10], bg=palette[11] */
+
+    expect_true("make bitmap frame", c64_make_frame_snapshot(&machine, &frame));
+
+    /* sx=0 (x=24): bitmap bit7=1 → fg = palette[10] */
+    expect_u32("bitmap fg at x=24", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    /* sx=1 (x=25): bitmap bit6=0 → bg = palette[11] */
+    expect_u32("bitmap bg at x=25", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+}
+
+static void test_multicolor_bitmap_mode(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  blue;
+
+    blue = TEST_PALETTE_6;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, bitmap=$2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x38); /* BMM=1, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
+
+    machine.bus.ram[0x2000] = 0xE4; /* pairs: (11)(10)(01)(00) at sx=0,2,4,6 */
+    machine.bus.ram[0x0400] = 0xAB; /* vm_byte: high=0xA→palette[10], low=0xB→palette[11] */
+    machine.bus.color_ram[0] = 0x05; /* pair 11 → palette[5] = green */
+
+    expect_true("make mcm bitmap frame", c64_make_frame_snapshot(&machine, &frame));
+
+    /* sx=0 (x=24): pair=3 → palette[color_ram[0]] = palette[5] = green */
+    expect_u32("mcmbm pair11 at x=24", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    /* sx=2 (x=26): pair=2 → palette[vm_byte & 0x0F] = palette[0xB] = palette[11] */
+    expect_u32("mcmbm pair10 at x=26", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + 26]);
+    /* sx=4 (x=28): pair=1 → palette[(vm_byte>>4) & 0x0F] = palette[0xA] = palette[10] */
+    expect_u32("mcmbm pair01 at x=28", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + 28]);
+    /* sx=6 (x=30): pair=0 → B0C = blue */
+    expect_u32("mcmbm pair00 at x=30", blue, frame.pixels[51 * C64_FRAME_WIDTH + 30]);
+}
+
+static void test_mcm_text_mode(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  green, blue;
+
+    green = TEST_PALETTE_5;
+    blue  = TEST_PALETTE_6;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, char=$0000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, ECM=0, BMM=0, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
+    c64_bus_write(&machine.bus, 0xd023, 0x05); /* B2C = green */
+
+    /* Cell 0: char 1, color_nib=5 (bit3=0 → hires). Glyph row 0=0x80: bit7 at sx=0. */
+    machine.bus.ram[0x0400] = 0x01;
+    machine.bus.color_ram[0] = 0x05;
+
+    /* Cell 1: char 1, color_nib=0x0D (bit3=1 → MCM, color bits=5).
+       Glyph row 0=0x80=1000 0000 → pairs: (10)(00)(00)(00).
+       sx=8 (col 1 start, x=32): sx&6=0, pair=(0x80>>6)&3=2 → B2C = green.
+       sx=10 (x=34): sx&6=2, pair=(0x80>>4)&3=0 → B0C = blue. */
+    machine.bus.ram[0x0401] = 0x01;
+    machine.bus.color_ram[1] = 0x0D;
+
+    expect_true("make mcm text frame", c64_make_frame_snapshot(&machine, &frame));
+
+    /* Cell 0 hires: sx=0 (x=24) → glyph bit7=1 → fg = palette[5] = green */
+    expect_u32("mcm hires fg at x=24", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    /* Cell 0 hires: sx=1 (x=25) → glyph bit6=0 → B0C = blue */
+    expect_u32("mcm hires bg at x=25", blue, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+
+    /* Cell 1 multicolor: sx=8 (x=32) → pair=2 → B2C = green */
+    expect_u32("mcm color pair2 at x=32", green, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+    /* Cell 1 multicolor: sx=10 (x=34) → pair=0 → B0C = blue */
+    expect_u32("mcm color pair0 at x=34", blue, frame.pixels[51 * C64_FRAME_WIDTH + 34]);
+}
+
+static void test_invalid_mode_forces_black(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  black, border_color;
+
+    black = TEST_PALETTE_0; /* 0xff000000 */
+
+    /* Mode 6: ECM=1, BMM=1 → $D011 bit6=1, bit5=1 */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x78); /* ECM=1, BMM=1, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* border = red (not black) */
+
+    expect_true("make invalid frame", c64_make_frame_snapshot(&machine, &frame));
+
+    border_color = frame.pixels[0]; /* top-left is always border */
+    expect_not_u32("invalid border not black", black, border_color);
+
+    /* Display window pixel: must be black */
+    expect_u32("invalid display black at (51,24)", black,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("invalid display black at (100,100)", black,
+               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+
+    /* Mode 5: ECM=1, MCM=1 */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x58); /* ECM=1, BMM=0, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+
+    expect_true("make mode5 frame", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("mode5 display black", black, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
 }
 
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
+    test_irq_status_high_bit_reports_enabled_pending_irq();
+    test_bad_line_ba_asserts_at_cycle_12();
     test_frame_snapshot_geometry_and_regions();
     test_reset_screen_starts_clear();
     test_character_rendering_uses_screen_char_rom_and_color_ram();
     test_border_rsel_csel();
     test_xscroll_shifts_content();
     test_yscroll_shifts_content();
+    test_ecm_text_mode();
+    test_standard_bitmap_mode();
+    test_multicolor_bitmap_mode();
+    test_mcm_text_mode();
+    test_invalid_mode_forces_black();
     return 0;
 }

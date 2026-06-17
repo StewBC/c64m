@@ -12,6 +12,10 @@ enum {
     VICII_REG_MEMORY_POINTER = 0x18,
     VICII_REG_BORDER_COLOR = 0x20,
     VICII_REG_BACKGROUND_COLOR_0 = 0x21,
+    /* Phase C: background color register indices */
+    VICII_REG_BACKGROUND_COLOR_1 = 0x22,
+    VICII_REG_BACKGROUND_COLOR_2 = 0x23,
+    VICII_REG_BACKGROUND_COLOR_3 = 0x24,
     VICII_DEFAULT_BORDER_COLOR = 6,
     VICII_DEFAULT_BACKGROUND_COLOR = 14,
     VICII_TEXT_COLUMNS = 40,
@@ -162,9 +166,12 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
             v->rc            = 0;
             v->vc            = v->vc_base;
             v->display_state = true;
-            v->timing.ba_low             = true;
-            v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
         }
+    }
+
+    if (v->bad_line && cycle == (uint32_t)VICII_BA_ASSERT_CYCLE) {
+        v->timing.ba_low             = true;
+        v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
     }
 
     /* ------------------------------------------------------------------
@@ -259,7 +266,9 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
     }
 
     if (reg == 0x19) {
-        return (uint8_t)(v->irq_status | 0xF0u);
+        return (uint8_t)(((v->irq_status & v->irq_enable) ? 0x80u : 0x00u) |
+                         0x70u |
+                         (v->irq_status & 0x0Fu));
     }
 
     if (reg == 0x1A) {
@@ -339,9 +348,12 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     vicii_border_geometry g;
     bool     vborder, hborder;
     uint8_t  xscroll, yscroll;
-    uint8_t  border_index, background_index;
-    uint32_t border_color, background_color;
+    uint8_t  border_index;
+    uint32_t border_color;
     uint16_t screen_base, char_base;
+    uint8_t  mode;
+    uint16_t bitmap_base;
+    uint32_t b0c, b1c, b2c, b3c;
     uint32_t x, y;
 
     assert(v);
@@ -350,14 +362,20 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
 
     g = vicii_get_border_geometry(v);
 
-    xscroll          = v->registers[0x16] & 0x07u;
-    yscroll          = v->registers[0x11] & 0x07u;
-    border_index     = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR]       & 0x0fu);
-    background_index = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
-    border_color     = vicii_palette_argb[border_index];
-    background_color = vicii_palette_argb[background_index];
-    screen_base      = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    char_base        = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+    xscroll     = v->registers[0x16] & 0x07u;
+    yscroll     = v->registers[0x11] & 0x07u;
+    border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+    border_color = vicii_palette_argb[border_index];
+    screen_base  = (uint16_t)((v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    char_base    = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+    mode        = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                            ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                            ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+    bitmap_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+    b0c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    b1c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
+    b2c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
+    b3c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
 
     v->working_frame.width        = C64_FRAME_WIDTH;
     v->working_frame.height       = C64_FRAME_HEIGHT;
@@ -387,26 +405,107 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
                 uint32_t sx_raw = x - g.left;
                 uint32_t sy     = y - g.top;
 
-                /* XSCROLL shifts content right; pixels past column 39 show background */
-                uint32_t sx = sx_raw + xscroll;
-
-                /* YSCROLL shifts content down (Bauer §3.7.2): the first character row
-                   starts at sy=YSCROLL. Lines before that show background (idle state).
-                   The vc/rc path is deferred to the future per-cycle renderer. */
-                if (sx >= 320u || sy < (uint32_t)yscroll) {
-                    pixel = background_color;
+                if (mode >= 5u) {
+                    /* Invalid modes 5/6/7: background/display pixels forced black. */
+                    pixel = vicii_palette_argb[0];
+                } else if (sx_raw < (uint32_t)xscroll || sy < (uint32_t)yscroll) {
+                    /* Delayed scroll edges: background. */
+                    pixel = b0c;
                 } else {
-                    uint32_t adjusted    = sy - yscroll;
+                    uint32_t sx          = sx_raw - (uint32_t)xscroll;
+                    uint32_t adjusted    = sy - (uint32_t)yscroll;
                     uint32_t row_in_cell = adjusted & 7u;
                     uint32_t char_row    = adjusted / 8u;
-                    uint32_t col   = sx / 8u;
-                    uint8_t  bit   = (uint8_t)(0x80u >> (sx & 7u));
-                    uint16_t cell  = (uint16_t)(char_row * 40u + col);
-                    uint8_t  code  = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                    uint8_t  glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
-                                                                     (uint8_t)row_in_cell);
-                    uint8_t  fg    = c64_bus_vic_read_color(bus, cell);
-                    pixel = (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : background_color;
+                    uint32_t col         = sx / 8u;
+                    uint16_t cell        = (uint16_t)(char_row * 40u + col);
+
+                    switch (mode) {
+                    case 0u: /* Standard text */
+                        {
+                            uint8_t code  = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
+                                                                             (uint8_t)row_in_cell);
+                            uint8_t fg    = c64_bus_vic_read_color(bus, cell);
+                            uint8_t bit   = (uint8_t)(0x80u >> (sx & 7u));
+                            pixel = (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : b0c;
+                        }
+                        break;
+
+                    case 1u: /* MCM text (Bauer §3.3.2) */
+                        {
+                            uint8_t code      = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+                            uint8_t glyph     = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
+                                                                                 (uint8_t)row_in_cell);
+                            if ((color_nib & 0x08u) == 0u) {
+                                /* Standard hires character in MCM mode */
+                                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+                                pixel = (glyph & bit) ? vicii_palette_argb[color_nib & 0x0fu] : b0c;
+                            } else {
+                                /* Multicolor character: pixel pairs, halved horizontal resolution.
+                                   Both pixels in a pair share the same color. sx&6 selects the pair. */
+                                uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
+                                switch (pair) {
+                                case 0u:  pixel = b0c; break;
+                                case 1u:  pixel = b1c; break;
+                                case 2u:  pixel = b2c; break;
+                                default:  pixel = vicii_palette_argb[color_nib & 0x07u]; break;
+                                }
+                            }
+                        }
+                        break;
+
+                    case 2u: /* Standard bitmap (Bauer §3.3.3) */
+                        {
+                            uint8_t  vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                            uint16_t baddr   = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+                            uint8_t  bdata   = c64_bus_vic_read_ram(bus, baddr);
+                            uint8_t  bit     = (uint8_t)(0x80u >> (sx & 7u));
+                            pixel = (bdata & bit) ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
+                                                  : vicii_palette_argb[vm_byte & 0x0fu];
+                        }
+                        break;
+
+                    case 3u: /* Multicolor bitmap (Bauer §3.3.4) */
+                        {
+                            uint8_t  vm_byte   = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                            uint8_t  color_nib = c64_bus_vic_read_color(bus, cell);
+                            uint16_t baddr     = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+                            uint8_t  bdata     = c64_bus_vic_read_ram(bus, baddr);
+                            uint8_t  pair      = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
+                            switch (pair) {
+                            case 0u:  pixel = b0c; break;
+                            case 1u:  pixel = vicii_palette_argb[(vm_byte >> 4) & 0x0fu]; break;
+                            case 2u:  pixel = vicii_palette_argb[vm_byte & 0x0fu]; break;
+                            default:  pixel = vicii_palette_argb[color_nib & 0x0fu]; break;
+                            }
+                        }
+                        break;
+
+                    case 4u: /* ECM text (Bauer §3.4) */
+                        {
+                            uint8_t  code    = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+                            uint8_t  ecm_sel = (code >> 6) & 3u;
+                            uint8_t  glyph   = c64_bus_vic_read_char_glyph_at(bus, char_base,
+                                                                               code & 0x3fu,
+                                                                               (uint8_t)row_in_cell);
+                            uint8_t  fg_nib  = c64_bus_vic_read_color(bus, cell);
+                            uint8_t  bit     = (uint8_t)(0x80u >> (sx & 7u));
+                            uint32_t ecm_bg;
+                            switch (ecm_sel) {
+                            case 0u:  ecm_bg = b0c; break;
+                            case 1u:  ecm_bg = b1c; break;
+                            case 2u:  ecm_bg = b2c; break;
+                            default:  ecm_bg = b3c; break;
+                            }
+                            pixel = (glyph & bit) ? vicii_palette_argb[fg_nib & 0x0fu] : ecm_bg;
+                        }
+                        break;
+
+                    default: /* unreachable: modes 5-7 handled above */
+                        pixel = vicii_palette_argb[0];
+                        break;
+                    }
                 }
             }
 

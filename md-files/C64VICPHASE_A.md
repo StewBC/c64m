@@ -14,8 +14,8 @@ from that document.
 
 ## Goal
 
-Make the VIC-II raster counter cycle-accurate, add Bad Line detection, stall the CPU
-for 40 cycles on each Bad Line (BA/RDY model), maintain the internal VC/VCBASE/RC
+Make the VIC-II raster counter cycle-accurate, add Bad Line detection, expose the
+40-cycle Bad Line c-access window, maintain the internal VC/VCBASE/RC
 counters that gate display vs idle state, and fire the raster IRQ at the correct cycle
 within the correct raster line.
 
@@ -47,7 +47,7 @@ raw address and mask it with `0x3F` to produce the register index.
 |-------|---------|------------|--------------------------|
 | `$11` | `$D011` | CONTROL_1  | Bit 7 = RST8 (raster Y bit 8, read-only in normal use), bit 4 = DEN, bits 2:0 = YSCROLL |
 | `$12` | `$D012` | RASTER     | Read: raster_y bits 7:0. Write: raster_compare bits 7:0 |
-| `$19` | `$D019` | IRQ_STATUS | Bit 0 = IRST (raster IRQ fired). Bits 7:4 always read as 1. Write-1-to-clear per bit |
+| `$19` | `$D019` | IRQ_STATUS | Bit 7 = IRQ summary, bit 0 = IRST (raster IRQ fired). Bits 6:4 read as 1. Write-1-to-clear per source bit |
 | `$1A` | `$D01A` | IRQ_ENABLE | Bit 0 = ERST (enable raster IRQ). Bits 7:4 always read as 1 |
 
 **$D011 write:** bits 6:0 are stored in `registers[0x11]`. Bit 7 (RST8) writes the
@@ -65,7 +65,9 @@ This is already implemented correctly.
 flag (write-1-to-clear). Example: writing `$01` clears IRST. Other flag bits are
 unaffected.
 
-**$D019 read:** return `(irq_status & 0x0F) | 0xF0`. Bits 7:4 are always 1.
+**$D019 read:** return `((irq_status & irq_enable) ? 0x80 : 0x00) | 0x70 |
+(irq_status & 0x0F)`. Bit 7 reflects whether any enabled VIC IRQ source is pending;
+bits 6:4 read as 1.
 
 **$D01A read:** return `(irq_enable & 0x0F) | 0xF0`. Bits 7:4 are always 1.
 
@@ -207,8 +209,10 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
 Add two cases before the final `return v->registers[reg]` in the existing function:
 
 ```c
-case 0x19: /* IRQ_STATUS: bits 7:4 always 1 */
-    return (uint8_t)(v->irq_status | 0xF0u);
+case 0x19: /* IRQ_STATUS: bit 7 = enabled pending IRQ, bits 6:4 read as 1 */
+    return (uint8_t)(((v->irq_status & v->irq_enable) ? 0x80u : 0x00u) |
+                     0x70u |
+                     (v->irq_status & 0x0Fu));
 
 case 0x1A: /* IRQ_ENABLE: bits 7:4 always 1 */
     return (uint8_t)(v->irq_enable | 0xF0u);
@@ -295,13 +299,14 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
             v->vc = v->vc_base;
             /* Enter display state */
             v->display_state = true;
-            /* BA goes low at cycle VICII_BA_ASSERT_CYCLE = 12.
-               Since we are at cycle 0, assert BA now for the whole line.
-               The c-access window opens at cycle 15 and closes after cycle 54.
-               BA returns high at cycle 55. */
-            v->timing.ba_low             = true;
-            v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
         }
+    }
+
+    /* BA goes low 3 cycles before the c-access window (cycles 15-54). Phase H
+       refines this into a full AEC/RDY/read-vs-write model. */
+    if (v->bad_line && cycle == (uint32_t)VICII_BA_ASSERT_CYCLE) {
+        v->timing.ba_low             = true;
+        v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
     }
 
     /* ------------------------------------------------------------------ */
@@ -463,28 +468,15 @@ the CPU cycle counter when using single-step, which is acceptable.
 
 ## Section 8 — BA Timing Detail
 
-Per Bauer section 3.6, BA goes low 3 cycles before the VIC needs the bus. The
-c-access window begins at cycle 15, so BA should go low at cycle 12. In the
-implementation above, the Bad Line is detected at cycle 0 and BA is asserted
-immediately. This means BA goes low at cycle 0 rather than cycle 12 on a Bad Line
-raster line. This is conservative (BA is low for 55 cycles instead of 43) but
-correct in that the CPU never executes during the actual c-access window. For
-cycle-exact BA timing (needed for demos that rely on the 3-cycle BA warning window),
-change the assertion:
+Per Bauer section 3.6, BA goes low 3 cycles before the VIC needs the bus. The c-access
+window begins at cycle 15, so this phase asserts BA at cycle 12 and releases it after
+cycle 54. That exposes a 43-cycle BA-low warning/window interval. The VIC's actual
+bus takeover remains the 40 c-access cycles from 15 through 54.
 
-```c
-/* Deferred BA assertion: assert only when cycle reaches VICII_BA_ASSERT_CYCLE */
-if (v->bad_line && cycle == (uint32_t)VICII_BA_ASSERT_CYCLE) {
-    v->timing.ba_low             = true;
-    v->timing.ba_low_until_cycle = (uint32_t)(VICII_CACCESS_LAST_CYCLE + 1);
-}
-```
-
-Move this block out of the `if (cycle == 0)` section and place it as a standalone
-check at the top of `vicii_step_cycle`. Remove the BA assertion from inside the
-`cycle == 0` block. The early approach (asserting at cycle 0) is simpler and passes
-all Phase A acceptance criteria; the exact approach (asserting at cycle 12) is
-deferred to Phase H (full BA/AEC model).
+The `c64_step_cycle` stall shown above is still an approximation: it treats BA low as
+"do not tick the CPU" and does not yet distinguish CPU read cycles from write cycles.
+That is good enough to prevent CPU execution during the Bad Line c-access window, but
+full AEC/RDY/read-vs-write behavior belongs to Phase H.
 
 ---
 
@@ -509,9 +501,10 @@ jump backwards within a frame.
 
 Write `$01` to `$D019` with IRST set, then immediately read `$D019`. Bit 0 must be 0.
 
-### 9.4 `$D019` and `$D01A` bits 7:4 read as 1
+### 9.4 `$D019` and `$D01A` high bits read correctly
 
-Read both registers with no IRQs pending. High nibble of each must be `$F`.
+Read both registers with no IRQs pending. `$D019` must have bit 7 clear and bits 6:4
+set (`$70` in the high nibble); `$D01A` high nibble must be `$F`.
 
 ### 9.5 Bad Lines at correct Y positions
 
@@ -523,13 +516,12 @@ Lines per frame (one per character row). Add a temporary debug counter
 met). At end of frame, `bad_line_count` must be 25 (PAL) or 25 (NTSC, same
 Y range). Reset the counter at end of each frame.
 
-### 9.6 CPU stall for 40 cycles on Bad Lines
+### 9.6 Bad Line c-access and BA-low timing
 
-After a fixed number of frames, compare `machine->clock.cycle` with
-`machine->clock.cpu_cycles`. The difference must grow by approximately
-`25 × 40 = 1000` cycles per frame (25 bad lines × 40 stall cycles each, PAL). The
-exact value may vary by a few cycles depending on where in the frame the comparison
-is made; within ±10 cycles per frame is acceptable.
+Instrument the VIC path and verify each Bad Line performs exactly 40 c-accesses
+(cycles 15-54). Also verify BA is low from cycle 12 through cycle 54 on each Bad
+Line. Exact lost CPU cycles are finalized in Phase H because the 6510 RDY model must
+allow writes to complete while BA is low.
 
 ### 9.7 VC wraps correctly
 

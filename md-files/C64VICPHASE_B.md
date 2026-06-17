@@ -96,24 +96,29 @@ Y values are raster line numbers within the 272-line frame (`C64_FRAME_HEIGHT`).
 ### YSCROLL — Formula Approach (Bauer §3.7.2)
 
 `YSCROLL` (bits 2–0 of `$D011`, power-on default 3) shifts the display window content
-vertically without moving the border boundary. The effect: the glyph row rendered at the
-first display-window line is glyph row `YSCROLL` of the first character row, rather than
-glyph row 0.
+vertically without moving the border boundary. In this snapshot renderer, increasing
+`YSCROLL` delays the displayed character data by that many raster lines. For example,
+with `YSCROLL=0`, glyph row 0 appears at `sy=0`; with `YSCROLL=1`, glyph row 0
+appears at `sy=1`.
 
 For a pixel at display-window-relative Y position `sy` (0 = first line inside top
 border), the glyph row within the character cell is:
 
 ```
-row_in_cell = (sy + 8 - YSCROLL) & 7      /* Bauer §3.7.2 */
-char_row    = (sy + 8 - YSCROLL) / 8      /* 0-based character row, may overflow to 25 */
+if (sy < YSCROLL) {
+    pixel = B0C          /* delayed top edge before content begins */
+} else {
+    adjusted    = sy - YSCROLL
+    row_in_cell = adjusted & 7
+    char_row    = adjusted / 8
+}
 ```
 
-This is the correct approach for `vicii_make_frame_snapshot()`, which is a whole-frame
-CPU-side draw and does not model per-cycle pixel output. The `vc`/`rc` counters
-accumulated during `vicii_step_cycle()` are left in end-of-frame state and must not be
-used to drive this from-scratch render. Annotate the formula with a comment citing
-Bauer §3.7.2 and noting that `vc`/`rc` integration is deferred to a future per-cycle
-renderer.
+This is the approach for `vicii_make_frame_snapshot()`, which is a whole-frame CPU-side
+draw and does not model per-cycle pixel output. The `vc`/`rc` counters accumulated
+during `vicii_step_cycle()` are left in end-of-frame state and must not be used to drive
+this from-scratch render. Per-cycle renderer integration can refine this later against
+the live RC/VC state.
 
 ### XSCROLL (Bauer §3.7.1)
 
@@ -123,12 +128,17 @@ horizontally by 0–7 pixels without moving the border boundary.
 For a pixel at display-window-relative X position `sx_raw = x - g.left`:
 
 ```
-sx = sx_raw + XSCROLL    /* pixel into the scrolled content; may be >= 320 */
+if (sx_raw < XSCROLL) {
+    pixel = B0C          /* delayed left edge before content begins */
+} else {
+    sx = sx_raw - XSCROLL
+}
 col = sx / 8             /* character column, 0-39 */
 bit = 0x80u >> (sx & 7)  /* bit within the glyph byte */
 ```
 
-When `sx >= 320` the content has scrolled off-screen; render background color.
+When `sx_raw < XSCROLL`, the delayed left edge has not produced content yet; render
+background color.
 
 ---
 
@@ -241,17 +251,13 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus,
                 uint32_t sx_raw = x - g.left;
                 uint32_t sy     = y - g.top;
 
-                /* XSCROLL shifts content right; pixels past col 39 show background */
-                uint32_t sx = sx_raw + xscroll;
-
-                /* YSCROLL shifts content down (Bauer §3.7.2).
-                   The vc/rc path is deferred to the future per-cycle renderer. */
-                uint32_t row_in_cell = (sy + 8u - yscroll) & 7u;
-                uint32_t char_row    = (sy + 8u - yscroll) / 8u;
-
-                if (sx >= 320u || char_row >= 25u) {
+                if (sx_raw < (uint32_t)xscroll || sy < (uint32_t)yscroll) {
                     pixel = background_color;
                 } else {
+                    uint32_t sx   = sx_raw - (uint32_t)xscroll;
+                    uint32_t adjusted    = sy - (uint32_t)yscroll;
+                    uint32_t row_in_cell = adjusted & 7u;
+                    uint32_t char_row    = adjusted / 8u;
                     uint32_t col  = sx / 8u;
                     uint8_t  bit  = (uint8_t)(0x80u >> (sx & 7u));
                     uint16_t cell = (uint16_t)(char_row * 40u + col);
@@ -302,6 +308,7 @@ static void reset_machine(c64_t *machine) {
 
     /* PAL is the canonical video standard for all tests: the 384×272 pixel
        buffer matches PAL dimensions and border compare values. */
+    memset(&cfg, 0, sizeof(cfg));
     cfg.video_standard = C64_VIDEO_STANDARD_PAL;
     c64_set_config(machine, &cfg);
 
@@ -346,7 +353,7 @@ static void test_frame_snapshot_geometry_and_regions(void) {
 
 With YSCROLL=3 (power-on default), the renderer shows glyph row 5 at `sy=0`, but the
 synthetic character ROM only has data in rows 0–3 — so the foreground pixel would not
-appear at `sy=0`. Force `YSCROLL=0` by writing `$D011 = 0x1B` (DEN=1, RSEL=1,
+appear at `sy=0`. Force `YSCROLL=0` by writing `$D011 = 0x18` (DEN=1, RSEL=1,
 YSCROLL=0) so glyph row 0 appears at the first display-window line. Update the pixel
 coordinates to use the PAL geometry:
 
@@ -363,9 +370,9 @@ static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
 
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     /* Force YSCROLL=0 so glyph row 0 appears at the first display-window line.
-       0x1B = DEN=1, RSEL=1, YSCROLL=0. Without this, the default YSCROLL=3 would
+       0x18 = DEN=1, RSEL=1, YSCROLL=0. Without this, the default YSCROLL=3 would
        place glyph row 5 at sy=0, and the synthetic ROM has no data in row 5. */
-    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd011, 0x18);
     machine.bus.ram[0x0400] = 1;
     machine.bus.color_ram[0] = 5;
 
@@ -427,11 +434,11 @@ static void test_border_rsel_csel(void) {
                    frame.pixels[56 * C64_FRAME_WIDTH + 50]);
 
     /* CSEL=0: left border extends from x=24 to x=30 (7 extra pixels).
-       Write $D016 = 0x08: CSEL=0, XSCROLL=0. */
+       Write $D016 = 0x00: CSEL=0, MCM=0, XSCROLL=0. */
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x05);
-    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd016, 0x00);
     expect_true("make frame csel0", c64_make_frame_snapshot(&machine, &frame));
     /* x=26 is inside the extended left border (CSEL=0 left=31, was 24) */
     expect_u32("csel0 extended left border at x=26", border_color,
@@ -453,15 +460,15 @@ static void test_xscroll_shifts_content(void) {
 
     reset_machine(&machine);
     /* Force YSCROLL=0 and CSEL=1. Character 1 glyph row 0 = 0x80: bit at sx=0. */
-    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=0 */
-    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
     machine.bus.color_ram[0] = 5;
 
     expect_true("xscroll0 frame", c64_make_frame_snapshot(&machine, &frame0));
 
-    c64_bus_write(&machine.bus, 0xd016, 0x19); /* XSCROLL=1 */
+    c64_bus_write(&machine.bus, 0xd016, 0x09); /* CSEL=1, MCM=0, XSCROLL=1 */
     expect_true("xscroll1 frame", c64_make_frame_snapshot(&machine, &frame1));
 
     /* With XSCROLL=0: foreground at x=24 (left=24, sx=0, glyph bit 7 set) */
@@ -490,8 +497,8 @@ static void test_yscroll_shifts_content(void) {
 
     reset_machine(&machine);
     /* YSCROLL=0: glyph row 0 at sy=0 (y=51). Character 1 glyph row 0 = 0x80. */
-    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=0 */
-    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
     machine.bus.color_ram[0] = 5;
@@ -565,8 +572,8 @@ No new files are required. No changes to `struct vicii` fields.
    within the display window; the border boundary does not move.
 5. Incrementing `YSCROLL` by 1 shifts all character pixel data 1 raster line down
    within the display window; the border boundary does not move.
-6. `YSCROLL=3` (power-on default) with a character whose data starts at glyph row 0
-   shows glyph row 3 at `sy=0` and glyph row 0 at `sy=5`.
+6. `YSCROLL=3` with a character whose data starts at glyph row 0 shows background for
+   `sy=0..2` and glyph row 0 at `sy=3`.
 7. All existing VIC-II tests continue to pass after coordinate and PAL-mode updates.
 8. The three new Phase B tests (`test_border_rsel_csel`, `test_xscroll_shifts_content`,
    `test_yscroll_shifts_content`) all pass.
