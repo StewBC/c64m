@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifndef C64M_SOURCE_DIR
+#define C64M_SOURCE_DIR "."
+#endif
+
 enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_NMI_VECTOR = 0xe080,
@@ -51,6 +55,27 @@ static void expect_u64_gt(const char *name, uint64_t lhs, uint64_t rhs) {
         fprintf(stderr, "%s: expected %llu > %llu\n", name, (unsigned long long)lhs, (unsigned long long)rhs);
         exit(1);
     }
+}
+
+static bool file_exists(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+    fclose(file);
+    return true;
+}
+
+static const char *find_existing_path(const char *const *paths, size_t count) {
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (file_exists(paths[i])) {
+            return paths[i];
+        }
+    }
+
+    return paths[0];
 }
 
 static void build_roms(c64_rom_set *roms, uint16_t reset_vector) {
@@ -231,14 +256,32 @@ static void test_d018_selects_screen_memory(void) {
 }
 
 static void test_real_rom_progresses_to_device_checkpoints(void) {
+    static const char system_rom_source_path[] = C64M_SOURCE_DIR "/roms/system.rom";
+    static const char character_rom_source_path[] = C64M_SOURCE_DIR "/roms/character.rom";
+    static const char *const system_rom_paths[] = {
+        system_rom_source_path,
+        "roms/system.rom",
+        "../roms/system.rom",
+    };
+    static const char *const character_rom_paths[] = {
+        character_rom_source_path,
+        "roms/character.rom",
+        "../roms/character.rom",
+    };
     c64_rom_set roms;
     c64_t machine;
     c64_machine_snapshot snapshot;
     char error[256];
+    const char *system_rom_path = find_existing_path(
+        system_rom_paths,
+        sizeof(system_rom_paths) / sizeof(system_rom_paths[0]));
+    const char *character_rom_path = find_existing_path(
+        character_rom_paths,
+        sizeof(character_rom_paths) / sizeof(character_rom_paths[0]));
 
     c64_rom_set_init(&roms);
-    expect_true("load system rom", c64_rom_load_combined_64c(&roms, "../assets/roms/64c.251913-01.bin", error, sizeof(error)));
-    expect_true("load character rom", c64_rom_load_character(&roms, "../assets/roms/characters.901225-01.bin", error, sizeof(error)));
+    expect_true("load system rom", c64_rom_load_combined_64c(&roms, system_rom_path, error, sizeof(error)));
+    expect_true("load character rom", c64_rom_load_character(&roms, character_rom_path, error, sizeof(error)));
     reset_machine(&machine, &roms);
 
     step_cycles(&machine, 50000);
