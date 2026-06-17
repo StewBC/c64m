@@ -12,7 +12,11 @@
 #include <sys/stat.h>
 
 enum {
-    FRONTEND_DEBUGGER_INTENT_CAPACITY = 32
+    FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
+    FRONTEND_DISPLAY_CROP_X = 8,
+    FRONTEND_DISPLAY_CROP_Y = 31,
+    FRONTEND_DISPLAY_CROP_W = 352,
+    FRONTEND_DISPLAY_CROP_H = 240
 };
 
 typedef enum frontend_register_field {
@@ -1405,11 +1409,19 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
         nk_fill_rect(canvas, canvas_bounds, 0.0f, nk_rgb(17, 22, 28));
 
         if (ui->has_frame && ui->display_texture != NULL) {
-            struct nk_image image = nk_image_handle(nk_handle_ptr(ui->display_texture));
+            struct nk_image image = nk_subimage_handle(
+                nk_handle_ptr(ui->display_texture),
+                (nk_ushort)ui->current_frame.width,
+                (nk_ushort)ui->current_frame.height,
+                nk_rect(
+                    (float)FRONTEND_DISPLAY_CROP_X,
+                    (float)FRONTEND_DISPLAY_CROP_Y,
+                    (float)FRONTEND_DISPLAY_CROP_W,
+                    (float)FRONTEND_DISPLAY_CROP_H));
             struct nk_rect image_bounds = frontend_fit_nk_rect(
                 canvas_bounds,
-                ui->current_frame.width,
-                ui->current_frame.height);
+                FRONTEND_DISPLAY_CROP_W,
+                FRONTEND_DISPLAY_CROP_H);
 
             nk_draw_image(canvas, image_bounds, &image, nk_rgba(255, 255, 255, 255));
             nk_stroke_rect(canvas, image_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
@@ -3920,8 +3932,16 @@ static void frontend_render_display_only(frontend *ui)
     }
 
     platform_window_get_size(ui->window, &width, &height);
-    dest = frontend_fit_rect(0, 0, width, height, (int)ui->current_frame.width, (int)ui->current_frame.height);
-    SDL_RenderCopy(ui->renderer, ui->display_texture, NULL, &dest);
+    dest = frontend_fit_rect(0, 0, width, height, FRONTEND_DISPLAY_CROP_W, FRONTEND_DISPLAY_CROP_H);
+    {
+        SDL_Rect src = {
+            FRONTEND_DISPLAY_CROP_X,
+            FRONTEND_DISPLAY_CROP_Y,
+            FRONTEND_DISPLAY_CROP_W,
+            FRONTEND_DISPLAY_CROP_H,
+        };
+        SDL_RenderCopy(ui->renderer, ui->display_texture, &src, &dest);
+    }
 }
 
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state)

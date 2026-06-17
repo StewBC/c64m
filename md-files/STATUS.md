@@ -23,6 +23,36 @@ Implemented:
   - character ROM glyph fetch
   - color RAM nibble storage and fetch
   - 40x25 text rendering into the active display area
+- VIC-II review/implementation state after the Phase A/B/C planning review:
+  - `$D019` IRQ status reads now model bit 7 as the enabled-pending VIC IRQ summary;
+    bits 6:4 read as 1, and `$D01A` still reads with the high nibble set
+  - raster IRQ status/enable is wired into the CPU IRQ pending callback
+  - Bad Line detection exists for DEN-enabled visible lines matching YSCROLL
+  - Bad Line c-access fetches populate the internal 40-byte video matrix/color line
+    buffers during cycles 15-54
+  - BA is asserted at cycle 12 on Bad Lines and released after the c-access window;
+    this is still an approximation of RDY/AEC because CPU read-vs-write cycle
+    discrimination is not implemented
+  - VC/VCBASE/RC/display-state bookkeeping exists for Bad Line/text-row progression
+  - PAL/NTSC raster line and frame counts are selected from machine configuration
+  - snapshot rendering now applies PAL border-window geometry with RSEL/CSEL:
+    25/24 row vertical clamps and 40/38 column horizontal clamps
+  - snapshot rendering applies XSCROLL/YSCROLL as delayed display-window edges:
+    pixels before the scroll offset show background, then content begins from row/col 0
+  - snapshot rendering supports the VIC-II graphics-mode dispatch for ECM/BMM/MCM:
+    standard text, multicolor text, standard bitmap, multicolor bitmap, ECM text,
+    and invalid modes 5/6/7 as black background/display-layer pixels
+  - standard bitmap mode uses bitmap data from `$D018` bit 3 and colors from the
+    video matrix byte; color RAM is not used for standard bitmap colors
+  - multicolor bitmap and multicolor text color selection paths are implemented in
+    the snapshot renderer
+  - invalid graphics modes black the background/display layer while leaving border
+    rendering unaffected
+  - mode/scroll changes are reflected on the next snapshot render; per-cycle
+    mid-frame mode switching is not implemented
+  - frontend display presentation crops the internal 384x272 frame to a balanced
+    352x240 view for both display-only and debugger-pane rendering, leaving the
+    internal frame/raster geometry unchanged
 - CIA foundations:
   - CIA #1 and CIA #2 machine-owned devices
   - `$DC00-$DCFF` and `$DD00-$DDFF` bus routing
@@ -158,12 +188,22 @@ Implemented:
 
 ## Not Implemented
 
+- VIC-II remaining accuracy/features:
+  - hardware sprites, sprite priority, and sprite collision detection are not implemented
+  - light pen is not implemented
+  - open-bus / last-byte-on-bus behavior is not implemented
+  - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA stalls do
+    not distinguish CPU read cycles from write cycles
+  - sprite fetch BA events are not implemented
+  - per-cycle/mid-frame pixel rendering effects are not implemented; the renderer is
+    still a whole-frame snapshot using current register state
+  - idle-state g-access fetch behavior from `$3FFF` / `$39FF` is not modeled in the
+    snapshot renderer
 - Phase 13 deferred breakpoint action details:
   - Type text injection is not implemented yet
   - Swap disk behavior is not implemented yet
   - Trace output/details are not implemented yet
 - Full CIA accuracy.
-- Sprites.
 - SID.
 - Cycle-perfect video/audio timing.
 

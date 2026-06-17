@@ -396,6 +396,27 @@ static void test_standard_bitmap_mode(void) {
     expect_u32("bitmap bg at x=25", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
+static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 59); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd018, 24); /* screen=$0400, bitmap=$2000 */
+
+    /* The user's program clears bitmap RAM, but standard bitmap colors come from
+       screen RAM. Make one bit visible as white-on-black so the mode switch is
+       unambiguous. */
+    machine.bus.ram[0x0400] = 0x10;
+    machine.bus.ram[0x2000] = 0x80; /* YSCROLL=3: sy=3 maps to bitmap row 0. */
+
+    expect_true("make basic hires setup frame", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("basic hires setup foreground", 0xffffffffu,
+               frame.pixels[54 * C64_FRAME_WIDTH + 31]);
+    expect_u32("basic hires setup background", TEST_PALETTE_0,
+               frame.pixels[54 * C64_FRAME_WIDTH + 32]);
+}
+
 static void test_multicolor_bitmap_mode(void) {
     c64_t     machine;
     c64_frame frame;
@@ -511,6 +532,7 @@ int main(void) {
     test_yscroll_shifts_content();
     test_ecm_text_mode();
     test_standard_bitmap_mode();
+    test_basic_hires_circle_setup_selects_bitmap_mode();
     test_multicolor_bitmap_mode();
     test_mcm_text_mode();
     test_invalid_mode_forces_black();
