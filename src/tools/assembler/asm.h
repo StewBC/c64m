@@ -61,6 +61,8 @@ struct ASSEMBLER {
     int valid_opcodes;
 
     int expression_size;
+    int expression_unknown;
+    int expression_depth;
     TARGET *active_target;
     DYNARRAY targets;
     const char *strcode;

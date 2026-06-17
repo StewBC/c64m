@@ -117,6 +117,7 @@ static int64_t expr_primary(ASSEMBLER *as) {
                 if(!sl) {
                     sl = symbol_write(as, symbol_name, symbol_len, SYMBOL_UNKNOWN, 0xFFFF);
                     if(!sl) {
+                        as->expression_unknown = 1;
                         if(symbol_has_scope_path(symbol_name, (int)symbol_len)) {
                             return 65535;
                         }
@@ -124,6 +125,7 @@ static int64_t expr_primary(ASSEMBLER *as) {
                         return 0;
                     }
                 }
+                as->expression_unknown = 1;
                 sl->symbol_width = 16;
             } else {
                 if(sl && sl->symbol_type == SYMBOL_UNKNOWN) {
@@ -146,6 +148,7 @@ static int64_t expr_primary(ASSEMBLER *as) {
                 }
 
                 if(!sl) {
+                    as->expression_unknown = 1;
                     asm_err(as, ASM_ERR_RESOLVE, "Value for %.*s not found", (int)symbol_len, symbol_name);
                     return 0;
                 }
@@ -377,11 +380,17 @@ static int64_t expr_conditional(ASSEMBLER *as, int64_t condition_value) {
 }
 
 int64_t expr_evaluate(ASSEMBLER *as) {
-    as->expression_size = 0;
+    int root_expression = as->expression_depth == 0;
+    if(root_expression) {
+        as->expression_size = 0;
+        as->expression_unknown = 0;
+    }
+    as->expression_depth++;
     int64_t value = expr_logical(as);
     if(as->token.type == TOKEN_OP && as->token.op == '?') {
         value = expr_conditional(as, value);
     }
+    as->expression_depth--;
     return value;
 }
 

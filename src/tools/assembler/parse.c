@@ -326,6 +326,71 @@ static void dot_define(ASSEMBLER *as) {
     }
 }
 
+static void if_stack_push(ASSEMBLER *as, int was_true) {
+    IF_FRAME frame;
+    frame.was_true = was_true;
+    frame.else_seen = 0;
+    if(ASM_OK != ARRAY_ADD(&as->if_stack, frame)) {
+        asm_err(as, ASM_ERR_FATAL, "Out of memory pushing conditional assembly frame");
+    }
+}
+
+static IF_FRAME *if_stack_top(ASSEMBLER *as) {
+    if(as->if_stack.items == 0) {
+        return NULL;
+    }
+    return ARRAY_GET(&as->if_stack, IF_FRAME, as->if_stack.items - 1);
+}
+
+static void if_stack_pop(ASSEMBLER *as) {
+    if(as->if_stack.items == 0) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endif with no .if");
+        return;
+    }
+    as->if_stack.items--;
+}
+
+static void dot_if(ASSEMBLER *as) {
+    int64_t value = expr_full_evaluate(as);
+    int was_true = value != 0;
+    if(as->pass == 1 && as->expression_unknown) {
+        asm_err(as, ASM_ERR_RESOLVE, ".if expression must resolve on pass 1");
+        was_true = 0;
+    }
+    if_stack_push(as, was_true);
+    if(!was_true) {
+        as->if_skip_depth = 1;
+    }
+}
+
+static void dot_else(ASSEMBLER *as) {
+    IF_FRAME *frame = if_stack_top(as);
+    if(!frame) {
+        asm_err(as, ASM_ERR_RESOLVE, ".else without .if");
+        while(as->token.type != TOKEN_END) {
+            next_token(as);
+        }
+        return;
+    }
+    if(frame->else_seen) {
+        asm_err(as, ASM_ERR_RESOLVE, ".else after .else");
+    }
+    frame->else_seen = 1;
+    if(frame->was_true) {
+        as->if_skip_depth = 1;
+    }
+    while(as->token.type != TOKEN_END) {
+        next_token(as);
+    }
+}
+
+static void dot_endif(ASSEMBLER *as) {
+    if_stack_pop(as);
+    while(as->token.type != TOKEN_END) {
+        next_token(as);
+    }
+}
+
 int is_label(ASSEMBLER *as) {
     if(as->token.type == TOKEN_OP && as->token.op == ':') {
         return 1;
@@ -473,12 +538,13 @@ void parse_dot_command(ASSEMBLER *as) {
         emit_cs_values(as, 16, BYTE_ORDER_LO);
         break;
     case GPERF_DOT_ELSE:
+        dot_else(as);
+        break;
     case GPERF_DOT_ENDIF:
+        dot_endif(as);
+        break;
     case GPERF_DOT_IF:
-        asm_err(as, ASM_ERR_RESOLVE, "Conditional assembly parser not implemented yet");
-        while(as->token.type != TOKEN_END) {
-            next_token(as);
-        }
+        dot_if(as);
         break;
     default:
         asm_err(as, ASM_ERR_RESOLVE, "Dot command %.*s not implemented yet",
@@ -508,11 +574,23 @@ void parse_if_skip(ASSEMBLER *as) {
         break;
     case GPERF_DOT_ELSE:
         if(as->if_skip_depth == 1) {
+            IF_FRAME *frame = if_stack_top(as);
+            if(!frame) {
+                asm_err(as, ASM_ERR_RESOLVE, ".else without .if");
+                return;
+            }
+            if(frame->else_seen) {
+                asm_err(as, ASM_ERR_RESOLVE, ".else after .else");
+            }
+            frame->else_seen = 1;
             as->if_skip_depth = 0;
         }
         break;
     case GPERF_DOT_ENDIF:
-        if(as->if_skip_depth > 0) {
+        if(as->if_skip_depth == 1) {
+            if_stack_pop(as);
+            as->if_skip_depth = 0;
+        } else if(as->if_skip_depth > 1) {
             as->if_skip_depth--;
         }
         break;

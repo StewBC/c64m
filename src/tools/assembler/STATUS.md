@@ -85,9 +85,9 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 
 ## Phase 11 — Conditional Assembly
 
-- [ ] `.if` / `.else` / `.endif` with IF_FRAME stack + if_skip_depth
-- [ ] `.defined` directive (test macro parameter presence)
-- [ ] `.lt` `.le` `.gt` `.ge` `.eq` `.ne` comparison operators in expressions
+- [x] `.if` / `.else` / `.endif` with IF_FRAME stack + if_skip_depth
+- [x] `.defined` directive (test macro parameter presence)
+- [x] `.lt` `.le` `.gt` `.ge` `.eq` `.ne` comparison operators in expressions
 
 ## Phase 12 — Loops
 
@@ -128,3 +128,4 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 - Phase 8: `assembler_assemble` now runs the two-pass line pipeline: file read, comment strip, skip-state handling, define substitution, tokenize, dispatch. `parse.c` contains classification helpers and explicit stubs for Phase 9/10/11 parser bodies, plus `.6502`/`.65c02` handling and skip scanning for false `.if` branches.
 - Phase 9: core parser behavior is live for labels, address assignment, variables, and opcode addressing modes. `parse_macro_if_is_macro` remains a no-op until the macro table exists in Phase 13, but the dispatch hook is in place before variable parsing.
 - Phase 10: data directives are live for `.org`, scalar data widths, reverse-order variants, `.res`, `.align`, strings, `.strcode`, `.include`, `.incbin`, CPU selection, and `.define`. `asm.h` is now self-contained for external callers via `asm_common.h`; loaded files are stored as stable heap objects so include frames survive file-array growth; symbol names are owned copies so pass-2 lookups do not depend on pass-1 line buffers.
+- Phase 11: conditional assembly is live for `.if` / `.else` / `.endif`, including nested skipped blocks through `if_skip_depth`. `.if` expressions now reject pass-1 unknowns/forward references for stable branch selection. `.defined` and `.lt`/`.le`/`.gt`/`.ge`/`.eq`/`.ne` are handled by the tokenizer/expression evaluator. `assembler_conditionals` covers true/false branches, skipped nested branches, comparisons, `.defined`, and forward-reference rejection.

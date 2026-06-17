@@ -62,6 +62,8 @@ static void reset_pass_state(ASSEMBLER *as) {
     as->strcode = NULL;
     as->if_stack.items = 0;
     as->if_skip_depth = 0;
+    as->expression_depth = 0;
+    as->expression_unknown = 0;
     as->cur = NULL;
     memset(&as->token, 0, sizeof(as->token));
 }
