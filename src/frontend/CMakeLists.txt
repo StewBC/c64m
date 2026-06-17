@@ -16,6 +16,7 @@ add_library(frontend STATIC
 target_include_directories(frontend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${SDL2_INCLUDE_DIRS}
 )
 
 target_compile_features(frontend PUBLIC c_std_99)

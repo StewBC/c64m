@@ -92,6 +92,7 @@ static void build_roms(c64_rom_set *roms, uint16_t reset_vector) {
     roms->kernal[TEST_NMI_VECTOR - 0xe000] = 0xea;
     roms->kernal[TEST_IRQ_VECTOR - 0xe000] = 0xea;
     roms->character[1 * 8] = 0x80;
+    roms->character[1 * 8 + 3] = 0x10;
 }
 
 static void copy_to_kernal(c64_rom_set *roms, uint16_t address, const uint8_t *program, size_t size) {
@@ -228,11 +229,11 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
     expect_u8("color memory changed", 0x05, c64_bus_vic_read_color(&machine.bus, 0));
 
     expect_true("make frame", c64_make_frame_snapshot(&machine, &frame));
-    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0 → glyph row 0 at sy=0 (y=55).
-       $D016=0 → CSEL=0 (left=31). Character 1 glyph row 0=0x80 → bit 7 set at sx=0.
-       First display pixel: x=31 (left compare). Foreground at (y=55, x=31). */
-    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 31]);
-    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[55 * C64_FRAME_WIDTH + 32]);
+    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0, so the top visible line
+       samples glyph row 3. $D016=0 → CSEL=0 (left=31). Character 1 glyph row 3=0x10
+       has bit 3 set, so the foreground pixel is at x=34. */
+    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 34]);
+    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[55 * C64_FRAME_WIDTH + 35]);
 }
 
 static void test_d018_selects_screen_memory(void) {
@@ -251,8 +252,8 @@ static void test_d018_selects_screen_memory(void) {
 
     expect_true("make d018 frame", c64_make_frame_snapshot(&machine, &frame));
     /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0; $D016=0 → CSEL=0 (left=31).
-       Glyph row 0 at sy=0 (y=55), bit 7 at sx=0 → x=31. */
-    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 31]);
+       The top visible line samples glyph row 3, whose bit 3 lands at x=34. */
+    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 34]);
 }
 
 static void test_real_rom_progresses_to_device_checkpoints(void) {

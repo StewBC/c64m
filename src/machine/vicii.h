@@ -76,6 +76,11 @@ struct vicii {
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
     uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes */
+
+    /* Phase E: sprite priority and collision latches */
+    uint8_t  sprite_priority;              /* $D01B: 1 = sprite behind foreground graphics */
+    uint8_t  sprite_sprite_collision;      /* $D01E: sprite-sprite collision latch, clear on read */
+    uint8_t  sprite_background_collision;  /* $D01F: sprite-background collision latch, clear on read */
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);

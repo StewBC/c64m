@@ -21,8 +21,11 @@ enum {
     VICII_REG_SPR_X_MSB      = 0x10,
     VICII_REG_SPR_ENABLE     = 0x15,
     VICII_REG_SPR_Y_EXPAND   = 0x17,
+    VICII_REG_SPR_PRIORITY   = 0x1B,
     VICII_REG_SPR_MULTICOLOR = 0x1C,
     VICII_REG_SPR_X_EXPAND   = 0x1D,
+    VICII_REG_SPR_SPR_COLL   = 0x1E,
+    VICII_REG_SPR_BG_COLL    = 0x1F,
     VICII_REG_SPR_MM0        = 0x25,
     VICII_REG_SPR_MM1        = 0x26,
     VICII_DEFAULT_BORDER_COLOR = 6,
@@ -30,6 +33,8 @@ enum {
     VICII_TEXT_COLUMNS = 40,
     VICII_CHARACTER_WIDTH = 8,
     VICII_CHARACTER_HEIGHT = 8,
+    VICII_DEFAULT_YSCROLL = 3,
+    VICII_DISPLAY_HEIGHT = 200,
 
     /* Phase A additions */
     VICII_BADLINE_FIRST        = 0x30,
@@ -40,6 +45,8 @@ enum {
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
+    VICII_IRQ_IMBC             = 0x02,
+    VICII_IRQ_IMMC             = 0x04,
 
     /* PAL border compare values (pixel/line units within 384×272 frame) */
     VICII_PAL_VBORDER_TOP_25    = 51,
@@ -151,6 +158,9 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
     memset(v->sprite_data,     0, sizeof(v->sprite_data));
+    v->sprite_priority = 0;
+    v->sprite_sprite_collision = 0;
+    v->sprite_background_collision = 0;
     vicii_begin_live_frame(v);
 }
 
@@ -185,6 +195,16 @@ typedef struct vicii_border_geometry {
     uint32_t right;
 } vicii_border_geometry;
 
+typedef struct vicii_bg_pixel {
+    uint32_t color;
+    bool     foreground;
+} vicii_bg_pixel;
+
+typedef struct vicii_sprite_pixel {
+    uint32_t color;
+    bool     opaque;
+} vicii_sprite_pixel;
+
 static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     vicii_border_geometry g;
     bool rsel = (v->registers[0x11] & 0x08u) != 0;
@@ -203,36 +223,83 @@ static int vicii_sprite_dx_wrapped(uint32_t frame_x, uint16_t spr_x) {
     return dx;
 }
 
-static bool vicii_sprite_pixel(const vicii *v, int n, int dx, uint32_t *out_pixel) {
+static bool vicii_display_adjusted_y(uint32_t sy, uint8_t yscroll, uint32_t *out_adjusted) {
+    int32_t adjusted;
+
+    adjusted = (int32_t)sy + ((int32_t)VICII_DEFAULT_YSCROLL - (int32_t)(yscroll & 0x07u));
+    if (adjusted < 0 || adjusted >= (int32_t)VICII_DISPLAY_HEIGHT) {
+        return false;
+    }
+
+    *out_adjusted = (uint32_t)adjusted;
+    return true;
+}
+
+static uint32_t vicii_sprite_display_y(uint8_t spr_y) {
+    return (uint32_t)spr_y + 1u;
+}
+
+static vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
+    vicii_bg_pixel pixel;
+
+    pixel.color = color;
+    pixel.foreground = foreground;
+    return pixel;
+}
+
+static vicii_sprite_pixel vicii_sprite_pixel_make(uint32_t color, bool opaque) {
+    vicii_sprite_pixel pixel;
+
+    pixel.color = color;
+    pixel.opaque = opaque;
+    return pixel;
+}
+
+static vicii_sprite_pixel vicii_sprite_pixel_from_data(
+    const vicii *v,
+    const uint8_t data[3],
+    int n,
+    int dx)
+{
     bool    x_expand   = (v->registers[VICII_REG_SPR_X_EXPAND]  >> n) & 1u;
     bool    multicolor = (v->registers[VICII_REG_SPR_MULTICOLOR] >> n) & 1u;
     int     spr_width  = x_expand ? 48 : 24;
 
-    if (dx < 0 || dx >= spr_width) return false;
+    if (dx < 0 || dx >= spr_width) {
+        return vicii_sprite_pixel_make(0, false);
+    }
 
     if (multicolor) {
         int     pair_index = x_expand ? (dx / 4) : (dx / 2);
         int     bit_shift  = 6 - (pair_index * 2) % 8;
-        uint8_t pair       = (v->sprite_data[n][(pair_index * 2) / 8] >> bit_shift) & 3u;
+        uint8_t pair       = (data[(pair_index * 2) / 8] >> bit_shift) & 3u;
         switch (pair) {
-        case 0u:  return false;
-        case 1u:  *out_pixel = vicii_palette_argb[v->registers[VICII_REG_SPR_MM0] & 0x0Fu]; return true;
-        case 2u:  *out_pixel = vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu]; return true;
-        default:  *out_pixel = vicii_palette_argb[v->registers[VICII_REG_SPR_MM1] & 0x0Fu]; return true;
+        case 0u:
+            return vicii_sprite_pixel_make(0, false);
+        case 1u:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->registers[VICII_REG_SPR_MM0] & 0x0Fu], true);
+        case 2u:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu], true);
+        default:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->registers[VICII_REG_SPR_MM1] & 0x0Fu], true);
         }
     } else {
         int     bit_pos = x_expand ? (dx / 2) : dx;
-        uint8_t bit     = (v->sprite_data[n][bit_pos / 8] >> (7 - bit_pos % 8)) & 1u;
-        if (!bit) return false;
-        *out_pixel = vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu];
-        return true;
+        uint8_t bit     = (data[bit_pos / 8] >> (7 - bit_pos % 8)) & 1u;
+        if (!bit) {
+            return vicii_sprite_pixel_make(0, false);
+        }
+        return vicii_sprite_pixel_make(vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu], true);
     }
 }
 
-static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, uint32_t x, uint32_t y) {
-    bool vborder = y < g->top || y >= g->bottom;
-    bool hborder = x < g->left || x >= g->right;
-    uint8_t border = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+static vicii_bg_pixel vicii_background_pixel(
+    const vicii *v,
+    const c64_bus_t *bus,
+    const vicii_border_geometry *g,
+    uint32_t x,
+    uint32_t y)
+{
     uint32_t b0c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
     uint32_t b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
     uint32_t b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
@@ -240,154 +307,234 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     uint8_t mode;
     uint8_t xscroll;
     uint8_t yscroll;
-    uint16_t vic_bank;
-    uint16_t screen_base;
-    uint16_t char_base;
-    uint16_t bitmap_base;
     uint32_t sx_raw;
     uint32_t sy;
-    uint32_t sx;
     uint32_t adjusted;
+    uint32_t sx;
     uint32_t row_in_cell;
     uint32_t char_row;
     uint32_t col;
     uint16_t cell;
-    uint32_t pixel;
+    uint16_t vic_bank;
+    uint16_t screen_base;
+    uint16_t char_base;
+    uint16_t bitmap_base;
 
-    if (vborder || hborder) {
-        return vicii_palette_argb[border];
+    if (x < g->left || x >= g->right || y < g->top || y >= g->bottom) {
+        return vicii_bg_pixel_make(b0c, false);
     }
 
     mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
                      ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
-
     xscroll = v->registers[0x16] & 0x07u;
     yscroll = v->registers[0x11] & 0x07u;
     sx_raw = x - g->left;
     sy = y - g->top;
 
     if (mode >= 5u) {
-        pixel = vicii_palette_argb[0];
-    } else if (sx_raw < (uint32_t)xscroll || sy < (uint32_t)yscroll) {
-        pixel = b0c;
-    } else {
-        sx = sx_raw - (uint32_t)xscroll;
-        adjusted = sy - (uint32_t)yscroll;
-        row_in_cell = adjusted & 7u;
-        char_row = adjusted / 8u;
-        col = sx / 8u;
-        cell = (uint16_t)(char_row * 40u + col);
-        vic_bank    = c64_bus_vic_bank_base(bus);
-        screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-        char_base   = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-        bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+        return vicii_bg_pixel_make(vicii_palette_argb[0], false);
+    }
 
-        switch (mode) {
-        case 0u:
-            {
-                uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
-                uint8_t fg = c64_bus_vic_read_color(bus, cell);
-                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
-                pixel = (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : b0c;
+    if (sx_raw < (uint32_t)xscroll ||
+        !vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
+        return vicii_bg_pixel_make(b0c, false);
+    }
+
+    sx = sx_raw - (uint32_t)xscroll;
+    row_in_cell = adjusted & 7u;
+    char_row = adjusted / 8u;
+    col = sx / 8u;
+    cell = (uint16_t)(char_row * 40u + col);
+    vic_bank = c64_bus_vic_bank_base(bus);
+    screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+    bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+
+    switch (mode) {
+    case 0u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+            uint8_t fg = c64_bus_vic_read_color(bus, cell);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            if (glyph & bit) {
+                return vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true);
             }
-            break;
+            return vicii_bg_pixel_make(b0c, false);
+        }
 
-        case 1u:
-            {
-                uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
-                uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+    case 1u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
 
-                if ((color_nib & 0x08u) == 0u) {
-                    uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
-                    pixel = (glyph & bit) ? vicii_palette_argb[color_nib & 0x0fu] : b0c;
-                } else {
-                    uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
-                    switch (pair) {
-                    case 0u:  pixel = b0c; break;
-                    case 1u:  pixel = b1c; break;
-                    case 2u:  pixel = b2c; break;
-                    default:  pixel = vicii_palette_argb[color_nib & 0x07u]; break;
-                    }
+            if ((color_nib & 0x08u) == 0u) {
+                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+                if (glyph & bit) {
+                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
                 }
-            }
-            break;
-
-        case 2u:
-            {
-                uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-                uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
-                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
-                pixel = (bdata & bit) ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
-                                      : vicii_palette_argb[vm_byte & 0x0fu];
-            }
-            break;
-
-        case 3u:
-            {
-                uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
-                uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-                uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
-                uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
+                return vicii_bg_pixel_make(b0c, false);
+            } else {
+                uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
                 switch (pair) {
-                case 0u:  pixel = b0c; break;
-                case 1u:  pixel = vicii_palette_argb[(vm_byte >> 4) & 0x0fu]; break;
-                case 2u:  pixel = vicii_palette_argb[vm_byte & 0x0fu]; break;
-                default:  pixel = vicii_palette_argb[color_nib & 0x0fu]; break;
+                case 0u:
+                    return vicii_bg_pixel_make(b0c, false);
+                case 1u:
+                    return vicii_bg_pixel_make(b1c, true);
+                case 2u:
+                    return vicii_bg_pixel_make(b2c, true);
+                default:
+                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x07u], true);
                 }
             }
-            break;
+        }
 
-        case 4u:
-            {
-                uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                uint8_t ecm_sel = (code >> 6) & 3u;
-                uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code & 0x3fu, (uint8_t)row_in_cell);
-                uint8_t fg_nib = c64_bus_vic_read_color(bus, cell);
-                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
-                uint32_t ecm_bg;
-
-                switch (ecm_sel) {
-                case 0u:  ecm_bg = b0c; break;
-                case 1u:  ecm_bg = b1c; break;
-                case 2u:  ecm_bg = b2c; break;
-                default:  ecm_bg = b3c; break;
-                }
-                pixel = (glyph & bit) ? vicii_palette_argb[fg_nib & 0x0fu] : ecm_bg;
+    case 2u:
+        {
+            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            if (bdata & bit) {
+                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
             }
-            break;
+            return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], false);
+        }
 
-        default:
-            pixel = vicii_palette_argb[0];
-            break;
+    case 3u:
+        {
+            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
+            switch (pair) {
+            case 0u:
+                return vicii_bg_pixel_make(b0c, false);
+            case 1u:
+                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
+            case 2u:
+                return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], true);
+            default:
+                return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
+            }
+        }
+
+    case 4u:
+        {
+            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t ecm_sel = (code >> 6) & 3u;
+            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code & 0x3fu, (uint8_t)row_in_cell);
+            uint8_t fg_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
+            uint32_t ecm_bg;
+
+            if (glyph & bit) {
+                return vicii_bg_pixel_make(vicii_palette_argb[fg_nib & 0x0fu], true);
+            }
+
+            switch (ecm_sel) {
+            case 0u:  ecm_bg = b0c; break;
+            case 1u:  ecm_bg = b1c; break;
+            case 2u:  ecm_bg = b2c; break;
+            default:  ecm_bg = b3c; break;
+            }
+            return vicii_bg_pixel_make(ecm_bg, false);
+        }
+
+    default:
+        return vicii_bg_pixel_make(vicii_palette_argb[0], false);
+    }
+}
+
+static void vicii_set_irq_flag(vicii *v, uint8_t flag) {
+    v->irq_status |= flag;
+    v->registers[0x19] = v->irq_status;
+}
+
+static void vicii_note_sprite_collisions(vicii *v, vicii_bg_pixel bg, const vicii_sprite_pixel sprites[8]) {
+    uint8_t mask = 0;
+    int n;
+
+    for (n = 0; n < 8; n++) {
+        if (sprites[n].opaque) {
+            mask |= (uint8_t)(1u << n);
         }
     }
 
-    /* Phase D: sprite overlay (sprite 0 = highest priority) */
-    {
-        uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
-        int n;
-        for (n = 0; n < 8; n++) {
-            uint16_t spr_x;
-            int dx;
-            uint32_t spr_pixel;
-            if (!((enable >> n) & 1u)) continue;
-            if (!v->sprite_visible[n]) continue;
-            spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
-                     ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
-            dx = vicii_sprite_dx_wrapped(x, spr_x);
-            if (vicii_sprite_pixel(v, n, dx, &spr_pixel)) {
-                pixel = spr_pixel;
-                break;
-            }
+    if ((mask & (uint8_t)(mask - 1u)) != 0) {
+        v->sprite_sprite_collision |= mask;
+        if ((v->irq_status & VICII_IRQ_IMMC) == 0) {
+            vicii_set_irq_flag(v, VICII_IRQ_IMMC);
         }
     }
 
-    return pixel;
+    if (bg.foreground && mask != 0) {
+        v->sprite_background_collision |= mask;
+        if ((v->irq_status & VICII_IRQ_IMBC) == 0) {
+            vicii_set_irq_flag(v, VICII_IRQ_IMBC);
+        }
+    }
+}
+
+static uint32_t vicii_compose_pixel(
+    vicii *v,
+    bool border_active,
+    uint32_t border_color,
+    vicii_bg_pixel bg,
+    const vicii_sprite_pixel sprites[8])
+{
+    int n;
+
+    vicii_note_sprite_collisions(v, bg, sprites);
+
+    if (border_active) {
+        return border_color;
+    }
+
+    for (n = 0; n < 8; n++) {
+        if (sprites[n].opaque && ((v->sprite_priority & (uint8_t)(1u << n)) == 0)) {
+            return sprites[n].color;
+        }
+    }
+
+    if (bg.foreground) {
+        return bg.color;
+    }
+
+    for (n = 0; n < 8; n++) {
+        if (sprites[n].opaque && ((v->sprite_priority & (uint8_t)(1u << n)) != 0)) {
+            return sprites[n].color;
+        }
+    }
+
+    return bg.color;
+}
+
+static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, uint32_t x, uint32_t y) {
+    bool vborder = y < g->top || y >= g->bottom;
+    bool hborder = x < g->left || x >= g->right;
+    uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
+    vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, x, y);
+    vicii_sprite_pixel sprites[8];
+    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
+    int n;
+
+    for (n = 0; n < 8; n++) {
+        sprites[n] = vicii_sprite_pixel_make(0, false);
+        if (!((enable >> n) & 1u)) continue;
+        if (!v->sprite_visible[n]) continue;
+        {
+            uint16_t spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
+                ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
+            int dx = vicii_sprite_dx_wrapped(x, spr_x);
+            sprites[n] = vicii_sprite_pixel_from_data(v, v->sprite_data[n], n, dx);
+        }
+    }
+
+    return vicii_compose_pixel(v, vborder || hborder, border_color, bg, sprites);
 }
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
@@ -437,11 +584,12 @@ static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
 
     for (n = 0; n < 8; n++) {
         uint8_t  spr_y    = v->registers[1 + n * 2];
+        uint32_t sprite_y = vicii_sprite_display_y(spr_y);
         uint32_t raster_y = v->timing.raster_line;
         bool     y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
 
         if ((enable >> n) & 1u) {
-            if (raster_y == (uint32_t)spr_y) {
+            if (raster_y == sprite_y) {
                 v->sprite_mc[n]       = 0;
                 v->sprite_active[n]   = true;
                 v->sprite_y_exp_ff[n] = false;
@@ -486,8 +634,7 @@ static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
 }
 
 static void vicii_assert_raster_irq(vicii *v) {
-    v->irq_status      |= VICII_IRQ_RASTER;
-    v->registers[0x19]  = v->irq_status;
+    vicii_set_irq_flag(v, VICII_IRQ_RASTER);
 }
 
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus) {
@@ -631,6 +778,22 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
         return (uint8_t)(v->irq_enable | 0xF0u);
     }
 
+    if (reg == VICII_REG_SPR_PRIORITY) {
+        return v->sprite_priority;
+    }
+
+    if (reg == VICII_REG_SPR_SPR_COLL) {
+        uint8_t value = v->sprite_sprite_collision;
+        v->sprite_sprite_collision = 0;
+        return value;
+    }
+
+    if (reg == VICII_REG_SPR_BG_COLL) {
+        uint8_t value = v->sprite_background_collision;
+        v->sprite_background_collision = 0;
+        return value;
+    }
+
     return v->registers[reg];
 }
 
@@ -663,6 +826,15 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
     case 0x1A: /* IRQ_ENABLE */
         v->irq_enable     = value & 0x0Fu;
         v->registers[reg] = v->irq_enable;
+        break;
+
+    case VICII_REG_SPR_PRIORITY:
+        v->sprite_priority = value;
+        v->registers[reg] = value;
+        break;
+
+    case VICII_REG_SPR_SPR_COLL:
+    case VICII_REG_SPR_BG_COLL:
         break;
 
     default:
@@ -719,6 +891,7 @@ static void vicii_snapshot_sprite_line(
 
     for (n = 0; n < 8; n++) {
         uint8_t  spr_y;
+        uint32_t sprite_y;
         bool     y_expand;
         int      dy;
         int      sprite_row;
@@ -730,8 +903,9 @@ static void vicii_snapshot_sprite_line(
         if (!((enable >> n) & 1u)) continue;
 
         spr_y    = v->registers[1 + n * 2];
+        sprite_y = vicii_sprite_display_y(spr_y);
         y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
-        dy       = (int)raster_y - (int)spr_y;
+        dy       = (int)raster_y - (int)sprite_y;
 
         if (dy < 0) continue;
 
@@ -753,14 +927,8 @@ static void vicii_snapshot_sprite_line(
 bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
     vicii_border_geometry g;
     bool     vborder, hborder;
-    uint8_t  xscroll, yscroll;
     uint8_t  border_index;
     uint32_t border_color;
-    uint16_t vic_bank;
-    uint16_t screen_base, char_base;
-    uint8_t  mode;
-    uint16_t bitmap_base;
-    uint32_t b0c, b1c, b2c, b3c;
     uint32_t x, y;
 
     assert(v);
@@ -773,21 +941,8 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
 
     g = vicii_get_border_geometry(v);
 
-    xscroll     = v->registers[0x16] & 0x07u;
-    yscroll     = v->registers[0x11] & 0x07u;
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     border_color = vicii_palette_argb[border_index];
-    vic_bank     = c64_bus_vic_bank_base(bus);
-    screen_base  = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    char_base    = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-    mode        = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
-                            ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
-                            ((v->registers[0x16] & 0x10u) ? 1u : 0u));
-    bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
-    b0c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
-    b1c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
-    b2c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
-    b3c         = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
 
     v->working_frame.width        = C64_FRAME_WIDTH;
     v->working_frame.height       = C64_FRAME_HEIGHT;
@@ -806,181 +961,34 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
         if (y == g.top)    vborder = false;
         if (y == g.bottom) vborder = true;
 
-        if (!vborder) {
-            vicii_snapshot_sprite_line(v, bus, y, spr_rows);
-        }
+        vicii_snapshot_sprite_line(v, bus, y, spr_rows);
 
         for (x = 0; x < C64_FRAME_WIDTH; x++) {
+            vicii_bg_pixel bg;
+            vicii_sprite_pixel sprites[8];
             uint32_t pixel;
+            uint8_t enable_reg;
+            int n;
 
             /* Horizontal flip-flop transitions (Bauer §3.9) */
             if (x == g.right) hborder = true;
             if (x == g.left && !vborder) hborder = false;
 
-            if (vborder || hborder) {
-                pixel = border_color;
-            } else {
-                uint32_t sx_raw = x - g.left;
-                uint32_t sy     = y - g.top;
-
-                if (mode >= 5u) {
-                    /* Invalid modes 5/6/7: background/display pixels forced black. */
-                    pixel = vicii_palette_argb[0];
-                } else if (sx_raw < (uint32_t)xscroll || sy < (uint32_t)yscroll) {
-                    /* Delayed scroll edges: background. */
-                    pixel = b0c;
-                } else {
-                    uint32_t sx          = sx_raw - (uint32_t)xscroll;
-                    uint32_t adjusted    = sy - (uint32_t)yscroll;
-                    uint32_t row_in_cell = adjusted & 7u;
-                    uint32_t char_row    = adjusted / 8u;
-                    uint32_t col         = sx / 8u;
-                    uint16_t cell        = (uint16_t)(char_row * 40u + col);
-
-                    switch (mode) {
-                    case 0u: /* Standard text */
-                        {
-                            uint8_t code  = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
-                                                                             (uint8_t)row_in_cell);
-                            uint8_t fg    = c64_bus_vic_read_color(bus, cell);
-                            uint8_t bit   = (uint8_t)(0x80u >> (sx & 7u));
-                            pixel = (glyph & bit) ? vicii_palette_argb[fg & 0x0fu] : b0c;
-                        }
-                        break;
-
-                    case 1u: /* MCM text (Bauer §3.3.2) */
-                        {
-                            uint8_t code      = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
-                            uint8_t glyph     = c64_bus_vic_read_char_glyph_at(bus, char_base, code,
-                                                                                 (uint8_t)row_in_cell);
-                            if ((color_nib & 0x08u) == 0u) {
-                                /* Standard hires character in MCM mode */
-                                uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
-                                pixel = (glyph & bit) ? vicii_palette_argb[color_nib & 0x0fu] : b0c;
-                            } else {
-                                /* Multicolor character: pixel pairs, halved horizontal resolution.
-                                   Both pixels in a pair share the same color. sx&6 selects the pair. */
-                                uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
-                                switch (pair) {
-                                case 0u:  pixel = b0c; break;
-                                case 1u:  pixel = b1c; break;
-                                case 2u:  pixel = b2c; break;
-                                default:  pixel = vicii_palette_argb[color_nib & 0x07u]; break;
-                                }
-                            }
-                        }
-                        break;
-
-                    case 2u: /* Standard bitmap (Bauer §3.3.3) */
-                        {
-                            uint8_t  vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                            uint16_t baddr   = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-                            uint8_t  bdata   = c64_bus_vic_read_ram(bus, baddr);
-                            uint8_t  bit     = (uint8_t)(0x80u >> (sx & 7u));
-                            pixel = (bdata & bit) ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
-                                                  : vicii_palette_argb[vm_byte & 0x0fu];
-                        }
-                        break;
-
-                    case 3u: /* Multicolor bitmap (Bauer §3.3.4) */
-                        {
-                            uint8_t  vm_byte   = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                            uint8_t  color_nib = c64_bus_vic_read_color(bus, cell);
-                            uint16_t baddr     = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-                            uint8_t  bdata     = c64_bus_vic_read_ram(bus, baddr);
-                            uint8_t  pair      = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
-                            switch (pair) {
-                            case 0u:  pixel = b0c; break;
-                            case 1u:  pixel = vicii_palette_argb[(vm_byte >> 4) & 0x0fu]; break;
-                            case 2u:  pixel = vicii_palette_argb[vm_byte & 0x0fu]; break;
-                            default:  pixel = vicii_palette_argb[color_nib & 0x0fu]; break;
-                            }
-                        }
-                        break;
-
-                    case 4u: /* ECM text (Bauer §3.4) */
-                        {
-                            uint8_t  code    = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-                            uint8_t  ecm_sel = (code >> 6) & 3u;
-                            uint8_t  glyph   = c64_bus_vic_read_char_glyph_at(bus, char_base,
-                                                                               code & 0x3fu,
-                                                                               (uint8_t)row_in_cell);
-                            uint8_t  fg_nib  = c64_bus_vic_read_color(bus, cell);
-                            uint8_t  bit     = (uint8_t)(0x80u >> (sx & 7u));
-                            uint32_t ecm_bg;
-                            switch (ecm_sel) {
-                            case 0u:  ecm_bg = b0c; break;
-                            case 1u:  ecm_bg = b1c; break;
-                            case 2u:  ecm_bg = b2c; break;
-                            default:  ecm_bg = b3c; break;
-                            }
-                            pixel = (glyph & bit) ? vicii_palette_argb[fg_nib & 0x0fu] : ecm_bg;
-                        }
-                        break;
-
-                    default: /* unreachable: modes 5-7 handled above */
-                        pixel = vicii_palette_argb[0];
-                        break;
-                    }
+            bg = vicii_background_pixel(v, bus, &g, x, y);
+            enable_reg = v->registers[VICII_REG_SPR_ENABLE];
+            for (n = 0; n < 8; n++) {
+                sprites[n] = vicii_sprite_pixel_make(0, false);
+                if (!((enable_reg >> n) & 1u)) continue;
+                if (!spr_rows[n].active) continue;
+                {
+                    uint16_t spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
+                        ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
+                    int dx = vicii_sprite_dx_wrapped(x, spr_x);
+                    sprites[n] = vicii_sprite_pixel_from_data(v, spr_rows[n].data, n, dx);
                 }
             }
 
-            /* Phase D: sprite overlay */
-            if (!vborder && !hborder) {
-                uint8_t enable_reg = v->registers[VICII_REG_SPR_ENABLE];
-                int n;
-                for (n = 0; n < 8; n++) {
-                    uint16_t spr_x;
-                    int      dx;
-                    bool     x_expand;
-                    bool     mc_mode;
-                    int      spr_width;
-                    uint32_t spr_pixel;
-                    bool     opaque;
-
-                    if (!((enable_reg >> n) & 1u)) continue;
-                    if (!spr_rows[n].active) continue;
-
-                    spr_x     = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
-                                 ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
-                    dx        = vicii_sprite_dx_wrapped(x, spr_x);
-                    x_expand  = (v->registers[VICII_REG_SPR_X_EXPAND]  >> n) & 1u;
-                    mc_mode   = (v->registers[VICII_REG_SPR_MULTICOLOR] >> n) & 1u;
-                    spr_width = x_expand ? 48 : 24;
-
-                    if (dx < 0 || dx >= spr_width) continue;
-
-                    spr_pixel = 0;
-                    opaque    = false;
-
-                    if (mc_mode) {
-                        int     pair_index = x_expand ? (dx / 4) : (dx / 2);
-                        int     bit_shift  = 6 - (pair_index * 2) % 8;
-                        uint8_t pair       = (spr_rows[n].data[(pair_index * 2) / 8] >> bit_shift) & 3u;
-                        switch (pair) {
-                        case 1u: spr_pixel = vicii_palette_argb[v->registers[VICII_REG_SPR_MM0] & 0x0Fu]; opaque = true; break;
-                        case 2u: spr_pixel = vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu]; opaque = true; break;
-                        case 3u: spr_pixel = vicii_palette_argb[v->registers[VICII_REG_SPR_MM1] & 0x0Fu]; opaque = true; break;
-                        default: break;
-                        }
-                    } else {
-                        int     bit_pos = x_expand ? (dx / 2) : dx;
-                        uint8_t bit     = (spr_rows[n].data[bit_pos / 8] >> (7 - bit_pos % 8)) & 1u;
-                        if (bit) {
-                            spr_pixel = vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu];
-                            opaque    = true;
-                        }
-                    }
-
-                    if (opaque) {
-                        pixel = spr_pixel;
-                        break;
-                    }
-                }
-            }
-
+            pixel = vicii_compose_pixel(v, vborder || hborder, border_color, bg, sprites);
             v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = pixel;
         }
     }

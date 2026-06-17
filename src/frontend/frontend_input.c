@@ -149,7 +149,11 @@ static void map_keydown(const SDL_KeyboardEvent *event, frontend_input_chord *ch
             add_key(chord, C64_KEY_RETURN, true);
             break;
         case SDLK_BACKSPACE:
-            add_key(chord, C64_KEY_DELETE, true);
+            if (shifted) {
+                add_shifted_key(chord, C64_KEY_DELETE, true);
+            } else {
+                add_key(chord, C64_KEY_DELETE, true);
+            }
             break;
         case SDLK_LCTRL:
         case SDLK_RCTRL:

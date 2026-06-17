@@ -458,7 +458,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                             frontend_input_has_option_modifier(&event.key))) {
                     send_pause_command(client);
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
-                           (event.key.keysym.mod & KMOD_SHIFT)) {
+                           frontend_input_has_option_modifier(&event.key)) {
                     char *text = SDL_GetClipboardText();
                     if (text && text[0] != '\0') {
                         runtime_client_paste_text(client, text, strlen(text));

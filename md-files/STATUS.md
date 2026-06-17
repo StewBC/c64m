@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16 plus VIC-II Phase D (sprites display).
+Completed through Phase 16 plus VIC-II Phase E (sprite priority and collisions).
 
 Implemented:
 
@@ -80,7 +80,7 @@ Implemented:
     - right/down map to C64 cursor keys
     - left/up synthesize Shift + C64 cursor keys
   - ESC maps to C64 RUN/STOP
-  - Backspace maps to C64 DEL
+  - Backspace maps to C64 DEL; Shift+Backspace maps to C64 INST (insert)
   - host Delete maps to RESTORE
 - Keyboard Pass 2 / Phase 11 BASIC typing polish:
   - SDL-to-C64 key translation moved out of `main.c` into frontend-owned input mapping
@@ -98,6 +98,18 @@ Implemented:
     - `10 PRINT "HELLO"`
     - `20 GOTO 10`
     - `RUN`
+- Paste from host OS clipboard:
+  - Option+Insert triggers a clipboard paste into the running emulator
+  - each character is translated from ASCII to a C64 key + shift combination and
+    injected via the keyboard matrix state machine in the runtime thread
+  - timing is cycle-accurate: each key is held for ~40ms equivalent in emulated
+    PAL cycles with a ~10ms inter-key gap, so paste rate scales correctly with
+    turbo multiplier
+  - mapping covers all ASCII printable characters the C64 keyboard can produce:
+    letters (A–Z), digits (0–9), unshifted symbols (`@ * + - = : ; , . /`),
+    shifted digit symbols (`! " # $ % & ' ( )`), shifted punctuation
+    (`< > ? [ ]`), and `^` via the up-arrow key; unmappable characters are silently
+    skipped
 - IRQ/CIA boot compatibility:
   - CIA #1 ICR read/write diagnostics
   - CIA interrupt assertion diagnostics
@@ -221,15 +233,38 @@ Implemented:
     `c64_bus_vic_bank_base()`; default bank is `$0000`
   - `vicii_fetch_sprites()` called at cycle 0 of each raster line; sets
     `sprite_visible[n]` and fills `sprite_data[n][3]` for the live renderer
-  - sprite overlay composited in `vicii_live_pixel()` after background pixel
-    computation; sprite 0 has highest priority; sprites are hidden behind the border
+  - sprite pixel candidates are decoded in `vicii_live_pixel()` after background
+    pixel computation; Phase E owns final priority composition
   - `vicii_snapshot_sprite_line()` computes sprite row data statically per raster
     line for the snapshot renderer; overlay loop mirrors live-pixel compositing
   - horizontal wraparound (modulo 512) handled by `vicii_sprite_dx_wrapped()`
-  - sprites above background in all 5 valid graphics modes (priority via `$D01B`
-    is Phase E)
   - regression test `test_sprite_hires_appears_at_position` confirms yellow pixels
     appear at the correct frame coordinates for a fully-opaque hires sprite
+- VIC-II Phase E — Sprite Priority and Collision Detection:
+  - `$D01B` sprite-background priority is implemented; sprites with priority bits
+    clear appear in front of foreground graphics, and sprites with bits set appear
+    behind foreground graphics but remain visible over background pixels
+  - final pixel composition order is border, front-priority sprites, foreground
+    graphics, behind-priority sprites, then background graphics
+  - standard text, multicolor text, standard bitmap, multicolor bitmap, ECM text,
+    and invalid modes now expose foreground/non-foreground classification to the
+    sprite compositor and collision logic
+  - `$D01E` sprite-sprite collision latch sets all participating sprite bits when
+    two or more non-transparent sprite pixels overlap; reads return and clear the
+    latch, and writes are ignored
+  - `$D01F` sprite-background collision latch sets sprite bits when non-transparent
+    sprite pixels overlap foreground graphics pixels; reads return and clear the
+    latch, and writes are ignored
+  - IMMC (`$D019/$D01A` bit 2) and IMBC (`$D019/$D01A` bit 1) are wired through the
+    existing VIC IRQ status/enable path, including retriggering after `$D019` is
+    cleared even if the collision latch still contains prior bits
+  - collision detection uses decoded, expanded sprite pixels and runs before visual
+    priority selection; `$D01B` does not suppress collision detection
+  - sprite-sprite collision detection still runs under the border while border
+    pixels remain visually in front of sprites
+  - regression coverage validates `$D01B` readback, `$D01E/$D01F` read-clear and
+    write-ignore behavior, sprite-sprite collision IRQs, sprite-background priority
+    and collision behavior, and border-over-sprite collision latching
 
 - VIC-II bank-aware character and screen rendering:
   - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
@@ -248,8 +283,6 @@ Implemented:
 ## Not Implemented
 
 - VIC-II remaining accuracy/features:
-  - sprite-background priority (`$D01B`) and sprite collision detection (`$D01E`/`$D01F`)
-    are not implemented (Phase E)
   - light pen is not implemented
   - open-bus / last-byte-on-bus behavior is not implemented
   - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA handling

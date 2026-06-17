@@ -14,8 +14,10 @@ enum {
 };
 
 #define TEST_PALETTE_0   0xff000000u  /* black      */
+#define TEST_PALETTE_2   0xff813338u  /* red        */
 #define TEST_PALETTE_5   0xff56ac4du  /* green      */
 #define TEST_PALETTE_6   0xff2e2c9bu  /* blue       */
+#define TEST_PALETTE_7   0xffedf171u  /* yellow     */
 #define TEST_PALETTE_10  0xffc46c71u  /* light red  */
 #define TEST_PALETTE_11  0xff4a4a4au  /* dark gray  */
 
@@ -71,6 +73,7 @@ static void build_roms(c64_rom_set *roms) {
     roms->character[1 * 8 + 1] = 0x40;
     roms->character[1 * 8 + 2] = 0x20;
     roms->character[1 * 8 + 3] = 0x10;
+    roms->character[1 * 8 + 7] = 0x80;
 }
 
 static void copy_to_kernal(c64_rom_set *roms, uint16_t address, const uint8_t *program, size_t size) {
@@ -130,6 +133,28 @@ static void make_live_frame(c64_t *machine, c64_frame *frame, const char *name) 
     expect_true(name, c64_make_frame_snapshot(machine, frame));
 }
 
+static void setup_solid_sprite(c64_t *machine, int sprite, uint16_t data_addr, uint16_t x, uint8_t y, uint8_t color) {
+    int i;
+    uint8_t enable;
+
+    for (i = 0; i < 63; i++) {
+        machine->bus.ram[(uint16_t)(data_addr + (uint16_t)i)] = 0xffu;
+    }
+
+    machine->bus.ram[0x07f8u + (uint16_t)sprite] = (uint8_t)(data_addr / 64u);
+    c64_bus_write(&machine->bus, (uint16_t)(0xd000u + (uint16_t)sprite * 2u), (uint8_t)(x & 0xffu));
+    c64_bus_write(&machine->bus, (uint16_t)(0xd001u + (uint16_t)sprite * 2u), y);
+    if (x & 0x100u) {
+        c64_bus_write(&machine->bus, 0xd010, (uint8_t)(machine->vic.registers[0x10] | (uint8_t)(1u << sprite)));
+    } else {
+        c64_bus_write(&machine->bus, 0xd010, (uint8_t)(machine->vic.registers[0x10] & (uint8_t)~(uint8_t)(1u << sprite)));
+    }
+    c64_bus_write(&machine->bus, (uint16_t)(0xd027u + (uint16_t)sprite), color);
+
+    enable = (uint8_t)(machine->vic.registers[0x15] | (uint8_t)(1u << sprite));
+    c64_bus_write(&machine->bus, 0xd015, enable);
+}
+
 static void test_vicii_reset_state(void) {
     vicii v;
     c64_vicii_snapshot snapshot;
@@ -184,6 +209,28 @@ static void test_irq_status_high_bit_reports_enabled_pending_irq(void) {
     vicii_write_register(&v, 0xd019, 0x01);
     expect_u8("d019 cleared irq", 0x70, vicii_read_register(&v, 0xd019));
     expect_u8("d01a high nibble", 0xf1, vicii_read_register(&v, 0xd01a));
+}
+
+static void test_sprite_collision_registers_read_clear(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd01b, 0xa5);
+    expect_u8("d01b priority readback", 0xa5, vicii_read_register(&v, 0xd01b));
+
+    v.sprite_sprite_collision = 0x03;
+    expect_u8("d01e first read", 0x03, vicii_read_register(&v, 0xd01e));
+    expect_u8("d01e clears on read", 0x00, vicii_read_register(&v, 0xd01e));
+    vicii_write_register(&v, 0xd01e, 0xff);
+    expect_u8("d01e write ignored", 0x00, vicii_read_register(&v, 0xd01e));
+
+    v.sprite_background_collision = 0x04;
+    expect_u8("d01f first read", 0x04, vicii_read_register(&v, 0xd01f));
+    expect_u8("d01f clears on read", 0x00, vicii_read_register(&v, 0xd01f));
+    vicii_write_register(&v, 0xd01f, 0xff);
+    expect_u8("d01f write ignored", 0x00, vicii_read_register(&v, 0xd01f));
 }
 
 static void test_bad_line_ba_asserts_at_cycle_12(void) {
@@ -258,10 +305,8 @@ static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
     reset_machine(&machine);
 
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    /* Force YSCROLL=0 so glyph row 0 appears at the first display-window line (sy=0).
-       0x18 = DEN=1, RSEL=1, YSCROLL=0. Without this, the default YSCROLL=3 would
-       place glyph row 5 at sy=0, and the synthetic ROM has no data in row 5. */
-    c64_bus_write(&machine.bus, 0xd011, 0x18);
+    /* Normal startup geometry: DEN=1, RSEL=1, YSCROLL=3. */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
     /* CSEL=1 so the display window left edge is at x=24 (default $D016=0 gives CSEL=0, left=31). */
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     machine.bus.ram[0x0400] = 1;
@@ -333,9 +378,9 @@ static void test_xscroll_shifts_content(void) {
     green = 0xff56ac4du; /* palette index 5 */
 
     /* Character 1 glyph row 0 = 0x80: only bit 7 set → foreground only at sx=0.
-       YSCROLL=0 so glyph row 0 is at sy=0 (y=51). */
+       YSCROLL=3 so glyph row 0 is at sy=0 (y=51). */
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
@@ -355,30 +400,53 @@ static void test_xscroll_shifts_content(void) {
 
 static void test_yscroll_shifts_content(void) {
     c64_t machine;
-    c64_frame frame0, frame1;
+    c64_frame frame3, frame4;
     uint32_t green;
 
     green = 0xff56ac4du; /* palette index 5 */
 
     /* Character 1 glyph row 0 = 0x80: foreground at sx=0 (x=24).
-       YSCROLL=0: row_in_cell at sy=0 = (0+8-0)&7 = 0 → glyph row 0 at y=51. */
+       YSCROLL=3 is the normal alignment: glyph row 0 appears at y=51. */
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400]  = 1;
     machine.bus.color_ram[0] = 5;
-    expect_true("yscroll0 frame", c64_make_frame_snapshot(&machine, &frame0));
+    expect_true("yscroll3 frame", c64_make_frame_snapshot(&machine, &frame3));
 
-    c64_bus_write(&machine.bus, 0xd011, 0x19); /* DEN=1, RSEL=1, YSCROLL=1 */
-    expect_true("yscroll1 frame", c64_make_frame_snapshot(&machine, &frame1));
+    c64_bus_write(&machine.bus, 0xd011, 0x1c); /* DEN=1, RSEL=1, YSCROLL=4 */
+    expect_true("yscroll4 frame", c64_make_frame_snapshot(&machine, &frame4));
 
-    /* YSCROLL=0: glyph row 0 at y=51 */
-    expect_u32("yscroll0 fg at y=51", green, frame0.pixels[51 * C64_FRAME_WIDTH + 24]);
+    /* YSCROLL=3: glyph row 0 at y=51 */
+    expect_u32("yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + 24]);
 
-    /* YSCROLL=1: sy=0 samples glyph row 7, and glyph row 0 appears at sy=1. */
-    expect_not_u32("yscroll1 no fg at y=51", green, frame1.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("yscroll1 fg at y=52", green, frame1.pixels[52 * C64_FRAME_WIDTH + 24]);
+    /* YSCROLL=4: output is delayed by one raster line, so glyph row 0 moves to y=52. */
+    expect_not_u32("yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + 24]);
+}
+
+static void test_default_yscroll_fills_display_rows(void) {
+    c64_t machine;
+    c64_frame frame;
+    uint32_t green;
+
+    green = TEST_PALETTE_5;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    machine.bus.ram[0x0400 + 24 * 40] = 1;
+    machine.bus.color_ram[24 * 40] = 5;
+
+    expect_true("default yscroll frame", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("default yscroll top row starts at display top",
+               green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("default yscroll bottom row reaches display bottom",
+               green, frame.pixels[250 * C64_FRAME_WIDTH + 24]);
 }
 
 static void test_ecm_text_mode(void) {
@@ -392,8 +460,8 @@ static void test_ecm_text_mode(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x15); /* screen=$0400, char=$1000 (ROM) */
-    /* ECM=1, DEN=1, RSEL=1, YSCROLL=0.  0x58 = 0101 1000 */
-    c64_bus_write(&machine.bus, 0xd011, 0x58);
+    /* ECM=1, DEN=1, RSEL=1, YSCROLL=3. */
+    c64_bus_write(&machine.bus, 0xd011, 0x5b);
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
     c64_bus_write(&machine.bus, 0xd022, 0x05); /* B1C = green */
@@ -426,7 +494,7 @@ static void test_standard_bitmap_mode(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, bitmap=$2000 */
-    c64_bus_write(&machine.bus, 0xd011, 0x38); /* BMM=1, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
 
     machine.bus.ram[0x2000] = 0x80; /* cell 0, row 0: bit 7 set */
@@ -452,13 +520,13 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
        screen RAM. Make one bit visible as white-on-black so the mode switch is
        unambiguous. */
     machine.bus.ram[0x0400] = 0x10;
-    machine.bus.ram[0x2000] = 0x80; /* YSCROLL=3: sy=3 maps to bitmap row 0. */
+    machine.bus.ram[0x2000] = 0x80;
 
     make_live_frame(&machine, &frame, "make live basic hires setup frame");
     expect_u32("basic hires setup foreground", 0xffffffffu,
-               frame.pixels[54 * C64_FRAME_WIDTH + 31]);
+               frame.pixels[51 * C64_FRAME_WIDTH + 31]);
     expect_u32("basic hires setup background", TEST_PALETTE_0,
-               frame.pixels[54 * C64_FRAME_WIDTH + 32]);
+               frame.pixels[51 * C64_FRAME_WIDTH + 32]);
 }
 
 static void test_multicolor_bitmap_mode(void) {
@@ -470,7 +538,7 @@ static void test_multicolor_bitmap_mode(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen=$0400, bitmap=$2000 */
-    c64_bus_write(&machine.bus, 0xd011, 0x38); /* BMM=1, DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
 
@@ -500,7 +568,7 @@ static void test_mcm_text_mode(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x15); /* screen=$0400, char=$1000 (ROM) */
-    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, ECM=0, BMM=0, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, ECM=0, BMM=0, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = blue */
     c64_bus_write(&machine.bus, 0xd023, 0x05); /* B2C = green */
@@ -577,7 +645,7 @@ static void test_live_raster_border_change_and_text(void) {
     copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
     reset_machine_with_roms(&machine, &roms);
 
-    c64_bus_write(&machine.bus, 0xd011, 0x18); /* DEN=1, RSEL=1, YSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
     machine.bus.ram[0x0400] = 1;
@@ -609,9 +677,9 @@ static void test_sprite_hires_appears_at_position(void) {
     /* sprite 0 pointer at $07F8: value 13 → data at 13×64=$0340 */
     machine.bus.ram[0x07F8] = 13;
 
-    /* sprite 0: X=100, Y=100, color=yellow(7), enabled */
+    /* sprite 0: X=100, Y=99 displays its first visible row at raster 100. */
     c64_bus_write(&machine.bus, 0xD000, 100);
-    c64_bus_write(&machine.bus, 0xD001, 100);
+    c64_bus_write(&machine.bus, 0xD001, 99);
     c64_bus_write(&machine.bus, 0xD027, 7);
     c64_bus_write(&machine.bus, 0xD015, 1);
 
@@ -633,10 +701,132 @@ static void test_sprite_hires_appears_at_position(void) {
     }
 }
 
+static void test_sprite_y50_touches_top_border_fully_revealed(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 50, 7);
+
+    make_live_frame(&machine, &frame, "sprite y50 top border frame");
+
+    expect_u32("sprite y50 does not draw in top border", TEST_PALETTE_2,
+               frame.pixels[50 * C64_FRAME_WIDTH + 46]);
+    expect_u32("sprite y50 first visible row touches display top", TEST_PALETTE_7,
+               frame.pixels[51 * C64_FRAME_WIDTH + 46]);
+    expect_u32("sprite y50 last row fully visible", TEST_PALETTE_7,
+               frame.pixels[71 * C64_FRAME_WIDTH + 46]);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 51, 7);
+
+    make_live_frame(&machine, &frame, "sprite y51 one-line gap frame");
+    expect_u32("sprite y51 leaves one display line above", TEST_PALETTE_6,
+               frame.pixels[51 * C64_FRAME_WIDTH + 46]);
+    expect_u32("sprite y51 starts on following line", TEST_PALETTE_7,
+               frame.pixels[52 * C64_FRAME_WIDTH + 46]);
+}
+
+static void test_sprite_sprite_collision_priority_and_irq(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    setup_solid_sprite(&machine, 0, 0x0340, 100, 99, 7);
+    setup_solid_sprite(&machine, 1, 0x0380, 100, 99, 10);
+    c64_bus_write(&machine.bus, 0xd01a, 0x04); /* enable IMMC */
+
+    make_live_frame(&machine, &frame, "sprite-sprite collision frame");
+
+    expect_u32("sprite 0 wins visual priority", TEST_PALETTE_7,
+               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+    expect_u8("immc irq pending", 0xf5, vicii_read_register(&machine.vic, 0xd019));
+
+    /* Clearing $D019 while $D01E remains latched must allow a later collision IRQ. */
+    vicii_write_register(&machine.vic, 0xd019, 0x04);
+    expect_u8("immc irq cleared", 0x71, vicii_read_register(&machine.vic, 0xd019));
+
+    make_live_frame(&machine, &frame, "sprite-sprite collision retrigger frame");
+    expect_u8("immc irq retriggered", 0xf5, vicii_read_register(&machine.vic, 0xd019));
+    expect_u8("d01e participants", 0x03, vicii_read_register(&machine.vic, 0xd01e));
+    expect_u8("d01e read clear after live collision", 0x00, vicii_read_register(&machine.vic, 0xd01e));
+}
+
+static void test_sprite_background_priority_and_collision(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    c64_bus_write(&machine.bus, 0xd01a, 0x02); /* enable IMBC */
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+
+    make_live_frame(&machine, &frame, "front sprite over text frame");
+    expect_u32("front sprite hides foreground text", TEST_PALETTE_7,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u8("imbc irq pending", 0xf3, vicii_read_register(&machine.vic, 0xd019));
+    expect_u8("d01f front sprite collides with foreground", 0x01, vicii_read_register(&machine.vic, 0xd01f));
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+    c64_bus_write(&machine.bus, 0xd01b, 0x01); /* sprite 0 behind foreground graphics */
+
+    make_live_frame(&machine, &frame, "behind sprite over text frame");
+    expect_u32("foreground text hides behind sprite", TEST_PALETTE_5,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u8("behind sprite still collides with foreground", 0x01, vicii_read_register(&machine.vic, 0xd01f));
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 100, 99, 7);
+    c64_bus_write(&machine.bus, 0xd01b, 0x01);
+
+    make_live_frame(&machine, &frame, "behind sprite over background frame");
+    expect_u32("behind sprite visible over background", TEST_PALETTE_7,
+               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+    expect_u8("no sprite-background collision on background pixel", 0x00, vicii_read_register(&machine.vic, 0xd01f));
+}
+
+static void test_border_hides_sprites_but_collision_latches(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    setup_solid_sprite(&machine, 0, 0x0340, 10, 9, 7);
+    setup_solid_sprite(&machine, 1, 0x0380, 10, 9, 10);
+
+    make_live_frame(&machine, &frame, "border sprite collision frame");
+
+    expect_u32("border hides sprite pixel", TEST_PALETTE_2,
+               frame.pixels[10 * C64_FRAME_WIDTH + 10]);
+    expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
+}
+
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
     test_irq_status_high_bit_reports_enabled_pending_irq();
+    test_sprite_collision_registers_read_clear();
     test_bad_line_ba_asserts_at_cycle_12();
     test_frame_snapshot_geometry_and_regions();
     test_reset_screen_starts_clear();
@@ -644,6 +834,7 @@ int main(void) {
     test_border_rsel_csel();
     test_xscroll_shifts_content();
     test_yscroll_shifts_content();
+    test_default_yscroll_fills_display_rows();
     test_ecm_text_mode();
     test_standard_bitmap_mode();
     test_basic_hires_circle_setup_selects_bitmap_mode();
@@ -652,5 +843,9 @@ int main(void) {
     test_invalid_mode_forces_black();
     test_live_raster_border_change_and_text();
     test_sprite_hires_appears_at_position();
+    test_sprite_y50_touches_top_border_fully_revealed();
+    test_sprite_sprite_collision_priority_and_irq();
+    test_sprite_background_priority_and_collision();
+    test_border_hides_sprites_but_collision_latches();
     return 0;
 }
