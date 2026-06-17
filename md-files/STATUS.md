@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16 plus VIC-II Phase E (sprite priority and collisions).
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), and VIC-II Phase G (open bus / unused register reads). Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -154,6 +154,29 @@ Implemented:
   - symbol resolver hooks exist and currently default to not found
   - breakpoint rendering/toggling uses runtime-owned execute breakpoint snapshots
   - regression coverage validates core decoder formatting and symbol lookup behavior
+- Tools-level debug symbol table:
+  - `src/tools/symbols` implements a frontend/debug-session-owned symbol table,
+    separate from emulator machine state and separate from the assembler's
+    internal symbol machinery
+  - symbols store an owned name, 16-bit address, source kind, and owned exact
+    source name
+  - source kinds cover file, assembler, user, and built-in symbols
+  - exact address lookup uses a 65536-entry primary index storing entry indexes
+  - name lookup uses `stb_ds` and keeps one current binding per name
+  - `symbol_table_add()` supports deterministic conflict handling with explicit
+    overwrite behavior; v1 stores only active/current symbols, not same-address
+    aliases or history
+  - `symbol_table_remove_source()` and `symbol_table_clear()` support reassembly,
+    reload, and session reset workflows
+  - nearest-symbol lookup is available for future debugger/UI use, while current
+    disassembler formatting remains exact-only
+  - `symbol_table_make_resolver()` backs the existing disassembler
+    `symbol_resolver` interface
+  - `stb_ds` implementation is centralized in `external/stb/stb_ds_impl.c`
+    instead of being embedded in individual users
+  - regression coverage validates add/find, conflict and overwrite behavior,
+    source removal, nearest lookup, resolver enumeration, and disassembler
+    integration
 - Phase 12 debugger UI foundation, View 4 breakpoint pass:
   - misc/debugger view is now organized as scrollable tabs: Programs, Debugger, Breakpoints, and Hardware
   - Programs tab can select a `.prg` file and send it to runtime for direct RAM loading at the PRG load address
@@ -196,7 +219,8 @@ Implemented:
   - VIC-II timing now supports NTSC and PAL line/frame timing selected from machine configuration
   - `[config]` INI keys now persist scroll wheel speed, turbo speeds, symbol files, and `Save=yes`
   - turbo speed CSV is parsed into runtime-owned available multipliers; the first entry becomes the active paced multiplier
-  - symbol file changes currently trigger view refresh plumbing only; real symbol unload/load remains future work
+  - symbol file changes currently trigger view refresh plumbing only; real symbol
+    file parsing and UI-driven load/unload into `src/tools/symbols` remain future work
 - Phase 16 timed bus event and live VIC-II raster foundation:
   - machine owns a monotonic master cycle and advances VIC-II/CIA/SID hooks to
     timestamped CPU bus event cycles before applying CPU-visible side effects
@@ -266,6 +290,29 @@ Implemented:
     write-ignore behavior, sprite-sprite collision IRQs, sprite-background priority
     and collision behavior, and border-over-sprite collision latching
 
+- VIC-II Phase F (light pen): skipped — not implemented; $D013/$D014 remain stubbed.
+- VIC-II Phase G — Open Bus / Unused Register Reads:
+  - `$D016` bits 7:5 are unused and read as 1; bits 4:0 (MCM/CSEL/XSCROLL) continue
+    to reflect written state
+  - `$D020`–`$D02E` (border, background 0–3, sprite multicolor 0–1, sprite colors 0–7)
+    bits 7:4 are unused and read as 1; bits 3:0 continue to reflect the written color index
+  - `$D02F`–`$D03F` (unused register block) all reads return `$FF`; existing register
+    mirroring ($D000–$D3FF via `addr & 0x3F`) means mirrored addresses ($D12F, $D22F,
+    $D32F, etc.) also return `$FF` without any additional code
+  - internal register storage is unchanged — writes still store full bytes; only the
+    read path applies the above masks
+  - `$D018` has no Phase G masking; read behavior is unchanged from pre-Phase-G
+  - `$D019` bits 6:4 read as 1 and bit 7 reflects aggregate enabled-pending IRQ
+    summary: re-verified by existing `test_irq_status_high_bit_reports_enabled_pending_irq`;
+    not reimplemented
+  - `$D01A` bits 7:4 read as 1: re-verified by the same existing test; not reimplemented
+  - `$D01E`/`$D01F` read-clear and write-ignore behavior: re-verified by existing
+    `test_sprite_collision_registers_read_clear`; not reimplemented
+  - last-byte-on-bus stretch goal: not attempted (not authorized by human maintainer)
+  - regression tests added: `test_d016_unused_high_bits_read_as_1`,
+    `test_color_register_high_nibble_reads_as_1`, `test_unused_register_block_reads_ff`,
+    `test_unused_register_block_mirrored_reads_ff`, `test_d018_no_phase_g_masking`
+
 - VIC-II bank-aware character and screen rendering:
   - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
     full absolute VIC address: `vic_bank + within-bank offset`
@@ -283,8 +330,9 @@ Implemented:
 ## Not Implemented
 
 - VIC-II remaining accuracy/features:
-  - light pen is not implemented
-  - open-bus / last-byte-on-bus behavior is not implemented
+  - light pen is not implemented (Phase F skipped)
+  - open-bus / last-byte-on-bus (last fetched byte returned for open addresses) is not
+    implemented; unused register addresses return fixed $FF per Phase G
   - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA handling
     distinguishes CPU read and write event kinds, but sprite-fetch BA events and
     exact AEC/RDY timing remain deferred

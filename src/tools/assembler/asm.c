@@ -56,7 +56,10 @@ static void reset_pass_state(ASSEMBLER *as) {
     as->active_scope = as->root_scope;
     as->symbol_table = as->root_scope ? as->root_scope->symbol_table : NULL;
     as->scope_stack.items = 0;
-    as->macro_stack.items = 0;
+    loop_stack_clear(as);
+    macro_stack_clear(as);
+    macro_definitions_clear(as);
+    as->macro_id = 0;
     defines_free(as);
     free((char *)as->strcode);
     as->strcode = NULL;
@@ -97,10 +100,11 @@ static void parse_line(ASSEMBLER *as) {
         return;
     }
 
+    if(as->token.type == TOKEN_VAR && parse_macro_if_is_macro(as)) {
+        return;
+    }
+
     if(is_variable(as)) {
-        if(parse_macro_if_is_macro(as)) {
-            return;
-        }
         parse_variable(as);
         return;
     }
@@ -129,6 +133,8 @@ int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
     ARRAY_INIT(&as->defines, DEFINE);
     ARRAY_INIT(&as->scope_stack, SCOPE*);
     ARRAY_INIT(&as->anon_symbols, uint16_t);
+    ARRAY_INIT(&as->loop_stack, LOOP);
+    ARRAY_INIT(&as->macros, MACRO);
     ARRAY_INIT(&as->macro_stack, MACRO_EXPAND);
     ARRAY_INIT(&as->if_stack, IF_FRAME);
     ARRAY_INIT(&as->targets, TARGET*);
@@ -189,6 +195,7 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
                 continue;
             }
 
+            macro_substitute_line(as);
             define_substitute(as);
             as->cur = as->line;
             parse_line(as);
@@ -196,6 +203,9 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
 
         if(as->scope_stack.items > 0) {
             asm_err(as, ASM_ERR_RESOLVE, "Unclosed scope at end of assembly");
+        }
+        if(as->loop_stack.items > 0) {
+            asm_err(as, ASM_ERR_RESOLVE, "Unclosed loop at end of assembly");
         }
         if(as->if_stack.items > 0 || as->if_skip_depth > 0) {
             asm_err(as, ASM_ERR_RESOLVE, "Unclosed conditional assembly block");
@@ -205,11 +215,78 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
     return as->errorlog && as->errorlog->log_array.items > initial_errors ? ASM_ERR : ASM_OK;
 }
 
+static int assembler_symbol_is_macro_local(const SYMBOL_LABEL *symbol) {
+    return symbol->symbol_length == GEN_NAME_LEN &&
+        0 == strncmp(symbol->symbol_name, "__macro_local_", 14);
+}
+
+static int assembler_symbol_append(char *out, size_t out_size, size_t *len, const char *text, size_t text_len) {
+    if(*len + text_len >= out_size) {
+        return 0;
+    }
+    memcpy(out + *len, text, text_len);
+    *len += text_len;
+    out[*len] = '\0';
+    return 1;
+}
+
+static void assembler_walk_scope_symbols(SCOPE *scope, char *prefix, size_t prefix_len, assembler_symbol_cb cb, void *user) {
+    char name[512];
+
+    if(!scope || !cb) {
+        return;
+    }
+
+    for(int bucket = 0; bucket < HASH_BUCKETS; bucket++) {
+        DYNARRAY *symbols = &scope->symbol_table[bucket];
+        for(size_t i = 0; i < symbols->items; i++) {
+            SYMBOL_LABEL *symbol = ARRAY_GET(symbols, SYMBOL_LABEL, i);
+            size_t name_len = 0;
+            if(symbol->symbol_type != SYMBOL_ADDRESS || assembler_symbol_is_macro_local(symbol)) {
+                continue;
+            }
+            if(!assembler_symbol_append(name, sizeof(name), &name_len, prefix, prefix_len)) {
+                continue;
+            }
+            if(!assembler_symbol_append(name, sizeof(name), &name_len, symbol->symbol_name, symbol->symbol_length)) {
+                continue;
+            }
+            cb(name, (uint16_t)symbol->symbol_value, user);
+        }
+    }
+
+    for(size_t i = 0; i < scope->child_scopes.items; i++) {
+        SCOPE *child = *ARRAY_GET(&scope->child_scopes, SCOPE*, i);
+        char child_prefix[512];
+        size_t child_prefix_len = prefix_len;
+        memcpy(child_prefix, prefix, prefix_len);
+        child_prefix[child_prefix_len] = '\0';
+        if(!assembler_symbol_append(child_prefix, sizeof(child_prefix), &child_prefix_len, child->scope_name, (size_t)child->scope_name_length)) {
+            continue;
+        }
+        if(!assembler_symbol_append(child_prefix, sizeof(child_prefix), &child_prefix_len, "::", 2)) {
+            continue;
+        }
+        assembler_walk_scope_symbols(child, child_prefix, child_prefix_len, cb, user);
+    }
+}
+
+void assembler_walk_symbols(ASSEMBLER *as, assembler_symbol_cb cb, void *user) {
+    char prefix[1] = {0};
+
+    if(!as || !cb || !as->root_scope) {
+        return;
+    }
+    assembler_walk_scope_symbols(as->root_scope, prefix, 0, cb, user);
+}
+
 void assembler_shutdown(ASSEMBLER *as) {
     if(!as) {
         return;
     }
     defines_free(as);
+    macro_stack_clear(as);
+    macro_definitions_clear(as);
     files_free(as);
     scope_destroy(as->root_scope);
     as->root_scope = NULL;
@@ -217,6 +294,9 @@ void assembler_shutdown(ASSEMBLER *as) {
     as->symbol_table = NULL;
     array_free(&as->scope_stack);
     array_free(&as->anon_symbols);
+    loop_stack_clear(as);
+    array_free(&as->loop_stack);
+    array_free(&as->macros);
     array_free(&as->macro_stack);
     array_free(&as->if_stack);
     targets_free(as);

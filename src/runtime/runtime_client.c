@@ -292,6 +292,20 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_ASSEMBLE_FILE,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.assemble_file.path, sizeof(command.data.assemble_file.path), "%s", path);
+    command.data.assemble_file.address = address;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_apply_machine_config(
     runtime_client *client,
     const c64_config *config,

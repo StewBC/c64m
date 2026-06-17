@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "ini.h"
-#define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
 
 typedef struct config_entry {

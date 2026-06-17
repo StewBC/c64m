@@ -4,6 +4,7 @@
 #include "runtime_breakpoint_ini.h"
 #include "runtime_command.h"
 #include "runtime_event.h"
+#include "runtime_assembler.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -991,6 +992,41 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
     runtime_publish_machine_state(rt);
 }
 
+static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_ASSEMBLE_COMPLETE,
+    };
+
+    event.data.assemble.address = address;
+    snprintf(event.data.assemble.path, sizeof(event.data.assemble.path), "%s", path ? path : "");
+    runtime_publish_event(rt, &event);
+}
+
+static void runtime_assemble_file_command(runtime *rt, const runtime_command *command) {
+    char error[1024];
+
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_error(rt, "assembly requires paused runtime");
+        return;
+    }
+
+    if (!runtime_assemble_file(
+            &rt->machine,
+            NULL,
+            command->data.assemble_file.path,
+            command->data.assemble_file.address,
+            NULL,
+            error,
+            sizeof(error))) {
+        runtime_publish_error(rt, error[0] != '\0' ? error : "assembly failed");
+        return;
+    }
+
+    runtime_publish_assemble_complete(rt, command->data.assemble_file.path, command->data.assemble_file.address);
+    runtime_publish_memory(rt, command->data.assemble_file.address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
+    runtime_publish_machine_state(rt);
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -1116,6 +1152,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_LOAD_PRG:
             runtime_load_prg(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_ASSEMBLE_FILE:
+            runtime_assemble_file_command(rt, command);
             break;
 
         case RUNTIME_COMMAND_APPLY_MACHINE_CONFIG:

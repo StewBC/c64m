@@ -35,6 +35,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
     RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
     RUNTIME_COMMAND_LOAD_PRG,
+    RUNTIME_COMMAND_ASSEMBLE_FILE,
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_PASTE_TEXT
 } runtime_command_type;
@@ -116,6 +117,11 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
         } load_prg;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+            uint16_t address;
+        } assemble_file;
 
         struct {
             c64_config config;

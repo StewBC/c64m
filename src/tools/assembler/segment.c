@@ -58,6 +58,7 @@ void targets_free(ASSEMBLER *as) {
         }
         for(size_t j = 0; j < t->segments.items; j++) {
             SEGMENT *s = *ARRAY_GET(&t->segments, SEGMENT*, j);
+            free((char *)s->segment_name);
             free(s);
         }
         array_free(&t->segments);

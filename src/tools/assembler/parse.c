@@ -33,6 +33,40 @@ static char *copy_trimmed_slice(const char *start, int len) {
     return out;
 }
 
+static char *copy_slice(const char *start, int len) {
+    if(len < 0) {
+        len = 0;
+    }
+    char *out = malloc((size_t)len + 1);
+    if(!out) {
+        return NULL;
+    }
+    if(len > 0) {
+        memcpy(out, start, (size_t)len);
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static char *copy_token_name(ASSEMBLER *as) {
+    char *out = malloc((size_t)as->token.name_length + 1);
+    if(!out) {
+        asm_err(as, ASM_ERR_FATAL, "Out of memory copying token name");
+        return NULL;
+    }
+    memcpy(out, as->token.name, as->token.name_length);
+    out[as->token.name_length] = '\0';
+    return out;
+}
+
+static int identifier_start(int c) {
+    return isalpha((unsigned char)c) || c == '_';
+}
+
+static int identifier_char(int c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
 static char *copy_token_string(ASSEMBLER *as) {
     if(as->token.type != TOKEN_STR) {
         asm_err(as, ASM_ERR_RESOLVE, "Expected quoted file name");
@@ -48,6 +82,221 @@ static char *copy_token_string(ASSEMBLER *as) {
     return out;
 }
 
+static int append_text_checked(ASSEMBLER *as, char *out, int *out_len, const char *text, int text_len) {
+    if(text_len <= 0) {
+        return 1;
+    }
+    int room = ASM_MAX_LINE - 1 - *out_len;
+    if(text_len > room) {
+        if(room > 0) {
+            memcpy(out + *out_len, text, (size_t)room);
+            *out_len += room;
+        }
+        out[*out_len] = '\0';
+        asm_err(as, ASM_ERR_FATAL, "Macro expansion line too long; truncated to %d characters", ASM_MAX_LINE - 1);
+        return 0;
+    }
+    memcpy(out + *out_len, text, (size_t)text_len);
+    *out_len += text_len;
+    out[*out_len] = '\0';
+    return 1;
+}
+
+static int append_buffer_text(ASSEMBLER *as, char **buf, size_t *len, size_t *cap, const char *src, size_t n) {
+    if(n == 0) {
+        return 1;
+    }
+    if(*len + n + 1 > *cap) {
+        size_t new_cap = *cap ? *cap : 64;
+        while(*len + n + 1 > new_cap) {
+            new_cap *= 2;
+        }
+        char *new_buf = realloc(*buf, new_cap);
+        if(!new_buf) {
+            asm_err(as, ASM_ERR_FATAL, "Out of memory building macro argument");
+            return 0;
+        }
+        *buf = new_buf;
+        *cap = new_cap;
+    }
+    memcpy(*buf + *len, src, n);
+    *len += n;
+    (*buf)[*len] = '\0';
+    return 1;
+}
+
+static char *parse_macro_arg(ASSEMBLER *as, const char **pp, int *out_len) {
+    const char *p = *pp;
+    while(*p == ' ' || *p == '\t') {
+        p++;
+    }
+
+    char *out = NULL;
+    size_t out_len_size = 0;
+    size_t out_cap = 0;
+    int parens = 0;
+    int in_string = 0;
+    int quote_wrapped = *p == '"';
+
+    if(quote_wrapped) {
+        p++;
+    }
+
+    while(*p) {
+        char c = *p;
+        if(!in_string) {
+            if(c == ';' || c == '\n' || c == '\r') {
+                break;
+            }
+            if(!quote_wrapped && c == ',' && parens == 0) {
+                break;
+            }
+            if(c == '(') {
+                parens++;
+            } else if(c == ')' && parens > 0) {
+                parens--;
+            } else if(c == '"') {
+                if(quote_wrapped) {
+                    p++;
+                    break;
+                }
+                in_string = 1;
+            }
+        } else if(c == '"' && p[-1] != '\\') {
+            in_string = 0;
+        }
+
+        if(!append_buffer_text(as, &out, &out_len_size, &out_cap, p, 1)) {
+            free(out);
+            *out_len = 0;
+            return NULL;
+        }
+        p++;
+    }
+
+    while(out_len_size > 0 && (out[out_len_size - 1] == ' ' || out[out_len_size - 1] == '\t')) {
+        out[--out_len_size] = '\0';
+    }
+
+    if(!out) {
+        out = copy_slice("", 0);
+        if(!out) {
+            asm_err(as, ASM_ERR_FATAL, "Out of memory building macro argument");
+            *out_len = 0;
+            return NULL;
+        }
+    }
+
+    *out_len = (int)out_len_size;
+    *pp = p;
+    return out;
+}
+
+static void loop_free(LOOP *loop) {
+    if(!loop) {
+        return;
+    }
+    if(loop->type == LOOP_FOR) {
+        free(loop->condition);
+        free(loop->adjust);
+    } else if(loop->type == LOOP_REPEAT) {
+        free(loop->var_name);
+    }
+    memset(loop, 0, sizeof(*loop));
+}
+
+void loop_stack_clear(ASSEMBLER *as) {
+    if(!as) {
+        return;
+    }
+    for(size_t i = 0; i < as->loop_stack.items; i++) {
+        LOOP *loop = ARRAY_GET(&as->loop_stack, LOOP, i);
+        loop_free(loop);
+    }
+    as->loop_stack.items = 0;
+}
+
+static void loop_stack_pop(ASSEMBLER *as) {
+    if(as->loop_stack.items == 0) {
+        return;
+    }
+    LOOP *loop = ARRAY_GET(&as->loop_stack, LOOP, as->loop_stack.items - 1);
+    loop_free(loop);
+    as->loop_stack.items--;
+}
+
+static void macro_free(MACRO *macro) {
+    if(!macro) {
+        return;
+    }
+    free(macro->name);
+    for(size_t i = 0; i < macro->parameters.items; i++) {
+        MACRO_PARAM *param = ARRAY_GET(&macro->parameters, MACRO_PARAM, i);
+        free(param->name);
+    }
+    array_free(&macro->parameters);
+    memset(macro, 0, sizeof(*macro));
+}
+
+void macro_definitions_clear(ASSEMBLER *as) {
+    if(!as) {
+        return;
+    }
+    for(size_t i = 0; i < as->macros.items; i++) {
+        MACRO *macro = ARRAY_GET(&as->macros, MACRO, i);
+        macro_free(macro);
+    }
+    as->macros.items = 0;
+}
+
+static void macro_expand_free(ASSEMBLER *as, MACRO_EXPAND *expand) {
+    if(!expand) {
+        return;
+    }
+    for(int ri = (int)expand->renames.items - 1; ri >= 0; ri--) {
+        RENAME_MAP *ren = ARRAY_GET(&expand->renames, RENAME_MAP, (size_t)ri);
+        symbol_delete_local(as->active_scope, ren->generated_name, GEN_NAME_LEN, as->pass == 2);
+        free(ren->generated_name);
+        free(ren->user_name);
+    }
+    for(size_t ai = 0; ai < expand->args.items; ai++) {
+        MACRO_ARG_VALUE *arg = ARRAY_GET(&expand->args, MACRO_ARG_VALUE, ai);
+        free(arg->value);
+    }
+    array_free(&expand->renames);
+    array_free(&expand->args);
+    memset(expand, 0, sizeof(*expand));
+}
+
+static void macro_stack_pop(ASSEMBLER *as) {
+    if(!as || as->macro_stack.items == 0) {
+        return;
+    }
+    MACRO_EXPAND *expand = ARRAY_GET(&as->macro_stack, MACRO_EXPAND, as->macro_stack.items - 1);
+    macro_expand_free(as, expand);
+    as->macro_stack.items--;
+}
+
+void macro_stack_clear(ASSEMBLER *as) {
+    if(!as) {
+        return;
+    }
+    while(as->macro_stack.items > 0) {
+        macro_stack_pop(as);
+    }
+}
+
+static int64_t evaluate_loop_expression(ASSEMBLER *as, const char *expr) {
+    const char *saved_cur = as->cur;
+    TOKEN saved_token = as->token;
+    as->cur = expr;
+    memset(&as->token, 0, sizeof(as->token));
+    int64_t value = expr_full_evaluate(as);
+    as->cur = saved_cur;
+    as->token = saved_token;
+    return value;
+}
+
 static int next_token_op_is(ASSEMBLER *as, char op) {
     const char *saved_cur = as->cur;
     TOKEN saved_token = as->token;
@@ -56,6 +305,10 @@ static int next_token_op_is(ASSEMBLER *as, char op) {
     as->cur = saved_cur;
     as->token = saved_token;
     return matched;
+}
+
+static int token_is_line_end(ASSEMBLER *as) {
+    return as->token.type == TOKEN_END && as->token.op == '\0';
 }
 
 static void set_current_output_address(ASSEMBLER *as, uint16_t address) {
@@ -326,6 +579,724 @@ static void dot_define(ASSEMBLER *as) {
     }
 }
 
+static int line_dot_command_id(ASSEMBLER *as, const char *line) {
+    const char *saved_cur = as->cur;
+    TOKEN saved_token = as->token;
+    int opcode_id = -1;
+
+    as->cur = line;
+    get_token(as);
+    if(as->token.type == TOKEN_VAR && as->token.name_length >= 2 && as->token.name[0] == '.') {
+        OPCODEINFO *info = in_word_set(as->token.name, as->token.name_length);
+        if(info && info->mnemonic[0] == '.') {
+            opcode_id = info->opcode_id;
+        }
+    }
+
+    as->cur = saved_cur;
+    as->token = saved_token;
+    return opcode_id;
+}
+
+static int skip_to_matching_dot(ASSEMBLER *as, int start_id, int end_id, const char **matched_line_start) {
+    int depth = 0;
+    FILE_FRAME *frame = file_stack_top(as);
+    while(frame && frame->read_ptr && *frame->read_ptr) {
+        const char *line_start = frame->read_ptr;
+        if(!file_read_line(as)) {
+            break;
+        }
+
+        int scan_len = as->line_len;
+        char scan_line[ASM_MAX_LINE];
+        memcpy(scan_line, as->line, (size_t)scan_len + 1);
+
+        int in_string = 0;
+        for(int i = 0; i < scan_len; i++) {
+            if(in_string) {
+                if(scan_line[i] == '\\' && i + 1 < scan_len) {
+                    i++;
+                } else if(scan_line[i] == '"') {
+                    in_string = 0;
+                }
+            } else if(scan_line[i] == '"') {
+                in_string = 1;
+            } else if(scan_line[i] == ';') {
+                scan_line[i] = '\0';
+                break;
+            }
+        }
+
+        int opcode_id = line_dot_command_id(as, scan_line);
+        if(opcode_id == start_id) {
+            depth++;
+        } else if(opcode_id == end_id) {
+            if(depth == 0) {
+                if(matched_line_start) {
+                    *matched_line_start = line_start;
+                }
+                return 1;
+            }
+            depth--;
+        }
+        frame = file_stack_top(as);
+    }
+    return 0;
+}
+
+static int skip_to_matching_loop_end(ASSEMBLER *as, int start_id, int end_id) {
+    return skip_to_matching_dot(as, start_id, end_id, NULL);
+}
+
+static int token_is_opcode_text(const char *name, int name_len) {
+    if(name_len != 3) {
+        return 0;
+    }
+    OPCODEINFO *info = in_word_set(name, (unsigned int)name_len);
+    return info && info->mnemonic[0] != '.';
+}
+
+static MACRO_ARG_VALUE *macro_arg_lookup(MACRO_EXPAND *expand, const char *name, int name_len) {
+    for(size_t i = 0; i < expand->args.items; i++) {
+        MACRO_ARG_VALUE *arg = ARRAY_GET(&expand->args, MACRO_ARG_VALUE, i);
+        if(arg->name_len == name_len && 0 == asm_strnicmp(arg->name, name, (size_t)name_len)) {
+            return arg;
+        }
+    }
+    return NULL;
+}
+
+static RENAME_MAP *macro_rename_lookup(MACRO_EXPAND *expand, const char *name, int name_len) {
+    for(size_t i = 0; i < expand->renames.items; i++) {
+        RENAME_MAP *ren = ARRAY_GET(&expand->renames, RENAME_MAP, i);
+        if((int)ren->user_name_len == name_len && 0 == asm_strnicmp(ren->user_name, name, (size_t)name_len)) {
+            return ren;
+        }
+    }
+    return NULL;
+}
+
+void macro_substitute_line(ASSEMBLER *as) {
+    FILE_FRAME *frame = file_stack_top(as);
+    if(!as || !frame || !frame->is_macro || as->macro_stack.items == 0) {
+        return;
+    }
+    if(line_dot_command_id(as, as->line) == GPERF_DOT_LOCAL) {
+        return;
+    }
+
+    MACRO_EXPAND *expand = ARRAY_GET(&as->macro_stack, MACRO_EXPAND, as->macro_stack.items - 1);
+    char out[ASM_MAX_LINE];
+    int out_len = 0;
+    int in_string = 0;
+
+    for(int i = 0; i < as->line_len;) {
+        char c = as->line[i];
+        if(in_string) {
+            append_text_checked(as, out, &out_len, &as->line[i], 1);
+            if(c == '\\' && i + 1 < as->line_len) {
+                i++;
+                append_text_checked(as, out, &out_len, &as->line[i], 1);
+            } else if(c == '"') {
+                in_string = 0;
+            }
+            i++;
+            continue;
+        }
+
+        if(c == '"') {
+            in_string = 1;
+            append_text_checked(as, out, &out_len, &as->line[i], 1);
+            i++;
+            continue;
+        }
+
+        if(identifier_start(c) || (c == ':' && i + 1 < as->line_len && as->line[i + 1] == ':')) {
+            int start = i;
+            if(c == ':' && i + 1 < as->line_len && as->line[i + 1] == ':') {
+                i += 2;
+            } else {
+                i++;
+            }
+            while(i < as->line_len) {
+                if(identifier_char(as->line[i])) {
+                    i++;
+                } else if(as->line[i] == ':' && i + 1 < as->line_len && as->line[i + 1] == ':') {
+                    i += 2;
+                } else {
+                    break;
+                }
+            }
+
+            const char *name = &as->line[start];
+            int name_len = i - start;
+            MACRO_ARG_VALUE *arg = NULL;
+            RENAME_MAP *ren = NULL;
+            if(!token_is_opcode_text(name, name_len)) {
+                arg = macro_arg_lookup(expand, name, name_len);
+                if(!arg) {
+                    ren = macro_rename_lookup(expand, name, name_len);
+                }
+            }
+
+            if(arg) {
+                append_text_checked(as, out, &out_len, arg->value, arg->value_len);
+            } else if(ren) {
+                append_text_checked(as, out, &out_len, ren->generated_name, GEN_NAME_LEN);
+            } else {
+                append_text_checked(as, out, &out_len, name, name_len);
+            }
+            continue;
+        }
+
+        append_text_checked(as, out, &out_len, &as->line[i], 1);
+        i++;
+    }
+
+    out[out_len] = '\0';
+    memcpy(as->line, out, (size_t)out_len + 1);
+    as->line_len = out_len;
+}
+
+static void dot_local(ASSEMBLER *as) {
+    FILE_FRAME *frame = file_stack_top(as);
+    if(!frame || !frame->is_macro || as->macro_stack.items == 0) {
+        asm_err(as, ASM_ERR_RESOLVE, ".local is only valid inside a .macro");
+        return;
+    }
+
+    do {
+        next_token(as);
+        if(as->token.type != TOKEN_VAR) {
+            asm_err(as, ASM_ERR_RESOLVE, ".local needs to be followed by a variable");
+            return;
+        }
+        if(!symbol_declare_local(as, as->token.name, as->token.name_length)) {
+            asm_err(as, ASM_ERR_FATAL, "Unable to declare macro local %.*s",
+                    (int)as->token.name_length, as->token.name);
+            return;
+        }
+        next_token(as);
+    } while(as->token.op == ',');
+}
+
+static int macro_add_parameter(ASSEMBLER *as, MACRO *macro, const char *name, int name_len) {
+    MACRO_PARAM param;
+    param.name = copy_slice(name, name_len);
+    param.name_len = name_len;
+    if(!param.name) {
+        asm_err(as, ASM_ERR_FATAL, "Out of memory storing macro parameter");
+        return 0;
+    }
+    if(ASM_OK != ARRAY_ADD(&macro->parameters, param)) {
+        free(param.name);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory storing macro parameter");
+        return 0;
+    }
+    return 1;
+}
+
+static int resolve_def_target(ASSEMBLER *as, const char *name, int len, SCOPE **out_parent, const char **out_leaf, int *out_leaf_len) {
+    if(len >= 2 && name[0] == ':' && name[1] == ':') {
+        *out_parent = as->root_scope;
+        *out_leaf = name + 2;
+        *out_leaf_len = len - 2;
+        return 1;
+    }
+    *out_parent = as->active_scope;
+    *out_leaf = name;
+    *out_leaf_len = len;
+    return 1;
+}
+
+static void dot_macro(ASSEMBLER *as) {
+    MACRO macro;
+    memset(&macro, 0, sizeof(macro));
+    ARRAY_INIT(&macro.parameters, MACRO_PARAM);
+    int macro_ok = 1;
+
+    next_token(as);
+    if(as->token.type != TOKEN_VAR) {
+        macro_ok = 0;
+        asm_err(as, ASM_ERR_RESOLVE, "Macro has no name");
+    } else {
+        macro.name = copy_token_name(as);
+        macro.name_len = (int)as->token.name_length;
+        if(!macro.name) {
+            macro_free(&macro);
+            return;
+        }
+        for(size_t i = 0; i < as->macros.items; i++) {
+            MACRO *existing = ARRAY_GET(&as->macros, MACRO, i);
+            if(existing->name_len == macro.name_len &&
+               0 == asm_strnicmp(existing->name, macro.name, (size_t)macro.name_len)) {
+                macro_ok = 0;
+                asm_err(as, ASM_ERR_DEFINE, "Macro with name %.*s has already been defined",
+                        macro.name_len, macro.name);
+            }
+        }
+        next_token(as);
+    }
+
+    while(!token_is_line_end(as)) {
+        if(as->token.op == ',') {
+            next_token(as);
+            continue;
+        }
+        if(as->token.type != TOKEN_VAR) {
+            macro_ok = 0;
+            asm_err(as, ASM_ERR_DEFINE, "Macro definition error");
+            break;
+        }
+        if(!macro_add_parameter(as, &macro, as->token.name, (int)as->token.name_length)) {
+            macro_free(&macro);
+            return;
+        }
+        next_token(as);
+    }
+
+    FILE_FRAME *frame = file_stack_top(as);
+    macro.body_file = frame ? frame->file : NULL;
+    macro.body_start = frame ? frame->read_ptr : NULL;
+    macro.body_line = frame ? frame->line_num : 0;
+
+    const char *end_line = NULL;
+    if(!skip_to_matching_dot(as, GPERF_DOT_MACRO, GPERF_DOT_ENDMACRO, &end_line)) {
+        macro_ok = 0;
+        asm_err(as, ASM_ERR_RESOLVE, ".macro %.*s with no .endmacro",
+                macro.name_len, macro.name ? macro.name : "");
+    }
+
+    if(macro_ok) {
+        if(ASM_OK != ARRAY_ADD(&as->macros, macro)) {
+            macro_free(&macro);
+            asm_err(as, ASM_ERR_FATAL, "Out of memory storing macro");
+        }
+    } else {
+        macro_free(&macro);
+    }
+    (void)end_line;
+}
+
+static void dot_endmacro(ASSEMBLER *as) {
+    FILE_FRAME *frame = file_stack_top(as);
+    if(frame && frame->is_macro && as->macro_stack.items > 0) {
+        macro_stack_pop(as);
+        file_stack_pop(as);
+        return;
+    }
+    asm_err(as, ASM_ERR_RESOLVE, ".endmacro but not running a macro");
+}
+
+static void dot_endscope(ASSEMBLER *as) {
+    if(!as->active_scope || as->active_scope->scope_type != GPERF_DOT_SCOPE) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endscope without a matching .scope");
+        return;
+    }
+    if(!scope_pop(as)) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endscope without a matching .scope");
+    }
+}
+
+static void dot_endproc(ASSEMBLER *as) {
+    if(!as->active_scope || as->active_scope->scope_type != GPERF_DOT_PROC) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endproc without a matching .proc");
+        return;
+    }
+    if(!scope_pop(as)) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endproc without a matching .proc");
+    }
+}
+
+static void dot_scope(ASSEMBLER *as) {
+    const char *name;
+    int name_len;
+    char anon_name[16];
+
+    next_token(as);
+    if(token_is_line_end(as)) {
+        name_len = snprintf(anon_name, sizeof(anon_name), "anon_%04X", ++as->active_scope->anon_scope_id);
+        name = anon_name;
+    } else if(as->token.type == TOKEN_VAR) {
+        name = as->token.name;
+        name_len = (int)as->token.name_length;
+        if(symbol_has_scope_path(name, name_len)) {
+            asm_err(as, ASM_ERR_DEFINE, "The name %.*s is scoped and not allowed as a scope name", name_len, name);
+            return;
+        }
+        next_token(as);
+        if(!token_is_line_end(as)) {
+            asm_err(as, ASM_ERR_RESOLVE, ".scope does not support file= or dest= options on C64");
+            while(!token_is_line_end(as)) {
+                next_token(as);
+            }
+            return;
+        }
+    } else {
+        asm_err(as, ASM_ERR_RESOLVE, ".scope name must be an identifier");
+        return;
+    }
+
+    SCOPE *scope = scope_find_child(as->active_scope, name, name_len);
+    if(!scope) {
+        scope = scope_add(as, name, name_len, as->active_scope, GPERF_DOT_SCOPE);
+        if(!scope) {
+            asm_err(as, ASM_ERR_FATAL, "Out of memory creating scope %.*s", name_len, name);
+            return;
+        }
+    }
+    scope_push(as, scope);
+}
+
+static void dot_proc(ASSEMBLER *as) {
+    next_token(as);
+    if(as->token.type != TOKEN_VAR) {
+        asm_err(as, ASM_ERR_RESOLVE, ".proc must be followed by a name");
+        return;
+    }
+
+    SCOPE *parent = NULL;
+    const char *leaf = NULL;
+    int leaf_len = 0;
+    resolve_def_target(as, as->token.name, (int)as->token.name_length, &parent, &leaf, &leaf_len);
+    if(leaf_len <= 0 || symbol_has_scope_path(leaf, leaf_len)) {
+        asm_err(as, ASM_ERR_DEFINE, "The name %.*s is scoped and not allowed", leaf_len, leaf ? leaf : "");
+        return;
+    }
+
+    SCOPE *scope = scope_find_child(parent, leaf, leaf_len);
+    if(scope) {
+        if(as->pass == 1) {
+            asm_err(as, ASM_ERR_DEFINE, "In this scope a .proc has already been defined with the name %.*s", leaf_len, leaf);
+        } else {
+            scope_push(as, scope);
+        }
+        return;
+    }
+
+    symbol_store_in_scope(as, parent, leaf, (uint32_t)leaf_len, SYMBOL_ADDRESS, current_output_address(as));
+    scope = scope_add(as, leaf, leaf_len, parent, GPERF_DOT_PROC);
+    if(!scope) {
+        asm_err(as, ASM_ERR_FATAL, "Out of memory creating proc %.*s", leaf_len, leaf);
+        return;
+    }
+    scope_push(as, scope);
+}
+
+static void dot_segdef(ASSEMBLER *as) {
+    SEGMENT segment;
+    memset(&segment, 0, sizeof(segment));
+
+    next_token(as);
+    if(as->token.type != TOKEN_STR) {
+        asm_err(as, ASM_ERR_RESOLVE, ".segdef expects a quoted segment name");
+        return;
+    }
+    segment.segment_name = as->token.name;
+    segment.segment_name_length = as->token.name_length;
+    segment.segment_name_hash = as->token.name_hash;
+
+    next_token(as);
+    if(as->token.op != ',') {
+        asm_err(as, ASM_ERR_RESOLVE, ".segdef expects a comma then a start address after the name");
+        return;
+    }
+
+    uint16_t start = (uint16_t)expr_full_evaluate(as);
+    int do_not_emit = 0;
+    if(as->token.op == ',') {
+        next_token(as);
+        if(as->token.type == TOKEN_VAR &&
+           as->token.name_length == 4 &&
+           0 == asm_strnicmp(as->token.name, "emit", 4)) {
+            do_not_emit = 0;
+            next_token(as);
+        } else if(as->token.type == TOKEN_VAR &&
+                  as->token.name_length == 6 &&
+                  0 == asm_strnicmp(as->token.name, "noemit", 6)) {
+            do_not_emit = 1;
+            next_token(as);
+        } else {
+            asm_err(as, ASM_ERR_RESOLVE, "The optional parameter to .segdef after the name and start is either emit or noemit");
+            return;
+        }
+    }
+    if(!token_is_line_end(as)) {
+        asm_err(as, ASM_ERR_RESOLVE, "Unexpected token after .segdef");
+        return;
+    }
+
+    SEGMENT *existing = segment_find(&as->active_target->segments, &segment);
+    if(existing) {
+        if(as->pass == 1) {
+            asm_err(as, ASM_ERR_DEFINE, "Segment %.*s has already been defined",
+                    (int)segment.segment_name_length, segment.segment_name);
+        }
+        return;
+    }
+
+    SEGMENT *new_segment = malloc(sizeof(*new_segment));
+    if(!new_segment) {
+        asm_err(as, ASM_ERR_FATAL, "Out of memory creating segment");
+        return;
+    }
+    memset(new_segment, 0, sizeof(*new_segment));
+    if(!set_name((char **)&new_segment->segment_name, segment.segment_name, (int)segment.segment_name_length)) {
+        free(new_segment);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory storing segment name");
+        return;
+    }
+    new_segment->segment_name_length = segment.segment_name_length;
+    new_segment->segment_name_hash = segment.segment_name_hash;
+    new_segment->segment_start_address = start;
+    new_segment->segment_output_address = start;
+    new_segment->segment_init = 1;
+    new_segment->do_not_emit = do_not_emit;
+    if(ASM_OK != ARRAY_ADD(&as->active_target->segments, new_segment)) {
+        free((char *)new_segment->segment_name);
+        free(new_segment);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory tracking segment");
+    }
+}
+
+static void dot_segment(ASSEMBLER *as) {
+    SEGMENT key;
+    memset(&key, 0, sizeof(key));
+
+    next_token(as);
+    if(as->token.type != TOKEN_STR) {
+        asm_err(as, ASM_ERR_RESOLVE, ".segment expects a quoted segment name");
+        return;
+    }
+    key.segment_name = as->token.name;
+    key.segment_name_length = as->token.name_length;
+    key.segment_name_hash = as->token.name_hash;
+
+    SEGMENT *segment = NULL;
+    if(key.segment_name_length == 0) {
+        segment = *ARRAY_GET(&as->active_target->segments, SEGMENT*, 0);
+    } else {
+        segment = segment_find(&as->active_target->segments, &key);
+    }
+    if(!segment) {
+        asm_err(as, ASM_ERR_DEFINE, "Segment %.*s not defined",
+                (int)key.segment_name_length, key.segment_name);
+        return;
+    }
+    as->active_target->active_segment = segment;
+
+    next_token(as);
+    if(!token_is_line_end(as)) {
+        asm_err(as, ASM_ERR_RESOLVE, "Unexpected token after .segment");
+    }
+}
+
+static void restore_loop_body(ASSEMBLER *as, LOOP *loop) {
+    FILE_FRAME *frame = file_stack_top(as);
+    if(!frame) {
+        return;
+    }
+    frame->file = loop->body_file;
+    frame->read_ptr = loop->body_start;
+    frame->line_num = loop->body_line;
+    as->current_file = frame->file;
+    as->current_file_name = frame->file ? frame->file->display_name : NULL;
+    as->current_line = frame->line_num;
+}
+
+static void dot_for(ASSEMBLER *as) {
+    LOOP loop;
+    memset(&loop, 0, sizeof(loop));
+    loop.type = LOOP_FOR;
+
+    next_token(as);
+    if(as->token.type != TOKEN_VAR) {
+        asm_err(as, ASM_ERR_RESOLVE, ".for must be followed by a variable name");
+        return;
+    }
+    const char *var_name = as->token.name;
+    uint32_t var_name_len = as->token.name_length;
+
+    next_token(as);
+    expect_op(as, '=');
+    uint64_t value = (uint64_t)expr_evaluate(as);
+    symbol_write(as, var_name, var_name_len, SYMBOL_VARIABLE, value);
+
+    if(as->token.op != ',') {
+        asm_err(as, ASM_ERR_RESOLVE, ".for requires a condition after the initializer");
+        return;
+    }
+
+    const char *condition_start = as->cur;
+    int64_t condition = expr_full_evaluate(as);
+    const char *condition_end = as->token.op == ',' ? as->token.name : as->cur;
+    if(as->pass == 1 && as->expression_unknown) {
+        asm_err(as, ASM_ERR_RESOLVE, ".for condition must resolve on pass 1");
+        condition = 0;
+    }
+
+    if(as->token.op != ',') {
+        asm_err(as, ASM_ERR_RESOLVE, ".for requires an iteration expression");
+        return;
+    }
+
+    const char *adjust_start = as->cur;
+    int adjust_len = (int)strlen(adjust_start);
+    loop.condition = copy_trimmed_slice(condition_start, (int)(condition_end - condition_start));
+    loop.adjust = copy_trimmed_slice(adjust_start, adjust_len);
+    if(!loop.condition || !loop.adjust) {
+        loop_free(&loop);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory storing .for loop");
+        return;
+    }
+    if(loop.condition[0] == '\0' || loop.adjust[0] == '\0') {
+        loop_free(&loop);
+        asm_err(as, ASM_ERR_RESOLVE, ".for requires condition and iteration expressions");
+        return;
+    }
+
+    if(!condition) {
+        loop_free(&loop);
+        if(!skip_to_matching_loop_end(as, GPERF_DOT_FOR, GPERF_DOT_ENDFOR)) {
+            asm_err(as, ASM_ERR_RESOLVE, ".for without .endfor");
+        }
+        return;
+    }
+
+    FILE_FRAME *frame = file_stack_top(as);
+    loop.body_file = frame ? frame->file : NULL;
+    loop.body_start = frame ? frame->read_ptr : NULL;
+    loop.body_line = frame ? frame->line_num : 0;
+    if(ASM_OK != ARRAY_ADD(&as->loop_stack, loop)) {
+        loop_free(&loop);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory pushing .for loop");
+    }
+}
+
+static void dot_endfor(ASSEMBLER *as) {
+    if(as->loop_stack.items == 0) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endfor without a matching .for");
+        return;
+    }
+
+    LOOP *loop = ARRAY_GET(&as->loop_stack, LOOP, as->loop_stack.items - 1);
+    if(loop->type != LOOP_FOR) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endfor without a matching .for");
+        return;
+    }
+
+    FILE_FRAME *frame = file_stack_top(as);
+    int same_file = frame && frame->file == loop->body_file;
+    size_t iterations = ++loop->iterations;
+    evaluate_loop_expression(as, loop->adjust);
+    int64_t condition = evaluate_loop_expression(as, loop->condition);
+    if(as->pass == 1 && as->expression_unknown) {
+        asm_err(as, ASM_ERR_RESOLVE, ".for condition must resolve on pass 1");
+        condition = 0;
+    }
+
+    if(iterations < 65536 && same_file && condition) {
+        restore_loop_body(as, loop);
+        return;
+    }
+
+    if(!same_file) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endfor matches .for in file %s, body at line %zu",
+                loop->body_file && loop->body_file->display_name ? loop->body_file->display_name : "<unknown>",
+                loop->body_line + 1);
+    } else if(iterations >= 65536) {
+        asm_err(as, ASM_ERR_RESOLVE, "Exiting .for loop with body at line %zu, which has iterated 64K times",
+                loop->body_line + 1);
+    }
+    loop_stack_pop(as);
+}
+
+static void dot_repeat(ASSEMBLER *as) {
+    LOOP loop;
+    memset(&loop, 0, sizeof(loop));
+    loop.type = LOOP_REPEAT;
+
+    next_token(as);
+    loop.max_iterations = expr_evaluate(as);
+    if(as->pass == 1 && as->expression_unknown) {
+        asm_err(as, ASM_ERR_RESOLVE, ".repeat count must resolve on pass 1");
+        loop.max_iterations = 0;
+    }
+
+    if(as->token.op == ',') {
+        next_token(as);
+        if(as->token.type == TOKEN_VAR) {
+            loop.var_name = copy_token_name(as);
+            loop.var_name_len = (int)as->token.name_length;
+            if(!loop.var_name) {
+                loop_free(&loop);
+                return;
+            }
+            symbol_write(as, loop.var_name, (uint32_t)loop.var_name_len, SYMBOL_VARIABLE, 0);
+            next_token(as);
+        } else {
+            asm_err(as, ASM_ERR_RESOLVE, ".repeat expects a variable after the comma");
+        }
+    }
+
+    if(as->token.type != TOKEN_END) {
+        loop_free(&loop);
+        asm_err(as, ASM_ERR_RESOLVE, "Unexpected token after .repeat");
+        return;
+    }
+
+    if(loop.max_iterations <= 0) {
+        loop_free(&loop);
+        if(!skip_to_matching_loop_end(as, GPERF_DOT_REPEAT, GPERF_DOT_ENDREPEAT)) {
+            asm_err(as, ASM_ERR_RESOLVE, ".repeat without .endrepeat");
+        }
+        return;
+    }
+
+    FILE_FRAME *frame = file_stack_top(as);
+    loop.body_file = frame ? frame->file : NULL;
+    loop.body_start = frame ? frame->read_ptr : NULL;
+    loop.body_line = frame ? frame->line_num : 0;
+    if(ASM_OK != ARRAY_ADD(&as->loop_stack, loop)) {
+        loop_free(&loop);
+        asm_err(as, ASM_ERR_FATAL, "Out of memory pushing .repeat loop");
+    }
+}
+
+static void dot_endrepeat(ASSEMBLER *as) {
+    if(as->loop_stack.items == 0) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endrepeat without a matching .repeat");
+        return;
+    }
+
+    LOOP *loop = ARRAY_GET(&as->loop_stack, LOOP, as->loop_stack.items - 1);
+    if(loop->type != LOOP_REPEAT) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endrepeat without a matching .repeat");
+        return;
+    }
+
+    FILE_FRAME *frame = file_stack_top(as);
+    int same_file = frame && frame->file == loop->body_file;
+    size_t iterations = ++loop->iterations;
+    if(iterations < 65536 && same_file && (int64_t)iterations < loop->max_iterations) {
+        if(loop->var_name_len > 0) {
+            symbol_write(as, loop->var_name, (uint32_t)loop->var_name_len, SYMBOL_VARIABLE, iterations);
+        }
+        restore_loop_body(as, loop);
+        return;
+    }
+
+    if(!same_file) {
+        asm_err(as, ASM_ERR_RESOLVE, ".endrepeat matches .repeat in file %s, body at line %zu",
+                loop->body_file && loop->body_file->display_name ? loop->body_file->display_name : "<unknown>",
+                loop->body_line + 1);
+    } else if(iterations >= 65536) {
+        asm_err(as, ASM_ERR_RESOLVE, "Exiting .repeat loop with body at line %zu, which has iterated 64K times",
+                loop->body_line + 1);
+    }
+    loop_stack_pop(as);
+}
+
 static void if_stack_push(ASSEMBLER *as, int was_true) {
     IF_FRAME frame;
     frame.was_true = was_true;
@@ -513,20 +1484,59 @@ void parse_dot_command(ASSEMBLER *as) {
     case GPERF_DOT_DWORD:
         emit_cs_values(as, 32, BYTE_ORDER_LO);
         break;
+    case GPERF_DOT_ENDFOR:
+        dot_endfor(as);
+        break;
+    case GPERF_DOT_ENDMACRO:
+        dot_endmacro(as);
+        break;
+    case GPERF_DOT_ENDPROC:
+        dot_endproc(as);
+        break;
+    case GPERF_DOT_ENDREPEAT:
+        dot_endrepeat(as);
+        break;
+    case GPERF_DOT_ENDSCOPE:
+        dot_endscope(as);
+        break;
+    case GPERF_DOT_FOR:
+        dot_for(as);
+        break;
     case GPERF_DOT_INCBIN:
         dot_incbin(as);
         break;
     case GPERF_DOT_INCLUDE:
         dot_include(as);
         break;
+    case GPERF_DOT_LOCAL:
+        dot_local(as);
+        break;
+    case GPERF_DOT_MACRO:
+        dot_macro(as);
+        break;
     case GPERF_DOT_ORG:
         dot_org(as);
+        break;
+    case GPERF_DOT_PROC:
+        dot_proc(as);
         break;
     case GPERF_DOT_QWORD:
         emit_cs_values(as, 64, BYTE_ORDER_LO);
         break;
+    case GPERF_DOT_REPEAT:
+        dot_repeat(as);
+        break;
     case GPERF_DOT_RES:
         dot_res(as);
+        break;
+    case GPERF_DOT_SEGDEF:
+        dot_segdef(as);
+        break;
+    case GPERF_DOT_SEGMENT:
+        dot_segment(as);
+        break;
+    case GPERF_DOT_SCOPE:
+        dot_scope(as);
         break;
     case GPERF_DOT_STRCODE:
         dot_strcode(as);
@@ -612,7 +1622,81 @@ void parse_label(ASSEMBLER *as) {
 }
 
 int parse_macro_if_is_macro(ASSEMBLER *as) {
-    (void)as;
+    if(as->token.type != TOKEN_VAR) {
+        return 0;
+    }
+
+    for(size_t i = 0; i < as->macros.items; i++) {
+        MACRO *macro = ARRAY_GET(&as->macros, MACRO, i);
+        if(macro->name_len != (int)as->token.name_length ||
+           0 != asm_strnicmp(macro->name, as->token.name, as->token.name_length)) {
+            continue;
+        }
+
+        for(size_t si = 0; si < as->macro_stack.items; si++) {
+            MACRO_EXPAND *active = ARRAY_GET(&as->macro_stack, MACRO_EXPAND, si);
+            if(active->macro_name_length == (uint32_t)macro->name_len &&
+               0 == asm_strnicmp(active->macro_name, macro->name, (size_t)macro->name_len)) {
+                asm_err(as, ASM_ERR_RESOLVE, "Macro %.*s cannot call itself", macro->name_len, macro->name);
+                return 1;
+            }
+        }
+
+        MACRO_EXPAND expand;
+        memset(&expand, 0, sizeof(expand));
+        ARRAY_INIT(&expand.renames, RENAME_MAP);
+        ARRAY_INIT(&expand.args, MACRO_ARG_VALUE);
+        expand.macro_name = macro->name;
+        expand.macro_name_length = (uint32_t)macro->name_len;
+
+        const char *p = as->cur;
+        for(size_t pi = 0; pi < macro->parameters.items; pi++) {
+            MACRO_PARAM *param = ARRAY_GET(&macro->parameters, MACRO_PARAM, pi);
+            while(*p == ' ' || *p == '\t') {
+                p++;
+            }
+
+            int value_len = 0;
+            char *value = NULL;
+            if(*p == '\0' || *p == ';') {
+                value = copy_slice("", 0);
+            } else {
+                value = parse_macro_arg(as, &p, &value_len);
+                if(*p == ',') {
+                    p++;
+                }
+            }
+            if(!value) {
+                macro_expand_free(as, &expand);
+                return 1;
+            }
+
+            MACRO_ARG_VALUE arg;
+            arg.name = param->name;
+            arg.name_len = param->name_len;
+            arg.value = value;
+            arg.value_len = value_len;
+            if(ASM_OK != ARRAY_ADD(&expand.args, arg)) {
+                free(value);
+                macro_expand_free(as, &expand);
+                asm_err(as, ASM_ERR_FATAL, "Out of memory storing macro argument");
+                return 1;
+            }
+        }
+
+        if(ASM_OK != ARRAY_ADD(&as->macro_stack, expand)) {
+            macro_expand_free(as, &expand);
+            asm_err(as, ASM_ERR_FATAL, "Out of memory pushing macro invocation");
+            return 1;
+        }
+
+        if(ASM_OK != file_stack_push(as, macro->body_file, macro->body_start, macro->body_line, 1)) {
+            macro_stack_pop(as);
+            return 1;
+        }
+        return 1;
+    }
+
     return 0;
 }
 

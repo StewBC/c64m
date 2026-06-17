@@ -31,15 +31,23 @@ typedef struct {
 } SYMBOL_LABEL;
 
 typedef struct {
-    const char *user_name;
+    char *user_name;
     uint32_t user_name_len;
     char *generated_name;
 } RENAME_MAP;
 
 typedef struct {
+    const char *name;
+    int name_len;
+    char *value;
+    int value_len;
+} MACRO_ARG_VALUE;
+
+typedef struct {
     const char *macro_name;
     uint32_t macro_name_length;
     DYNARRAY renames;
+    DYNARRAY args;
 } MACRO_EXPAND;
 
 #define GEN_NAME_FMT "__macro_local_%04X"

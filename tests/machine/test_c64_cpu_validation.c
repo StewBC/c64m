@@ -414,7 +414,7 @@ static void test_sta_d020_applies_at_event_cycle(void) {
     expect_u8("d020 write kind", C64_CPU_BUS_EVENT_WRITE, (uint8_t)trace.events[3].kind);
     expect_u16("d020 write address", 0xd020, trace.events[3].address);
     expect_u8("d020 write io", 1, trace.events[3].is_io);
-    expect_u8("d020 final register", 0x0b, c64_bus_read(&machine.bus, 0xd020));
+    expect_u8("d020 final register", 0xfb, c64_bus_read(&machine.bus, 0xd020));
     expect_u64("d020 write absolute cycle", start_cycle + 3, trace.events[3].absolute_cycle);
     expect_u64("sta advances machine cycles", start_cycle + 4, machine.clock.cycle);
 }

@@ -1,5 +1,13 @@
 # c64m Assembler — Implementation Status
 
+## Original
+The document src/tools/assembler/DESIGN.md
+It now lives at: md-files/ASMDESIGN.md
+The document src/tools/assembler/STATUS.md
+It now lives at: md-files/ASMSTATUS.md
+
+They were renamed and moved after the completion of PHASE 15.
+
 See `DESIGN.md` for full design. This file tracks what is done, in progress, and pending.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
@@ -91,29 +99,29 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 
 ## Phase 12 — Loops
 
-- [ ] `.for` / `.endfor`
-- [ ] `.repeat` / `.endrepeat` / `.endrep`
+- [x] `.for` / `.endfor`
+- [x] `.repeat` / `.endrepeat` / `.endrep`
 
 ## Phase 13 — Macros
 
-- [ ] `.macro` / `.endmacro`
-- [ ] `.local`
-- [ ] macro invocation with parameter substitution
-- [ ] MACRO_EXPAND stack for .local name mapping
+- [x] `.macro` / `.endmacro`
+- [x] `.local`
+- [x] macro invocation with parameter substitution
+- [x] MACRO_EXPAND stack for .local name mapping
 
 ## Phase 14 — Scopes and Segments
 
-- [ ] `.scope` (anonymous and named)
-- [ ] `.proc` / `.endproc`
-- [ ] `.endscope`
-- [ ] `.segdef` / `.segment`
+- [x] `.scope` (anonymous and named)
+- [x] `.proc` / `.endproc`
+- [x] `.endscope`
+- [x] `.segdef` / `.segment`
 
 ## Phase 15 — c64m Integration
 
-- [ ] `c64_assemble_file()` in runtime/debugger
-- [ ] `assembler_walk_symbols()` helper
-- [ ] Symbol loading into debugger symbol table
-- [ ] Error display in UI
+- [x] `c64_assemble_file()` in runtime/debugger
+- [x] `assembler_walk_symbols()` helper
+- [x] Symbol loading into debugger symbol table
+- [x] Error display in UI
 
 ---
 
@@ -129,3 +137,7 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 - Phase 9: core parser behavior is live for labels, address assignment, variables, and opcode addressing modes. `parse_macro_if_is_macro` remains a no-op until the macro table exists in Phase 13, but the dispatch hook is in place before variable parsing.
 - Phase 10: data directives are live for `.org`, scalar data widths, reverse-order variants, `.res`, `.align`, strings, `.strcode`, `.include`, `.incbin`, CPU selection, and `.define`. `asm.h` is now self-contained for external callers via `asm_common.h`; loaded files are stored as stable heap objects so include frames survive file-array growth; symbol names are owned copies so pass-2 lookups do not depend on pass-1 line buffers.
 - Phase 11: conditional assembly is live for `.if` / `.else` / `.endif`, including nested skipped blocks through `if_skip_depth`. `.if` expressions now reject pass-1 unknowns/forward references for stable branch selection. `.defined` and `.lt`/`.le`/`.gt`/`.ge`/`.eq`/`.ne` are handled by the tokenizer/expression evaluator. `assembler_conditionals` covers true/false branches, skipped nested branches, comparisons, `.defined`, and forward-reference rejection.
+- Phase 12: loop directives are live for `.for` / `.endfor` and `.repeat` / `.endrepeat` / `.endrep`. Loop bodies rewind the current `FILE_FRAME` to stable `ASM_FILE` buffer positions; `.for` condition/iteration snippets and optional `.repeat` index names are owned copies because header text is parsed from the mutable line buffer. False or zero-count loops scan forward to their matching end directive with nested same-kind loop tracking, and both loop families stop after 64K iterations.
+- Phase 13: macros are live without a2m-style expanded macro buffers. `.macro` definitions store stable body pointers into loaded `ASM_FILE` buffers, invocations push macro `FILE_FRAME`s, and each macro body line gets parameter and `.local` substitution in the mutable line buffer before normal tokenization. Macro definitions are re-parsed each pass; generated `.local` names reset per pass so pass-1 and pass-2 symbol names match.
+- Phase 14: scopes and segments are live. `.scope` supports anonymous and named namespaces without a2m output redirect options; `.proc` defines both an address symbol and child scope; `.segdef` creates named single-target segments with optional `emit`/`noemit`; `.segment ""` returns to the default segment. Segment definitions are created on pass 1 and reused on pass 2.
+- Phase 15: integration helpers are live. `assembler_walk_symbols()` exports resolved address labels with scoped names; `c64_assemble_file()` assembles into C64 RAM and imports assembler labels into `src/tools/symbols` using `SYMBOL_SOURCE_ASSEMBLER`; the runtime exposes an assemble-file command that publishes assembler diagnostics through `RUNTIME_EVENT_ERROR` and success through `RUNTIME_EVENT_ASSEMBLE_COMPLETE`.

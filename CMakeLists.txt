@@ -188,6 +188,18 @@ target_link_libraries(test_disasm_6502 PRIVATE
 
 add_test(NAME disasm_6502 COMMAND test_disasm_6502)
 
+add_executable(test_symbol_table
+    tests/tools/test_symbol_table.c
+)
+
+target_compile_features(test_symbol_table PRIVATE c_std_99)
+
+target_link_libraries(test_symbol_table PRIVATE
+    symbols
+)
+
+add_test(NAME symbol_table COMMAND test_symbol_table)
+
 add_executable(test_assembler_conditionals
     tests/tools/test_assembler_conditionals.c
 )
@@ -199,6 +211,42 @@ target_link_libraries(test_assembler_conditionals PRIVATE
 )
 
 add_test(NAME assembler_conditionals COMMAND test_assembler_conditionals)
+
+add_executable(test_assembler_loops
+    tests/tools/test_assembler_loops.c
+)
+
+target_compile_features(test_assembler_loops PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_loops PRIVATE
+    assembler
+)
+
+add_test(NAME assembler_loops COMMAND test_assembler_loops)
+
+add_executable(test_assembler_macros
+    tests/tools/test_assembler_macros.c
+)
+
+target_compile_features(test_assembler_macros PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_macros PRIVATE
+    assembler
+)
+
+add_test(NAME assembler_macros COMMAND test_assembler_macros)
+
+add_executable(test_assembler_scopes_segments
+    tests/tools/test_assembler_scopes_segments.c
+)
+
+target_compile_features(test_assembler_scopes_segments PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_scopes_segments PRIVATE
+    assembler
+)
+
+add_test(NAME assembler_scopes_segments COMMAND test_assembler_scopes_segments)
 
 add_executable(test_runtime_romboot
     tests/runtime/test_runtime_romboot.c
@@ -235,3 +283,15 @@ target_link_libraries(test_runtime_frame PRIVATE
 )
 
 add_test(NAME runtime_frame COMMAND test_runtime_frame)
+
+add_executable(test_runtime_assembler
+    tests/runtime/test_runtime_assembler.c
+)
+
+target_compile_features(test_runtime_assembler PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_assembler PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_assembler COMMAND test_runtime_assembler)

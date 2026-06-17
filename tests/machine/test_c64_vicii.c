@@ -822,6 +822,100 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
+/* Phase G: $D016 bits 7:5 always read as 1 regardless of writes */
+static void test_d016_unused_high_bits_read_as_1(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd016, 0x00);
+    expect_u8("d016 high bits set when written 0x00", 0xE0, vicii_read_register(&v, 0xd016) & 0xE0u);
+    expect_u8("d016 low bits zero when written 0x00", 0x00, vicii_read_register(&v, 0xd016) & 0x1Fu);
+
+    vicii_write_register(&v, 0xd016, 0xFF);
+    expect_u8("d016 high bits set when written 0xFF", 0xE0, vicii_read_register(&v, 0xd016) & 0xE0u);
+    expect_u8("d016 low bits set when written 0xFF", 0x1F, vicii_read_register(&v, 0xd016) & 0x1Fu);
+
+    vicii_write_register(&v, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+    expect_u8("d016 csel set reads correctly", 0xE8, vicii_read_register(&v, 0xd016));
+}
+
+/* Phase G: $D020–$D02E color registers — bits 7:4 always read as 1 */
+static void test_color_register_high_nibble_reads_as_1(void) {
+    vicii v;
+    char error[256];
+    uint16_t addr;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    for (addr = 0xd020u; addr <= 0xd02eu; addr++) {
+        vicii_write_register(&v, addr, 0x00);
+        expect_u8("color reg high nibble set when written 0x00",
+                  0xF0, vicii_read_register(&v, addr) & 0xF0u);
+        expect_u8("color reg low nibble zero when written 0x00",
+                  0x00, vicii_read_register(&v, addr) & 0x0Fu);
+
+        vicii_write_register(&v, addr, 0x0A);
+        expect_u8("color reg high nibble set when written 0x0A",
+                  0xF0, vicii_read_register(&v, addr) & 0xF0u);
+        expect_u8("color reg low nibble preserved when written 0x0A",
+                  0x0A, vicii_read_register(&v, addr) & 0x0Fu);
+
+        vicii_write_register(&v, addr, 0xF5);
+        expect_u8("color reg high nibble set when written 0xF5",
+                  0xF0, vicii_read_register(&v, addr) & 0xF0u);
+        expect_u8("color reg low nibble preserved when written 0xF5",
+                  0x05, vicii_read_register(&v, addr) & 0x0Fu);
+    }
+}
+
+/* Phase G: $D02F–$D03F unused block always returns $FF regardless of writes */
+static void test_unused_register_block_reads_ff(void) {
+    vicii v;
+    char error[256];
+    uint16_t addr;
+    static const uint8_t probes[] = {0x00, 0x55, 0xAA, 0xFF};
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    for (addr = 0xd02fu; addr <= 0xd03fu; addr++) {
+        for (i = 0; i < 4; i++) {
+            vicii_write_register(&v, addr, probes[i]);
+            expect_u8("unused block reads 0xFF", 0xFF, vicii_read_register(&v, addr));
+        }
+    }
+}
+
+/* Phase G: mirrored unused block reads — $D12F/$D22F/$D32F also return $FF */
+static void test_unused_register_block_mirrored_reads_ff(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd02f, 0x00);
+    expect_u8("d12f mirror reads 0xFF", 0xFF, vicii_read_register(&v, 0xd12f));
+    expect_u8("d22f mirror reads 0xFF", 0xFF, vicii_read_register(&v, 0xd22f));
+    expect_u8("d32f mirror reads 0xFF", 0xFF, vicii_read_register(&v, 0xd32f));
+    expect_u8("d13f mirror reads 0xFF", 0xFF, vicii_read_register(&v, 0xd13f));
+}
+
+/* Phase G: $D018 must not have Phase G masking applied — read matches write */
+static void test_d018_no_phase_g_masking(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd018, 0x15);
+    expect_u8("d018 reads back 0x15 unchanged", 0x15, vicii_read_register(&v, 0xd018));
+
+    vicii_write_register(&v, 0xd018, 0xAA);
+    expect_u8("d018 reads back 0xAA unchanged", 0xAA, vicii_read_register(&v, 0xd018));
+}
+
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
@@ -847,5 +941,10 @@ int main(void) {
     test_sprite_sprite_collision_priority_and_irq();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
+    test_d016_unused_high_bits_read_as_1();
+    test_color_register_high_nibble_reads_as_1();
+    test_unused_register_block_reads_ff();
+    test_unused_register_block_mirrored_reads_ff();
+    test_d018_no_phase_g_masking();
     return 0;
 }

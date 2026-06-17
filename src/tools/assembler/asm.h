@@ -31,6 +31,11 @@ typedef struct {
     asm_output_byte_fn output_byte;
 } CB_ASM_CTX;
 
+typedef void (*assembler_symbol_cb)(
+    const char *name,
+    uint16_t address,
+    void *user);
+
 struct ASSEMBLER {
     CB_ASM_CTX cb;
 
@@ -51,6 +56,8 @@ struct ASSEMBLER {
     DYNARRAY scope_stack;
     DYNARRAY *symbol_table;
     DYNARRAY anon_symbols;
+    DYNARRAY loop_stack;
+    DYNARRAY macros;
     DYNARRAY macro_stack;
     int macro_id;
 
@@ -83,4 +90,5 @@ static inline uint16_t current_output_address(ASSEMBLER *as) {
 
 int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb);
 int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address);
+void assembler_walk_symbols(ASSEMBLER *as, assembler_symbol_cb cb, void *user);
 void assembler_shutdown(ASSEMBLER *as);

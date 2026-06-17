@@ -1,5 +1,13 @@
 # c64m Assembler — Design Document
 
+## Original
+The document src/tools/assembler/DESIGN.md
+It now lives at: md-files/ASMDESIGN.md
+The document src/tools/assembler/STATUS.md
+It now lives at: md-files/ASMSTATUS.md
+
+They were renamed and moved after the completion of PHASE 15.
+
 ## Context
 
 This document guides implementation of a 6502/6510 assembler for c64m. It is written for a Claude instance with read access to both:
@@ -525,7 +533,6 @@ The internal include hub, replacing a2m's `asm_lib.h`. Include order matters bec
 #include "emit.h"
 #include "expr.h"
 #include "parse.h"
-#include "asm.h"
 ```
 
 ### `CMakeLists.txt`
@@ -583,7 +590,68 @@ void c64_assemble_file(C64 *c64, const char *path, uint16_t org) {
 }
 ```
 
-Symbol loading for the debugger: after `assembler_assemble`, walk the `SCOPE` tree to extract `SYMBOL_ADDRESS` entries and load them into the debugger's symbol table. Add a helper `assembler_walk_symbols(ASSEMBLER *as, void (*cb)(const char *, uint16_t, void *), void *user)` in `asm.c` for this.
+### Exporting Symbols to c64m Debug Metadata
+
+The assembler's internal symbol system remains private to the assembler. It uses
+a2m-derived `SCOPE`, `SYMBOL_LABEL`, and `DYNARRAY` machinery for pass-time
+assembly behavior. Do not expose those structures to the emulator, runtime, or
+frontend symbol system.
+
+c64m's debug/disassembly symbol table lives in `src/tools/symbols/` and is the
+human-facing metadata store used by the disassembler through `symbol_resolver`.
+Future assembler integration should bridge into that table by exporting resolved
+address labels only.
+
+Preferred assembler-side helper:
+
+```c
+typedef void (*assembler_symbol_cb)(
+    const char *name,
+    uint16_t address,
+    void *user);
+
+void assembler_walk_symbols(
+    ASSEMBLER *as,
+    assembler_symbol_cb cb,
+    void *user);
+```
+
+The helper should:
+
+- walk the resolved scope tree after a successful `assembler_assemble`
+- report only `SYMBOL_ADDRESS` labels
+- skip variables, unknowns, macro temporaries unless they are real address labels
+- pass stable names to the callback for the duration of the call
+- keep the assembler independent of `src/tools/symbols`
+
+The caller/debug session owns the emulator symbol table and performs the import:
+
+```c
+typedef struct {
+    symbol_table *symbols;
+    const char *source_name;
+} ASM_SYMBOL_IMPORT;
+
+static void add_asm_symbol(const char *name, uint16_t address, void *user) {
+    ASM_SYMBOL_IMPORT *import = (ASM_SYMBOL_IMPORT *)user;
+    symbol_table_add(
+        import->symbols,
+        address,
+        name,
+        SYMBOL_SOURCE_ASSEMBLER,
+        import->source_name,
+        true);
+}
+
+ASM_SYMBOL_IMPORT import = { symbols, source_name };
+symbol_table_remove_source(symbols, SYMBOL_SOURCE_ASSEMBLER, source_name);
+assembler_walk_symbols(as, add_asm_symbol, &import);
+```
+
+Use `SYMBOL_SOURCE_ASSEMBLER` and an exact `source_name` chosen by the debug
+session, such as `"current"` or the assembled source path. Reassembly should
+remove that same source before importing the new assembler labels so imported
+file symbols, built-ins, and user labels remain intact.
 
 ---
 

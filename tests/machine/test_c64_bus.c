@@ -103,15 +103,15 @@ static void test_vicii_io_mirroring_and_banking(void) {
     c64_init(&machine);
 
     c64_bus_write(&machine.bus, 0xd020, 0x05);
-    expect_u8("vic border visible", 0x05, c64_bus_read(&machine.bus, 0xd020));
-    expect_u8("vic border mirror", 0x05, c64_bus_read(&machine.bus, 0xd060));
+    expect_u8("vic border visible", 0xF5, c64_bus_read(&machine.bus, 0xd020));
+    expect_u8("vic border mirror", 0xF5, c64_bus_read(&machine.bus, 0xd060));
 
     c64_bus_write(&machine.bus, 0x0001, 0x34);
     c64_bus_write(&machine.bus, 0xd020, 0x09);
     expect_u8("ram under io visible", 0x09, c64_bus_read(&machine.bus, 0xd020));
 
     c64_bus_write(&machine.bus, 0x0001, 0x37);
-    expect_u8("vic register preserved while ram banked", 0x05, c64_bus_read(&machine.bus, 0xd020));
+    expect_u8("vic register preserved while ram banked", 0xF5, c64_bus_read(&machine.bus, 0xd020));
 }
 
 static void test_color_ram_nibble_storage(void) {

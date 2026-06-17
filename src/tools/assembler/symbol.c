@@ -261,16 +261,23 @@ SYMBOL_LABEL *symbol_declare_local(ASSEMBLER *as, const char *name, uint32_t nam
     }
 
     RENAME_MAP ren;
-    ren.user_name = name;
+    ren.user_name = malloc((size_t)name_len + 1);
+    if(!ren.user_name) {
+        return NULL;
+    }
+    memcpy(ren.user_name, name, name_len);
+    ren.user_name[name_len] = '\0';
     ren.user_name_len = name_len;
     ren.generated_name = malloc(GEN_NAME_LEN + 1);
     if(!ren.generated_name) {
+        free(ren.user_name);
         return NULL;
     }
 
     MACRO_EXPAND *mes = ARRAY_GET(&as->macro_stack, MACRO_EXPAND, as->macro_stack.items - 1);
     snprintf(ren.generated_name, GEN_NAME_LEN + 1, GEN_NAME_FMT, ++as->macro_id);
     if(ASM_OK != ARRAY_ADD(&mes->renames, ren)) {
+        free(ren.user_name);
         free(ren.generated_name);
         return NULL;
     }

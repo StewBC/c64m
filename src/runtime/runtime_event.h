@@ -17,6 +17,7 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
     RUNTIME_EVENT_MEMORY_RESPONSE,
     RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
+    RUNTIME_EVENT_ASSEMBLE_COMPLETE,
     RUNTIME_EVENT_FRAME_READY
 } runtime_event_type;
 
@@ -172,5 +173,9 @@ typedef struct runtime_event {
         runtime_machine_snapshot machine_state;
         runtime_memory_snapshot memory;
         runtime_breakpoint_snapshot breakpoints;
+        struct {
+            uint16_t address;
+            char path[1024];
+        } assemble;
     } data;
 } runtime_event;

@@ -1,7 +1,10 @@
-add_library(c64m_stb_ds INTERFACE)
-target_include_directories(c64m_stb_ds INTERFACE
+add_library(c64m_stb_ds STATIC
+    stb/stb_ds_impl.c
+)
+target_include_directories(c64m_stb_ds PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/stb
 )
+target_compile_features(c64m_stb_ds PUBLIC c_std_99)
 
 add_library(c64m_logc STATIC
     logc/log.c

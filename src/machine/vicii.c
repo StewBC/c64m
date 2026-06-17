@@ -794,6 +794,21 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
         return value;
     }
 
+    /* Phase G: $D016 — bits 7:5 are unused and read as 1 */
+    if (reg == 0x16u) {
+        return (uint8_t)((v->registers[reg] & 0x1Fu) | 0xE0u);
+    }
+
+    /* Phase G: $D020–$D02E (color registers) — bits 7:4 are unused and read as 1 */
+    if (reg >= 0x20u && reg <= 0x2Eu) {
+        return (uint8_t)((v->registers[reg] & 0x0Fu) | 0xF0u);
+    }
+
+    /* Phase G: $D02F–$D03F (unused register block) — all reads return $FF */
+    if (reg >= 0x2Fu) {
+        return 0xFFu;
+    }
+
     return v->registers[reg];
 }
 
