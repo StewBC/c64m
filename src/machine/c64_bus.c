@@ -262,6 +262,13 @@ bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
     return true;
 }
 
+uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus) {
+    uint8_t pa;
+    if (!bus->cia2) return 0;
+    pa = cia_read_register(bus->cia2, 0xDD00);
+    return (uint16_t)(((~pa) & 3u) * 0x4000u);
+}
+
 bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
     assert(bus);
     if (!data || size != sizeof(bus->basic_rom) + sizeof(bus->kernal_rom)) {

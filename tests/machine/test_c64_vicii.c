@@ -592,6 +592,47 @@ static void test_live_raster_border_change_and_text(void) {
     expect_u32("live standard text background", TEST_PALETTE_6, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
+static void test_sprite_hires_appears_at_position(void) {
+    c64_t     machine;
+    c64_frame frame;
+    int       i;
+    /* palette[7] = yellow */
+    uint32_t  sprite_color = 0xffedf171u;
+    uint32_t  px;
+
+    reset_machine(&machine);
+
+    /* sprite data at $0340 (832): solid 24×21 block */
+    for (i = 0; i < 63; i++) {
+        machine.bus.ram[0x0340 + i] = 0xFFu;
+    }
+    /* sprite 0 pointer at $07F8: value 13 → data at 13×64=$0340 */
+    machine.bus.ram[0x07F8] = 13;
+
+    /* sprite 0: X=100, Y=100, color=yellow(7), enabled */
+    c64_bus_write(&machine.bus, 0xD000, 100);
+    c64_bus_write(&machine.bus, 0xD001, 100);
+    c64_bus_write(&machine.bus, 0xD027, 7);
+    c64_bus_write(&machine.bus, 0xD015, 1);
+
+    make_live_frame(&machine, &frame, "sprite hires live frame");
+
+    px = frame.pixels[100 * C64_FRAME_WIDTH + 100];
+    if (px != sprite_color) {
+        fprintf(stderr,
+            "sprite at (100,100): got 0x%08x, expected 0x%08x\n",
+            px, sprite_color);
+        exit(1);
+    }
+    px = frame.pixels[100 * C64_FRAME_WIDTH + 123];
+    if (px != sprite_color) {
+        fprintf(stderr,
+            "sprite at (123,100): got 0x%08x, expected 0x%08x\n",
+            px, sprite_color);
+        exit(1);
+    }
+}
+
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
@@ -610,5 +651,6 @@ int main(void) {
     test_mcm_text_mode();
     test_invalid_mode_forces_black();
     test_live_raster_border_change_and_text();
+    test_sprite_hires_appears_at_position();
     return 0;
 }

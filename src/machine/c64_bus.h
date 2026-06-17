@@ -66,3 +66,5 @@ bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_char_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
+
+uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus);

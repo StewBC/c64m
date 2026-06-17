@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16.
+Completed through Phase 16 plus VIC-II Phase D (sprites display).
 
 Implemented:
 
@@ -205,11 +205,37 @@ Implemented:
   - current Bad Line BA handling now routes through CPU event read/write
     classification: read cycles stall while BA is low, write-only cycles continue,
     and unknown/internal cycles remain conservatively stalled
+- VIC-II Phase D — Sprites Display:
+  - all 8 hardware sprites can be independently positioned and displayed
+  - 9-bit X coordinate (`$D000`/`$D002`…`$D00E` + MSB register `$D010`) and 8-bit Y
+    coordinate (`$D001`/`$D003`…`$D00F`) with per-sprite enable via `$D015`
+  - hires mode (1 bit/pixel, 24×21): sprite color from `$D027`–`$D02E`
+  - X-expand (`$D01D`): doubles sprite width to 48 pixels
+  - Y-expand (`$D017`): doubles sprite height to 42 raster lines via per-sprite
+    flip-flop that gates `mc` advance on alternate lines
+  - multicolor mode (`$D01C`): 2 bits per logical pixel pair — transparent / MM0
+    (`$D025`) / sprite color / MM1 (`$D026`); combined X+Y expand works correctly
+  - sprite pointer (p-access) fetched from `vic_bank + screen_base + $03F8 + n`;
+    sprite data (s-access) fetched as 3 bytes from `vic_bank + pointer × 64 + mc`
+  - VIC bank base derived from CIA 2 port A bits 1–0 (inverted) via
+    `c64_bus_vic_bank_base()`; default bank is `$0000`
+  - `vicii_fetch_sprites()` called at cycle 0 of each raster line; sets
+    `sprite_visible[n]` and fills `sprite_data[n][3]` for the live renderer
+  - sprite overlay composited in `vicii_live_pixel()` after background pixel
+    computation; sprite 0 has highest priority; sprites are hidden behind the border
+  - `vicii_snapshot_sprite_line()` computes sprite row data statically per raster
+    line for the snapshot renderer; overlay loop mirrors live-pixel compositing
+  - horizontal wraparound (modulo 512) handled by `vicii_sprite_dx_wrapped()`
+  - sprites above background in all 5 valid graphics modes (priority via `$D01B`
+    is Phase E)
+  - regression test `test_sprite_hires_appears_at_position` confirms yellow pixels
+    appear at the correct frame coordinates for a fully-opaque hires sprite
 
 ## Not Implemented
 
 - VIC-II remaining accuracy/features:
-  - hardware sprites, sprite priority, and sprite collision detection are not implemented
+  - sprite-background priority (`$D01B`) and sprite collision detection (`$D01E`/`$D01F`)
+    are not implemented (Phase E)
   - light pen is not implemented
   - open-bus / last-byte-on-bus behavior is not implemented
   - exact BA/AEC/RDY cycle stealing is not implemented; current Bad Line BA handling

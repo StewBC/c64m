@@ -69,6 +69,13 @@ struct vicii {
     uint8_t  color_line[40];   /* color nibbles fetched on Bad Lines */
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
+
+    /* Phase D: per-sprite state */
+    uint8_t  sprite_mc[8];          /* next byte offset into 63-byte sprite block (0,3,6…60) */
+    bool     sprite_active[8];      /* sprite sequencer remains active for future lines */
+    bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
+    bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
+    uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes */
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
