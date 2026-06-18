@@ -115,6 +115,8 @@ typedef struct runtime_machine_snapshot {
     uint64_t cia1_interrupt_assertions;
     uint64_t nmi_entries;
     uint64_t restore_requests;
+    uint32_t active_turbo_multiplier;
+    uint8_t turbo_speed_count;
     uint8_t cia1_irq_pending;
     uint8_t cia2_nmi_pending;
 } runtime_machine_snapshot;

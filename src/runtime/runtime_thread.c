@@ -146,6 +146,8 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.cia1_interrupt_assertions = snapshot.cia1_interrupt_assertions;
     event.data.machine_state.nmi_entries = snapshot.nmi_entries;
     event.data.machine_state.restore_requests = snapshot.restore_requests;
+    event.data.machine_state.active_turbo_multiplier = rt->active_turbo_multiplier;
+    event.data.machine_state.turbo_speed_count = rt->turbo_speed_count;
     event.data.machine_state.cia1_irq_pending = snapshot.cia1_irq_pending ? 1 : 0;
     event.data.machine_state.cia2_nmi_pending = snapshot.cia2_nmi_pending ? 1 : 0;
 
@@ -380,6 +382,26 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     } else {
         runtime_publish_machine_state(rt);
     }
+}
+
+static void runtime_cycle_turbo_speed(runtime *rt) {
+    uint8_t i;
+    uint8_t next_index = 0;
+
+    if (rt == NULL || rt->turbo_speed_count == 0) {
+        return;
+    }
+
+    for (i = 0; i < rt->turbo_speed_count; ++i) {
+        if (rt->turbo_speeds[i] == rt->active_turbo_multiplier) {
+            next_index = (uint8_t)((i + 1u) % rt->turbo_speed_count);
+            break;
+        }
+    }
+
+    rt->active_turbo_multiplier = rt->turbo_speeds[next_index];
+    rt->pace_initialized = false;
+    runtime_publish_machine_state(rt);
 }
 
 static int runtime_find_breakpoint_by_id(const runtime *rt, uint32_t id) {
@@ -1192,6 +1214,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_APPLY_MACHINE_CONFIG:
             runtime_apply_machine_config(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_CYCLE_TURBO_SPEED:
+            runtime_cycle_turbo_speed(rt);
             break;
 
         case RUNTIME_COMMAND_PASTE_TEXT: {

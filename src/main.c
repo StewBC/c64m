@@ -461,6 +461,9 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                            (event.key.keysym.sym == SDLK_p &&
                             frontend_input_has_option_modifier(&event.key))) {
                     send_pause_command(client);
+                } else if (event.key.keysym.sym == SDLK_t &&
+                           frontend_input_has_option_modifier(&event.key)) {
+                    runtime_client_cycle_turbo_speed(client);
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
                            frontend_input_has_option_modifier(&event.key)) {
                     char *text = SDL_GetClipboardText();

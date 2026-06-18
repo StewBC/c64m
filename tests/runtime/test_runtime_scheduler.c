@@ -262,6 +262,39 @@ static runtime *start_runtime(runtime_client **out_client) {
     return rt;
 }
 
+static runtime *start_runtime_with_turbo(runtime_client **out_client, const char *turbo_csv) {
+    runtime_config config = {
+        .system_rom_path = "scheduler_64c.bin",
+        .char_rom_path = "scheduler_character.bin",
+    };
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    expect_true("parse runtime turbo test csv", runtime_config_set_turbo_csv(&config, turbo_csv));
+    expect_true("runtime init", runtime_init());
+    rt = runtime_create(&config);
+    if (!rt) {
+        fail("runtime_create failed");
+    }
+
+    expect_true("runtime start", runtime_start(rt));
+    client = runtime_get_client(rt);
+    if (!poll_event(client, &event, RUNTIME_EVENT_STARTED)) {
+        fail("STARTED event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("startup RESET_COMPLETE event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("startup CPU state not received");
+    }
+    drain_runtime_events(client);
+
+    *out_client = client;
+    return rt;
+}
+
 static runtime *start_runtime_with_ini(runtime_client **out_client, const char *ini_path, bool save_ini) {
     runtime_config config = {
         .system_rom_path = "scheduler_64c.bin",
@@ -296,6 +329,20 @@ static runtime *start_runtime_with_ini(runtime_client **out_client, const char *
     return rt;
 }
 
+static void expect_turbo_multiplier(runtime_client *client, uint32_t expected) {
+    runtime_event event;
+
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("turbo machine state not received");
+    }
+    expect_u64("active turbo multiplier", expected, event.data.machine_state.active_turbo_multiplier);
+}
+
+static void request_and_expect_turbo_multiplier(runtime_client *client, uint32_t expected) {
+    expect_true("request machine state for turbo", runtime_client_request_machine_state(client));
+    expect_turbo_multiplier(client, expected);
+}
+
 static void stop_runtime(runtime *rt, runtime_client *client) {
     runtime_client_quit(client);
     runtime_stop(rt);
@@ -328,6 +375,23 @@ static void test_runtime_run_for_cycles(void) {
     expect_u64("bounded run cycle count", 1000, event.data.machine_state.cycle);
     expect_u64("bounded run CPU cycles", 1000, event.data.machine_state.cpu_cycles);
     expect_u64("bounded run pauses", 0, event.data.machine_state.running);
+
+    stop_runtime(rt, client);
+}
+
+static void test_runtime_cycle_turbo_speed(void) {
+    runtime *rt;
+    runtime_client *client;
+
+    rt = start_runtime_with_turbo(&client, "2,4,8");
+
+    request_and_expect_turbo_multiplier(client, 2);
+    expect_true("cycle turbo to second speed", runtime_client_cycle_turbo_speed(client));
+    expect_turbo_multiplier(client, 4);
+    expect_true("cycle turbo to third speed", runtime_client_cycle_turbo_speed(client));
+    expect_turbo_multiplier(client, 8);
+    expect_true("cycle turbo wraps to first speed", runtime_client_cycle_turbo_speed(client));
+    expect_turbo_multiplier(client, 2);
 
     stop_runtime(rt, client);
 }
@@ -1222,6 +1286,7 @@ int main(void) {
     write_test_prg();
     test_single_machine_cycle();
     test_runtime_run_for_cycles();
+    test_runtime_cycle_turbo_speed();
     test_runtime_keyboard_event_reaches_machine();
     test_runtime_restore_event_reaches_machine();
     test_runtime_run_pause();

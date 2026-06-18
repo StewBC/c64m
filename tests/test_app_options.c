@@ -128,6 +128,41 @@ static void write_phase14_ini(const char *path) {
     fclose(file);
 }
 
+static void write_legacy_runtime_turbo_ini(const char *path) {
+    FILE *file = fopen(path, "w");
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    fputs("[runtime]\n", file);
+    fputs("turbo=251\n", file);
+    fputs("\n[config]\n", file);
+    fputs("turbo_speeds=1,2,4\n", file);
+    fclose(file);
+}
+
+static bool file_contains(const char *path, const char *needle) {
+    FILE *file = fopen(path, "r");
+    char line[256];
+
+    if (!file) {
+        fprintf(stderr, "failed to open %s\n", path);
+        exit(1);
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strstr(line, needle) != NULL) {
+            fclose(file);
+            return true;
+        }
+    }
+
+    fclose(file);
+    return false;
+}
+
 static void test_rom_paths_from_ini(void) {
     app_options options;
     char *argv[] = {
@@ -345,6 +380,27 @@ static void test_phase14_config_from_ini(void) {
     remove("test_phase14.ini");
 }
 
+static void test_config_turbo_speeds_ignores_runtime_turbo(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_turbo_precedence.ini",
+    };
+
+    write_legacy_runtime_turbo_ini("test_turbo_precedence.ini");
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string("config turbo speeds wins", "1,2,4", options.turbo_multipliers);
+
+    app_options_destroy(&options);
+    remove("test_turbo_precedence.ini");
+}
+
 static void test_phase14_config_saved_to_ini(void) {
     app_options options;
     char *argv[] = {
@@ -360,7 +416,7 @@ static void test_phase14_config_saved_to_ini(void) {
         "test_phase14_save.ini",
     };
 
-    remove("test_phase14_save.ini");
+    write_legacy_runtime_turbo_ini("test_phase14_save.ini");
     if (!app_options_load_startup(&options, 5, argv)) {
         fprintf(stderr, "app_options_load_startup failed\n");
         exit(1);
@@ -383,6 +439,11 @@ static void test_phase14_config_saved_to_ini(void) {
         exit(1);
     }
     app_options_destroy(&options);
+
+    if (file_contains("test_phase14_save.ini", "turbo=251")) {
+        fprintf(stderr, "legacy runtime turbo was not removed on save\n");
+        exit(1);
+    }
 
     if (!app_options_load_startup(&options, 3, load_argv)) {
         fprintf(stderr, "app_options_load_startup after save failed\n");
@@ -412,6 +473,7 @@ int main(void) {
     test_window_layout_from_ini();
     test_window_layout_saved_to_ini();
     test_phase14_config_from_ini();
+    test_config_turbo_speeds_ignores_runtime_turbo();
     test_phase14_config_saved_to_ini();
     return 0;
 }

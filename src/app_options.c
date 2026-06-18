@@ -314,10 +314,6 @@ static void apply_config(app_options *options, config *cfg)
     options->layout_display_height = config_get_int(
         cfg, "Layout", "display_height", options->layout_display_height);
 
-    value = config_get(cfg, "runtime", "turbo");
-    if (value != NULL) {
-        replace_string(&options->turbo_multipliers, value);
-    }
     value = config_get(cfg, "config", "turbo_speeds");
     if (value != NULL) {
         replace_string(&options->turbo_multipliers, value);
@@ -659,8 +655,8 @@ bool app_options_save_shutdown(const app_options *options)
     }
 
     config_set_bool(cfg, "ui", "leds", options->show_leds);
+    config_remove_prefix(cfg, "runtime", "turbo");
     if (options->turbo_multipliers != NULL) {
-        config_set(cfg, "runtime", "turbo", options->turbo_multipliers);
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
