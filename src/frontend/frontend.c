@@ -3871,7 +3871,9 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
 
 bool frontend_routes_keyboard_to_c64(const frontend *ui)
 {
-    return ui != NULL && ui->c64_input_active;
+    return ui != NULL && ui->c64_input_active
+        && !ui->config_dialog.open
+        && !ui->breakpoint_dialog.open;
 }
 
 void frontend_end_input(frontend *ui)
