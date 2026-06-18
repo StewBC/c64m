@@ -2670,13 +2670,22 @@ static char frontend_memory_ascii(uint8_t value)
     return '.';
 }
 
-static void frontend_memory_request_if_needed(frontend *ui)
+static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
 {
     frontend_memory_view_state *memory = &ui->memory;
     uint16_t length = frontend_memory_visible_count(memory);
 
     if (length == 0) {
         return;
+    }
+
+    if (memory->request_pending &&
+        debug_state != NULL &&
+        debug_state->has_memory &&
+        debug_state->memory.address == memory->requested_address &&
+        debug_state->memory.length == memory->requested_length &&
+        debug_state->memory.mode == (runtime_memory_mode)memory->requested_mode) {
+        memory->request_pending = false;
     }
 
     if (!memory->request_pending ||
@@ -3220,7 +3229,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         ui->has_pending_memory_key = false;
     }
 
-    frontend_memory_request_if_needed(ui);
+    frontend_memory_request_if_needed(ui, debug_state);
 
     if (nk_begin(ui->ctx, "Memory", bounds, pane_flags)) {
         saved_window_style = ui->ctx->style.window;
