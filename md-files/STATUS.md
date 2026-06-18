@@ -341,6 +341,26 @@ Implemented:
     `test_inactive_sprites_no_ba`, `test_sprite3_cross_line_ba`,
     `test_sprite4_cross_line_ba`, `test_aec_absent_ba_is_sole_stall_predicate`
 
+- Machine reset and PRG loader polish:
+  - RESET button added to the Misc > Machine tab; wired through a new `FRONTEND_INTENT_RESET`
+    intent dispatched to `runtime_client_reset()` in `main.c`
+  - `RUNTIME_COMMAND_RESET` remembers whether the runtime was running before the reset and
+    resumes automatically if it was, so RESET behaves like a real C64 reset rather than
+    halting the emulator
+  - PRG loader now follows the same run-state contract: remember running state, reset,
+    load, resume
+  - Collection PRGs (PRGs that pre-fill the C64 keyboard buffer at `$C6`/`$0277–$0280` to
+    auto-start games) work correctly with the reset-before-load path via deferred injection:
+    - after reset, the machine is set running so Kernal RAMTAS and BASIC cold start execute
+      fully (RAMTAS clears zero page including `$C6`, so injecting before this point is
+      ineffective)
+    - the PRG path is held in `runtime.pending_prg_path`; the inner run loop watches for
+      `cpu.pc == $E38B` (Kernal warm-start / BASIC READY entry point)
+    - at that PC the PRG bytes are injected into RAM — keyboard buffer pre-fills survive
+      because all initialization is complete and BASIC has not yet read the buffer — then
+      execution continues normally, BASIC prints "READY." and processes the injected keys
+    - a manual RESET cancels any pending PRG injection by freeing `pending_prg_path`
+
 - VIC-II bank-aware character and screen rendering:
   - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
     full absolute VIC address: `vic_bank + within-bank offset`

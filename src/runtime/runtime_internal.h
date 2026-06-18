@@ -103,6 +103,7 @@ struct runtime {
     bool started;
     bool paste_active;
     paste_state paste;
+    char *pending_prg_path;
 };
 
 int runtime_thread_main(void *userdata);

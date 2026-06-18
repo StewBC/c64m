@@ -327,6 +327,9 @@ static void runtime_reset_command(runtime *rt) {
         return;
     }
 
+    free(rt->pending_prg_path);
+    rt->pending_prg_path = NULL;
+
     if (was_running) {
         rt->exec_state = RUNTIME_EXEC_RUNNING;
         rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
@@ -1004,22 +1007,21 @@ static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
 }
 
 static void runtime_load_prg(runtime *rt, const runtime_command *command) {
-    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
-
     if (!runtime_reset_machine(rt)) {
         return;
     }
 
-    if (!runtime_load_prg_bytes(rt, command->data.load_prg.path)) {
+    if (!runtime_replace_string(&rt->pending_prg_path, command->data.load_prg.path)) {
+        runtime_publish_error(rt, "failed to store PRG path");
         return;
     }
 
-    if (was_running) {
-        rt->exec_state = RUNTIME_EXEC_RUNNING;
-        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
-        runtime_reset_pacer(rt);
-        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
-    }
+    /* Boot the machine so the Kernal and BASIC initialize fully before the
+       PRG bytes are injected at the BASIC warm-start address ($E38B). */
+    rt->exec_state = RUNTIME_EXEC_RUNNING;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+    runtime_reset_pacer(rt);
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
 }
 
 static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
@@ -1405,6 +1407,13 @@ int runtime_thread_main(void *userdata) {
                     runtime_pause_for_breakpoint(rt);
                     break;
                 }
+                if (rt->pending_prg_path != NULL &&
+                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                    char *path = rt->pending_prg_path;
+                    rt->pending_prg_path = NULL;
+                    runtime_load_prg_bytes(rt, path);
+                    free(path);
+                }
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
@@ -1431,6 +1440,8 @@ int runtime_thread_main(void *userdata) {
         runtime_process_command(rt, &command, &alive);
     }
 
+    free(rt->pending_prg_path);
+    rt->pending_prg_path = NULL;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STOPPED);
     return 0;
 }
