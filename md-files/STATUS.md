@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), and CIA Phase F (CIA #2 VIC bank and IEC port integration). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), CIA Phase F (CIA #2 VIC bank and IEC port integration), and CIA Phase G (time-of-day clock and alarm). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -179,6 +179,27 @@ Implemented:
     existing VIC bank rendering tests, and CIA #2 NMI entry
   - disk-drive emulation, full IEC protocol timing/state machines, and CIA serial data
     register shifting remain deferred
+- CIA Phase G TOD behavior:
+  - TOD state is explicit CIA state for tenths, seconds, minutes, hours, alarm, and
+    read latch rather than raw `$08-$0B` passthrough
+  - CRA bit 7 selects the TOD source policy: clear uses a 60 Hz source and set uses a
+    50 Hz source; machine setup configures the 50 Hz tenth cadence as 5 PAL frames
+    (`63*312*5` cycles) and the 60 Hz tenth cadence as 6 NTSC frames (`65*263*6`)
+  - TOD values are stored/read as BCD; invalid BCD writes are normalized to a
+    deterministic zero value, while invalid hours normalize to 12
+  - TOD hours use bit 7 as PM and 12-hour rollover: 11:59:59.9 AM advances to
+    12:00:00.0 PM, and 12:59:59.9 PM advances to 1:00:00.0 PM
+  - CPU-visible TOD hour reads latch a coherent snapshot, subsequent TOD reads use that
+    snapshot, and reading TOD tenths releases the latch
+  - debugger-safe TOD peeks expose the current latched/live TOD value without creating or
+    releasing the CPU-visible latch
+  - CRB bit 7 selects alarm writes; alarm matches set ICR bit 2 and route through the
+    Phase D IRQ/NMI mask and output behavior
+  - regression coverage includes selected 50/60 Hz cadence, machine cadence constants,
+    BCD second/minute/hour rollover, AM/PM behavior, coherent read latching,
+    debugger-safe peeks, alarm writes, TOD ICR flagging, and CIA #2 TOD alarm NMI entry
+  - pin-perfect TOD input, hardware variant differences, TOD write stop/resume edge
+    timing, and latch/read races remain deferred to later accuracy work
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus

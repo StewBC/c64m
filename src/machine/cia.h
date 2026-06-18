@@ -23,6 +23,13 @@ typedef struct cia_timer {
     bool pulse_active;
 } cia_timer;
 
+typedef struct cia_tod {
+    uint8_t tenth;
+    uint8_t seconds;
+    uint8_t minutes;
+    uint8_t hours;
+} cia_tod;
+
 typedef struct cia_port_inputs {
     uint8_t port_a_pull_down;
     uint8_t port_b_pull_down;
@@ -38,6 +45,12 @@ struct cia {
     uint8_t registers[CIA_REGISTER_COUNT];
     cia_timer timer_a;
     cia_timer timer_b;
+    cia_tod tod;
+    cia_tod tod_alarm;
+    cia_tod tod_latch;
+    uint64_t tod_cycle_accum;
+    uint64_t tod_50hz_cycles;
+    uint64_t tod_60hz_cycles;
     uint8_t interrupt_flags;
     uint8_t interrupt_mask;
     c64_keyboard *keyboard;
@@ -46,6 +59,7 @@ struct cia {
     uint64_t interrupt_assertions;
     cia_port_input_fn port_input;
     void *port_input_user;
+    bool tod_latched;
     bool cnt_pulse;
 };
 
@@ -53,6 +67,7 @@ bool cia_init(cia *c, char *error, size_t error_size);
 void cia_reset(cia *c);
 void cia_attach_keyboard(cia *c, c64_keyboard *keyboard);
 void cia_attach_port_input(cia *c, cia_port_input_fn input, void *user);
+void cia_set_tod_cycles(cia *c, uint64_t cycles_50hz, uint64_t cycles_60hz);
 void cia_step_cycle(cia *c);
 void cia_pulse_cnt(cia *c);
 void cia_set_interrupt_source(cia *c, uint8_t source_mask);

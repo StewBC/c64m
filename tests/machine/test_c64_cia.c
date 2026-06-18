@@ -20,6 +20,7 @@ enum {
     CIA_REG_CONTROL_B = 0x0f,
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
+    CIA_INTERRUPT_TOD = 0x04,
     TEST_RESET_VECTOR = 0xe000,
     TEST_IRQ_VECTOR = 0xe010,
     TEST_NMI_VECTOR = 0xe020,
@@ -655,6 +656,119 @@ static void test_cia_debug_read_port_formula(void) {
     expect_u8("debug port a formula", 0xf5, cia_debug_read_register(&c, CIA_REG_PORT_A));
 }
 
+static void write_tod(cia *c, uint8_t hours, uint8_t minutes, uint8_t seconds, uint8_t tenths) {
+    cia_write_register(c, 0x0b, hours);
+    cia_write_register(c, 0x0a, minutes);
+    cia_write_register(c, 0x09, seconds);
+    cia_write_register(c, 0x08, tenths);
+}
+
+static void test_cia_tod_advances_at_selected_cadence(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_tod_cycles(&c, 5, 3);
+
+    step_cia_cycles(&c, 2);
+    expect_u8("tod clear cra uses 60hz source before tick", 0x00, cia_debug_read_register(&c, 0x08));
+    cia_step_cycle(&c);
+    expect_u8("tod clear cra uses 60hz source tick", 0x01, cia_debug_read_register(&c, 0x08));
+
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x80);
+    step_cia_cycles(&c, 4);
+    expect_u8("tod set cra uses 50hz source before tick", 0x01, cia_debug_read_register(&c, 0x08));
+    cia_step_cycle(&c);
+    expect_u8("tod set cra uses 50hz source tick", 0x02, cia_debug_read_register(&c, 0x08));
+}
+
+static void test_cia_tod_machine_cadence_policy(void) {
+    c64_t machine;
+
+    c64_init(&machine);
+
+    expect_u64("cia tod 50hz pal tenth cadence",
+        (uint64_t)63u * 312u * 5u,
+        machine.cia1.tod_50hz_cycles);
+    expect_u64("cia tod 60hz ntsc tenth cadence",
+        (uint64_t)65u * 263u * 6u,
+        machine.cia1.tod_60hz_cycles);
+}
+
+static void test_cia_tod_bcd_rollover_and_ampm(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_tod_cycles(&c, 1, 1);
+    write_tod(&c, 0x11, 0x59, 0x59, 0x09);
+
+    cia_step_cycle(&c);
+    expect_u8("tod tenths rolls to zero", 0x00, cia_debug_read_register(&c, 0x08));
+    expect_u8("tod seconds rolls to zero", 0x00, cia_debug_read_register(&c, 0x09));
+    expect_u8("tod minutes rolls to zero", 0x00, cia_debug_read_register(&c, 0x0a));
+    expect_u8("tod 11am rolls to 12pm", 0x92, cia_debug_read_register(&c, 0x0b));
+
+    write_tod(&c, 0x92, 0x59, 0x59, 0x09);
+    cia_step_cycle(&c);
+    expect_u8("tod 12pm rolls to 1pm", 0x81, cia_debug_read_register(&c, 0x0b));
+}
+
+static void test_cia_tod_read_latch_and_debug_peek(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_tod_cycles(&c, 1, 1);
+    write_tod(&c, 0x01, 0x59, 0x59, 0x09);
+
+    expect_u8("tod hours read latches", 0x01, cia_read_register(&c, 0x0b));
+    cia_step_cycle(&c);
+    expect_u8("debug peek sees latched tenths without releasing", 0x09, cia_debug_read_register(&c, 0x08));
+    expect_u8("tod latched minutes remain coherent", 0x59, cia_read_register(&c, 0x0a));
+    expect_u8("tod latched seconds remain coherent", 0x59, cia_read_register(&c, 0x09));
+    expect_u8("tod tenths read releases latch", 0x09, cia_read_register(&c, 0x08));
+    expect_u8("tod live minutes visible after release", 0x00, cia_read_register(&c, 0x0a));
+}
+
+static void test_cia_tod_writes_alarm_and_sets_interrupt(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_tod_cycles(&c, 1, 1);
+    write_tod(&c, 0x12, 0x00, 0x00, 0x00);
+
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x80);
+    write_tod(&c, 0x12, 0x00, 0x00, 0x01);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x00);
+    cia_write_register(&c, CIA_REG_ICR, 0x84);
+
+    cia_step_cycle(&c);
+    expect_u8("tod alarm flag set", CIA_INTERRUPT_TOD, c.interrupt_flags);
+    expect_true("tod alarm irq pending", cia_irq_pending(&c));
+    expect_u8("tod alarm icr read", 0x84, cia_read_register(&c, CIA_REG_ICR));
+}
+
+static void test_cia2_tod_alarm_can_raise_nmi(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+    char error[256];
+
+    reset_machine(&machine);
+    cia_set_tod_cycles(&machine.cia2, 1, 1);
+    write_tod(&machine.cia2, 0x12, 0x00, 0x00, 0x00);
+    cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x80);
+    write_tod(&machine.cia2, 0x12, 0x00, 0x00, 0x01);
+    cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x00);
+    cia_write_register(&machine.cia2, CIA_REG_ICR, 0x84);
+
+    expect_true("tod nmi cycle", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("tod nmi step instruction", c64_step_instruction(&machine, error, sizeof(error)));
+    c64_copy_cpu_snapshot(&machine, &cpu);
+    expect_u16("tod cia2 nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
+}
+
 static void test_machine_cia_step_and_irq_foundations(void) {
     c64_t machine;
     char error[256];
@@ -923,5 +1037,11 @@ int main(void) {
     test_cia_icr_masked_flags_and_mask_writes();
     test_cia_icr_reserved_sources_have_mask_semantics();
     test_cia_debug_read_port_formula();
+    test_cia_tod_advances_at_selected_cadence();
+    test_cia_tod_machine_cadence_policy();
+    test_cia_tod_bcd_rollover_and_ampm();
+    test_cia_tod_read_latch_and_debug_peek();
+    test_cia_tod_writes_alarm_and_sets_interrupt();
+    test_cia2_tod_alarm_can_raise_nmi();
     return 0;
 }

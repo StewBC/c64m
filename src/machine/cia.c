@@ -13,6 +13,10 @@ enum {
     CIA_REG_TIMER_A_HI = 0x05,
     CIA_REG_TIMER_B_LO = 0x06,
     CIA_REG_TIMER_B_HI = 0x07,
+    CIA_REG_TOD_TENTHS = 0x08,
+    CIA_REG_TOD_SECONDS = 0x09,
+    CIA_REG_TOD_MINUTES = 0x0a,
+    CIA_REG_TOD_HOURS = 0x0b,
     CIA_REG_ICR = 0x0d,
     CIA_REG_CONTROL_A = 0x0e,
     CIA_REG_CONTROL_B = 0x0f,
@@ -22,8 +26,10 @@ enum {
     CIA_CONTROL_ONESHOT = 0x08,
     CIA_CONTROL_FORCE_LOAD = 0x10,
     CIA_CONTROL_A_CNT_INPUT = 0x20,
+    CIA_CONTROL_TOD_50HZ = 0x80,
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
+    CIA_INTERRUPT_TOD = 0x04,
     CIA_INTERRUPT_SOURCE_MASK = 0x1f,
 };
 
@@ -66,6 +72,173 @@ static uint8_t cia_read_port_a_pins_internal(const cia *c) {
 
 static void cia_reload_timer(cia_timer *timer) {
     timer->counter = timer->latch == 0 ? 0xffffu : timer->latch;
+}
+
+static uint8_t cia_bcd_to_uint(uint8_t value) {
+    return (uint8_t)(((value >> 4) & 0x0fu) * 10u + (value & 0x0fu));
+}
+
+static uint8_t cia_uint_to_bcd(uint8_t value) {
+    return (uint8_t)(((value / 10u) << 4) | (value % 10u));
+}
+
+static uint8_t cia_sanitize_bcd(uint8_t value, uint8_t max) {
+    uint8_t decimal = cia_bcd_to_uint(value);
+
+    if ((value & 0x0fu) > 9u || decimal > max) {
+        decimal = 0;
+    }
+
+    return cia_uint_to_bcd(decimal);
+}
+
+static uint8_t cia_sanitize_tod_hour(uint8_t value) {
+    uint8_t pm = (uint8_t)(value & 0x80u);
+    uint8_t hour = cia_bcd_to_uint((uint8_t)(value & 0x1fu));
+
+    if (((value & 0x0fu) > 9u) || hour < 1u || hour > 12u) {
+        hour = 12;
+    }
+
+    return (uint8_t)(pm | cia_uint_to_bcd(hour));
+}
+
+static bool cia_tod_equal(const cia_tod *a, const cia_tod *b) {
+    return a->tenth == b->tenth &&
+        a->seconds == b->seconds &&
+        a->minutes == b->minutes &&
+        a->hours == b->hours;
+}
+
+static void cia_increment_tod(cia *c) {
+    uint8_t tenth = c->tod.tenth;
+    uint8_t seconds;
+    uint8_t minutes;
+    uint8_t hour;
+    uint8_t pm;
+
+    tenth++;
+    if (tenth < 10u) {
+        c->tod.tenth = tenth;
+        return;
+    }
+
+    c->tod.tenth = 0;
+    seconds = (uint8_t)(cia_bcd_to_uint(c->tod.seconds) + 1u);
+    if (seconds < 60u) {
+        c->tod.seconds = cia_uint_to_bcd(seconds);
+        return;
+    }
+
+    c->tod.seconds = 0;
+    minutes = (uint8_t)(cia_bcd_to_uint(c->tod.minutes) + 1u);
+    if (minutes < 60u) {
+        c->tod.minutes = cia_uint_to_bcd(minutes);
+        return;
+    }
+
+    c->tod.minutes = 0;
+    pm = (uint8_t)(c->tod.hours & 0x80u);
+    hour = (uint8_t)(cia_bcd_to_uint((uint8_t)(c->tod.hours & 0x1fu)) + 1u);
+    if (hour == 12u) {
+        pm ^= 0x80u;
+    } else if (hour > 12u) {
+        hour = 1;
+    }
+    c->tod.hours = (uint8_t)(pm | cia_uint_to_bcd(hour));
+}
+
+static uint64_t cia_tod_tick_cycles(const cia *c) {
+    if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_TOD_50HZ) != 0) {
+        return c->tod_50hz_cycles;
+    }
+
+    return c->tod_60hz_cycles;
+}
+
+static void cia_step_tod(cia *c) {
+    uint64_t tick_cycles = cia_tod_tick_cycles(c);
+
+    if (tick_cycles == 0) {
+        return;
+    }
+
+    c->tod_cycle_accum++;
+    while (c->tod_cycle_accum >= tick_cycles) {
+        c->tod_cycle_accum -= tick_cycles;
+        cia_increment_tod(c);
+        if (cia_tod_equal(&c->tod, &c->tod_alarm)) {
+            cia_set_interrupt_source(c, CIA_INTERRUPT_TOD);
+        }
+    }
+}
+
+static uint8_t cia_read_tod_register(cia *c, uint8_t reg) {
+    const cia_tod *tod = c->tod_latched ? &c->tod_latch : &c->tod;
+
+    if (reg == CIA_REG_TOD_HOURS && !c->tod_latched) {
+        c->tod_latch = c->tod;
+        c->tod_latched = true;
+        tod = &c->tod_latch;
+    }
+
+    switch (reg) {
+        case CIA_REG_TOD_TENTHS:
+            c->tod_latched = false;
+            return tod->tenth;
+        case CIA_REG_TOD_SECONDS:
+            return tod->seconds;
+        case CIA_REG_TOD_MINUTES:
+            return tod->minutes;
+        case CIA_REG_TOD_HOURS:
+            return tod->hours;
+        default:
+            return 0xff;
+    }
+}
+
+static uint8_t cia_debug_read_tod_register(const cia *c, uint8_t reg) {
+    const cia_tod *tod = c->tod_latched ? &c->tod_latch : &c->tod;
+
+    switch (reg) {
+        case CIA_REG_TOD_TENTHS:
+            return tod->tenth;
+        case CIA_REG_TOD_SECONDS:
+            return tod->seconds;
+        case CIA_REG_TOD_MINUTES:
+            return tod->minutes;
+        case CIA_REG_TOD_HOURS:
+            return tod->hours;
+        default:
+            return 0xff;
+    }
+}
+
+static void cia_write_tod_register(cia *c, uint8_t reg, uint8_t value) {
+    cia_tod *tod = (c->registers[CIA_REG_CONTROL_B] & 0x80u) != 0 ? &c->tod_alarm : &c->tod;
+
+    switch (reg) {
+        case CIA_REG_TOD_TENTHS:
+            tod->tenth = value <= 9u ? value : 0;
+            if (tod == &c->tod) {
+                c->tod_cycle_accum = 0;
+                c->tod_latched = false;
+            }
+            break;
+        case CIA_REG_TOD_SECONDS:
+            tod->seconds = cia_sanitize_bcd(value, 59);
+            break;
+        case CIA_REG_TOD_MINUTES:
+            tod->minutes = cia_sanitize_bcd(value, 59);
+            break;
+        case CIA_REG_TOD_HOURS:
+            tod->hours = cia_sanitize_tod_hour(value);
+            break;
+        default:
+            break;
+    }
+
+    c->registers[reg] = value;
 }
 
 static void cia_reset_timer_output_pulses(cia *c) {
@@ -152,7 +325,7 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
     if (timer->counter == 0) {
         timer->underflow = true;
         cia_set_interrupt_source(c, interrupt_flag);
-        cia_timer_update_pb_output(timer, control);
+    cia_timer_update_pb_output(timer, control);
         cia_reload_timer(timer);
         if ((control & CIA_CONTROL_ONESHOT) != 0) {
             c->registers[control_reg] = (uint8_t)(control & (uint8_t)~CIA_CONTROL_START);
@@ -205,18 +378,26 @@ void cia_reset(cia *c) {
     c64_keyboard *keyboard;
     cia_port_input_fn port_input;
     void *port_input_user;
+    uint64_t tod_50hz_cycles;
+    uint64_t tod_60hz_cycles;
 
     assert(c);
 
     keyboard = c->keyboard;
     port_input = c->port_input;
     port_input_user = c->port_input_user;
+    tod_50hz_cycles = c->tod_50hz_cycles;
+    tod_60hz_cycles = c->tod_60hz_cycles;
     memset(c, 0, sizeof(*c));
     c->keyboard = keyboard;
     c->port_input = port_input;
     c->port_input_user = port_input_user;
     c->timer_a.output_level = true;
     c->timer_b.output_level = true;
+    c->tod.hours = 0x12;
+    c->tod_alarm.hours = 0x12;
+    c->tod_50hz_cycles = tod_50hz_cycles == 0 ? 100000u : tod_50hz_cycles;
+    c->tod_60hz_cycles = tod_60hz_cycles == 0 ? 100000u : tod_60hz_cycles;
 }
 
 void cia_attach_keyboard(cia *c, c64_keyboard *keyboard) {
@@ -232,12 +413,20 @@ void cia_attach_port_input(cia *c, cia_port_input_fn input, void *user) {
     c->port_input_user = user;
 }
 
+void cia_set_tod_cycles(cia *c, uint64_t cycles_50hz, uint64_t cycles_60hz) {
+    assert(c);
+
+    c->tod_50hz_cycles = cycles_50hz;
+    c->tod_60hz_cycles = cycles_60hz;
+}
+
 void cia_step_cycle(cia *c) {
     assert(c);
 
     cia_reset_timer_output_pulses(c);
     cia_step_timer(c, &c->timer_a, CIA_REG_CONTROL_A, CIA_INTERRUPT_TIMER_A);
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
+    cia_step_tod(c);
     c->cnt_pulse = false;
 }
 
@@ -266,6 +455,11 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
             return (uint8_t)(c->timer_b.counter & 0xffu);
         case CIA_REG_TIMER_B_HI:
             return (uint8_t)(c->timer_b.counter >> 8);
+        case CIA_REG_TOD_TENTHS:
+        case CIA_REG_TOD_SECONDS:
+        case CIA_REG_TOD_MINUTES:
+        case CIA_REG_TOD_HOURS:
+            return cia_read_tod_register(c, reg);
         case CIA_REG_ICR: {
             uint8_t flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
             uint8_t value = flags;
@@ -318,6 +512,12 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
                 cia_reload_timer(&c->timer_b);
             }
             return;
+        case CIA_REG_TOD_TENTHS:
+        case CIA_REG_TOD_SECONDS:
+        case CIA_REG_TOD_MINUTES:
+        case CIA_REG_TOD_HOURS:
+            cia_write_tod_register(c, reg, value);
+            return;
         case CIA_REG_ICR:
             c->icr_writes++;
             if ((value & 0x80u) != 0) {
@@ -365,6 +565,11 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
             return (uint8_t)(c->timer_b.counter & 0xffu);
         case CIA_REG_TIMER_B_HI:
             return (uint8_t)(c->timer_b.counter >> 8);
+        case CIA_REG_TOD_TENTHS:
+        case CIA_REG_TOD_SECONDS:
+        case CIA_REG_TOD_MINUTES:
+        case CIA_REG_TOD_HOURS:
+            return cia_debug_read_tod_register(c, reg);
         case CIA_REG_ICR:
             flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
             if ((flags & c->interrupt_mask) != 0) {

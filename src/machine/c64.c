@@ -50,6 +50,14 @@ static void c64_step_sid(c64_t *machine) {
     (void)machine;
 }
 
+static void c64_configure_cia_tod(c64_t *machine) {
+    uint64_t pal_tenth = (uint64_t)VICII_PAL_CYCLES_PER_LINE * VICII_PAL_LINES_PER_FRAME * 5u;
+    uint64_t ntsc_tenth = (uint64_t)VICII_NTSC_CYCLES_PER_LINE * VICII_NTSC_LINES_PER_FRAME * 6u;
+
+    cia_set_tod_cycles(&machine->cia1, pal_tenth, ntsc_tenth);
+    cia_set_tod_cycles(&machine->cia2, pal_tenth, ntsc_tenth);
+}
+
 static void c64_advance_one_cycle(c64_t *machine) {
     c64_step_vic(machine);
     c64_step_cia1(machine);
@@ -374,6 +382,7 @@ void c64_init(c64_t *machine) {
     (void)vicii_init(&machine->vic, error, sizeof(error));
     (void)cia_init(&machine->cia1, error, sizeof(error));
     (void)cia_init(&machine->cia2, error, sizeof(error));
+    c64_configure_cia_tod(machine);
     c64_keyboard_reset(&machine->keyboard);
     cia_attach_port_input(&machine->cia1, c64_cia1_port_inputs, machine);
     cia_attach_port_input(&machine->cia2, c64_cia2_port_inputs, machine);
@@ -455,6 +464,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x15);
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);
+    c64_configure_cia_tod(machine);
     c64_keyboard_reset(&machine->keyboard);
     machine->joystick1 = 0;
     machine->joystick2 = 0;
