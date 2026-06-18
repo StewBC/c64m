@@ -1407,7 +1407,7 @@ int is_variable(ASSEMBLER *as) {
     }
 
     const char *p = skip_space(as->cur);
-    return *p == '=' || (p[0] == '+' && p[1] == '+') || (p[0] == '-' && p[1] == '-');
+    return *p == '=' || (p[0] == ':' && p[1] == '=') || (p[0] == '+' && p[1] == '+') || (p[0] == '-' && p[1] == '-');
 }
 
 void parse_address(ASSEMBLER *as) {
