@@ -5,6 +5,7 @@
 
 #include "c64_layout.h"
 #include "disasm_6502.h"
+#include "symbol_table.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,7 +114,8 @@ typedef enum frontend_misc_tab {
     FRONTEND_MISC_TAB_PROGRAMS = 0,
     FRONTEND_MISC_TAB_DEBUGGER,
     FRONTEND_MISC_TAB_BREAKPOINTS,
-    FRONTEND_MISC_TAB_HARDWARE
+    FRONTEND_MISC_TAB_HARDWARE,
+    FRONTEND_MISC_TAB_ASSEMBLER
 } frontend_misc_tab;
 
 typedef struct frontend_misc_view_state {
@@ -191,7 +193,9 @@ struct frontend {
     frontend_misc_view_state misc;
     frontend_config_dialog_state config_dialog;
     frontend_breakpoint_dialog_state breakpoint_dialog;
+    frontend_assembler_state assembler;
     symbol_resolver symbols;
+    symbol_table *symbol_table;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
     size_t intent_read;
     size_t intent_write;
@@ -295,6 +299,15 @@ static void frontend_push_debugger_intent(
     frontend *ui,
     frontend_debugger_intent_type type,
     uint16_t value);
+
+static bool frontend_push_assemble_run_intent(
+    frontend *ui,
+    const char *path,
+    uint16_t address,
+    uint16_t run_address,
+    bool auto_run);
+
+static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height);
 
 static void frontend_push_breakpoint_id_intent(
     frontend *ui,
@@ -628,6 +641,37 @@ static bool frontend_push_config_apply_intent(
         ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_NONE;
         return false;
     }
+    ui->intent_write = next;
+    return true;
+}
+
+static bool frontend_push_assemble_run_intent(
+    frontend *ui,
+    const char *path,
+    uint16_t address,
+    uint16_t run_address,
+    bool auto_run)
+{
+    size_t next;
+
+    if (ui == NULL || path == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN;
+    snprintf(
+        ui->intents[ui->intent_write].assemble_path,
+        sizeof(ui->intents[ui->intent_write].assemble_path),
+        "%s", path);
+    ui->intents[ui->intent_write].assemble_address = address;
+    ui->intents[ui->intent_write].assemble_run_address = run_address;
+    ui->intents[ui->intent_write].assemble_auto_run = auto_run;
     ui->intent_write = next;
     return true;
 }
@@ -3565,6 +3609,88 @@ static void frontend_draw_misc_hardware(frontend *ui)
     nk_label(ctx, "Memory banking details deferred", NK_TEXT_LEFT);
 }
 
+static void frontend_draw_misc_assembler(frontend *ui)
+{
+    struct nk_context *ctx;
+    frontend_assembler_state *asm_state;
+    static const nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    asm_state = &ui->assembler;
+
+    if (!asm_state->initialized) {
+        snprintf(asm_state->address_buf, sizeof(asm_state->address_buf), "8000");
+        snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "8000");
+        asm_state->run_address_user_edited = false;
+        asm_state->auto_run = false;
+        asm_state->initialized = true;
+    }
+
+    /* File Name row */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+    nk_layout_row_push(ctx, 0.22f);
+    nk_label(ctx, "File Name", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.56f);
+    nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->file_path, (int)sizeof(asm_state->file_path), nk_filter_default);
+    nk_layout_row_push(ctx, 0.22f);
+    if (nk_button_label(ctx, "Browse...")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE);
+    }
+    nk_layout_row_end(ctx);
+
+    /* Address row */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+    nk_layout_row_push(ctx, 0.35f);
+    nk_label(ctx, "Address", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.65f);
+    if (nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->address_buf, (int)sizeof(asm_state->address_buf), nk_filter_hex) & NK_EDIT_DEACTIVATED) {
+        /* Keep run_address in sync if user hasn't edited it independently */
+        if (!asm_state->run_address_user_edited) {
+            snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "%s", asm_state->address_buf);
+        }
+    }
+    nk_layout_row_end(ctx);
+
+    /* Run Address row */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+    nk_layout_row_push(ctx, 0.35f);
+    nk_label(ctx, "Run Address", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.65f);
+    if (nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->run_address_buf, (int)sizeof(asm_state->run_address_buf), nk_filter_hex) & NK_EDIT_ACTIVE) {
+        asm_state->run_address_user_edited = true;
+    }
+    nk_layout_row_end(ctx);
+
+    /* Auto Run row */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+    nk_layout_row_push(ctx, 0.35f);
+    nk_label(ctx, "Auto Run", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.65f);
+    {
+        nk_bool auto_run_nk = asm_state->auto_run ? nk_true : nk_false;
+        nk_checkbox_label(ctx, "", &auto_run_nk);
+        asm_state->auto_run = (auto_run_nk != nk_false);
+    }
+    nk_layout_row_end(ctx);
+
+    /* Assemble button */
+    nk_layout_row_dynamic(ctx, 28.0f, 1);
+    if (nk_button_label(ctx, "Assemble")) {
+        if (asm_state->file_path[0] != '\0') {
+            frontend_push_assemble_run_intent(
+                ui,
+                asm_state->file_path,
+                (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
+                (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
+                asm_state->auto_run);
+        }
+    }
+}
+
 static void frontend_draw_misc_tab_button(
     frontend *ui,
     frontend_misc_tab tab,
@@ -3602,11 +3728,12 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
 
     ctx = ui->ctx;
     if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-        nk_layout_row_dynamic(ctx, tab_h, 4);
+        nk_layout_row_dynamic(ctx, tab_h, 5);
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_PROGRAMS, "Machine");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_DEBUGGER, "Debugger");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_BREAKPOINTS, "Breakpoints");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_HARDWARE, "Hardware");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_ASSEMBLER, "Assembler");
 
         content_h = bounds.h - tab_h - 44.0f;
         if (content_h < 24.0f) {
@@ -3629,8 +3756,12 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
                     break;
 
                 case FRONTEND_MISC_TAB_HARDWARE:
-                default:
                     frontend_draw_misc_hardware(ui);
+                    break;
+
+                case FRONTEND_MISC_TAB_ASSEMBLER:
+                default:
+                    frontend_draw_misc_assembler(ui);
                     break;
             }
             nk_group_end(ctx);
@@ -3838,6 +3969,57 @@ void frontend_append_symbol_file(frontend *ui, const char *path)
     snprintf(dialog->edited.symbol_files, 1024, "%s", merged);
 }
 
+void frontend_set_assembler_path(frontend *ui, const char *path)
+{
+    if (ui == NULL || path == NULL) {
+        return;
+    }
+
+    snprintf(ui->assembler.file_path, sizeof(ui->assembler.file_path), "%s", path);
+}
+
+void frontend_show_assembler_errors(frontend *ui, const char *errors)
+{
+    if (ui == NULL) {
+        return;
+    }
+
+    snprintf(ui->assembler.error_text, sizeof(ui->assembler.error_text), "%s",
+        errors != NULL ? errors : "");
+    ui->assembler.error_dialog_open = true;
+    ui->misc.active_tab = FRONTEND_MISC_TAB_ASSEMBLER;
+}
+
+void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot)
+{
+    size_t i;
+
+    if (ui == NULL || snapshot == NULL) {
+        return;
+    }
+
+    if (ui->symbol_table == NULL) {
+        ui->symbol_table = symbol_table_create();
+    }
+    if (ui->symbol_table == NULL) {
+        return;
+    }
+
+    symbol_table_clear(ui->symbol_table);
+
+    for (i = 0; i < snapshot->count; ++i) {
+        symbol_table_add(
+            ui->symbol_table,
+            snapshot->entries[i].address,
+            snapshot->entries[i].name,
+            SYMBOL_SOURCE_ASSEMBLER,
+            "assembler",
+            true);
+    }
+
+    symbol_table_make_resolver(ui->symbol_table, &ui->symbols);
+}
+
 void frontend_destroy(frontend *ui)
 {
     if (ui == NULL) {
@@ -3852,6 +4034,7 @@ void frontend_destroy(frontend *ui)
         SDL_DestroyTexture(ui->display_texture);
     }
 
+    symbol_table_destroy(ui->symbol_table);
     frontend_config_dialog_reset(&ui->config_dialog);
     free(ui);
 }
@@ -3961,6 +4144,62 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
     return true;
 }
 
+static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height)
+{
+    struct nk_context *ctx;
+    frontend_assembler_state *asm_state;
+    struct nk_rect bounds;
+    float dialog_w, dialog_h;
+
+    if (ui == NULL || ui->ctx == NULL || !ui->assembler.error_dialog_open) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    asm_state = &ui->assembler;
+    dialog_w = (float)width * 0.7f;
+    if (dialog_w < 400.0f) dialog_w = 400.0f;
+    dialog_h = (float)height * 0.6f;
+    if (dialog_h < 200.0f) dialog_h = 200.0f;
+    bounds = nk_rect(
+        ((float)width - dialog_w) * 0.5f,
+        ((float)height - dialog_h) * 0.5f,
+        dialog_w, dialog_h);
+
+    if (nk_begin(ctx, "Assembly Errors", bounds,
+                 NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR)) {
+        float content_h = dialog_h - 80.0f;
+        if (content_h < 60.0f) content_h = 60.0f;
+
+        nk_layout_row_dynamic(ctx, content_h, 1);
+        if (nk_group_begin(ctx, "asm-error-scroll", NK_WINDOW_BORDER)) {
+            const char *p = asm_state->error_text;
+            const char *end = p + strlen(p);
+
+            while (p < end) {
+                const char *nl = strchr(p, '\n');
+                size_t len = nl != NULL ? (size_t)(nl - p) : (size_t)(end - p);
+                char line[256];
+                if (len >= sizeof(line)) len = sizeof(line) - 1u;
+                memcpy(line, p, len);
+                line[len] = '\0';
+                nk_layout_row_dynamic(ctx, 16.0f, 1);
+                nk_label(ctx, line, NK_TEXT_LEFT);
+                p = nl != NULL ? nl + 1 : end;
+            }
+            nk_group_end(ctx);
+        }
+
+        nk_layout_row_dynamic(ctx, 28.0f, 3);
+        nk_spacing(ctx, 1);
+        if (nk_button_label(ctx, "OK")) {
+            asm_state->error_dialog_open = false;
+        }
+        nk_spacing(ctx, 1);
+    }
+    nk_end(ctx);
+}
+
 static void frontend_render_display_only(frontend *ui)
 {
     int width = 0;
@@ -4055,6 +4294,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_corner_handle(ui->ctx, ui->layout.hit_display_corner, display_corner_active);
     frontend_draw_config_dialog(ui, width, height);
     frontend_draw_breakpoint_editor(ui, width, height);
+    frontend_draw_assembler_error_dialog(ui, width, height);
     nk_sdl_render(NK_ANTI_ALIASING_ON);
 }
 

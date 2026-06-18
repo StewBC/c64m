@@ -7,6 +7,7 @@
 #include "c64.h"
 #include "c64_rom.h"
 #include "mutex.h"
+#include "symbol_table.h"
 
 #include <stdbool.h>
 
@@ -32,6 +33,7 @@ struct runtime_client {
     message_queue *command_queue;
     message_queue *event_queue;
     struct runtime_frame_slot *frame_slot;
+    struct runtime_symbol_slot *symbol_slot;
 };
 
 typedef struct paste_state {
@@ -52,6 +54,12 @@ typedef struct runtime_frame_slot {
     uint64_t consumed_frames;
     uint64_t dropped_frames;
 } runtime_frame_slot;
+
+typedef struct runtime_symbol_slot {
+    mutex *mutex;
+    runtime_symbol_snapshot snapshot;
+    bool has_symbols;
+} runtime_symbol_slot;
 
 typedef struct runtime_breakpoint {
     uint32_t id;
@@ -75,6 +83,8 @@ struct runtime {
     message_queue *event_queue;
     runtime_client client;
     runtime_frame_slot frame_slot;
+    runtime_symbol_slot symbol_slot;
+    symbol_table *symbols;
     c64_t machine;
     c64_rom_set roms;
     char *basic_rom_path;
@@ -105,6 +115,10 @@ struct runtime {
     paste_state paste;
     char *pending_prg_path;
     bool pending_prg_resume_running;
+    char *pending_asm_path;
+    uint16_t pending_asm_address;
+    uint16_t pending_asm_run_address;
+    bool pending_asm_auto_run;
 };
 
 int runtime_thread_main(void *userdata);

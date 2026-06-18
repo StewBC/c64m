@@ -123,6 +123,29 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 - [x] Symbol loading into debugger symbol table
 - [x] Error display in UI
 
+## Phase 16 — Assembler UI Integration
+
+- [x] Assembler tab in Misc panel (5th tab: Machine / Debugger / Breakpoints / Hardware / Assembler)
+- [x] File Name edit field with Browse button (OS file picker via `FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE`)
+- [x] Address hex edit field (default `8000`)
+- [x] Run Address hex edit field (tracks Address until user edits it; `run_address_user_edited` flag)
+- [x] Auto Run checkbox
+- [x] Assemble button fires `FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN`
+- [x] `RUNTIME_COMMAND_ASSEMBLE_FILE` extended with `reset_first`, `run_address`, `auto_run` fields
+- [x] `runtime_client_assemble_file_full()` — new client function for full reset+assemble flow
+- [x] Reset-and-assemble flow: machine resets, runs to BASIC ($E38B), then assembles (mirrors PRG loader pattern with `pending_asm_path`)
+- [x] Auto Run: sets `cpu.pc = run_address`, `cpu.sp = 0x01FF`, then resumes
+- [x] Emulator always resumes after assembly regardless of success or failure
+- [x] `RUNTIME_EVENT_ASSEMBLE_ERROR` (new, distinct from `RUNTIME_EVENT_ERROR`) carries error text
+- [x] Scrollable assembly error dialog with per-line rendering and OK button
+- [x] `symbol_table *symbols` created in runtime thread on startup, destroyed on shutdown
+- [x] `runtime_symbol_slot` (mutex-protected, mirrors `runtime_frame_slot`) holds snapshot of up to 256 symbols (64-char names); silently caps if assembler produces more
+- [x] `runtime_publish_symbols()` serializes `rt->symbols` into `symbol_slot` after assembly
+- [x] `runtime_client_poll_symbols()` delivers `runtime_symbol_snapshot` to frontend
+- [x] Frontend builds its own `symbol_table *` from snapshot via `symbol_table_clear()` + `symbol_table_add()` + `symbol_table_make_resolver()` → `ui->symbols`
+- [x] Disassembler picks up assembler labels immediately after successful assembly
+- [x] Legacy `runtime_assemble_file_command` path (reset_first=0) now also passes `rt->symbols` and publishes symbol slot
+
 ---
 
 ## Notes
@@ -141,3 +164,4 @@ Phases 1–11 complete = can assemble real programs with labels, expressions, .o
 - Phase 13: macros are live without a2m-style expanded macro buffers. `.macro` definitions store stable body pointers into loaded `ASM_FILE` buffers, invocations push macro `FILE_FRAME`s, and each macro body line gets parameter and `.local` substitution in the mutable line buffer before normal tokenization. Macro definitions are re-parsed each pass; generated `.local` names reset per pass so pass-1 and pass-2 symbol names match.
 - Phase 14: scopes and segments are live. `.scope` supports anonymous and named namespaces without a2m output redirect options; `.proc` defines both an address symbol and child scope; `.segdef` creates named single-target segments with optional `emit`/`noemit`; `.segment ""` returns to the default segment. Segment definitions are created on pass 1 and reused on pass 2.
 - Phase 15: integration helpers are live. `assembler_walk_symbols()` exports resolved address labels with scoped names; `c64_assemble_file()` assembles into C64 RAM and imports assembler labels into `src/tools/symbols` using `SYMBOL_SOURCE_ASSEMBLER`; the runtime exposes an assemble-file command that publishes assembler diagnostics through `RUNTIME_EVENT_ERROR` and success through `RUNTIME_EVENT_ASSEMBLE_COMPLETE`.
+- Phase 16: `RUNTIME_SYMBOL_SNAPSHOT_MAX = 256` symbols × `RUNTIME_SYMBOL_NAME_MAX = 64` char names per snapshot; total assembler symbols exceeding 256 are silently capped (total count still reported in `runtime_symbol_snapshot.total`). The frontend's symbol_table is assembler-only and is fully cleared on each reassembly. `run_address_user_edited` tracks whether the Run Address field has ever been activated by the user; if not, it mirrors the Address field on deactivation.

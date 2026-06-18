@@ -325,6 +325,48 @@ bool runtime_client_assemble_file(runtime_client *client, const char *path, uint
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_assemble_file_full(
+    runtime_client *client,
+    const char *path,
+    uint16_t address,
+    uint16_t run_address,
+    bool auto_run) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_ASSEMBLE_FILE,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.assemble_file.path, sizeof(command.data.assemble_file.path), "%s", path);
+    command.data.assemble_file.address = address;
+    command.data.assemble_file.run_address = run_address;
+    command.data.assemble_file.auto_run = auto_run ? 1u : 0u;
+    command.data.assemble_file.reset_first = 1u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out) {
+    runtime_symbol_slot *slot;
+
+    if (!client || !out || !client->symbol_slot) {
+        return false;
+    }
+
+    slot = client->symbol_slot;
+    mutex_lock(slot->mutex);
+    if (!slot->has_symbols) {
+        mutex_unlock(slot->mutex);
+        return false;
+    }
+
+    *out = slot->snapshot;
+    slot->has_symbols = false;
+    mutex_unlock(slot->mutex);
+    return true;
+}
+
 bool runtime_client_cycle_turbo_speed(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_CYCLE_TURBO_SPEED);
 }

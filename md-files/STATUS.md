@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), CIA Phase F (CIA #2 VIC bank and IEC port integration), and CIA Phase G (time-of-day clock and alarm). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16 (timed bus events and live VIC-II raster) and assembler UI integration (Phase 16 of ASMDESIGN.md), VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), CIA Phase F (CIA #2 VIC bank and IEC port integration), and CIA Phase G (time-of-day clock and alarm). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -529,6 +529,16 @@ Implemented:
   - `c64_reset()` initialises `$D018 = $15` (screen at `$0400`, charset at
     `$1000`) matching the KERNAL default, so the ROM character set is visible
     before any game or KERNAL init code writes `$D018`
+- Assembler UI integration (ASMDESIGN.md Phase 16):
+  - Assembler tab added to the Misc panel as the fifth tab (Machine / Debugger / Breakpoints / Hardware / Assembler)
+  - File Name field with OS file-picker Browse button, Address and Run Address hex fields, Auto Run checkbox, and Assemble button
+  - Run Address field tracks the Address field until the user manually edits it (`run_address_user_edited` flag)
+  - Assembly uses the reset-and-run-to-BASIC flow: machine resets, runs to $E38B, then assembles at the given address — mirrors the PRG loader pending-path pattern
+  - Auto Run sets `cpu.pc = run_address` and `cpu.sp = 0x01FF` then resumes the emulator
+  - Emulator always resumes after assembly regardless of success or failure
+  - New `RUNTIME_EVENT_ASSEMBLE_ERROR` event (distinct from `RUNTIME_EVENT_ERROR`) carries assembler diagnostics; frontend shows a scrollable per-line error dialog with OK button
+  - Runtime thread owns a `symbol_table *symbols`; after successful assembly, symbols are serialized into a mutex-protected `runtime_symbol_slot` (mirrors `runtime_frame_slot`); frontend polls via `runtime_client_poll_symbols()` and rebuilds its own `symbol_table *` then calls `symbol_table_make_resolver()` so the disassembler view shows assembler labels immediately
+  - `RUNTIME_SYMBOL_SNAPSHOT_MAX = 256` symbols, `RUNTIME_SYMBOL_NAME_MAX = 64` chars; symbols beyond 256 are silently capped with total still reported
 
 ## Not Implemented
 

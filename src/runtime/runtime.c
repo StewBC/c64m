@@ -118,8 +118,9 @@ runtime *runtime_create(const runtime_config *config) {
         RUNTIME_EVENT_QUEUE_CAPACITY);
 
     rt->frame_slot.mutex = mutex_create();
+    rt->symbol_slot.mutex = mutex_create();
 
-    if (!rt->command_queue || !rt->event_queue || !rt->frame_slot.mutex) {
+    if (!rt->command_queue || !rt->event_queue || !rt->frame_slot.mutex || !rt->symbol_slot.mutex) {
         runtime_destroy(rt);
         return NULL;
     }
@@ -127,6 +128,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.command_queue = rt->command_queue;
     rt->client.event_queue = rt->event_queue;
     rt->client.frame_slot = &rt->frame_slot;
+    rt->client.symbol_slot = &rt->symbol_slot;
 
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
@@ -173,6 +175,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->system_rom_path);
     free(rt->ini_path);
     mutex_destroy(rt->frame_slot.mutex);
+    mutex_destroy(rt->symbol_slot.mutex);
     message_queue_destroy(rt->event_queue);
     message_queue_destroy(rt->command_queue);
     free(rt);

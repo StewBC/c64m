@@ -9,6 +9,23 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+enum {
+    RUNTIME_SYMBOL_NAME_MAX    = 64,
+    RUNTIME_SYMBOL_SNAPSHOT_MAX = 256
+};
+
+typedef struct runtime_symbol_snapshot_entry {
+    uint16_t address;
+    char name[RUNTIME_SYMBOL_NAME_MAX];
+} runtime_symbol_snapshot_entry;
+
+typedef struct runtime_symbol_snapshot {
+    size_t count;
+    size_t total;
+    runtime_symbol_snapshot_entry entries[RUNTIME_SYMBOL_SNAPSHOT_MAX];
+} runtime_symbol_snapshot;
 
 typedef struct runtime_client runtime_client;
 
@@ -62,6 +79,13 @@ bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, 
 bool runtime_client_request_breakpoints(runtime_client *client);
 bool runtime_client_load_prg(runtime_client *client, const char *path);
 bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address);
+bool runtime_client_assemble_file_full(
+    runtime_client *client,
+    const char *path,
+    uint16_t address,
+    uint16_t run_address,
+    bool auto_run);
+bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out);
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length);
 bool runtime_client_cycle_turbo_speed(runtime_client *client);
 bool runtime_client_apply_machine_config(

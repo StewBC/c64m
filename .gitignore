@@ -4,5 +4,6 @@
 build/
 disks/
 programs/
+samples/
 *.ini
 !CMakeLists.txt

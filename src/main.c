@@ -196,6 +196,17 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
         update_debug_state_from_event(debug_state, &event);
         if (event.type == RUNTIME_EVENT_ERROR) {
             SDL_Log("runtime error: %s", event.data.error.message);
+        } else if (event.type == RUNTIME_EVENT_ASSEMBLE_ERROR) {
+            if (ui != NULL) {
+                frontend_show_assembler_errors(ui, event.data.error.message);
+            }
+        } else if (event.type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
+            if (ui != NULL) {
+                runtime_symbol_snapshot symbols;
+                if (runtime_client_poll_symbols(client, &symbols)) {
+                    frontend_update_symbols(ui, &symbols);
+                }
+            }
         } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
                    debug_state != NULL &&
                    debug_state->has_cpu) {
@@ -410,6 +421,24 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                         runtime_client_request_memory(client, 0, 1, RUNTIME_MEMORY_MODE_CPU_MAP);
                     }
                 }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE:
+                {
+                    char path[1024];
+                    if (choose_file_path(path, sizeof(path), "Select Assembler Source", NULL)) {
+                        frontend_set_assembler_path(ui, path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN:
+                sent = runtime_client_assemble_file_full(
+                    client,
+                    intent.assemble_path,
+                    intent.assemble_address,
+                    intent.assemble_run_address,
+                    intent.assemble_auto_run);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:

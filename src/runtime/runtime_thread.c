@@ -333,6 +333,8 @@ static void runtime_reset_command(runtime *rt) {
     free(rt->pending_prg_path);
     rt->pending_prg_path = NULL;
     rt->pending_prg_resume_running = false;
+    free(rt->pending_asm_path);
+    rt->pending_asm_path = NULL;
 
     if (was_running) {
         rt->exec_state = RUNTIME_EXEC_RUNNING;
@@ -1079,6 +1081,77 @@ static void runtime_complete_pending_prg_load(runtime *rt, char *path) {
     runtime_publish_machine_state(rt);
 }
 
+static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address);
+
+static void runtime_publish_symbols(runtime *rt) {
+    runtime_symbol_slot *slot = &rt->symbol_slot;
+    runtime_symbol_snapshot *snap = &slot->snapshot;
+    size_t total;
+    size_t i;
+    symbol_info info;
+
+    total = symbol_table_count(rt->symbols);
+    snap->total = total;
+    snap->count = total < RUNTIME_SYMBOL_SNAPSHOT_MAX ? total : RUNTIME_SYMBOL_SNAPSHOT_MAX;
+
+    for (i = 0; i < snap->count; ++i) {
+        if (symbol_table_get(rt->symbols, i, &info) == SYMBOL_OK) {
+            snap->entries[i].address = info.address;
+            snprintf(snap->entries[i].name, RUNTIME_SYMBOL_NAME_MAX, "%s", info.name);
+        } else {
+            snap->entries[i].address = 0;
+            snap->entries[i].name[0] = '\0';
+        }
+    }
+
+    mutex_lock(slot->mutex);
+    slot->has_symbols = true;
+    mutex_unlock(slot->mutex);
+}
+
+static void runtime_publish_assemble_error(runtime *rt, const char *message) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_ASSEMBLE_ERROR,
+    };
+    snprintf(event.data.error.message, sizeof(event.data.error.message), "%s",
+        message != NULL ? message : "assembly failed");
+    runtime_publish_event(rt, &event);
+}
+
+static void runtime_complete_pending_asm(runtime *rt, char *path) {
+    char error[4096];
+    bool ok;
+    uint16_t address = rt->pending_asm_address;
+    uint16_t run_address = rt->pending_asm_run_address;
+    bool auto_run = rt->pending_asm_auto_run;
+
+    ok = runtime_assemble_file(&rt->machine, rt->symbols, path, address, path, error, sizeof(error));
+
+    if (ok) {
+        runtime_publish_symbols(rt);
+        if (auto_run) {
+            rt->machine.cpu.cpu.pc = run_address;
+            rt->machine.cpu.cpu.sp = 0x0100u + 0xFFu;
+        }
+    }
+
+    /* Always resume regardless of success or failure. */
+    rt->exec_state = RUNTIME_EXEC_RUNNING;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+    runtime_reset_pacer(rt);
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    runtime_publish_machine_state(rt);
+
+    if (ok) {
+        runtime_publish_assemble_complete(rt, path, address);
+        runtime_publish_memory(rt, address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
+    } else {
+        runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
+    }
+
+    free(path);
+}
+
 static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
     runtime_event event = {
         .type = RUNTIME_EVENT_ASSEMBLE_COMPLETE,
@@ -1090,8 +1163,29 @@ static void runtime_publish_assemble_complete(runtime *rt, const char *path, uin
 }
 
 static void runtime_assemble_file_command(runtime *rt, const runtime_command *command) {
-    char error[1024];
+    char error[4096];
 
+    if (command->data.assemble_file.reset_first) {
+        /* Reset machine, run to BASIC ($E38B), then assemble (like PRG load). */
+        if (!runtime_reset_machine(rt)) {
+            return;
+        }
+        free(rt->pending_asm_path);
+        rt->pending_asm_path = NULL;
+        if (!runtime_replace_string(&rt->pending_asm_path, command->data.assemble_file.path)) {
+            runtime_publish_error(rt, "failed to store assembler path");
+            return;
+        }
+        rt->pending_asm_address     = command->data.assemble_file.address;
+        rt->pending_asm_run_address = command->data.assemble_file.run_address;
+        rt->pending_asm_auto_run    = command->data.assemble_file.auto_run != 0;
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        return;
+    }
+
+    /* Legacy path: requires paused runtime. */
     if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
         runtime_publish_error(rt, "assembly requires paused runtime");
         return;
@@ -1099,16 +1193,17 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
 
     if (!runtime_assemble_file(
             &rt->machine,
-            NULL,
+            rt->symbols,
             command->data.assemble_file.path,
             command->data.assemble_file.address,
-            NULL,
+            command->data.assemble_file.path,
             error,
             sizeof(error))) {
         runtime_publish_error(rt, error[0] != '\0' ? error : "assembly failed");
         return;
     }
 
+    runtime_publish_symbols(rt);
     runtime_publish_assemble_complete(rt, command->data.assemble_file.path, command->data.assemble_file.address);
     runtime_publish_memory(rt, command->data.assemble_file.address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     runtime_publish_machine_state(rt);
@@ -1459,6 +1554,8 @@ int runtime_thread_main(void *userdata) {
     runtime *rt = userdata;
     bool alive = true;
 
+    rt->symbols = symbol_table_create();
+
     c64_init(&rt->machine);
     c64_set_config(&rt->machine, &rt->machine_config);
     c64_set_memory_access_callback(&rt->machine, runtime_memory_access, rt);
@@ -1501,6 +1598,12 @@ int runtime_thread_main(void *userdata) {
                     rt->pending_prg_path = NULL;
                     runtime_complete_pending_prg_load(rt, path);
                 }
+                if (rt->pending_asm_path != NULL &&
+                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                    char *path = rt->pending_asm_path;
+                    rt->pending_asm_path = NULL;
+                    runtime_complete_pending_asm(rt, path);
+                }
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
@@ -1529,6 +1632,10 @@ int runtime_thread_main(void *userdata) {
 
     free(rt->pending_prg_path);
     rt->pending_prg_path = NULL;
+    free(rt->pending_asm_path);
+    rt->pending_asm_path = NULL;
+    symbol_table_destroy(rt->symbols);
+    rt->symbols = NULL;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STOPPED);
     return 0;
 }

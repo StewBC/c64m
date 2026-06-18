@@ -123,6 +123,9 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
             uint16_t address;
+            uint16_t run_address;
+            uint8_t auto_run;
+            uint8_t reset_first;
         } assemble_file;
 
         struct {

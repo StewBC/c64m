@@ -2,12 +2,14 @@
 
 #include "platform.h"
 #include "runtime_event.h"
+#include "runtime_client.h"
 #include "app_options.h"
 
 #include "c64_frame.h"
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef struct frontend frontend;
 
@@ -38,6 +40,17 @@ typedef struct frontend_debug_state {
     bool has_breakpoints;
 } frontend_debug_state;
 
+typedef struct frontend_assembler_state {
+    bool initialized;
+    char file_path[1024];
+    char address_buf[8];
+    char run_address_buf[8];
+    bool run_address_user_edited;
+    bool auto_run;
+    bool error_dialog_open;
+    char error_text[4096];
+} frontend_assembler_state;
+
 typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_NONE = 0,
     FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC,
@@ -60,7 +73,9 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_MACHINE_RESET,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
-    FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY
+    FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY,
+    FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE,
+    FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN
 } frontend_debugger_intent_type;
 
 typedef struct frontend_config_apply_result {
@@ -81,6 +96,11 @@ typedef struct frontend_debugger_intent {
     runtime_breakpoint_definition breakpoint;
     app_options config;
     frontend_config_apply_result config_result;
+    /* Assembler */
+    char assemble_path[1024];
+    uint16_t assemble_address;
+    uint16_t assemble_run_address;
+    bool assemble_auto_run;
 } frontend_debugger_intent;
 
 typedef struct frontend_layout_state {
@@ -106,3 +126,6 @@ void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);
 void frontend_set_config_state(frontend *ui, const app_options *options);
 bool frontend_apply_selected_ini(frontend *ui, const app_options *options);
 void frontend_append_symbol_file(frontend *ui, const char *path);
+void frontend_set_assembler_path(frontend *ui, const char *path);
+void frontend_show_assembler_errors(frontend *ui, const char *errors);
+void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot);
