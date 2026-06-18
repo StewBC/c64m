@@ -119,14 +119,6 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
     case C64_CPU_BUS_EVENT_WRITE:
         c64_bus_write(&machine->bus, event->address, event->value);
         c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
-#if defined(C64M_DEBUG_CIA1_WRITES)
-        if (event->address >= 0xdc04u && event->address <= 0xdc0fu) {
-            fprintf(stderr, "[CIA1] PC=$%04X  $%04X <- $%02X\n",
-                (unsigned)machine->pending_cpu_trace.opcode_pc,
-                (unsigned)event->address,
-                (unsigned)event->value);
-        }
-#endif
         break;
 
     case C64_CPU_BUS_EVENT_INTERNAL:
@@ -210,16 +202,6 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
 
     machine->last_cpu_trace.total_cycles = c6510_step(&machine->cpu);
     machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
-
-#if defined(C64M_DEBUG_CIA1_WRITES)
-    if (machine->last_cpu_trace.opcode_pc == 0x3f7eu) {
-        fprintf(stderr, "[CIA1@3F7E] timer_b.counter=$%04X CRB=$%02X (START=%d INMODE=%d)\n",
-            (unsigned)machine->cia1.timer_b.counter,
-            (unsigned)machine->cia1.registers[0x0f],
-            (int)(machine->cia1.registers[0x0f] & 0x01u),
-            (int)((machine->cia1.registers[0x0f] >> 5) & 0x03u));
-    }
-#endif
     if (machine->last_cpu_trace.total_cycles == 0) {
         machine->last_cpu_trace.total_cycles = 1;
     }
