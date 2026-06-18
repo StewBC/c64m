@@ -3986,6 +3986,8 @@ void frontend_show_assembler_errors(frontend *ui, const char *errors)
 
     snprintf(ui->assembler.error_text, sizeof(ui->assembler.error_text), "%s",
         errors != NULL ? errors : "");
+    ui->assembler.error_scroll_x = 0;
+    ui->assembler.error_scroll_y = 0;
     ui->assembler.error_dialog_open = true;
     ui->misc.active_tab = FRONTEND_MISC_TAB_ASSEMBLER;
 }
@@ -4172,22 +4174,39 @@ static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int he
         if (content_h < 60.0f) content_h = 60.0f;
 
         nk_layout_row_dynamic(ctx, content_h, 1);
-        if (nk_group_begin(ctx, "asm-error-scroll", NK_WINDOW_BORDER)) {
-            const char *p = asm_state->error_text;
-            const char *end = p + strlen(p);
-
-            while (p < end) {
-                const char *nl = strchr(p, '\n');
-                size_t len = nl != NULL ? (size_t)(nl - p) : (size_t)(end - p);
-                char line[256];
-                if (len >= sizeof(line)) len = sizeof(line) - 1u;
-                memcpy(line, p, len);
-                line[len] = '\0';
-                nk_layout_row_dynamic(ctx, 16.0f, 1);
-                nk_label(ctx, line, NK_TEXT_LEFT);
-                p = nl != NULL ? nl + 1 : end;
+        {
+            const struct nk_user_font *font = ctx->style.font;
+            float max_row_w = dialog_w;
+            {
+                const char *sp = asm_state->error_text;
+                const char *se = sp + strlen(sp);
+                while (sp < se) {
+                    const char *nl = strchr(sp, '\n');
+                    int line_chars = nl ? (int)(nl - sp) : (int)(se - sp);
+                    float w = font->width(font->userdata, font->height, sp, line_chars) + 20.0f;
+                    if (w > max_row_w) max_row_w = w;
+                    sp = nl ? nl + 1 : se;
+                }
             }
-            nk_group_end(ctx);
+            struct nk_scroll scroll = { asm_state->error_scroll_x, asm_state->error_scroll_y };
+            if (nk_group_scrolled_begin(ctx, &scroll, "asm-error-scroll", NK_WINDOW_BORDER)) {
+                const char *p = asm_state->error_text;
+                const char *end = p + strlen(p);
+                while (p < end) {
+                    const char *nl = strchr(p, '\n');
+                    size_t len = nl != NULL ? (size_t)(nl - p) : (size_t)(end - p);
+                    char line[256];
+                    if (len >= sizeof(line)) len = sizeof(line) - 1u;
+                    memcpy(line, p, len);
+                    line[len] = '\0';
+                    nk_layout_row_static(ctx, 16.0f, (int)max_row_w, 1);
+                    nk_label(ctx, line, NK_TEXT_LEFT);
+                    p = nl != NULL ? nl + 1 : end;
+                }
+                nk_group_scrolled_end(ctx);
+            }
+            asm_state->error_scroll_x = scroll.x;
+            asm_state->error_scroll_y = scroll.y;
         }
 
         nk_layout_row_dynamic(ctx, 28.0f, 3);

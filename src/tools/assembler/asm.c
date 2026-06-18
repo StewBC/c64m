@@ -179,6 +179,19 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
             if(ASM_OK != file_load(as, input_file)) {
                 return ASM_ERR;
             }
+            free(as->root_dir);
+            as->root_dir = NULL;
+            if(as->root_file && as->root_file->display_name) {
+                const char *slash = strrchr(as->root_file->display_name, '/');
+                if(slash) {
+                    size_t dir_len = (size_t)(slash - as->root_file->display_name + 1);
+                    as->root_dir = malloc(dir_len + 1);
+                    if(as->root_dir) {
+                        memcpy(as->root_dir, as->root_file->display_name, dir_len);
+                        as->root_dir[dir_len] = '\0';
+                    }
+                }
+            }
         } else if(ASM_OK != file_stack_reset_for_pass2(as)) {
             return ASM_ERR;
         }
@@ -284,6 +297,8 @@ void assembler_shutdown(ASSEMBLER *as) {
     if(!as) {
         return;
     }
+    free(as->root_dir);
+    as->root_dir = NULL;
     defines_free(as);
     macro_stack_clear(as);
     macro_definitions_clear(as);

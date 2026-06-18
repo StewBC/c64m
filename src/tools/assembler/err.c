@@ -44,6 +44,12 @@ void asm_err(ASSEMBLER *as, ASM_ERR_CLASS cls, const char *format, ...) {
     }
 
     const char *file_name = as->current_file_name ? as->current_file_name : "<unknown>";
+    if(as->root_dir && as->current_file_name) {
+        size_t root_len = strlen(as->root_dir);
+        if(strncmp(as->current_file_name, as->root_dir, root_len) == 0) {
+            file_name = as->current_file_name + root_len;
+        }
+    }
     uint32_t file_name_hash = fnv_1a_hash(file_name);
     if(as->error_log_level < 1) {
         for(size_t i = 0; i < entries; i++) {

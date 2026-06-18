@@ -49,6 +49,8 @@ typedef struct frontend_assembler_state {
     bool auto_run;
     bool error_dialog_open;
     char error_text[4096];
+    unsigned int error_scroll_x;
+    unsigned int error_scroll_y;
 } frontend_assembler_state;
 
 typedef enum frontend_debugger_intent_type {

@@ -79,6 +79,7 @@ struct ASSEMBLER {
     int error_log_level;
     const char *current_file_name;
     size_t current_line;
+    char *root_dir;
 };
 
 static inline uint16_t current_output_address(ASSEMBLER *as) {

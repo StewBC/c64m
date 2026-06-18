@@ -44,7 +44,7 @@ static int write_source(char *path, size_t path_size, const char *source)
     return 0;
 }
 
-static int assemble_file(const char *path, test_memory *mem, ERRORLOG *log)
+static int assemble_file_at(const char *path, test_memory *mem, ERRORLOG *log, uint16_t start)
 {
     CB_ASM_CTX cb;
     ASSEMBLER as;
@@ -58,9 +58,14 @@ static int assemble_file(const char *path, test_memory *mem, ERRORLOG *log)
         return ASM_ERR;
     }
 
-    result = assembler_assemble(&as, path, 0x0801);
+    result = assembler_assemble(&as, path, start);
     assembler_shutdown(&as);
     return result;
+}
+
+static int assemble_file(const char *path, test_memory *mem, ERRORLOG *log)
+{
+    return assemble_file_at(path, mem, log, 0x0801);
 }
 
 static int expect_bytes(const test_memory *mem, const uint8_t *expected, size_t expected_len)
@@ -237,6 +242,100 @@ static int test_anon_label_with_repeat(void)
     return failures;
 }
 
+/* Assembler started at $8000 but source begins with .org $2000 — previously
+   dot_org rejected the lower address; now it must succeed. */
+static int test_org_below_start(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    const char *source =
+        ".org $2000\n"
+        "    lda #81\n"
+        "    ldx #40\n"
+        ":\n"
+        "    .repeat 24, I\n"
+        "        sta $0400+I*40,x\n"
+        "    .endrep\n"
+        "    dex\n"
+        "    bne :-\n"
+        "    rts\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file_at(path, &mem, &log, 0x8000) != ASM_OK) {
+        fprintf(stderr, "org-below-start failed with %zu errors\n", log.log_array.items);
+        for (size_t i = 0; i < log.log_array.items; i++) {
+            ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
+            fprintf(stderr, "  [%zu] %s\n", i, e->err_str ? e->err_str : "?");
+        }
+        failures++;
+    }
+    if (mem.memory[0x2000] != 0xA9 || mem.memory[0x2001] != 0x51) {
+        fprintf(stderr, "org-below-start: output at wrong address\n");
+        failures++;
+    }
+
+    errlog_shutdown(&log);
+    unlink(path);
+    return failures;
+}
+
+/* Errors should reference files by name relative to the source directory. */
+static int test_relative_error_path(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    /* Deliberate error: undefined symbol */
+    const char *source = "lda undefined_sym\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    assemble_file(path, &mem, &log);
+
+    if (log.log_array.items == 0) {
+        fprintf(stderr, "relative-path: expected at least one error\n");
+        errlog_shutdown(&log);
+        unlink(path);
+        return 1;
+    }
+
+    ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
+    if (e == NULL || e->err_str == NULL) {
+        fprintf(stderr, "relative-path: null error entry\n");
+        failures++;
+    } else {
+        /* The error must not contain the directory prefix from path ("/tmp/"). */
+        const char *slash = strrchr(path, '/');
+        const char *base_name = slash ? slash + 1 : path;
+        if (strstr(e->err_str, base_name) == NULL) {
+            fprintf(stderr, "relative-path: file name not in error: %s\n", e->err_str);
+            failures++;
+        }
+        /* The error must not start with "File: /tmp/" — only the base name. */
+        const char *dir = "/tmp/";
+        if (strstr(e->err_str, dir) != NULL) {
+            fprintf(stderr, "relative-path: full path leaks into error: %s\n", e->err_str);
+            failures++;
+        }
+    }
+
+    errlog_shutdown(&log);
+    unlink(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -244,6 +343,8 @@ int main(void)
     failures += test_loop_output();
     failures += test_loop_errors();
     failures += test_anon_label_with_repeat();
+    failures += test_org_below_start();
+    failures += test_relative_error_path();
 
     return failures == 0 ? 0 : 1;
 }

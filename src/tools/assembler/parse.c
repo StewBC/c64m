@@ -407,15 +407,10 @@ static void decode_abs_rel_zp_opcode(ASSEMBLER *as) {
 static void dot_org(ASSEMBLER *as) {
     uint64_t value = (uint64_t)expr_full_evaluate(as);
     SEGMENT *segment = as->active_target->active_segment;
-    if(segment->segment_output_address > value) {
-        asm_err(as, ASM_ERR_RESOLVE, "Assigning address %04llX when address is already %04X error",
-                (unsigned long long)value, segment->segment_output_address);
-    } else {
-        segment->segment_output_address = (uint16_t)value;
-        if(!segment->segment_init) {
-            segment->segment_start_address = (uint16_t)value;
-            segment->segment_init = 1;
-        }
+    segment->segment_output_address = (uint16_t)value;
+    if(!segment->segment_init) {
+        segment->segment_start_address = (uint16_t)value;
+        segment->segment_init = 1;
     }
 }
 
