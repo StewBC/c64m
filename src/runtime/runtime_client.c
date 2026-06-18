@@ -103,6 +103,25 @@ bool runtime_client_request_memory(
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_request_memory_view(
+    runtime_client *client,
+    uint16_t address,
+    uint16_t length,
+    runtime_memory_mode mode) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_REQUEST_MEMORY_VIEW,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.request_memory.address = address;
+    command.data.request_memory.length = length;
+    command.data.request_memory.mode = (uint8_t)mode;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_request_frame(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_FRAME);
 }

@@ -152,6 +152,11 @@ static void update_debug_state_from_event(
             debug_state->has_memory = true;
             break;
 
+        case RUNTIME_EVENT_MEMORY_VIEW_RESPONSE:
+            debug_state->memory_view = event->data.memory;
+            debug_state->has_memory_view = true;
+            break;
+
         case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
             debug_state->breakpoints = event->data.breakpoints;
             debug_state->has_breakpoints = true;
@@ -301,6 +306,14 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
 
             case FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY:
                 sent = runtime_client_request_memory(
+                    client,
+                    intent.address,
+                    intent.length,
+                    intent.memory_mode);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY_VIEW:
+                sent = runtime_client_request_memory_view(
                     client,
                     intent.address,
                     intent.length,

@@ -1186,6 +1186,31 @@ static void frontend_push_memory_request(
     ui->intent_write = next;
 }
 
+static void frontend_push_memory_view_request(
+    frontend *ui,
+    uint16_t address,
+    uint16_t length,
+    runtime_memory_mode mode)
+{
+    size_t next;
+
+    if (ui == NULL || length == 0) {
+        return;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY_VIEW;
+    ui->intents[ui->intent_write].address = address;
+    ui->intents[ui->intent_write].length = length;
+    ui->intents[ui->intent_write].value = 0;
+    ui->intents[ui->intent_write].memory_mode = mode;
+    ui->intent_write = next;
+}
+
 static void frontend_push_memory_write_byte(
     frontend *ui,
     uint16_t address,
@@ -2649,16 +2674,16 @@ static uint8_t frontend_memory_byte_at(
 {
     int index;
 
-    if (debug_state == NULL || !debug_state->has_memory) {
+    if (debug_state == NULL || !debug_state->has_memory_view) {
         return 0;
     }
 
-    index = frontend_memory_snapshot_index(&debug_state->memory, address);
+    index = frontend_memory_snapshot_index(&debug_state->memory_view, address);
     if (index < 0) {
         return 0;
     }
 
-    return debug_state->memory.bytes[index];
+    return debug_state->memory_view.bytes[index];
 }
 
 static char frontend_memory_ascii(uint8_t value)
@@ -2681,10 +2706,10 @@ static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug
 
     if (memory->request_pending &&
         debug_state != NULL &&
-        debug_state->has_memory &&
-        debug_state->memory.address == memory->requested_address &&
-        debug_state->memory.length == memory->requested_length &&
-        debug_state->memory.mode == (runtime_memory_mode)memory->requested_mode) {
+        debug_state->has_memory_view &&
+        debug_state->memory_view.address == memory->requested_address &&
+        debug_state->memory_view.length == memory->requested_length &&
+        debug_state->memory_view.mode == (runtime_memory_mode)memory->requested_mode) {
         memory->request_pending = false;
     }
 
@@ -2692,7 +2717,7 @@ static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug
         memory->requested_address != memory->view_address ||
         memory->requested_length != length ||
         memory->requested_mode != memory->mode) {
-        frontend_push_memory_request(ui, memory->view_address, length, memory->mode);
+        frontend_push_memory_view_request(ui, memory->view_address, length, memory->mode);
         memory->requested_address = memory->view_address;
         memory->requested_length = length;
         memory->requested_mode = memory->mode;

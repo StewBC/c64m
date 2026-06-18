@@ -1152,6 +1152,34 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             }
             break;
 
+        case RUNTIME_COMMAND_REQUEST_MEMORY_VIEW:
+            if (runtime_memory_mode_is_valid(command->data.request_memory.mode)) {
+                runtime_event mem_view_event = {
+                    .type = RUNTIME_EVENT_MEMORY_VIEW_RESPONSE,
+                };
+                uint16_t mv_address = command->data.request_memory.address;
+                uint16_t mv_length = command->data.request_memory.length;
+                runtime_memory_mode mv_mode = (runtime_memory_mode)command->data.request_memory.mode;
+                uint16_t i;
+
+                if (mv_length > RUNTIME_MEMORY_SNAPSHOT_MAX) {
+                    mv_length = RUNTIME_MEMORY_SNAPSHOT_MAX;
+                }
+                mem_view_event.data.memory.address = mv_address;
+                mem_view_event.data.memory.mode = mv_mode;
+                mem_view_event.data.memory.length = mv_length;
+                for (i = 0; i < mv_length; ++i) {
+                    uint16_t cur = (uint16_t)(mv_address + i);
+                    mem_view_event.data.memory.bytes[i] = mv_mode == RUNTIME_MEMORY_MODE_RAM ?
+                        c64_debug_read_ram(&rt->machine, cur) :
+                        c64_debug_read_cpu_map(&rt->machine, cur);
+                }
+                runtime_publish_event(rt, &mem_view_event);
+            } else {
+                runtime_publish_error(rt, "unsupported memory view request mode");
+            }
+            break;
+
         case RUNTIME_COMMAND_REQUEST_FRAME:
             runtime_publish_debug_frame(rt);
             break;
