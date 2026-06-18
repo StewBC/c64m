@@ -60,6 +60,14 @@ typedef enum c64_video_standard {
     C64_VIDEO_STANDARD_PAL
 } c64_video_standard;
 
+typedef enum c64_joystick_input {
+    C64_JOYSTICK_UP = 0x01,
+    C64_JOYSTICK_DOWN = 0x02,
+    C64_JOYSTICK_LEFT = 0x04,
+    C64_JOYSTICK_RIGHT = 0x08,
+    C64_JOYSTICK_FIRE = 0x10
+} c64_joystick_input;
+
 typedef struct c64_config {
     c64_video_standard video_standard;
 } c64_config;
@@ -116,6 +124,8 @@ typedef struct c64_t {
     cia cia1;
     cia cia2;
     c64_keyboard keyboard;
+    uint8_t joystick1;
+    uint8_t joystick2;
     c64_clock clock;
     c64_frame working_frame;
     uint64_t keyboard_events;
@@ -151,6 +161,7 @@ bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
+void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);

@@ -114,3 +114,18 @@ uint8_t c64_keyboard_read_columns(const c64_keyboard *keyboard, uint8_t selected
 
     return value;
 }
+
+uint8_t c64_keyboard_read_rows(const c64_keyboard *keyboard, uint8_t selected_columns) {
+    uint8_t value = 0xff;
+    uint8_t row;
+
+    assert(keyboard);
+
+    for (row = 0; row < 8; row++) {
+        if ((keyboard->rows[row] & selected_columns) != 0) {
+            value &= (uint8_t)~(1u << row);
+        }
+    }
+
+    return value;
+}

@@ -307,6 +307,27 @@ static uint8_t c64_cpu_nmi_pending(void *user) {
     return pending ? 1u : 0u;
 }
 
+static void c64_cia1_port_inputs(
+    void *user,
+    uint8_t port_a_pins,
+    uint8_t port_b_pins,
+    cia_port_inputs *out) {
+    c64_t *machine = user;
+    uint8_t selected_rows;
+    uint8_t selected_columns;
+
+    assert(machine);
+    assert(out);
+
+    selected_rows = (uint8_t)~port_a_pins;
+    selected_columns = (uint8_t)~port_b_pins;
+
+    out->port_b_pull_down |= (uint8_t)~c64_keyboard_read_columns(&machine->keyboard, selected_rows);
+    out->port_a_pull_down |= (uint8_t)~c64_keyboard_read_rows(&machine->keyboard, selected_columns);
+    out->port_b_pull_down |= (uint8_t)(machine->joystick1 & 0x1fu);
+    out->port_a_pull_down |= (uint8_t)(machine->joystick2 & 0x1fu);
+}
+
 void c64_init(c64_t *machine) {
     char error[256];
 
@@ -319,7 +340,7 @@ void c64_init(c64_t *machine) {
     (void)cia_init(&machine->cia1, error, sizeof(error));
     (void)cia_init(&machine->cia2, error, sizeof(error));
     c64_keyboard_reset(&machine->keyboard);
-    cia_attach_keyboard(&machine->cia1, &machine->keyboard);
+    cia_attach_port_input(&machine->cia1, c64_cia1_port_inputs, machine);
     c64_bus_attach_vicii(&machine->bus, &machine->vic);
     c64_bus_attach_cias(&machine->bus, &machine->cia1, &machine->cia2);
     c6510_init(&machine->cpu, machine, c64_cpu_read, c64_cpu_write);
@@ -399,6 +420,8 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);
     c64_keyboard_reset(&machine->keyboard);
+    machine->joystick1 = 0;
+    machine->joystick2 = 0;
 
     c6510_reset(&machine->cpu);
     memset(&machine->clock, 0, sizeof(machine->clock));
@@ -505,6 +528,16 @@ void c64_set_key(c64_t *machine, c64_key key, bool pressed) {
 
     c64_keyboard_set_key(&machine->keyboard, key, pressed);
     machine->keyboard_events++;
+}
+
+void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs) {
+    assert(machine);
+
+    if (port == 1u) {
+        machine->joystick1 = (uint8_t)(inputs & 0x1fu);
+    } else if (port == 2u) {
+        machine->joystick2 = (uint8_t)(inputs & 0x1fu);
+    }
 }
 
 void c64_restore(c64_t *machine) {

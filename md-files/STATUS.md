@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), and CIA Phase D (interrupt control register and IRQ/NMI line behavior). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), and CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -143,6 +143,25 @@ Implemented:
     RESTORE NMI preservation
   - TOD alarm, serial complete, FLAG line event generation, and pin-level interrupt race
     behavior remain deferred to later CIA phases
+- CIA Phase E CIA #1 port behavior:
+  - generic CIA port reads now support external active-low line pulls while preserving
+    output latches and DDR-selected input/output behavior
+  - CIA #1 wiring lives at the machine layer through a port-input callback rather than
+    in frontend or runtime code
+  - keyboard matrix scans work in both directions: Port A row output selection affects
+    Port B column reads, and Port B column output selection affects Port A row reads
+  - multiple simultaneous keys combine as active-low electrical pulls on shared lines
+  - joystick port 1 pulls CIA #1 Port B bits 0-4 low for up/down/left/right/fire
+  - joystick port 2 pulls CIA #1 Port A bits 0-4 low for up/down/left/right/fire
+  - keyboard and joystick inputs combine on the same CIA #1 lines, so either source can
+    pull a bit low
+  - RESTORE remains outside the ordinary keyboard matrix and continues through the CPU
+    NMI request path
+  - regression coverage includes bidirectional keyboard scanning, multi-key scans,
+    joystick port 1 and port 2 bits, keyboard-plus-joystick shared-line behavior,
+    debugger-safe port peeks, and RESTORE isolation from matrix reads
+  - light-pen/fire-button side effects, host joystick/frontend mapping, and cycle-perfect
+    keyboard/joystick sampling remain deferred
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus

@@ -78,3 +78,4 @@ typedef struct c64_keyboard {
 void c64_keyboard_reset(c64_keyboard *keyboard);
 void c64_keyboard_set_key(c64_keyboard *keyboard, c64_key key, bool pressed);
 uint8_t c64_keyboard_read_columns(const c64_keyboard *keyboard, uint8_t selected_rows);
+uint8_t c64_keyboard_read_rows(const c64_keyboard *keyboard, uint8_t selected_columns);

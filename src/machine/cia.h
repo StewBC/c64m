@@ -23,6 +23,17 @@ typedef struct cia_timer {
     bool pulse_active;
 } cia_timer;
 
+typedef struct cia_port_inputs {
+    uint8_t port_a_pull_down;
+    uint8_t port_b_pull_down;
+} cia_port_inputs;
+
+typedef void (*cia_port_input_fn)(
+    void *user,
+    uint8_t port_a_pins,
+    uint8_t port_b_pins,
+    cia_port_inputs *out);
+
 struct cia {
     uint8_t registers[CIA_REGISTER_COUNT];
     cia_timer timer_a;
@@ -33,12 +44,15 @@ struct cia {
     uint64_t icr_reads;
     uint64_t icr_writes;
     uint64_t interrupt_assertions;
+    cia_port_input_fn port_input;
+    void *port_input_user;
     bool cnt_pulse;
 };
 
 bool cia_init(cia *c, char *error, size_t error_size);
 void cia_reset(cia *c);
 void cia_attach_keyboard(cia *c, c64_keyboard *keyboard);
+void cia_attach_port_input(cia *c, cia_port_input_fn input, void *user);
 void cia_step_cycle(cia *c);
 void cia_pulse_cnt(cia *c);
 void cia_set_interrupt_source(cia *c, uint8_t source_mask);

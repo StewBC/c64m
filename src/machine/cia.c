@@ -39,8 +39,29 @@ static uint8_t cia_read_port(uint8_t data, uint8_t direction) {
     return (uint8_t)((data & direction) | (uint8_t)~direction);
 }
 
-static uint8_t cia_keyboard_selected_rows(const cia *c) {
-    return (uint8_t)~cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+static cia_port_inputs cia_read_external_inputs(const cia *c, uint8_t port_a_pins, uint8_t port_b_pins) {
+    cia_port_inputs inputs = {0, 0};
+
+    if (c->port_input) {
+        c->port_input(c->port_input_user, port_a_pins, port_b_pins, &inputs);
+    }
+
+    if (c->keyboard) {
+        uint8_t selected_rows = (uint8_t)~port_a_pins;
+        uint8_t selected_columns = (uint8_t)~port_b_pins;
+        inputs.port_b_pull_down |= (uint8_t)~c64_keyboard_read_columns(c->keyboard, selected_rows);
+        inputs.port_a_pull_down |= (uint8_t)~c64_keyboard_read_rows(c->keyboard, selected_columns);
+    }
+
+    return inputs;
+}
+
+static uint8_t cia_read_port_a_pins_internal(const cia *c) {
+    uint8_t port_a = cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+    uint8_t port_b = cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+    cia_port_inputs inputs = cia_read_external_inputs(c, port_a, port_b);
+
+    return (uint8_t)(port_a & (uint8_t)~inputs.port_a_pull_down);
 }
 
 static void cia_reload_timer(cia_timer *timer) {
@@ -143,7 +164,11 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
 }
 
 static uint8_t cia_read_port_b_pins(const cia *c) {
+    uint8_t port_a = cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
     uint8_t value = cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+    cia_port_inputs inputs = cia_read_external_inputs(c, port_a, value);
+
+    value &= (uint8_t)~inputs.port_b_pull_down;
 
     if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_PB_OUTPUT) != 0) {
         if (c->timer_a.pulse_active || !c->timer_a.output_level) {
@@ -178,12 +203,18 @@ bool cia_init(cia *c, char *error, size_t error_size) {
 
 void cia_reset(cia *c) {
     c64_keyboard *keyboard;
+    cia_port_input_fn port_input;
+    void *port_input_user;
 
     assert(c);
 
     keyboard = c->keyboard;
+    port_input = c->port_input;
+    port_input_user = c->port_input_user;
     memset(c, 0, sizeof(*c));
     c->keyboard = keyboard;
+    c->port_input = port_input;
+    c->port_input_user = port_input_user;
     c->timer_a.output_level = true;
     c->timer_b.output_level = true;
 }
@@ -192,6 +223,13 @@ void cia_attach_keyboard(cia *c, c64_keyboard *keyboard) {
     assert(c);
 
     c->keyboard = keyboard;
+}
+
+void cia_attach_port_input(cia *c, cia_port_input_fn input, void *user) {
+    assert(c);
+
+    c->port_input = input;
+    c->port_input_user = user;
 }
 
 void cia_step_cycle(cia *c) {
@@ -217,12 +255,8 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
     reg = (uint8_t)(addr & 0x0fu);
     switch (reg) {
         case CIA_REG_PORT_A:
-            return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+            return cia_read_port_a_pins_internal(c);
         case CIA_REG_PORT_B:
-            if (c->keyboard) {
-                return (uint8_t)(cia_read_port_b_pins(c) &
-                    c64_keyboard_read_columns(c->keyboard, cia_keyboard_selected_rows(c)));
-            }
             return cia_read_port_b_pins(c);
         case CIA_REG_TIMER_A_LO:
             return (uint8_t)(c->timer_a.counter & 0xffu);
@@ -320,12 +354,8 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
     reg = (uint8_t)(addr & 0x0fu);
     switch (reg) {
         case CIA_REG_PORT_A:
-            return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+            return cia_read_port_a_pins_internal(c);
         case CIA_REG_PORT_B:
-            if (c->keyboard) {
-                return (uint8_t)(cia_read_port_b_pins(c) &
-                    c64_keyboard_read_columns(c->keyboard, cia_keyboard_selected_rows(c)));
-            }
             return cia_read_port_b_pins(c);
         case CIA_REG_TIMER_A_LO:
             return (uint8_t)(c->timer_a.counter & 0xffu);
@@ -349,7 +379,7 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
 uint8_t cia_read_port_a_pins(const cia *c) {
     assert(c);
 
-    return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+    return cia_read_port_a_pins_internal(c);
 }
 
 bool cia_irq_pending(const cia *c) {

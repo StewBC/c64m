@@ -691,6 +691,93 @@ static void test_restore_nmi_still_reaches_cpu_nmi_vector(void) {
     expect_u64("restore request counted", 1, machine.restore_requests);
 }
 
+static void test_cia1_keyboard_matrix_bidirectional_scan(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_set_key(&machine, C64_KEY_A, true);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_A, 0xfd);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0x00);
+    expect_u8("A pulls PRB column 2 low", 0xfb, cia_read_register(&machine.cia1, CIA_REG_PORT_B));
+    expect_u8("debug A pulls PRB column 2 low", 0xfb, cia_debug_read_register(&machine.cia1, CIA_REG_PORT_B));
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_B, 0xfb);
+    expect_u8("A pulls PRA row 1 low", 0xfd, cia_read_register(&machine.cia1, CIA_REG_PORT_A));
+    expect_u8("debug A pulls PRA row 1 low", 0xfd, cia_debug_read_register(&machine.cia1, CIA_REG_PORT_A));
+}
+
+static void test_cia1_keyboard_multiple_keys_combine(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_set_key(&machine, C64_KEY_A, true);
+    c64_set_key(&machine, C64_KEY_S, true);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_A, 0xfd);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0x00);
+    expect_u8("A and S pull both columns low", 0xdb, cia_read_register(&machine.cia1, CIA_REG_PORT_B));
+}
+
+static void test_cia1_joystick_port_1_bits(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_set_joystick(&machine, 1, C64_JOYSTICK_UP | C64_JOYSTICK_FIRE);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_A, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0x00);
+    expect_u8("joystick 1 pulls PRB up/fire low", 0xee, cia_read_register(&machine.cia1, CIA_REG_PORT_B));
+}
+
+static void test_cia1_joystick_port_2_bits(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_set_joystick(&machine, 2, C64_JOYSTICK_DOWN | C64_JOYSTICK_LEFT | C64_JOYSTICK_FIRE);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_B, 0xff);
+    expect_u8("joystick 2 pulls PRA down/left/fire low", 0xe9, cia_read_register(&machine.cia1, CIA_REG_PORT_A));
+}
+
+static void test_cia1_keyboard_and_joystick_shared_lines_combine(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_set_key(&machine, C64_KEY_A, true);
+    c64_set_joystick(&machine, 1, C64_JOYSTICK_FIRE);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_A, 0xfd);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0x00);
+    expect_u8("keyboard A and joystick fire both pull PRB", 0xeb, cia_read_register(&machine.cia1, CIA_REG_PORT_B));
+}
+
+static void test_restore_does_not_enter_keyboard_matrix(void) {
+    c64_t machine;
+
+    reset_machine(&machine);
+    c64_restore(&machine);
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_A, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0x00);
+    expect_u8("restore does not pull keyboard columns", 0xff, cia_read_register(&machine.cia1, CIA_REG_PORT_B));
+
+    cia_write_register(&machine.cia1, CIA_REG_DDRA, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_DDRB, 0xff);
+    cia_write_register(&machine.cia1, CIA_REG_PORT_B, 0x00);
+    expect_u8("restore does not pull keyboard rows", 0xff, cia_read_register(&machine.cia1, CIA_REG_PORT_A));
+    expect_u64("restore still counted separately", 1, machine.restore_requests);
+}
+
 static void test_cycle_step_replays_cia_icr_read_at_bus_cycle(void) {
     static const uint8_t code[] = {
         0xad, 0x0d, 0xdc, /* LDA $DC0D */
@@ -776,6 +863,12 @@ int main(void) {
     test_cia1_timer_irq_reaches_cpu_irq_vector();
     test_cia2_timer_nmi_reaches_cpu_nmi_vector();
     test_restore_nmi_still_reaches_cpu_nmi_vector();
+    test_cia1_keyboard_matrix_bidirectional_scan();
+    test_cia1_keyboard_multiple_keys_combine();
+    test_cia1_joystick_port_1_bits();
+    test_cia1_joystick_port_2_bits();
+    test_cia1_keyboard_and_joystick_shared_lines_combine();
+    test_restore_does_not_enter_keyboard_matrix();
     test_cycle_step_replays_cia_icr_read_at_bus_cycle();
     test_cpu_visible_timer_b_counts_down();
     test_cia_debug_read_timer_counters();
