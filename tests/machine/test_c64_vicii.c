@@ -1282,6 +1282,112 @@ static void test_aec_absent_ba_is_sole_stall_predicate(void) {
     expect_true("ba active via sole predicate", vicii_ba_active(&v, abs));
 }
 
+static void test_vicii_debug_read_raster(void) {
+    vicii v;
+    char error[256];
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+
+    /* advance one full line so raster_line == 1 */
+    for (i = 0; i < VICII_PAL_CYCLES_PER_LINE; i++) {
+        vicii_step_cycle(&v, NULL, (uint64_t)i);
+    }
+
+    /* $D012 must return the live raster line low byte, not 0 */
+    expect_u8("d012 debug returns live raster low", 1, vicii_debug_read_register(&v, 0xd012));
+
+    /* registers[0x12] is never written by the VIC internally so it stays 0 */
+    expect_u8("registers[12] still holds compare value", 0, v.registers[0x12]);
+}
+
+static void test_vicii_debug_read_d011_raster_bit8(void) {
+    vicii v;
+    char error[256];
+    uint32_t i;
+    uint64_t abs;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+
+    /* advance past line 255 so raster_line >= 256 */
+    abs = 0;
+    for (i = 0; i < VICII_PAL_CYCLES_PER_LINE * 256u; i++) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+
+    /* raster_line should now be 256 — bit 8 set */
+    expect_u8("d011 debug bit 7 reflects raster bit 8", 0x80,
+              (uint8_t)(vicii_debug_read_register(&v, 0xd011) & 0x80u));
+    /* stored registers[0x11] bit 7 should be 0 (cleared on write) */
+    expect_u8("registers[11] bit 7 is 0", 0, (uint8_t)(v.registers[0x11] & 0x80u));
+}
+
+static void test_vicii_debug_read_collision_no_clear(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    v.sprite_sprite_collision = 0x05;
+    v.sprite_background_collision = 0x06;
+
+    expect_u8("d01e debug read", 0x05, vicii_debug_read_register(&v, 0xd01e));
+    expect_u8("d01e latch unchanged after debug read", 0x05, v.sprite_sprite_collision);
+
+    expect_u8("d01f debug read", 0x06, vicii_debug_read_register(&v, 0xd01f));
+    expect_u8("d01f latch unchanged after debug read", 0x06, v.sprite_background_collision);
+
+    /* normal CPU reads still clear */
+    vicii_read_register(&v, 0xd01e);
+    expect_u8("d01e cleared by normal read", 0x00, v.sprite_sprite_collision);
+    vicii_read_register(&v, 0xd01f);
+    expect_u8("d01f cleared by normal read", 0x00, v.sprite_background_collision);
+}
+
+static void test_vicii_debug_read_irq_status_no_clear(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    /* trigger raster IRQ at line 0 */
+    vicii_write_register(&v, 0xd012, 0x00);
+    vicii_write_register(&v, 0xd01a, 0x01);
+    vicii_step_cycle(&v, NULL, 0u);
+
+    /* debug read returns formatted value with bit 7 set */
+    expect_u8("d019 debug has pending bit", 0xf1, vicii_debug_read_register(&v, 0xd019));
+    /* irq_status must not be cleared */
+    expect_u8("irq_status intact after debug read", 0x01, v.irq_status);
+
+    /* normal read also returns correct value */
+    expect_u8("d019 normal read", 0xf1, vicii_read_register(&v, 0xd019));
+    /* normal write-1-to-clear then clears it */
+    vicii_write_register(&v, 0xd019, 0x01);
+    expect_u8("irq_status cleared after normal write", 0x00, v.irq_status);
+}
+
+static void test_vicii_debug_read_forced_high_bits(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    vicii_write_register(&v, 0xd016, 0x08);
+    expect_u8("d016 debug bits 7:5 forced high", 0xe8, vicii_debug_read_register(&v, 0xd016));
+
+    vicii_write_register(&v, 0xd01a, 0x03);
+    expect_u8("d01a debug bits 7:4 forced high", 0xf3, vicii_debug_read_register(&v, 0xd01a));
+
+    vicii_write_register(&v, 0xd020, 0x05);
+    expect_u8("d020 debug bits 7:4 forced high", 0xf5, vicii_debug_read_register(&v, 0xd020));
+
+    vicii_write_register(&v, 0xd02e, 0x03);
+    expect_u8("d02e debug bits 7:4 forced high", 0xf3, vicii_debug_read_register(&v, 0xd02e));
+}
+
 int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
@@ -1323,5 +1429,10 @@ int main(void) {
     test_sprite3_cross_line_ba();
     test_sprite4_cross_line_ba();
     test_aec_absent_ba_is_sole_stall_predicate();
+    test_vicii_debug_read_raster();
+    test_vicii_debug_read_d011_raster_bit8();
+    test_vicii_debug_read_collision_no_clear();
+    test_vicii_debug_read_irq_status_no_clear();
+    test_vicii_debug_read_forced_high_bits();
     return 0;
 }

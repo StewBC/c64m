@@ -38,5 +38,6 @@ void cia_reset(cia *c);
 void cia_attach_keyboard(cia *c, c64_keyboard *keyboard);
 void cia_step_cycle(cia *c);
 uint8_t cia_read_register(cia *c, uint16_t addr);
+uint8_t cia_debug_read_register(const cia *c, uint16_t addr);
 void cia_write_register(cia *c, uint16_t addr, uint8_t value);
 bool cia_irq_pending(const cia *c);

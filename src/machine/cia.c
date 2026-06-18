@@ -58,6 +58,17 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
         return;
     }
 
+    /* Timer B input mode: bits 5-6 of CRB select the count source. */
+    if (control_reg == CIA_REG_CONTROL_B) {
+        uint8_t input_mode = (uint8_t)((control & 0x60u) >> 5);
+        if (input_mode == 0x01u) {
+            return; /* CNT mode: external pin not emulated, never count */
+        }
+        if (input_mode >= 0x02u && !c->timer_a.underflow) {
+            return; /* cascade: count only when Timer A underflows this cycle */
+        }
+    }
+
     if (timer->counter == 0) {
         timer->underflow = true;
         cia_set_interrupt(c, interrupt_flag);
@@ -205,6 +216,41 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
         default:
             c->registers[reg] = value;
             return;
+    }
+}
+
+uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
+    uint8_t reg;
+    uint8_t flags;
+
+    assert(c);
+
+    reg = (uint8_t)(addr & 0x0fu);
+    switch (reg) {
+        case CIA_REG_PORT_A:
+            return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+        case CIA_REG_PORT_B:
+            if (c->keyboard) {
+                return (uint8_t)(cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]) &
+                    c64_keyboard_read_columns(c->keyboard, cia_keyboard_selected_rows(c)));
+            }
+            return cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+        case CIA_REG_TIMER_A_LO:
+            return (uint8_t)(c->timer_a.counter & 0xffu);
+        case CIA_REG_TIMER_A_HI:
+            return (uint8_t)(c->timer_a.counter >> 8);
+        case CIA_REG_TIMER_B_LO:
+            return (uint8_t)(c->timer_b.counter & 0xffu);
+        case CIA_REG_TIMER_B_HI:
+            return (uint8_t)(c->timer_b.counter >> 8);
+        case CIA_REG_ICR:
+            flags = (uint8_t)(c->interrupt_flags & 0x7fu);
+            if ((flags & c->interrupt_mask) != 0) {
+                return (uint8_t)(flags | 0x80u);
+            }
+            return flags;
+        default:
+            return c->registers[reg];
     }
 }
 

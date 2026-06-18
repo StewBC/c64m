@@ -94,6 +94,7 @@ bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
 void vicii_destroy(vicii *v);
 
 uint8_t vicii_read_register(vicii *v, uint16_t addr);
+uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr);
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value);
 bool vicii_consume_frame_complete(vicii *v);
 bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);

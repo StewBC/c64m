@@ -910,6 +910,51 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
     return v->registers[reg];
 }
 
+uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr) {
+    uint8_t reg;
+
+    assert(v);
+
+    reg = (uint8_t)(addr & 0x3fu);
+    if (reg == VICII_REG_RASTER) {
+        return (uint8_t)(v->timing.raster_line & 0xffu);
+    }
+    if (reg == VICII_REG_CONTROL_1) {
+        uint8_t value = v->registers[reg] & 0x7fu;
+        if ((v->timing.raster_line & 0x100u) != 0) {
+            value |= 0x80u;
+        }
+        return value;
+    }
+    if (reg == 0x19u) {
+        return (uint8_t)(((v->irq_status & v->irq_enable) ? 0x80u : 0x00u) |
+                         0x70u |
+                         (v->irq_status & 0x0Fu));
+    }
+    if (reg == 0x1Au) {
+        return (uint8_t)(v->irq_enable | 0xF0u);
+    }
+    if (reg == VICII_REG_SPR_PRIORITY) {
+        return v->sprite_priority;
+    }
+    if (reg == VICII_REG_SPR_SPR_COLL) {
+        return v->sprite_sprite_collision;
+    }
+    if (reg == VICII_REG_SPR_BG_COLL) {
+        return v->sprite_background_collision;
+    }
+    if (reg == 0x16u) {
+        return (uint8_t)((v->registers[reg] & 0x1Fu) | 0xE0u);
+    }
+    if (reg >= 0x20u && reg <= 0x2Eu) {
+        return (uint8_t)((v->registers[reg] & 0x0Fu) | 0xF0u);
+    }
+    if (reg >= 0x2Fu) {
+        return 0xFFu;
+    }
+    return v->registers[reg];
+}
+
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
     uint8_t reg;
 

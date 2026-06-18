@@ -183,6 +183,132 @@ static void test_cia_bus_mapping_and_ram_under_io(void) {
     expect_u8("cia2 preserved while io hidden", 0x5a, c64_bus_read(&machine.bus, 0xdd00));
 }
 
+static void test_cia_timer_b_cascade_mode(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+
+    /* Timer A: latch=3, force-load + start ($11 = FORCE_LOAD|START) */
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x03);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
+
+    /* Timer B: latch=5, cascade (INMODE1=1 → bits 5-6 = 10), force-load + start
+       CRB $51 = 0101_0001: bit0=START, bit4=FORCE_LOAD, bit6=INMODE1 → mode 10 */
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x05);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x51);
+
+    /* Steps 1-3: Timer A counts down, Timer B stays at 5 (no underflow yet) */
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step1 unchanged", 5, c.timer_b.counter);
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step2 unchanged", 5, c.timer_b.counter);
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step3 unchanged", 5, c.timer_b.counter);
+
+    /* Step 4: Timer A underflows (counter was 0), Timer B decrements by 1 */
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step4 decremented", 4, c.timer_b.counter);
+    expect_u16("ta reloaded after underflow", 3, c.timer_a.counter);
+
+    /* Steps 5-7: Timer A counts, Timer B stays at 4 */
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step7 unchanged", 4, c.timer_b.counter);
+
+    /* Step 8: Timer A underflows again, Timer B decrements */
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step8 decremented", 3, c.timer_b.counter);
+}
+
+static void test_cia_timer_b_cnt_mode(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+
+    /* Timer B: latch=5, CNT mode (INMODE0=1 → bits 5-6 = 01), force-load + start
+       CRB $31 = 0011_0001: bit0=START, bit4=FORCE_LOAD, bit5=INMODE0 → mode 01 */
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x05);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x31);
+
+    /* CNT pin not emulated — timer must never count regardless of steps */
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+
+    expect_u16("tb cnt mode never counts", 5, c.timer_b.counter);
+}
+
+static void test_cia_debug_read_timer_counters(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x10);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x02);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x20);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x03);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x01);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x01);
+
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+
+    expect_u8("debug timer a lo is live counter", 0x0d, cia_debug_read_register(&c, CIA_REG_TIMER_A_LO));
+    expect_u8("debug timer a hi is live counter", 0x02, cia_debug_read_register(&c, CIA_REG_TIMER_A_HI));
+    expect_u8("debug timer b lo is live counter", 0x1d, cia_debug_read_register(&c, CIA_REG_TIMER_B_LO));
+    expect_u8("debug timer b hi is live counter", 0x03, cia_debug_read_register(&c, CIA_REG_TIMER_B_HI));
+
+    /* raw registers still hold the latch, not the live counter */
+    expect_u8("registers[4] holds latch not counter", 0x10, c.registers[CIA_REG_TIMER_A_LO]);
+    expect_u8("registers[6] holds latch not counter", 0x20, c.registers[CIA_REG_TIMER_B_LO]);
+}
+
+static void test_cia_debug_read_icr_no_side_effects(void) {
+    cia c;
+    char error[256];
+    uint8_t icr_val;
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_ICR, 0x81);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x19);
+
+    cia_step_cycle(&c);
+    cia_step_cycle(&c);
+    expect_true("irq pending before debug read", cia_irq_pending(&c));
+
+    icr_val = cia_debug_read_register(&c, CIA_REG_ICR);
+    expect_u8("debug icr reports timer a and bit 7", 0x81, icr_val);
+    expect_true("irq still pending after debug read", cia_irq_pending(&c));
+    expect_u64("icr_reads not incremented by debug read", 0, c.icr_reads);
+
+    /* normal read does clear */
+    cia_read_register(&c, CIA_REG_ICR);
+    expect_false("normal icr read clears flags", cia_irq_pending(&c));
+}
+
+static void test_cia_debug_read_port_formula(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+
+    /* low nibble output, high nibble input */
+    cia_write_register(&c, CIA_REG_DDRA, 0x0f);
+    cia_write_register(&c, CIA_REG_PORT_A, 0x05);
+
+    /* output bits: data & dir = 0x05; input bits: ~dir = 0xf0 */
+    expect_u8("debug port a formula", 0xf5, cia_debug_read_register(&c, CIA_REG_PORT_A));
+}
+
 static void test_machine_cia_step_and_irq_foundations(void) {
     c64_t machine;
     char error[256];
@@ -213,6 +339,11 @@ int main(void) {
     test_cia_zero_latch_does_not_underflow_every_cycle();
     test_cia_oneshot_stops_after_underflow();
     test_cia_bus_mapping_and_ram_under_io();
+    test_cia_timer_b_cascade_mode();
+    test_cia_timer_b_cnt_mode();
     test_machine_cia_step_and_irq_foundations();
+    test_cia_debug_read_timer_counters();
+    test_cia_debug_read_icr_no_side_effects();
+    test_cia_debug_read_port_formula();
     return 0;
 }
