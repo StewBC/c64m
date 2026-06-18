@@ -204,6 +204,8 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
         0x8d, 0x00, 0xd8, /* STA $D800 */
         0xa9, 0x06,       /* LDA #$06 */
         0x8d, 0x21, 0xd0, /* STA $D021 */
+        0xa9, 0x10,       /* LDA #$10 */
+        0x8d, 0x11, 0xd0, /* STA $D011: DEN=1, RSEL=0, YSCROLL=0 */
         0xa9, 0x15,       /* LDA #$15 */
         0x8d, 0x18, 0xd0, /* STA $D018 */
         0xa9, 0x34,       /* LDA #$34 */
@@ -218,7 +220,7 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
     build_roms(&roms, TEST_RESET_VECTOR);
     copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
     reset_machine(&machine, &roms);
-    step_instructions(&machine, 11);
+    step_instructions(&machine, 13);
     c64_copy_machine_snapshot(&machine, &snapshot);
 
     expect_u64_gt("screen write checkpoint", snapshot.screen_ram_writes, 0);
@@ -229,7 +231,7 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
     expect_u8("color memory changed", 0x05, c64_bus_vic_read_color(&machine.bus, 0));
 
     expect_true("make frame", c64_make_frame_snapshot(&machine, &frame));
-    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0, so the top visible line
+    /* $D011=$10 → DEN=1, RSEL=0 (top=55), YSCROLL=0, so the top visible line
        samples glyph row 3. $D016=0 → CSEL=0 (left=31). Character 1 glyph row 3=0x10
        has bit 3 set, so the foreground pixel is at x=34. */
     expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 34]);
@@ -247,11 +249,12 @@ static void test_d018_selects_screen_memory(void) {
     machine.bus.ram[0x0400] = 0x20;
     machine.bus.ram[0x0800] = 0x01;
     machine.bus.color_ram[0] = 0x05;
+    c64_bus_write(&machine.bus, 0xd011, 0x10); /* DEN=1, RSEL=0, YSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     c64_bus_write(&machine.bus, 0xd018, 0x24); /* screen=$0800, char=$1000 (ROM) */
 
     expect_true("make d018 frame", c64_make_frame_snapshot(&machine, &frame));
-    /* After reset: $D011=0 → RSEL=0 (top=55), YSCROLL=0; $D016=0 → CSEL=0 (left=31).
+    /* $D011=$10 → DEN=1, RSEL=0 (top=55), YSCROLL=0; $D016=0 → CSEL=0 (left=31).
        The top visible line samples glyph row 3, whose bit 3 lands at x=34. */
     expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[55 * C64_FRAME_WIDTH + 34]);
 }

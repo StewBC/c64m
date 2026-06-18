@@ -274,6 +274,8 @@ static void test_frame_snapshot_geometry_and_regions(void) {
     uint32_t active;
 
     reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x05);
 
@@ -368,6 +370,7 @@ static void test_border_rsel_csel(void) {
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x05);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
     c64_bus_write(&machine.bus, 0xd016, 0x00);
     expect_true("make frame csel0", c64_make_frame_snapshot(&machine, &frame));
     /* x=26 is inside the extended left border (CSEL=0 left=31, was 24) */
@@ -819,6 +822,7 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     c64_frame frame;
 
     reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     setup_solid_sprite(&machine, 0, 0x0340, 10, 9, 7);
     setup_solid_sprite(&machine, 1, 0x0380, 10, 9, 10);
@@ -828,6 +832,74 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     expect_u32("border hides sprite pixel", TEST_PALETTE_2,
                frame.pixels[10 * C64_FRAME_WIDTH + 10]);
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
+}
+
+static void test_den_clear_blanks_text_display(void) {
+    c64_t machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+
+    expect_true("den set snapshot", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("den set text foreground", TEST_PALETTE_5,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
+    expect_true("den clear snapshot", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("den clear blanks former foreground", TEST_PALETTE_6,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("den clear blanks background pixel", TEST_PALETTE_6,
+               frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("den clear blanks snapshot border", TEST_PALETTE_6,
+               frame.pixels[0]);
+}
+
+static void test_den_clear_keeps_sprite_visible(void) {
+    c64_t machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+
+    make_live_frame(&machine, &frame, "den clear sprite visible frame");
+    expect_u32("den clear live border blanks to d021", TEST_PALETTE_6,
+               frame.pixels[40 * C64_FRAME_WIDTH + 20]);
+    expect_u32("den clear live crop bottom blanks to d021", TEST_PALETTE_6,
+               frame.pixels[270 * C64_FRAME_WIDTH + 20]);
+    expect_u32("den clear live frame bottom blanks to d021", TEST_PALETTE_6,
+               frame.pixels[(C64_FRAME_HEIGHT - 1) * C64_FRAME_WIDTH + 20]);
+    expect_u32("den clear live display background is d021", TEST_PALETTE_6,
+               frame.pixels[51 * C64_FRAME_WIDTH + 60]);
+    expect_u32("den clear sprite visible over blanked display", TEST_PALETTE_7,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+}
+
+static void test_den_clear_keeps_sprite_collisions(void) {
+    c64_t machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+    setup_solid_sprite(&machine, 1, 0x0380, 24, 50, 10);
+
+    make_live_frame(&machine, &frame, "den clear collision frame");
+    expect_u8("den clear sprite-background collision", 0x03, vicii_read_register(&machine.vic, 0xd01f));
+    expect_u8("den clear sprite-sprite collision", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
 /* Phase G: $D016 bits 7:5 always read as 1 regardless of writes */
@@ -1235,6 +1307,9 @@ int main(void) {
     test_sprite_sprite_collision_priority_and_irq();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
+    test_den_clear_blanks_text_display();
+    test_den_clear_keeps_sprite_visible();
+    test_den_clear_keeps_sprite_collisions();
     test_d016_unused_high_bits_read_as_1();
     test_color_register_high_nibble_reads_as_1();
     test_unused_register_block_reads_ff();

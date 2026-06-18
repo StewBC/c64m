@@ -122,11 +122,15 @@ static void vicii_prepare_frame(c64_frame *frame, uint64_t frame_number, uint64_
 }
 
 static void vicii_begin_live_frame(vicii *v) {
+    uint8_t fill_index;
     uint32_t fill_color;
 
     assert(v);
 
-    fill_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
+    fill_index = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u ?
+        (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu) :
+        (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+    fill_color = vicii_palette_argb[fill_index];
     vicii_prepare_frame(&v->working_frame, v->timing.frame_number, 0, fill_color);
 }
 
@@ -312,6 +316,13 @@ static vicii_sprite_pixel vicii_sprite_pixel_from_data(
     }
 }
 
+static vicii_bg_pixel vicii_apply_den_blanking(bool den, uint32_t b0c, vicii_bg_pixel pixel) {
+    if (!den) {
+        pixel.color = b0c;
+    }
+    return pixel;
+}
+
 static vicii_bg_pixel vicii_background_pixel(
     const vicii *v,
     const c64_bus_t *bus,
@@ -326,6 +337,7 @@ static vicii_bg_pixel vicii_background_pixel(
     uint8_t mode;
     uint8_t xscroll;
     uint8_t yscroll;
+    bool den;
     uint32_t sx_raw;
     uint32_t sy;
     uint32_t adjusted;
@@ -348,11 +360,12 @@ static vicii_bg_pixel vicii_background_pixel(
                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
     xscroll = v->registers[0x16] & 0x07u;
     yscroll = v->registers[0x11] & 0x07u;
+    den = (v->registers[0x11] & 0x10u) != 0u;
     sx_raw = x - g->left;
     sy = y - g->top;
 
     if (mode >= 5u) {
-        return vicii_bg_pixel_make(vicii_palette_argb[0], false);
+        return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[0], false));
     }
 
     if (sx_raw < (uint32_t)xscroll ||
@@ -378,7 +391,7 @@ static vicii_bg_pixel vicii_background_pixel(
             uint8_t fg = c64_bus_vic_read_color(bus, cell);
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (glyph & bit) {
-                return vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true));
             }
             return vicii_bg_pixel_make(b0c, false);
         }
@@ -392,7 +405,7 @@ static vicii_bg_pixel vicii_background_pixel(
             if ((color_nib & 0x08u) == 0u) {
                 uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
                 if (glyph & bit) {
-                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
+                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true));
                 }
                 return vicii_bg_pixel_make(b0c, false);
             } else {
@@ -401,11 +414,11 @@ static vicii_bg_pixel vicii_background_pixel(
                 case 0u:
                     return vicii_bg_pixel_make(b0c, false);
                 case 1u:
-                    return vicii_bg_pixel_make(b1c, true);
+                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(b1c, true));
                 case 2u:
-                    return vicii_bg_pixel_make(b2c, true);
+                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(b2c, true));
                 default:
-                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x07u], true);
+                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x07u], true));
                 }
             }
         }
@@ -417,9 +430,9 @@ static vicii_bg_pixel vicii_background_pixel(
             uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (bdata & bit) {
-                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true));
             }
-            return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], false);
+            return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], false));
         }
 
     case 3u:
@@ -433,11 +446,11 @@ static vicii_bg_pixel vicii_background_pixel(
             case 0u:
                 return vicii_bg_pixel_make(b0c, false);
             case 1u:
-                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true));
             case 2u:
-                return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], true));
             default:
-                return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true));
             }
         }
 
@@ -451,7 +464,7 @@ static vicii_bg_pixel vicii_background_pixel(
             uint32_t ecm_bg;
 
             if (glyph & bit) {
-                return vicii_bg_pixel_make(vicii_palette_argb[fg_nib & 0x0fu], true);
+                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[fg_nib & 0x0fu], true));
             }
 
             switch (ecm_sel) {
@@ -460,7 +473,7 @@ static vicii_bg_pixel vicii_background_pixel(
             case 2u:  ecm_bg = b2c; break;
             default:  ecm_bg = b3c; break;
             }
-            return vicii_bg_pixel_make(ecm_bg, false);
+            return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(ecm_bg, false));
         }
 
     default:
@@ -510,6 +523,9 @@ static uint32_t vicii_compose_pixel(
     vicii_note_sprite_collisions(v, bg, sprites);
 
     if (border_active) {
+        if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
+            return bg.color;
+        }
         return border_color;
     }
 

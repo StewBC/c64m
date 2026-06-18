@@ -12,6 +12,7 @@ enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_COLOR_GREEN = 0xff56ac4du,
     TEST_COLOR_BLUE = 0xff2e2c9bu,
+    TEST_COLOR_LIGHT_BLUE = 0xff706debu,
 };
 
 static void fail(const char *message) {
@@ -57,13 +58,18 @@ static void write_runtime_roms(void) {
     }
 
     fseek(system, (long)C64_BASIC_ROM_SIZE, SEEK_SET);
+    fputc(0xa9, system); /* LDA #$10 */
+    fputc(0x10, system);
+    fputc(0x8d, system); /* STA $D011 */
+    fputc(0x11, system);
+    fputc(0xd0, system);
     fputc(0xa9, system); /* LDA #$05 */
     fputc(0x05, system);
     fputc(0x8d, system); /* STA $D020 */
     fputc(0x20, system);
     fputc(0xd0, system);
-    fputc(0x4c, system); /* JMP $E005 */
-    fputc(0x05, system);
+    fputc(0x4c, system); /* JMP $E00A */
+    fputc(0x0a, system);
     fputc(0xe0, system);
 
     fseek(system, (long)(C64_BASIC_ROM_SIZE + 0x1ffc), SEEK_SET);
@@ -181,8 +187,9 @@ static void test_frame_while_running(void) {
     if (frame.machine_cycle == 0) {
         fail("running frame did not carry an advanced machine cycle");
     }
-    expect_u32("running frame keeps pre-write border", TEST_COLOR_BLUE, frame.pixels[8]);
-    expect_u32("running frame shows timed d020 write", TEST_COLOR_GREEN, frame.pixels[32]);
+    expect_u32("running frame starts blank before den", TEST_COLOR_LIGHT_BLUE, frame.pixels[8]);
+    expect_u32("running frame shows border after den", TEST_COLOR_BLUE, frame.pixels[40]);
+    expect_u32("running frame shows timed d020 write", TEST_COLOR_GREEN, frame.pixels[80]);
 
     expect_true("pause command", runtime_client_pause(client));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {

@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), and VIC-II Phase H (sprite-fetch BA cycle stealing). Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), and VIC-II Phase J (DEN-off visual blanking). Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -289,6 +289,19 @@ Implemented:
   - regression coverage validates `$D01B` readback, `$D01E/$D01F` read-clear and
     write-ignore behavior, sprite-sprite collision IRQs, sprite-background priority
     and collision behavior, and border-over-sprite collision latching
+- VIC-II Phase J — DEN-Off Visual Blanking:
+  - clearing `$D011` bit 4 (`DEN=0`) visually blanks display and border-visible pixels
+    to background color 0 (`$D021`) instead of drawing character/bitmap foreground
+    pixels or the normal `$D020` border color
+  - sprite visibility in the display area remains governed by the existing sprite
+    priority path
+  - underlying background foreground classification is preserved while the visible
+    color is blanked, so sprite-background collision via `$D01F` still latches when
+    an opaque sprite overlaps an underlying foreground graphics pixel
+  - sprite-sprite collision via `$D01E` continues to latch with `DEN=0`
+  - regression coverage validates DEN-on text foreground rendering, DEN-off visual
+    blanking, DEN-off border blanking, DEN-off sprite visibility, and DEN-off
+    sprite/background and sprite/sprite collisions
 
 - VIC-II Phase F (light pen): skipped — not implemented; $D013/$D014 remain stubbed.
 - VIC-II Phase G — Open Bus / Unused Register Reads:
