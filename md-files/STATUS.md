@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), and CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), and CIA Phase F (CIA #2 VIC bank and IEC port integration). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -162,6 +162,23 @@ Implemented:
     debugger-safe port peeks, and RESTORE isolation from matrix reads
   - light-pen/fire-button side effects, host joystick/frontend mapping, and cycle-perfect
     keyboard/joystick sampling remain deferred
+- CIA Phase F CIA #2 port behavior:
+  - VIC-II bank selection derives from effective CIA #2 Port A pin levels for PA0/PA1
+    using the C64 inverted bank mapping, so DDRA input bits read released-high instead
+    of using raw latch writes
+  - CIA #2 wiring lives at the machine layer through the generic CIA port-input callback
+  - IEC ATN, CLK, and DATA are represented as active-low/open-collector lines on CIA #2
+    Port A: PA3 drives/senses ATN, PA4 drives CLK with PA6 as CLK sense, and PA5 drives
+    DATA with PA7 as DATA sense
+  - released IEC lines read high; CIA output pulls and an external pull mask can hold
+    lines low until all sources release them
+  - CIA #2 timer interrupt routing to CPU NMI remains covered by the Phase D regression
+    after the CIA #2 port wiring changes
+  - regression coverage includes DDRA-sensitive VIC bank selection, IEC released-high
+    reads, CIA-driven ATN/CLK/DATA low reads, external DATA pull/release behavior,
+    existing VIC bank rendering tests, and CIA #2 NMI entry
+  - disk-drive emulation, full IEC protocol timing/state machines, and CIA serial data
+    register shifting remain deferred
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus

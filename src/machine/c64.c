@@ -328,6 +328,41 @@ static void c64_cia1_port_inputs(
     out->port_a_pull_down |= (uint8_t)(machine->joystick2 & 0x1fu);
 }
 
+static void c64_cia2_port_inputs(
+    void *user,
+    uint8_t port_a_pins,
+    uint8_t port_b_pins,
+    cia_port_inputs *out) {
+    c64_t *machine = user;
+    uint8_t pull = 0;
+
+    (void)port_b_pins;
+    assert(machine);
+    assert(out);
+
+    if ((port_a_pins & 0x08u) == 0) {
+        pull |= C64_IEC_ATN;
+    }
+    if ((port_a_pins & 0x10u) == 0) {
+        pull |= C64_IEC_CLK;
+    }
+    if ((port_a_pins & 0x20u) == 0) {
+        pull |= C64_IEC_DATA;
+    }
+
+    pull |= (uint8_t)(machine->iec_external_pull & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
+
+    if ((pull & C64_IEC_ATN) != 0) {
+        out->port_a_pull_down |= 0x08u;
+    }
+    if ((pull & C64_IEC_CLK) != 0) {
+        out->port_a_pull_down |= 0x10u | 0x40u;
+    }
+    if ((pull & C64_IEC_DATA) != 0) {
+        out->port_a_pull_down |= 0x20u | 0x80u;
+    }
+}
+
 void c64_init(c64_t *machine) {
     char error[256];
 
@@ -341,6 +376,7 @@ void c64_init(c64_t *machine) {
     (void)cia_init(&machine->cia2, error, sizeof(error));
     c64_keyboard_reset(&machine->keyboard);
     cia_attach_port_input(&machine->cia1, c64_cia1_port_inputs, machine);
+    cia_attach_port_input(&machine->cia2, c64_cia2_port_inputs, machine);
     c64_bus_attach_vicii(&machine->bus, &machine->vic);
     c64_bus_attach_cias(&machine->bus, &machine->cia1, &machine->cia2);
     c6510_init(&machine->cpu, machine, c64_cpu_read, c64_cpu_write);
@@ -422,6 +458,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     c64_keyboard_reset(&machine->keyboard);
     machine->joystick1 = 0;
     machine->joystick2 = 0;
+    machine->iec_external_pull = 0;
 
     c6510_reset(&machine->cpu);
     memset(&machine->clock, 0, sizeof(machine->clock));
@@ -538,6 +575,12 @@ void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs) {
     } else if (port == 2u) {
         machine->joystick2 = (uint8_t)(inputs & 0x1fu);
     }
+}
+
+void c64_set_iec_external_pull(c64_t *machine, uint8_t lines) {
+    assert(machine);
+
+    machine->iec_external_pull = (uint8_t)(lines & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
 }
 
 void c64_restore(c64_t *machine) {
