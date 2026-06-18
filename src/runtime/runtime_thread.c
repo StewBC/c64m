@@ -14,8 +14,9 @@
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
     RUNTIME_TARGET_FPS = 60,
-    PASTE_HOLD_CYCLES = 39400,  /* ~40ms at PAL 985248 Hz */
-    PASTE_GAP_CYCLES  =  9852,  /* ~10ms at PAL 985248 Hz */
+    PASTE_HOLD_CYCLES        =  39400,  /* ~40ms  at PAL 985248 Hz */
+    PASTE_GAP_CYCLES         =   9852,  /* ~10ms  at PAL 985248 Hz */
+    PASTE_RETURN_GAP_CYCLES  = 246312,  /* ~250ms at PAL 985248 Hz */
 };
 
 static void runtime_reset_pacer(runtime *rt) {
@@ -1393,9 +1394,10 @@ static void runtime_advance_paste(runtime *rt) {
         if (p->shift_needed) {
             c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, false);
         }
+        ch = (unsigned char)p->text[p->position];
         p->position++;
         p->in_gap = true;
-        p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+        p->phase_end_cycle = now + (ch == '\n' || ch == '\r' ? PASTE_RETURN_GAP_CYCLES : PASTE_GAP_CYCLES);
         return;
     }
 
