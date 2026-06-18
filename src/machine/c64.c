@@ -299,7 +299,10 @@ static uint8_t c64_cpu_irq_pending(void *user) {
 
 static uint8_t c64_cpu_nmi_pending(void *user) {
     c64_t *machine = user;
-    bool pending = machine->restore_pending;
+    bool cia2_line = cia_irq_pending(&machine->cia2);
+    bool cia2_edge = cia2_line && !machine->cia2_nmi_line;
+    bool pending = machine->restore_pending || cia2_edge;
+    machine->cia2_nmi_line = cia2_line;
     machine->restore_pending = false;
     return pending ? 1u : 0u;
 }
@@ -405,6 +408,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->keyboard_events = 0;
     machine->restore_requests = 0;
     machine->restore_pending = false;
+    machine->cia2_nmi_line = false;
     machine->cpu_cycles_remaining = 0;
     machine->cpu_trace_start_cycle = 0;
     machine->cpu_trace_start_cpu_cycle = 0;

@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), and CIA Phase B (Timer A/B core countdown and reload hardening). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), and CIA Phase D (interrupt control register and IRQ/NMI line behavior). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -101,9 +101,48 @@ Implemented:
   - regression coverage now includes stopped timers, force-load strobe behavior,
     continuous reload, one-shot reload/stop, zero-latch effective loading, timer source
     flags, and the CPU-visible Timer B countdown path
-  - CNT input, full Timer B cascade behavior, PB6/PB7 output, pin-level edge races, and
-    full hardware-variant timing remain deferred to CIA Phase C/J; any existing
-    preliminary CNT/cascade behavior is not yet claimed as complete accuracy
+  - Phase B deliberately left CNT input, full Timer B cascade behavior, PB6/PB7 output,
+    pin-level edge races, and hardware-variant timing to later phases
+- CIA Phase C timer control modes and PB outputs:
+  - CRA bit 5 selects Timer A source: Phi2 when clear, CNT pulse events when set
+  - CRB bits 5-6 select Timer B source: Phi2, CNT pulse events, Timer A underflows, or
+    Timer A underflows coincident with a CNT pulse
+  - generic CIA CNT input is represented by `cia_pulse_cnt()`, which schedules one CNT
+    event consumed by the next `cia_step_cycle()`
+  - Timer A underflow state is available within the same CIA step for Timer B cascade
+    and combined cascade+CNT modes
+  - CRA bit 1 enables Timer A output on PB6; CRB bit 1 enables Timer B output on PB7
+  - CRA/CRB bit 2 selects toggle output when set; when clear, underflow emits a
+    deterministic one-CIA-step low pulse and then restores high
+  - PB6/PB7 timer outputs override ordinary Port B read bits only while their timer
+    output-enable bit is set; with output disabled, ordinary PRB/DDR behavior is
+    preserved
+  - regression coverage includes Timer A CNT, Timer B Phi2/CNT/cascade/combined
+    sources, PB6/PB7 pulse and toggle outputs, ordinary Port B behavior with timer
+    output disabled, plus keyboard/VIC-bank/runtime regressions
+  - serial shift behavior from CRA bit 6, TOD behavior from CRA/CRB bit 7, FLAG/PC
+    handshakes, and cycle-race/pin-level output timing remain deferred to later phases
+- CIA Phase D interrupt behavior:
+  - ICR flags and masks are separate; writes to `$0D` update masks only and do not clear
+    pending source flags
+  - ICR write bit 7 selects set-mask vs clear-mask, and bits 0-4 select the affected
+    Timer A, Timer B, TOD alarm, serial complete, and FLAG source masks
+  - CPU-visible ICR reads return source flags plus bit 7 only when at least one enabled
+    source is pending, then clear the reported source flags and update the output line
+  - debugger-safe ICR peeks preserve flags and output state
+  - Timer A and Timer B underflows set their ICR source flags through a generic
+    `cia_set_interrupt_source()` helper; reserved TOD/serial/FLAG source masks are
+    handled even though their event generation is deferred
+  - CIA #1 enabled-pending sources drive the CPU IRQ aggregate path alongside VIC-II IRQ
+  - CIA #2 enabled-pending sources drive CPU NMI through an edge latch, preserving the
+    existing RESTORE NMI path and avoiding repeated NMI entries while the CIA2 line stays
+    asserted
+  - regression coverage includes masked vs enabled timer flags, ICR set/clear mask
+    writes, normal read-clear/deassert behavior, reserved source mask semantics, CIA #1
+    timer IRQ vector entry, CIA #2 timer NMI vector entry, CIA2 NMI edge behavior, and
+    RESTORE NMI preservation
+  - TOD alarm, serial complete, FLAG line event generation, and pin-level interrupt race
+    behavior remain deferred to later CIA phases
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus

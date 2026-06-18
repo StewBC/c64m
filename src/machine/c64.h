@@ -131,6 +131,7 @@ typedef struct c64_t {
     uint8_t cpu_bus_mode;
     bool pending_cpu_trace_active;
     bool restore_pending;
+    bool cia2_nmi_line;
     size_t cpu_cycles_remaining;
     bool has_basic_rom;
     bool has_kernal_rom;

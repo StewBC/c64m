@@ -17,10 +17,14 @@ enum {
     CIA_REG_CONTROL_A = 0x0e,
     CIA_REG_CONTROL_B = 0x0f,
     CIA_CONTROL_START = 0x01,
+    CIA_CONTROL_PB_OUTPUT = 0x02,
+    CIA_CONTROL_PB_TOGGLE = 0x04,
     CIA_CONTROL_ONESHOT = 0x08,
     CIA_CONTROL_FORCE_LOAD = 0x10,
+    CIA_CONTROL_A_CNT_INPUT = 0x20,
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
+    CIA_INTERRUPT_SOURCE_MASK = 0x1f,
 };
 
 static void cia_set_error(char *error, size_t error_size, const char *message) {
@@ -43,11 +47,69 @@ static void cia_reload_timer(cia_timer *timer) {
     timer->counter = timer->latch == 0 ? 0xffffu : timer->latch;
 }
 
-static void cia_set_interrupt(cia *c, uint8_t flag) {
+static void cia_reset_timer_output_pulses(cia *c) {
+    if (c->timer_a.pulse_active) {
+        c->timer_a.output_level = true;
+    }
+    if (c->timer_b.pulse_active) {
+        c->timer_b.output_level = true;
+    }
+    c->timer_a.pulse_active = false;
+    c->timer_b.pulse_active = false;
+}
+
+void cia_set_interrupt_source(cia *c, uint8_t source_mask) {
+    uint8_t flag;
+
+    assert(c);
+
+    flag = (uint8_t)(source_mask & CIA_INTERRUPT_SOURCE_MASK);
+    if (flag == 0) {
+        return;
+    }
+
     if ((c->interrupt_flags & flag) == 0) {
         c->interrupt_assertions++;
     }
     c->interrupt_flags |= flag;
+}
+
+static bool cia_timer_a_should_count(const cia *c, uint8_t control) {
+    if ((control & CIA_CONTROL_A_CNT_INPUT) != 0) {
+        return c->cnt_pulse;
+    }
+
+    return true;
+}
+
+static bool cia_timer_b_should_count(const cia *c, uint8_t control) {
+    uint8_t input_mode = (uint8_t)((control & 0x60u) >> 5);
+
+    switch (input_mode) {
+        case 0x00:
+            return true;
+        case 0x01:
+            return c->cnt_pulse;
+        case 0x02:
+            return c->timer_a.underflow;
+        case 0x03:
+            return c->timer_a.underflow && c->cnt_pulse;
+        default:
+            return false;
+    }
+}
+
+static void cia_timer_update_pb_output(cia_timer *timer, uint8_t control) {
+    if ((control & CIA_CONTROL_PB_OUTPUT) == 0) {
+        return;
+    }
+
+    if ((control & CIA_CONTROL_PB_TOGGLE) != 0) {
+        timer->output_level = !timer->output_level;
+    } else {
+        timer->pulse_active = true;
+        timer->output_level = false;
+    }
 }
 
 static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_t interrupt_flag) {
@@ -58,20 +120,18 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
         return;
     }
 
-    /* Timer B input mode: bits 5-6 of CRB select the count source. */
-    if (control_reg == CIA_REG_CONTROL_B) {
-        uint8_t input_mode = (uint8_t)((control & 0x60u) >> 5);
-        if (input_mode == 0x01u) {
-            return; /* CNT mode: external pin not emulated, never count */
+    if (control_reg == CIA_REG_CONTROL_A) {
+        if (!cia_timer_a_should_count(c, control)) {
+            return;
         }
-        if (input_mode >= 0x02u && !c->timer_a.underflow) {
-            return; /* cascade: count only when Timer A underflows this cycle */
-        }
+    } else if (!cia_timer_b_should_count(c, control)) {
+        return;
     }
 
     if (timer->counter == 0) {
         timer->underflow = true;
-        cia_set_interrupt(c, interrupt_flag);
+        cia_set_interrupt_source(c, interrupt_flag);
+        cia_timer_update_pb_output(timer, control);
         cia_reload_timer(timer);
         if ((control & CIA_CONTROL_ONESHOT) != 0) {
             c->registers[control_reg] = (uint8_t)(control & (uint8_t)~CIA_CONTROL_START);
@@ -80,6 +140,28 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
     }
 
     timer->counter--;
+}
+
+static uint8_t cia_read_port_b_pins(const cia *c) {
+    uint8_t value = cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+
+    if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_PB_OUTPUT) != 0) {
+        if (c->timer_a.pulse_active || !c->timer_a.output_level) {
+            value &= (uint8_t)~0x40u;
+        } else {
+            value |= 0x40u;
+        }
+    }
+
+    if ((c->registers[CIA_REG_CONTROL_B] & CIA_CONTROL_PB_OUTPUT) != 0) {
+        if (c->timer_b.pulse_active || !c->timer_b.output_level) {
+            value &= (uint8_t)~0x80u;
+        } else {
+            value |= 0x80u;
+        }
+    }
+
+    return value;
 }
 
 bool cia_init(cia *c, char *error, size_t error_size) {
@@ -102,6 +184,8 @@ void cia_reset(cia *c) {
     keyboard = c->keyboard;
     memset(c, 0, sizeof(*c));
     c->keyboard = keyboard;
+    c->timer_a.output_level = true;
+    c->timer_b.output_level = true;
 }
 
 void cia_attach_keyboard(cia *c, c64_keyboard *keyboard) {
@@ -113,8 +197,16 @@ void cia_attach_keyboard(cia *c, c64_keyboard *keyboard) {
 void cia_step_cycle(cia *c) {
     assert(c);
 
+    cia_reset_timer_output_pulses(c);
     cia_step_timer(c, &c->timer_a, CIA_REG_CONTROL_A, CIA_INTERRUPT_TIMER_A);
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
+    c->cnt_pulse = false;
+}
+
+void cia_pulse_cnt(cia *c) {
+    assert(c);
+
+    c->cnt_pulse = true;
 }
 
 uint8_t cia_read_register(cia *c, uint16_t addr) {
@@ -128,10 +220,10 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
             return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
         case CIA_REG_PORT_B:
             if (c->keyboard) {
-                return (uint8_t)(cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]) &
+                return (uint8_t)(cia_read_port_b_pins(c) &
                     c64_keyboard_read_columns(c->keyboard, cia_keyboard_selected_rows(c)));
             }
-            return cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+            return cia_read_port_b_pins(c);
         case CIA_REG_TIMER_A_LO:
             return (uint8_t)(c->timer_a.counter & 0xffu);
         case CIA_REG_TIMER_A_HI:
@@ -141,13 +233,13 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
         case CIA_REG_TIMER_B_HI:
             return (uint8_t)(c->timer_b.counter >> 8);
         case CIA_REG_ICR: {
-            uint8_t flags = (uint8_t)(c->interrupt_flags & 0x7fu);
+            uint8_t flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
             uint8_t value = flags;
             c->icr_reads++;
             if ((flags & c->interrupt_mask) != 0) {
                 value |= 0x80u;
             }
-            c->interrupt_flags = 0;
+            c->interrupt_flags &= (uint8_t)~flags;
             c->timer_a.underflow = false;
             c->timer_b.underflow = false;
             return value;
@@ -195,9 +287,9 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
         case CIA_REG_ICR:
             c->icr_writes++;
             if ((value & 0x80u) != 0) {
-                c->interrupt_mask |= (uint8_t)(value & 0x7fu);
+                c->interrupt_mask |= (uint8_t)(value & CIA_INTERRUPT_SOURCE_MASK);
             } else {
-                c->interrupt_mask &= (uint8_t)~(value & 0x7fu);
+                c->interrupt_mask &= (uint8_t)~(value & CIA_INTERRUPT_SOURCE_MASK);
             }
             c->registers[reg] = c->interrupt_mask;
             return;
@@ -231,10 +323,10 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
             return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
         case CIA_REG_PORT_B:
             if (c->keyboard) {
-                return (uint8_t)(cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]) &
+                return (uint8_t)(cia_read_port_b_pins(c) &
                     c64_keyboard_read_columns(c->keyboard, cia_keyboard_selected_rows(c)));
             }
-            return cia_read_port(c->registers[CIA_REG_PORT_B], c->registers[CIA_REG_DDRB]);
+            return cia_read_port_b_pins(c);
         case CIA_REG_TIMER_A_LO:
             return (uint8_t)(c->timer_a.counter & 0xffu);
         case CIA_REG_TIMER_A_HI:
@@ -244,7 +336,7 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
         case CIA_REG_TIMER_B_HI:
             return (uint8_t)(c->timer_b.counter >> 8);
         case CIA_REG_ICR:
-            flags = (uint8_t)(c->interrupt_flags & 0x7fu);
+            flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
             if ((flags & c->interrupt_mask) != 0) {
                 return (uint8_t)(flags | 0x80u);
             }
@@ -263,5 +355,5 @@ uint8_t cia_read_port_a_pins(const cia *c) {
 bool cia_irq_pending(const cia *c) {
     assert(c);
 
-    return (c->interrupt_flags & c->interrupt_mask & 0x7fu) != 0;
+    return (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
 }

@@ -21,6 +21,8 @@ enum {
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
     TEST_RESET_VECTOR = 0xe000,
+    TEST_IRQ_VECTOR = 0xe010,
+    TEST_NMI_VECTOR = 0xe020,
 };
 
 static void expect_true(const char *name, bool value) {
@@ -72,6 +74,10 @@ static void build_roms(c64_rom_set *roms) {
     roms->has_character = true;
     roms->kernal[0x1ffc] = (uint8_t)(TEST_RESET_VECTOR & 0xff);
     roms->kernal[0x1ffd] = (uint8_t)(TEST_RESET_VECTOR >> 8);
+    roms->kernal[0x1ffe] = (uint8_t)(TEST_IRQ_VECTOR & 0xff);
+    roms->kernal[0x1fff] = (uint8_t)(TEST_IRQ_VECTOR >> 8);
+    roms->kernal[0x1ffa] = (uint8_t)(TEST_NMI_VECTOR & 0xff);
+    roms->kernal[0x1ffb] = (uint8_t)(TEST_NMI_VECTOR >> 8);
     roms->kernal[TEST_RESET_VECTOR - 0xe000] = 0xea;
 }
 
@@ -105,6 +111,15 @@ static void step_cia_cycles(cia *c, size_t count) {
 
     for (i = 0; i < count; ++i) {
         cia_step_cycle(c);
+    }
+}
+
+static void step_machine_instructions(c64_t *machine, size_t count) {
+    char error[256];
+    size_t i;
+
+    for (i = 0; i < count; ++i) {
+        expect_true("step instruction", c64_step_instruction(machine, error, sizeof(error)));
     }
 }
 
@@ -370,6 +385,23 @@ static void test_cia_timer_b_cascade_mode(void) {
     expect_u16("tb cascade step8 decremented", 3, c.timer_b.counter);
 }
 
+static void test_cia_timer_a_cnt_mode(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x05);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x31);
+
+    step_cia_cycles(&c, 3);
+    expect_u16("timer a cnt mode ignores phi2", 5, c.timer_a.counter);
+
+    cia_pulse_cnt(&c);
+    cia_step_cycle(&c);
+    expect_u16("timer a cnt pulse decrements", 4, c.timer_a.counter);
+}
+
 static void test_cia_timer_b_cnt_mode(void) {
     cia c;
     char error[256];
@@ -382,12 +414,97 @@ static void test_cia_timer_b_cnt_mode(void) {
     cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x31);
 
-    /* CNT pin not emulated — timer must never count regardless of steps */
-    cia_step_cycle(&c);
-    cia_step_cycle(&c);
-    cia_step_cycle(&c);
+    step_cia_cycles(&c, 3);
+    expect_u16("tb cnt mode ignores phi2", 5, c.timer_b.counter);
 
-    expect_u16("tb cnt mode never counts", 5, c.timer_b.counter);
+    cia_pulse_cnt(&c);
+    cia_step_cycle(&c);
+    expect_u16("tb cnt pulse decrements", 4, c.timer_b.counter);
+}
+
+static void test_cia_timer_b_combined_cascade_and_cnt_mode(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x05);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x71);
+
+    step_cia_cycles(&c, 2);
+    expect_u16("combined mode ignores timer a underflow without cnt", 5, c.timer_b.counter);
+
+    cia_pulse_cnt(&c);
+    cia_step_cycle(&c);
+    expect_u16("combined mode ignores cnt without timer a underflow", 5, c.timer_b.counter);
+
+    cia_pulse_cnt(&c);
+    cia_step_cycle(&c);
+    expect_u16("combined mode counts timer a underflow with cnt", 4, c.timer_b.counter);
+}
+
+static void test_cia_pb6_pb7_pulse_outputs(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x13);
+    step_cia_cycles(&c, 2);
+    expect_u8("pb6 pulse low", 0xbf, cia_read_register(&c, CIA_REG_PORT_B));
+    cia_step_cycle(&c);
+    expect_u8("pb6 pulse restored high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
+
+    expect_true("cia reset", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x13);
+    step_cia_cycles(&c, 2);
+    expect_u8("pb7 pulse low", 0x7f, cia_read_register(&c, CIA_REG_PORT_B));
+    cia_step_cycle(&c);
+    expect_u8("pb7 pulse restored high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
+}
+
+static void test_cia_pb6_pb7_toggle_outputs(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x17);
+    step_cia_cycles(&c, 2);
+    expect_u8("pb6 toggle low", 0xbf, cia_read_register(&c, CIA_REG_PORT_B));
+    step_cia_cycles(&c, 2);
+    expect_u8("pb6 toggle high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
+
+    expect_true("cia reset", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x17);
+    step_cia_cycles(&c, 2);
+    expect_u8("pb7 toggle low", 0x7f, cia_read_register(&c, CIA_REG_PORT_B));
+    step_cia_cycles(&c, 2);
+    expect_u8("pb7 toggle high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
+}
+
+static void test_cia_port_b_ordinary_when_timer_output_disabled(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_DDRB, 0xff);
+    cia_write_register(&c, CIA_REG_PORT_B, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
+    step_cia_cycles(&c, 2);
+
+    expect_u8("port b ordinary output remains when timer output disabled", 0x00, cia_read_register(&c, CIA_REG_PORT_B));
 }
 
 static void test_cia_debug_read_timer_counters(void) {
@@ -441,6 +558,45 @@ static void test_cia_debug_read_icr_no_side_effects(void) {
     expect_false("normal icr read clears flags", cia_irq_pending(&c));
 }
 
+static void test_cia_icr_masked_flags_and_mask_writes(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_interrupt_source(&c, CIA_INTERRUPT_TIMER_A);
+    expect_u8("masked timer a flag without summary", CIA_INTERRUPT_TIMER_A, cia_read_register(&c, CIA_REG_ICR));
+    expect_false("masked timer a does not assert", cia_irq_pending(&c));
+
+    cia_set_interrupt_source(&c, CIA_INTERRUPT_TIMER_A | CIA_INTERRUPT_TIMER_B);
+    cia_write_register(&c, CIA_REG_ICR, 0x81);
+    expect_true("mask write can assert pending flag", cia_irq_pending(&c));
+    expect_u8("enabled timer a summary with timer b masked", 0x83, cia_debug_read_register(&c, CIA_REG_ICR));
+
+    cia_write_register(&c, CIA_REG_ICR, 0x82);
+    expect_u8("set mask preserves existing timer a", 0x03, c.interrupt_mask);
+    cia_write_register(&c, CIA_REG_ICR, 0x01);
+    expect_u8("clear mask only clears selected timer a", 0x02, c.interrupt_mask);
+    expect_true("timer b still asserts after timer a mask clear", cia_irq_pending(&c));
+
+    expect_u8("normal read reports and clears flags", 0x83, cia_read_register(&c, CIA_REG_ICR));
+    expect_false("icr read deasserts when flags clear", cia_irq_pending(&c));
+    expect_u8("source flags cleared by read", 0x00, c.interrupt_flags);
+}
+
+static void test_cia_icr_reserved_sources_have_mask_semantics(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_interrupt_source(&c, 0x1c);
+    expect_u8("reserved sources set flags without summary", 0x1c, cia_debug_read_register(&c, CIA_REG_ICR));
+    cia_write_register(&c, CIA_REG_ICR, 0x9c);
+    expect_u8("reserved masks set", 0x1c, c.interrupt_mask);
+    expect_true("reserved enabled sources assert", cia_irq_pending(&c));
+    cia_write_register(&c, CIA_REG_ICR, 0x08);
+    expect_u8("reserved mask clear preserves others", 0x14, c.interrupt_mask);
+}
+
 static void test_cia_debug_read_port_formula(void) {
     cia c;
     char error[256];
@@ -476,6 +632,63 @@ static void test_machine_cia_step_and_irq_foundations(void) {
     expect_true("machine cycle steps cia2", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("machine cycle steps cia2 again", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("cia2 nmi foundation", cia_irq_pending(&machine.cia2));
+}
+
+static void test_cia1_timer_irq_reaches_cpu_irq_vector(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+
+    reset_machine(&machine);
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
+    cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x11);
+    cia_step_cycle(&machine.cia1);
+    cia_step_cycle(&machine.cia1);
+    machine.cpu.cpu.I = 0;
+
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+
+    expect_u16("cia1 irq vector entered", TEST_IRQ_VECTOR, cpu.pc);
+    expect_u64("cia1 irq entry counted", 1, machine.cpu.cpu.irq_entries);
+}
+
+static void test_cia2_timer_nmi_reaches_cpu_nmi_vector(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+
+    reset_machine(&machine);
+    cia_write_register(&machine.cia2, CIA_REG_TIMER_B_LO, 0x01);
+    cia_write_register(&machine.cia2, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&machine.cia2, CIA_REG_ICR, 0x82);
+    cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x11);
+    cia_step_cycle(&machine.cia2);
+    cia_step_cycle(&machine.cia2);
+
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+
+    expect_u16("cia2 nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
+    expect_u64("cia2 nmi entry counted", 1, machine.cpu.cpu.nmi_entries);
+
+    step_machine_instructions(&machine, 1);
+    expect_u64("cia2 nmi is edge-triggered", 1, machine.cpu.cpu.nmi_entries);
+}
+
+static void test_restore_nmi_still_reaches_cpu_nmi_vector(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+
+    reset_machine(&machine);
+    c64_restore(&machine);
+
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+
+    expect_u16("restore nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
+    expect_u64("restore nmi entry counted", 1, machine.cpu.cpu.nmi_entries);
+    expect_u64("restore request counted", 1, machine.restore_requests);
 }
 
 static void test_cycle_step_replays_cia_icr_read_at_bus_cycle(void) {
@@ -553,12 +766,22 @@ int main(void) {
     test_cia_bus_mapping_and_ram_under_io();
     test_cia2_vic_bank_uses_port_pins();
     test_cia_timer_b_cascade_mode();
+    test_cia_timer_a_cnt_mode();
     test_cia_timer_b_cnt_mode();
+    test_cia_timer_b_combined_cascade_and_cnt_mode();
+    test_cia_pb6_pb7_pulse_outputs();
+    test_cia_pb6_pb7_toggle_outputs();
+    test_cia_port_b_ordinary_when_timer_output_disabled();
     test_machine_cia_step_and_irq_foundations();
+    test_cia1_timer_irq_reaches_cpu_irq_vector();
+    test_cia2_timer_nmi_reaches_cpu_nmi_vector();
+    test_restore_nmi_still_reaches_cpu_nmi_vector();
     test_cycle_step_replays_cia_icr_read_at_bus_cycle();
     test_cpu_visible_timer_b_counts_down();
     test_cia_debug_read_timer_counters();
     test_cia_debug_read_icr_no_side_effects();
+    test_cia_icr_masked_flags_and_mask_writes();
+    test_cia_icr_reserved_sources_have_mask_semantics();
     test_cia_debug_read_port_formula();
     return 0;
 }
