@@ -104,6 +104,7 @@ struct runtime {
     bool paste_active;
     paste_state paste;
     char *pending_prg_path;
+    bool pending_prg_resume_running;
 };
 
 int runtime_thread_main(void *userdata);

@@ -1220,6 +1220,9 @@ static void test_runtime_load_prg_writes_ram(void) {
     expect_u8("PRG byte 0", 0x01, event.data.memory.bytes[0]);
     expect_u8("PRG byte 1", 0x02, event.data.memory.bytes[1]);
     expect_u8("PRG byte 2", 0x03, event.data.memory.bytes[2]);
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PRG load paused event not received");
+    }
 
     expect_true("request RAM after PRG load", runtime_client_request_memory(
         client,

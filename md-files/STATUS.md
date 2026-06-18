@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), and VIC-II Phase J (DEN-off visual blanking). Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), and CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -56,12 +56,32 @@ Implemented:
 - CIA foundations:
   - CIA #1 and CIA #2 machine-owned devices
   - `$DC00-$DCFF` and `$DD00-$DDFF` bus routing
-  - register storage and mirroring
+  - register storage and `addr & $0F` mirroring across the full 256-byte CIA pages
   - timer A/B latch, counter, and underflow foundations
   - interrupt mask/flag foundations
   - CIA #1 IRQ pending callback path
   - CIA #2 NMI pending foundation
   - deterministic no-key keyboard matrix reads
+- CIA Phase A register/safe-read reconciliation:
+  - CPU-visible CIA reads use normal side-effecting register semantics through
+    `cia_read_register()`
+  - debugger and memory snapshot reads use `cia_debug_read_register()` through
+    `c64_debug_read_cpu_map()`, avoiding ICR clear-on-read and preserving future TOD
+    latch side-effect boundaries
+  - Timer A reads at `$04/$05` and Timer B reads at `$06/$07` return live counters for
+    both normal CPU reads and debugger-safe peeks
+  - Timer A/B writes through `$04/$05` and `$06/$07` update latches; while stopped,
+    the current deterministic behavior immediately loads the live counter
+  - the observed `$DC06 == $FF` Timer B concern was reconciled as a manual diagnostic
+    expectation issue: the counter was advancing too quickly for a `$FE` poll to catch
+  - `c64_step_cycle()` no longer performs side-effecting CPU reads while preparing a
+    deferred instruction trace; trace discovery uses debugger-safe peeks and replays the
+    real `c64_bus_read()` at the recorded bus event cycle
+  - `c64_bus_vic_bank_base()` reads CIA #2 port A pins via a non-side-effecting
+    `cia_read_port_a_pins()` helper instead of the CPU-visible CIA read API
+  - regression coverage includes CIA page routing/mirroring, live Timer B/debug peeks,
+    debugger-safe ICR reads, VIC-bank pin reads, and a cycle-stepped `$DC0D` ICR
+    clear-on-read timing test
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus
@@ -363,6 +383,9 @@ Implemented:
     halting the emulator
   - PRG loader now follows the same run-state contract: remember running state, reset,
     load, resume
+  - PRG load event order is deterministic: reset completion is published first, the
+    PRG memory snapshot is published after deferred injection, then the final paused or
+    running state event is published according to the pre-load runtime state
   - Collection PRGs (PRGs that pre-fill the C64 keyboard buffer at `$C6`/`$0277–$0280` to
     auto-start games) work correctly with the reset-before-load path via deferred injection:
     - after reset, the machine is set running so Kernal RAMTAS and BASIC cold start execute
@@ -378,7 +401,7 @@ Implemented:
 - VIC-II bank-aware character and screen rendering:
   - all VIC memory reads (screen RAM, character glyphs, bitmap data) now use the
     full absolute VIC address: `vic_bank + within-bank offset`
-  - `vic_bank` is derived from CIA 2 port A bits 1–0 (inverted) via
+  - `vic_bank` is derived from CIA 2 port A pins bits 1–0 (inverted) via
     `c64_bus_vic_bank_base()` and applied in `vicii_live_pixel()`,
     `vicii_make_frame_snapshot()`, and the Bad Line c-access fetch in
     `vicii_step_cycle()`

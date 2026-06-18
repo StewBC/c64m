@@ -272,7 +272,7 @@ bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
 uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus) {
     uint8_t pa;
     if (!bus->cia2) return 0;
-    pa = cia_read_register(bus->cia2, 0xDD00);
+    pa = cia_read_port_a_pins(bus->cia2);
     return (uint16_t)(((~pa) & 3u) * 0x4000u);
 }
 

@@ -332,6 +332,7 @@ static void runtime_reset_command(runtime *rt) {
 
     free(rt->pending_prg_path);
     rt->pending_prg_path = NULL;
+    rt->pending_prg_resume_running = false;
 
     if (was_running) {
         rt->exec_state = RUNTIME_EXEC_RUNNING;
@@ -1025,11 +1026,12 @@ static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
         load_address,
         payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
         RUNTIME_MEMORY_MODE_RAM);
-    runtime_publish_machine_state(rt);
     return true;
 }
 
 static void runtime_load_prg(runtime *rt, const runtime_command *command) {
+    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+
     if (!runtime_reset_machine(rt)) {
         return;
     }
@@ -1043,8 +1045,38 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
        PRG bytes are injected at the BASIC warm-start address ($E38B). */
     rt->exec_state = RUNTIME_EXEC_RUNNING;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+    rt->pending_prg_resume_running = was_running;
     runtime_reset_pacer(rt);
-    runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+}
+
+static void runtime_complete_pending_prg_load(runtime *rt, char *path) {
+    bool resume_running = rt->pending_prg_resume_running;
+    bool loaded = runtime_load_prg_bytes(rt, path);
+
+    free(path);
+    rt->pending_prg_resume_running = false;
+
+    if (!loaded) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+        runtime_publish_machine_state(rt);
+        return;
+    }
+
+    if (resume_running) {
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+        runtime_publish_machine_state(rt);
+        return;
+    }
+
+    rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_RESET;
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+    runtime_publish_machine_state(rt);
 }
 
 static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
@@ -1467,8 +1499,7 @@ int runtime_thread_main(void *userdata) {
                     rt->machine.cpu.cpu.pc == 0xE38Bu) {
                     char *path = rt->pending_prg_path;
                     rt->pending_prg_path = NULL;
-                    runtime_load_prg_bytes(rt, path);
-                    free(path);
+                    runtime_complete_pending_prg_load(rt, path);
                 }
                 if (!runtime_step_cycle(rt)) {
                     break;

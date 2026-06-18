@@ -76,6 +76,21 @@ static void reset_machine(c64_t *machine) {
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
 }
 
+static void reset_machine_with_kernal_code(c64_t *machine, const uint8_t *code, size_t code_size) {
+    c64_rom_set roms;
+    char error[256];
+    size_t i;
+
+    build_roms(&roms);
+    for (i = 0; i < code_size; ++i) {
+        roms.kernal[TEST_RESET_VECTOR - 0xe000u + i] = code[i];
+    }
+
+    c64_init(machine);
+    expect_true("install synthetic ROMs", c64_install_roms(machine, &roms, error, sizeof(error)));
+    expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
+}
+
 static void test_cia_reset_and_no_key_ports(void) {
     cia c;
     char error[256];
@@ -181,6 +196,25 @@ static void test_cia_bus_mapping_and_ram_under_io(void) {
     c64_bus_write(&machine.bus, 0x0001, 0x37);
     expect_u8("cia1 preserved while io hidden", 0xa5, c64_bus_read(&machine.bus, 0xdc00));
     expect_u8("cia2 preserved while io hidden", 0x5a, c64_bus_read(&machine.bus, 0xdd00));
+}
+
+static void test_cia2_vic_bank_uses_port_pins(void) {
+    c64_t machine;
+
+    c64_init(&machine);
+    cia_write_register(&machine.cia2, CIA_REG_DDRA, 0x03);
+
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x03);
+    expect_u16("cia2 bank bits 11 select bank 0", 0x0000, c64_bus_vic_bank_base(&machine.bus));
+
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x02);
+    expect_u16("cia2 bank bits 10 select bank 1", 0x4000, c64_bus_vic_bank_base(&machine.bus));
+
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x01);
+    expect_u16("cia2 bank bits 01 select bank 2", 0x8000, c64_bus_vic_bank_base(&machine.bus));
+
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x00);
+    expect_u16("cia2 bank bits 00 select bank 3", 0xc000, c64_bus_vic_bank_base(&machine.bus));
 }
 
 static void test_cia_timer_b_cascade_mode(void) {
@@ -332,6 +366,41 @@ static void test_machine_cia_step_and_irq_foundations(void) {
     expect_true("cia2 nmi foundation", cia_irq_pending(&machine.cia2));
 }
 
+static void test_cycle_step_replays_cia_icr_read_at_bus_cycle(void) {
+    static const uint8_t code[] = {
+        0xad, 0x0d, 0xdc, /* LDA $DC0D */
+        0xea              /* NOP */
+    };
+    c64_t machine;
+    char error[256];
+
+    reset_machine_with_kernal_code(&machine, code, sizeof(code));
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
+    cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x19);
+    cia_step_cycle(&machine.cia1);
+    cia_step_cycle(&machine.cia1);
+
+    expect_true("irq pending before lda icr", cia_irq_pending(&machine.cia1));
+
+    expect_true("lda icr cycle 1", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("icr still pending after opcode fetch", cia_irq_pending(&machine.cia1));
+    expect_u64("icr read not early after opcode fetch", 0, machine.cia1.icr_reads);
+
+    expect_true("lda icr cycle 2", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("icr still pending after address low fetch", cia_irq_pending(&machine.cia1));
+    expect_u64("icr read not early after address low fetch", 0, machine.cia1.icr_reads);
+
+    expect_true("lda icr cycle 3", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("icr still pending after address high fetch", cia_irq_pending(&machine.cia1));
+    expect_u64("icr read not early after address high fetch", 0, machine.cia1.icr_reads);
+
+    expect_true("lda icr cycle 4", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_false("icr read clears at data bus cycle", cia_irq_pending(&machine.cia1));
+    expect_u64("icr read counted at data bus cycle", 1, machine.cia1.icr_reads);
+}
+
 int main(void) {
     test_cia_reset_and_no_key_ports();
     test_cia_register_mirroring_and_ports();
@@ -339,9 +408,11 @@ int main(void) {
     test_cia_zero_latch_does_not_underflow_every_cycle();
     test_cia_oneshot_stops_after_underflow();
     test_cia_bus_mapping_and_ram_under_io();
+    test_cia2_vic_bank_uses_port_pins();
     test_cia_timer_b_cascade_mode();
     test_cia_timer_b_cnt_mode();
     test_machine_cia_step_and_irq_foundations();
+    test_cycle_step_replays_cia_icr_read_at_bus_cycle();
     test_cia_debug_read_timer_counters();
     test_cia_debug_read_icr_no_side_effects();
     test_cia_debug_read_port_formula();

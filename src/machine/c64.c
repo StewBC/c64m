@@ -113,6 +113,7 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
 
     switch (event->kind) {
     case C64_CPU_BUS_EVENT_READ:
+        event->value = c64_bus_read(&machine->bus, event->address);
         c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, event->address, event->value);
         break;
 
@@ -247,6 +248,12 @@ static uint8_t c64_cpu_read(void *user, uint16_t address) {
     c64_t *machine = user;
     uint8_t value;
 
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
+        value = c64_debug_read_cpu_map(machine, address);
+        c64_trace_append_event(machine, C64_CPU_BUS_EVENT_READ, address, value);
+        return value;
+    }
+
     if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_TIMED_IMMEDIATE) {
         uint64_t offset = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
         c64_advance_devices_to(machine, machine->cpu_trace_start_cycle + offset);
@@ -256,9 +263,6 @@ static uint8_t c64_cpu_read(void *user, uint16_t address) {
 
     if (machine->cpu_bus_mode != C64_CPU_BUS_MODE_IMMEDIATE) {
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_READ, address, value);
-        if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
-            return value;
-        }
     }
 
     c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, address, value);

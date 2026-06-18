@@ -254,6 +254,12 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
     }
 }
 
+uint8_t cia_read_port_a_pins(const cia *c) {
+    assert(c);
+
+    return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+}
+
 bool cia_irq_pending(const cia *c) {
     assert(c);
 
