@@ -53,6 +53,7 @@ bool runtime_client_request_memory_view(
 bool runtime_client_request_frame(runtime_client *client);
 bool runtime_client_keyboard_key(runtime_client *client, c64_key key, bool pressed);
 bool runtime_client_restore(runtime_client *client);
+bool runtime_client_set_joystick(runtime_client *client, unsigned port, uint8_t inputs);
 bool runtime_client_set_pc(runtime_client *client, uint16_t value);
 bool runtime_client_set_sp(runtime_client *client, uint8_t value);
 bool runtime_client_set_a(runtime_client *client, uint8_t value);

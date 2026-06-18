@@ -1320,6 +1320,13 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             c64_restore(&rt->machine);
             break;
 
+        case RUNTIME_COMMAND_SET_JOYSTICK:
+            c64_set_joystick(
+                &rt->machine,
+                command->data.set_joystick.port,
+                command->data.set_joystick.inputs);
+            break;
+
         case RUNTIME_COMMAND_SET_CPU_REGISTER:
             runtime_set_cpu_register(rt, command);
             break;

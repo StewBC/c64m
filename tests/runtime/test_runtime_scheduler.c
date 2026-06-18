@@ -431,6 +431,61 @@ static void test_runtime_restore_event_reaches_machine(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_joystick_event_reaches_machine(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    rt = start_runtime(&client);
+
+    expect_true("DDRA inputs", runtime_client_write_memory_byte(
+        client,
+        0xdc02,
+        0x00,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    expect_true("DDRB outputs", runtime_client_write_memory_byte(
+        client,
+        0xdc03,
+        0xff,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    expect_true("PRB high", runtime_client_write_memory_byte(
+        client,
+        0xdc01,
+        0xff,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE) ||
+        !poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE) ||
+        !poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("CIA setup memory write responses not received");
+    }
+    expect_true("send joystick port 2", runtime_client_set_joystick(
+        client,
+        2u,
+        C64_JOYSTICK_DOWN | C64_JOYSTICK_FIRE));
+    expect_true("request CIA1 PRA after joystick", runtime_client_request_memory(
+        client,
+        0xdc00,
+        1,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("CIA1 PRA after joystick not received");
+    }
+    expect_u8("joystick port 2 pulls down/fire low", 0xed, event.data.memory.bytes[0]);
+
+    expect_true("clear joystick port 2", runtime_client_set_joystick(client, 2u, 0));
+    expect_true("request CIA1 PRA after joystick clear", runtime_client_request_memory(
+        client,
+        0xdc00,
+        1,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("CIA1 PRA after joystick clear not received");
+    }
+    expect_u8("joystick port 2 clear releases lines", 0xff, event.data.memory.bytes[0]);
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_run_pause(void) {
     runtime *rt;
     runtime_client *client;
@@ -1292,6 +1347,7 @@ int main(void) {
     test_runtime_cycle_turbo_speed();
     test_runtime_keyboard_event_reaches_machine();
     test_runtime_restore_event_reaches_machine();
+    test_runtime_joystick_event_reaches_machine();
     test_runtime_run_pause();
     test_runtime_reset_resumes_running();
     test_runtime_step_instruction_from_running_pauses();

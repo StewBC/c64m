@@ -39,7 +39,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_ASSEMBLE_FILE,
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_CYCLE_TURBO_SPEED,
-    RUNTIME_COMMAND_PASTE_TEXT
+    RUNTIME_COMMAND_PASTE_TEXT,
+    RUNTIME_COMMAND_SET_JOYSTICK
 } runtime_command_type;
 
 enum {
@@ -142,5 +143,10 @@ typedef struct runtime_command {
             char text[RUNTIME_PASTE_TEXT_MAX];
             size_t length;
         } paste_text;
+
+        struct {
+            uint8_t port;
+            uint8_t inputs;
+        } set_joystick;
     } data;
 } runtime_command;

@@ -11,6 +11,23 @@
 #include <stdio.h>
 #include <string.h>
 
+enum {
+    C64M_CONTROLLER_MAX = 2,
+    C64M_CONTROLLER_AXIS_THRESHOLD = 16000
+};
+
+typedef struct sdl_c64_controller {
+    SDL_GameController *controller;
+    SDL_JoystickID instance_id;
+    uint8_t inputs;
+} sdl_c64_controller;
+
+typedef struct sdl_c64_controller_state {
+    sdl_c64_controller controllers[C64M_CONTROLLER_MAX];
+    unsigned single_controller_port;
+    bool swapped;
+} sdl_c64_controller_state;
+
 static bool choose_file_path(char *out_path, size_t out_size, const char *prompt, const char *types) {
 #if defined(__APPLE__)
     FILE *pipe;
@@ -280,6 +297,317 @@ static void dispatch_input_actions(
     }
 }
 
+static void sdl_c64_controllers_reset(sdl_c64_controller_state *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->single_controller_port = 2u;
+}
+
+static size_t sdl_c64_controller_count(const sdl_c64_controller_state *state) {
+    size_t i;
+    size_t count = 0;
+
+    if (state == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < C64M_CONTROLLER_MAX; i++) {
+        if (state->controllers[i].controller != NULL) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static int sdl_c64_controller_find_slot(
+    const sdl_c64_controller_state *state,
+    SDL_JoystickID instance_id) {
+    size_t i;
+
+    if (state == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < C64M_CONTROLLER_MAX; i++) {
+        if (state->controllers[i].controller != NULL &&
+            state->controllers[i].instance_id == instance_id) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static unsigned sdl_c64_controller_slot_port(
+    const sdl_c64_controller_state *state,
+    size_t slot,
+    size_t connected_count) {
+    if (state == NULL || connected_count == 0) {
+        return 0;
+    }
+
+    if (connected_count == 1) {
+        return state->single_controller_port;
+    }
+
+    if (slot == 0) {
+        return state->swapped ? 2u : 1u;
+    }
+    if (slot == 1) {
+        return state->swapped ? 1u : 2u;
+    }
+    return 0;
+}
+
+static void sdl_c64_controller_send_ports(
+    const sdl_c64_controller_state *state,
+    runtime_client *client) {
+    uint8_t ports[3] = {0, 0, 0};
+    size_t connected_count;
+    size_t i;
+
+    if (state == NULL || client == NULL) {
+        return;
+    }
+
+    connected_count = sdl_c64_controller_count(state);
+    for (i = 0; i < C64M_CONTROLLER_MAX; i++) {
+        unsigned port;
+
+        if (state->controllers[i].controller == NULL) {
+            continue;
+        }
+        port = sdl_c64_controller_slot_port(state, i, connected_count);
+        if (port >= 1u && port <= 2u) {
+            ports[port] = state->controllers[i].inputs;
+        }
+    }
+
+    runtime_client_set_joystick(client, 1u, ports[1]);
+    runtime_client_set_joystick(client, 2u, ports[2]);
+}
+
+static uint8_t sdl_c64_controller_read_inputs(SDL_GameController *controller) {
+    Sint16 x;
+    Sint16 y;
+    uint8_t inputs = 0;
+
+    if (controller == NULL) {
+        return 0;
+    }
+
+    x = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+    y = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+
+    if (x <= -C64M_CONTROLLER_AXIS_THRESHOLD ||
+        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
+        inputs |= C64_JOYSTICK_LEFT;
+    }
+    if (x >= C64M_CONTROLLER_AXIS_THRESHOLD ||
+        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
+        inputs |= C64_JOYSTICK_RIGHT;
+    }
+    if (y <= -C64M_CONTROLLER_AXIS_THRESHOLD ||
+        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) {
+        inputs |= C64_JOYSTICK_UP;
+    }
+    if (y >= C64M_CONTROLLER_AXIS_THRESHOLD ||
+        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
+        inputs |= C64_JOYSTICK_DOWN;
+    }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A)) {
+        inputs |= C64_JOYSTICK_FIRE;
+    }
+
+    return inputs;
+}
+
+static void sdl_c64_controller_refresh_slot(
+    sdl_c64_controller_state *state,
+    size_t slot,
+    runtime_client *client) {
+    uint8_t inputs;
+
+    if (state == NULL || slot >= C64M_CONTROLLER_MAX ||
+        state->controllers[slot].controller == NULL) {
+        return;
+    }
+
+    inputs = sdl_c64_controller_read_inputs(state->controllers[slot].controller);
+    if (inputs != state->controllers[slot].inputs) {
+        state->controllers[slot].inputs = inputs;
+        sdl_c64_controller_send_ports(state, client);
+    }
+}
+
+static void sdl_c64_controller_add(
+    sdl_c64_controller_state *state,
+    runtime_client *client,
+    int device_index) {
+    SDL_GameController *controller;
+    SDL_Joystick *joystick;
+    SDL_JoystickID instance_id;
+    size_t slot;
+
+    if (state == NULL || !SDL_IsGameController(device_index)) {
+        return;
+    }
+
+    for (slot = 0; slot < C64M_CONTROLLER_MAX; slot++) {
+        if (state->controllers[slot].controller == NULL) {
+            break;
+        }
+    }
+    if (slot >= C64M_CONTROLLER_MAX) {
+        SDL_Log("ignoring extra controller: %s", SDL_GameControllerNameForIndex(device_index));
+        return;
+    }
+
+    controller = SDL_GameControllerOpen(device_index);
+    if (controller == NULL) {
+        SDL_Log("SDL_GameControllerOpen failed: %s", SDL_GetError());
+        return;
+    }
+
+    joystick = SDL_GameControllerGetJoystick(controller);
+    instance_id = joystick != NULL ? SDL_JoystickInstanceID(joystick) : -1;
+    if (instance_id < 0) {
+        SDL_Log("SDL_JoystickInstanceID failed: %s", SDL_GetError());
+        SDL_GameControllerClose(controller);
+        return;
+    }
+    if (sdl_c64_controller_find_slot(state, instance_id) >= 0) {
+        SDL_GameControllerClose(controller);
+        return;
+    }
+
+    state->controllers[slot].controller = controller;
+    state->controllers[slot].instance_id = instance_id;
+    state->controllers[slot].inputs = sdl_c64_controller_read_inputs(controller);
+    SDL_Log("controller connected: %s", SDL_GameControllerName(controller));
+    sdl_c64_controller_send_ports(state, client);
+}
+
+static void sdl_c64_controller_remove(
+    sdl_c64_controller_state *state,
+    runtime_client *client,
+    SDL_JoystickID instance_id) {
+    int slot;
+
+    slot = sdl_c64_controller_find_slot(state, instance_id);
+    if (slot < 0) {
+        return;
+    }
+
+    SDL_Log("controller disconnected: %s", SDL_GameControllerName(state->controllers[slot].controller));
+    SDL_GameControllerClose(state->controllers[slot].controller);
+    memset(&state->controllers[slot], 0, sizeof(state->controllers[slot]));
+    sdl_c64_controller_send_ports(state, client);
+}
+
+static void sdl_c64_controller_handle_event(
+    sdl_c64_controller_state *state,
+    runtime_client *client,
+    const SDL_Event *event) {
+    int slot;
+
+    if (state == NULL || event == NULL) {
+        return;
+    }
+
+    switch (event->type) {
+        case SDL_CONTROLLERDEVICEADDED:
+            sdl_c64_controller_add(state, client, event->cdevice.which);
+            break;
+
+        case SDL_CONTROLLERDEVICEREMOVED:
+            sdl_c64_controller_remove(state, client, event->cdevice.which);
+            break;
+
+        case SDL_CONTROLLERAXISMOTION:
+            if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ||
+                event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
+                slot = sdl_c64_controller_find_slot(state, event->caxis.which);
+                if (slot >= 0) {
+                    sdl_c64_controller_refresh_slot(state, (size_t)slot, client);
+                }
+            }
+            break;
+
+        case SDL_CONTROLLERBUTTONDOWN:
+        case SDL_CONTROLLERBUTTONUP:
+            switch (event->cbutton.button) {
+                case SDL_CONTROLLER_BUTTON_A:
+                case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                    slot = sdl_c64_controller_find_slot(state, event->cbutton.which);
+                    if (slot >= 0) {
+                        sdl_c64_controller_refresh_slot(state, (size_t)slot, client);
+                    }
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void sdl_c64_controller_switch_mapping(
+    sdl_c64_controller_state *state,
+    runtime_client *client,
+    unsigned port) {
+    size_t connected_count;
+
+    if (state == NULL || (port != 1u && port != 2u)) {
+        return;
+    }
+
+    connected_count = sdl_c64_controller_count(state);
+    if (connected_count >= 2) {
+        state->swapped = !state->swapped;
+        SDL_Log("controller ports swapped");
+    } else {
+        state->single_controller_port = port;
+        SDL_Log("single controller mapped to C64 joystick port %u", port);
+    }
+    sdl_c64_controller_send_ports(state, client);
+}
+
+static void sdl_c64_controllers_open_existing(
+    sdl_c64_controller_state *state,
+    runtime_client *client) {
+    int i;
+    int count;
+
+    count = SDL_NumJoysticks();
+    for (i = 0; i < count; i++) {
+        sdl_c64_controller_add(state, client, i);
+    }
+}
+
+static void sdl_c64_controllers_close(sdl_c64_controller_state *state, runtime_client *client) {
+    size_t i;
+
+    if (state == NULL) {
+        return;
+    }
+
+    for (i = 0; i < C64M_CONTROLLER_MAX; i++) {
+        if (state->controllers[i].controller != NULL) {
+            SDL_GameControllerClose(state->controllers[i].controller);
+            memset(&state->controllers[i], 0, sizeof(state->controllers[i]));
+        }
+    }
+    sdl_c64_controller_send_ports(state, client);
+}
+
 static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_options *options) {
     frontend_debugger_intent intent;
 
@@ -468,11 +796,14 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
     bool running = true;
     bool ui_visible = false;
     frontend_input_mapper input_mapper;
+    sdl_c64_controller_state controller_state;
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
 
     frontend_input_mapper_reset(&input_mapper);
+    sdl_c64_controllers_reset(&controller_state);
+    sdl_c64_controllers_open_existing(&controller_state, client);
     request_debug_state(client);
     runtime_client_request_frame(client);
 
@@ -482,6 +813,8 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         frontend_begin_input(ui);
         while (SDL_PollEvent(&event)) {
             bool send_event_to_frontend = ui_visible;
+
+            sdl_c64_controller_handle_event(&controller_state, client, &event);
 
             if (event.type == SDL_QUIT) {
                 running = false;
@@ -506,6 +839,12 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_t &&
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
+                } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
+                           frontend_input_has_option_modifier(&event.key)) {
+                    sdl_c64_controller_switch_mapping(
+                        &controller_state,
+                        client,
+                        event.key.keysym.sym == SDLK_1 ? 1u : 2u);
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
                            frontend_input_has_option_modifier(&event.key)) {
                     char *text = SDL_GetClipboardText();
@@ -538,6 +877,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         dispatch_debugger_intents(client, ui, options);
         platform_window_present(window);
     }
+    sdl_c64_controllers_close(&controller_state, client);
 
     return true;
 }

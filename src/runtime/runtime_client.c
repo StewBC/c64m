@@ -144,6 +144,20 @@ bool runtime_client_restore(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_RESTORE);
 }
 
+bool runtime_client_set_joystick(runtime_client *client, unsigned port, uint8_t inputs) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_JOYSTICK,
+    };
+
+    if (!client || port < 1u || port > 2u) {
+        return false;
+    }
+
+    command.data.set_joystick.port = (uint8_t)port;
+    command.data.set_joystick.inputs = (uint8_t)(inputs & 0x1fu);
+    return message_queue_push(client->command_queue, &command);
+}
+
 static bool runtime_client_set_cpu_register(
     runtime_client *client,
     runtime_cpu_register reg,

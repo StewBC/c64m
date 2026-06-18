@@ -14,6 +14,7 @@ bool platform_init(void)
     if (SDL_Init(
         SDL_INIT_VIDEO |
         SDL_INIT_AUDIO |
+        SDL_INIT_JOYSTICK |
         SDL_INIT_GAMECONTROLLER) != 0) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return false;
