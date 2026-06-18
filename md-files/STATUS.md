@@ -2,7 +2,7 @@
 
 ## Current State
 
-Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), and CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation). VIC-II Phase F (light pen) is skipped.
+Completed through Phase 16, VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), and CIA Phase B (Timer A/B core countdown and reload hardening). VIC-II Phase F (light pen) is skipped.
 
 Implemented:
 
@@ -82,6 +82,28 @@ Implemented:
   - regression coverage includes CIA page routing/mirroring, live Timer B/debug peeks,
     debugger-safe ICR reads, VIC-bank pin reads, and a cycle-stepped `$DC0D` ICR
     clear-on-read timing test
+- CIA Phase B timer hardening:
+  - Timer A and Timer B are treated as 16-bit down-counters clocked once per current
+    emulator system cycle when running in Phi2 mode; this is the current project
+    abstraction, not sub-cycle/pin-level CIA timing
+  - latch and live counter state remain separate: timer register writes update the
+    latch, and timer reads return the live counter
+  - stopped timer-register writes immediately load the live counter from the effective
+    latch; the project policy for latch `$0000` is to load/reload `$FFFF`
+  - CRA/CRB bit 4 is a force-load strobe: writing it copies the effective latch into
+    the live counter, but the bit is not retained in the stored control register
+  - continuous timers underflow, set the Timer A/B ICR source flag, reload from the
+    effective latch, and keep running
+  - one-shot timers underflow, set the Timer A/B ICR source flag, reload from the
+    effective latch, and clear the start bit
+  - CPU-visible Timer B programming through `$DC06/$DC07/$DC0F` has a regression
+    diagnostic proving a later `$DC06` read observes a decreased live counter
+  - regression coverage now includes stopped timers, force-load strobe behavior,
+    continuous reload, one-shot reload/stop, zero-latch effective loading, timer source
+    flags, and the CPU-visible Timer B countdown path
+  - CNT input, full Timer B cascade behavior, PB6/PB7 output, pin-level edge races, and
+    full hardware-variant timing remain deferred to CIA Phase C/J; any existing
+    preliminary CNT/cascade behavior is not yet claimed as complete accuracy
 - ROM boot progression:
   - machine/runtime boot checkpoint counters
   - IRQ vector entry validation through the machine bus

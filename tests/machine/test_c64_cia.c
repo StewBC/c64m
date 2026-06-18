@@ -18,6 +18,8 @@ enum {
     CIA_REG_ICR = 0x0d,
     CIA_REG_CONTROL_A = 0x0e,
     CIA_REG_CONTROL_B = 0x0f,
+    CIA_INTERRUPT_TIMER_A = 0x01,
+    CIA_INTERRUPT_TIMER_B = 0x02,
     TEST_RESET_VECTOR = 0xe000,
 };
 
@@ -56,6 +58,13 @@ static void expect_u64(const char *name, uint64_t expected, uint64_t actual) {
     }
 }
 
+static void expect_u8_less_than(const char *name, uint8_t actual, uint8_t limit) {
+    if (actual >= limit) {
+        fprintf(stderr, "%s: expected %02x < %02x\n", name, actual, limit);
+        exit(1);
+    }
+}
+
 static void build_roms(c64_rom_set *roms) {
     c64_rom_set_init(roms);
     roms->has_basic = true;
@@ -89,6 +98,14 @@ static void reset_machine_with_kernal_code(c64_t *machine, const uint8_t *code, 
     c64_init(machine);
     expect_true("install synthetic ROMs", c64_install_roms(machine, &roms, error, sizeof(error)));
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
+}
+
+static void step_cia_cycles(cia *c, size_t count) {
+    size_t i;
+
+    for (i = 0; i < count; ++i) {
+        cia_step_cycle(c);
+    }
 }
 
 static void test_cia_reset_and_no_key_ports(void) {
@@ -143,6 +160,87 @@ static void test_cia_timer_and_interrupts(void) {
     expect_u64("icr write counted", 1, c.icr_writes);
 }
 
+static void test_cia_timer_stopped_timers_do_not_decrement(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x04);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x05);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+
+    step_cia_cycles(&c, 3);
+
+    expect_u16("stopped timer a unchanged", 0x0004, c.timer_a.counter);
+    expect_u16("stopped timer b unchanged", 0x0005, c.timer_b.counter);
+}
+
+static void test_cia_timer_force_load_strobe_for_both_timers(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x34);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x12);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x78);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x56);
+
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x11);
+
+    expect_u16("force load timer a", 0x1234, c.timer_a.counter);
+    expect_u16("force load timer b", 0x5678, c.timer_b.counter);
+    expect_u8("cra force-load strobe clears", 0x01, cia_read_register(&c, CIA_REG_CONTROL_A));
+    expect_u8("crb force-load strobe clears", 0x01, cia_read_register(&c, CIA_REG_CONTROL_B));
+}
+
+static void test_cia_timer_continuous_underflow_reloads_both_timers(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x11);
+
+    cia_step_cycle(&c);
+    expect_u16("continuous timer a reaches zero", 0x0000, c.timer_a.counter);
+    expect_u16("continuous timer b reaches zero", 0x0000, c.timer_b.counter);
+    expect_u8("no source flags before underflow", 0x00, c.interrupt_flags);
+
+    cia_step_cycle(&c);
+    expect_u16("continuous timer a reloads", 0x0001, c.timer_a.counter);
+    expect_u16("continuous timer b reloads", 0x0001, c.timer_b.counter);
+    expect_u8("continuous timer a keeps running", 0x01, cia_read_register(&c, CIA_REG_CONTROL_A));
+    expect_u8("continuous timer b keeps running", 0x01, cia_read_register(&c, CIA_REG_CONTROL_B));
+    expect_u8("timer source flags set", CIA_INTERRUPT_TIMER_A | CIA_INTERRUPT_TIMER_B, c.interrupt_flags);
+}
+
+static void test_cia_timer_oneshot_reloads_and_stops_both_timers(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x19);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x19);
+
+    step_cia_cycles(&c, 2);
+
+    expect_u16("oneshot timer a reloads", 0x0001, c.timer_a.counter);
+    expect_u16("oneshot timer b reloads", 0x0001, c.timer_b.counter);
+    expect_u8("oneshot timer a stops", 0x08, cia_read_register(&c, CIA_REG_CONTROL_A));
+    expect_u8("oneshot timer b stops", 0x08, cia_read_register(&c, CIA_REG_CONTROL_B));
+    expect_u8("oneshot source flags set", CIA_INTERRUPT_TIMER_A | CIA_INTERRUPT_TIMER_B, c.interrupt_flags);
+}
+
 static void test_cia_zero_latch_does_not_underflow_every_cycle(void) {
     cia c;
     char error[256];
@@ -156,6 +254,20 @@ static void test_cia_zero_latch_does_not_underflow_every_cycle(void) {
     cia_step_cycle(&c);
     expect_false("zero latch does not immediately underflow", cia_irq_pending(&c));
     expect_u16("zero latch decrements", 0xfffe, c.timer_a.counter);
+}
+
+static void test_cia_zero_latch_stopped_write_loads_effective_counter(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x00);
+    cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
+
+    expect_u16("zero latch stopped write loads timer a effective counter", 0xffff, c.timer_a.counter);
+    expect_u16("zero latch stopped write loads timer b effective counter", 0xffff, c.timer_b.counter);
 }
 
 static void test_cia_oneshot_stops_after_underflow(void) {
@@ -401,11 +513,42 @@ static void test_cycle_step_replays_cia_icr_read_at_bus_cycle(void) {
     expect_u64("icr read counted at data bus cycle", 1, machine.cia1.icr_reads);
 }
 
+static void test_cpu_visible_timer_b_counts_down(void) {
+    static const uint8_t code[] = {
+        0xa9, 0x40,       /* LDA #$40 */
+        0x8d, 0x06, 0xdc, /* STA $DC06 */
+        0xa9, 0x00,       /* LDA #$00 */
+        0x8d, 0x07, 0xdc, /* STA $DC07 */
+        0xa9, 0x01,       /* LDA #$01 */
+        0x8d, 0x0f, 0xdc, /* STA $DC0F */
+        0xea,             /* NOP */
+        0xea,             /* NOP */
+        0xea,             /* NOP */
+        0xad, 0x06, 0xdc  /* LDA $DC06 */
+    };
+    c64_t machine;
+    char error[256];
+    size_t i;
+
+    reset_machine_with_kernal_code(&machine, code, sizeof(code));
+
+    for (i = 0; i < 10; ++i) {
+        expect_true("step timer b cpu diagnostic", c64_step_instruction(&machine, error, sizeof(error)));
+    }
+
+    expect_u8_less_than("cpu-visible timer b low decremented", machine.cpu.cpu.A, 0x40);
+}
+
 int main(void) {
     test_cia_reset_and_no_key_ports();
     test_cia_register_mirroring_and_ports();
     test_cia_timer_and_interrupts();
+    test_cia_timer_stopped_timers_do_not_decrement();
+    test_cia_timer_force_load_strobe_for_both_timers();
+    test_cia_timer_continuous_underflow_reloads_both_timers();
+    test_cia_timer_oneshot_reloads_and_stops_both_timers();
     test_cia_zero_latch_does_not_underflow_every_cycle();
+    test_cia_zero_latch_stopped_write_loads_effective_counter();
     test_cia_oneshot_stops_after_underflow();
     test_cia_bus_mapping_and_ram_under_io();
     test_cia2_vic_bank_uses_port_pins();
@@ -413,6 +556,7 @@ int main(void) {
     test_cia_timer_b_cnt_mode();
     test_machine_cia_step_and_irq_foundations();
     test_cycle_step_replays_cia_icr_read_at_bus_cycle();
+    test_cpu_visible_timer_b_counts_down();
     test_cia_debug_read_timer_counters();
     test_cia_debug_read_icr_no_side_effects();
     test_cia_debug_read_port_formula();

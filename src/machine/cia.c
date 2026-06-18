@@ -168,28 +168,28 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             c->registers[reg] = value;
             c->timer_a.latch = (uint16_t)((c->timer_a.latch & 0xff00u) | value);
             if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_START) == 0) {
-                c->timer_a.counter = c->timer_a.latch;
+                cia_reload_timer(&c->timer_a);
             }
             return;
         case CIA_REG_TIMER_A_HI:
             c->registers[reg] = value;
             c->timer_a.latch = (uint16_t)((c->timer_a.latch & 0x00ffu) | ((uint16_t)value << 8));
             if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_START) == 0) {
-                c->timer_a.counter = c->timer_a.latch;
+                cia_reload_timer(&c->timer_a);
             }
             return;
         case CIA_REG_TIMER_B_LO:
             c->registers[reg] = value;
             c->timer_b.latch = (uint16_t)((c->timer_b.latch & 0xff00u) | value);
             if ((c->registers[CIA_REG_CONTROL_B] & CIA_CONTROL_START) == 0) {
-                c->timer_b.counter = c->timer_b.latch;
+                cia_reload_timer(&c->timer_b);
             }
             return;
         case CIA_REG_TIMER_B_HI:
             c->registers[reg] = value;
             c->timer_b.latch = (uint16_t)((c->timer_b.latch & 0x00ffu) | ((uint16_t)value << 8));
             if ((c->registers[CIA_REG_CONTROL_B] & CIA_CONTROL_START) == 0) {
-                c->timer_b.counter = c->timer_b.latch;
+                cia_reload_timer(&c->timer_b);
             }
             return;
         case CIA_REG_ICR:
