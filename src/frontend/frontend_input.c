@@ -243,6 +243,30 @@ static void map_keydown(const SDL_KeyboardEvent *event, frontend_input_chord *ch
         case SDLK_DELETE:
             add_restore(chord);
             break;
+        case SDLK_F1:
+            add_key(chord, C64_KEY_F1, true);
+            break;
+        case SDLK_F2:
+            add_shifted_key(chord, C64_KEY_F1, true);
+            break;
+        case SDLK_F3:
+            add_key(chord, C64_KEY_F3, true);
+            break;
+        case SDLK_F4:
+            add_shifted_key(chord, C64_KEY_F3, true);
+            break;
+        case SDLK_F5:
+            add_key(chord, C64_KEY_F5, true);
+            break;
+        case SDLK_F6:
+            add_shifted_key(chord, C64_KEY_F5, true);
+            break;
+        case SDLK_F7:
+            add_key(chord, C64_KEY_F7, true);
+            break;
+        case SDLK_F8:
+            add_shifted_key(chord, C64_KEY_F7, true);
+            break;
         default:
             break;
     }

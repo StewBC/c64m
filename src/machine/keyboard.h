@@ -64,6 +64,10 @@ typedef enum c64_key {
     C64_KEY_LEFT_ARROW,
     C64_KEY_UP_ARROW,
     C64_KEY_POUND,
+    C64_KEY_F1,
+    C64_KEY_F3,
+    C64_KEY_F5,
+    C64_KEY_F7,
     C64_KEY_COUNT
 } c64_key;
 

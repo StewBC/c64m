@@ -69,6 +69,10 @@ static const c64_key_position c64_key_positions[C64_KEY_COUNT] = {
     [C64_KEY_LEFT_ARROW] = {7, 1},
     [C64_KEY_UP_ARROW] = {6, 6},
     [C64_KEY_POUND] = {6, 0},
+    [C64_KEY_F1] = {0, 4},
+    [C64_KEY_F3] = {0, 5},
+    [C64_KEY_F5] = {0, 6},
+    [C64_KEY_F7] = {0, 3},
 };
 
 void c64_keyboard_reset(c64_keyboard *keyboard) {
