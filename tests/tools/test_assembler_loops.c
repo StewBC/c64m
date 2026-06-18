@@ -177,12 +177,73 @@ static int test_loop_errors(void)
     return failures;
 }
 
+static int test_anon_label_with_repeat(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    const char *source =
+        ".org $2000\n"
+        "    lda #81\n"
+        "    ldx #40\n"
+        ":\n"
+        "    .repeat 24, I\n"
+        "        sta $0400+I*40,x\n"
+        "    .endrep\n"
+        "    dex\n"
+        "    bne :-\n"
+        "    rts\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) != ASM_OK) {
+        fprintf(stderr, "anon label + repeat assembly failed with %zu errors\n", log.log_array.items);
+        failures++;
+    }
+
+    /* lda #81 = A9 51, ldx #40 = A2 28 */
+    if (mem.memory[0x2000] != 0xA9 || mem.memory[0x2001] != 0x51 ||
+        mem.memory[0x2002] != 0xA2 || mem.memory[0x2003] != 0x28) {
+        fprintf(stderr, "anon label + repeat: preamble mismatch\n");
+        failures++;
+    }
+    /* first sta $0400,x = 9D 00 04 */
+    if (mem.memory[0x2004] != 0x9D || mem.memory[0x2005] != 0x00 || mem.memory[0x2006] != 0x04) {
+        fprintf(stderr, "anon label + repeat: first sta mismatch: %02X %02X %02X\n",
+                mem.memory[0x2004], mem.memory[0x2005], mem.memory[0x2006]);
+        failures++;
+    }
+    /* last sta $0798,x (I=23: $0400+23*40=$0798) = 9D 98 07; ends at $204B */
+    if (mem.memory[0x2049] != 0x9D || mem.memory[0x204A] != 0x98 || mem.memory[0x204B] != 0x07) {
+        fprintf(stderr, "anon label + repeat: last sta mismatch: %02X %02X %02X\n",
+                mem.memory[0x2049], mem.memory[0x204A], mem.memory[0x204B]);
+        failures++;
+    }
+    /* dex = CA, bne :- = D0 B5 (offset -75 to $2004), rts = 60 */
+    if (mem.memory[0x204C] != 0xCA || mem.memory[0x204D] != 0xD0 ||
+        mem.memory[0x204E] != 0xB5 || mem.memory[0x204F] != 0x60) {
+        fprintf(stderr, "anon label + repeat: tail mismatch: %02X %02X %02X %02X\n",
+                mem.memory[0x204C], mem.memory[0x204D], mem.memory[0x204E], mem.memory[0x204F]);
+        failures++;
+    }
+
+    errlog_shutdown(&log);
+    unlink(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
 
     failures += test_loop_output();
     failures += test_loop_errors();
+    failures += test_anon_label_with_repeat();
 
     return failures == 0 ? 0 : 1;
 }

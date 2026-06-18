@@ -1369,7 +1369,7 @@ int is_label(ASSEMBLER *as) {
     if(as->token.type != TOKEN_VAR) {
         return 0;
     }
-    return next_token_op_is(as, ':');
+    return *as->cur == ':' && as->cur[1] != ':';
 }
 
 int is_address(ASSEMBLER *as) {
