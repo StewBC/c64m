@@ -142,6 +142,7 @@ typedef struct runtime_command {
         struct {
             char text[RUNTIME_PASTE_TEXT_MAX];
             size_t length;
+            uint8_t use_buffer;
         } paste_text;
 
         struct {

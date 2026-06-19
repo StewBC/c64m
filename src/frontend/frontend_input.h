@@ -34,6 +34,7 @@ typedef struct frontend_input_mapper {
 void frontend_input_mapper_reset(frontend_input_mapper *mapper);
 bool frontend_input_is_host_quit_shortcut(const SDL_KeyboardEvent *key);
 bool frontend_input_has_option_modifier(const SDL_KeyboardEvent *key);
+bool frontend_input_has_shift_modifier(const SDL_KeyboardEvent *key);
 size_t frontend_input_map_keyboard_event(
     frontend_input_mapper *mapper,
     const SDL_KeyboardEvent *event,

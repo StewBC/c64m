@@ -1394,6 +1394,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             p->position = 0;
             p->shift_needed = false;
             p->in_gap = true;
+            p->use_buffer = command->data.paste_text.use_buffer != 0;
             p->phase_end_cycle = rt->machine.clock.cycle;
             rt->paste_active = true;
             break;
@@ -1511,11 +1512,78 @@ static const paste_key_entry paste_ascii_map[128] = {
     ['z']  = { C64_KEY_Z,          false, true },
 };
 
+/* Maps ASCII 0-127 to PETSCII keyboard-buffer codes (0 = unmapped/skip).
+   $20-$3F and uppercase letters are identity. Lowercase folds to uppercase.
+   [ and ] use their PETSCII equivalents from SHIFT+colon/semicolon.
+   ^ maps to PETSCII $5E (C64 up-arrow, the BASIC exponentiation operator). */
+static const uint8_t ascii_to_petscii[128] = {
+    ['\n'] = 0x0D, ['\r'] = 0x0D,
+    [' ' ] = 0x20, ['!' ] = 0x21, ['"' ] = 0x22, ['#' ] = 0x23,
+    ['$' ] = 0x24, ['%' ] = 0x25, ['&' ] = 0x26, ['\''] = 0x27,
+    ['(' ] = 0x28, [')' ] = 0x29, ['*' ] = 0x2A, ['+' ] = 0x2B,
+    [',' ] = 0x2C, ['-' ] = 0x2D, ['.' ] = 0x2E, ['/' ] = 0x2F,
+    ['0' ] = 0x30, ['1' ] = 0x31, ['2' ] = 0x32, ['3' ] = 0x33,
+    ['4' ] = 0x34, ['5' ] = 0x35, ['6' ] = 0x36, ['7' ] = 0x37,
+    ['8' ] = 0x38, ['9' ] = 0x39, [':' ] = 0x3A, [';' ] = 0x3B,
+    ['<' ] = 0x3C, ['=' ] = 0x3D, ['>' ] = 0x3E, ['?' ] = 0x3F,
+    ['@' ] = 0x40,
+    ['A' ] = 0x41, ['B' ] = 0x42, ['C' ] = 0x43, ['D' ] = 0x44,
+    ['E' ] = 0x45, ['F' ] = 0x46, ['G' ] = 0x47, ['H' ] = 0x48,
+    ['I' ] = 0x49, ['J' ] = 0x4A, ['K' ] = 0x4B, ['L' ] = 0x4C,
+    ['M' ] = 0x4D, ['N' ] = 0x4E, ['O' ] = 0x4F, ['P' ] = 0x50,
+    ['Q' ] = 0x51, ['R' ] = 0x52, ['S' ] = 0x53, ['T' ] = 0x54,
+    ['U' ] = 0x55, ['V' ] = 0x56, ['W' ] = 0x57, ['X' ] = 0x58,
+    ['Y' ] = 0x59, ['Z' ] = 0x5A,
+    ['[' ] = 0x5B, [']' ] = 0x5D, ['^' ] = 0x5E,
+    ['a' ] = 0x41, ['b' ] = 0x42, ['c' ] = 0x43, ['d' ] = 0x44,
+    ['e' ] = 0x45, ['f' ] = 0x46, ['g' ] = 0x47, ['h' ] = 0x48,
+    ['i' ] = 0x49, ['j' ] = 0x4A, ['k' ] = 0x4B, ['l' ] = 0x4C,
+    ['m' ] = 0x4D, ['n' ] = 0x4E, ['o' ] = 0x4F, ['p' ] = 0x50,
+    ['q' ] = 0x51, ['r' ] = 0x52, ['s' ] = 0x53, ['t' ] = 0x54,
+    ['u' ] = 0x55, ['v' ] = 0x56, ['w' ] = 0x57, ['x' ] = 0x58,
+    ['y' ] = 0x59, ['z' ] = 0x5A,
+};
+
+/* Buffer-injection paste: writes PETSCII directly into the KERNAL keyboard
+   buffer ($0277-$0280, count at $00C6) whenever space is available.
+   Reliable for BASIC and any KERNAL-based app; does not work for games that
+   bypass the KERNAL keyboard IRQ. */
+static void runtime_advance_paste_buffer(runtime *rt) {
+    paste_state *p = &rt->paste;
+    uint8_t ndx = rt->machine.bus.ram[0x00C6];
+    uint8_t petscii;
+    unsigned char ch;
+
+    while (ndx < 10 && p->position < p->length) {
+        ch = (unsigned char)p->text[p->position++];
+        if (ch >= 128) {
+            continue;
+        }
+        petscii = ascii_to_petscii[ch];
+        if (petscii == 0) {
+            continue;
+        }
+        rt->machine.bus.ram[0x0277 + ndx] = petscii;
+        ndx++;
+    }
+
+    rt->machine.bus.ram[0x00C6] = ndx;
+
+    if (p->position >= p->length) {
+        rt->paste_active = false;
+    }
+}
+
 static void runtime_advance_paste(runtime *rt) {
     paste_state *p = &rt->paste;
     uint64_t now = rt->machine.clock.cycle;
     paste_key_entry entry;
     unsigned char ch;
+
+    if (p->use_buffer) {
+        runtime_advance_paste_buffer(rt);
+        return;
+    }
 
     if (now < p->phase_end_cycle) {
         return;

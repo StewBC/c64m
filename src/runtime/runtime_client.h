@@ -88,6 +88,7 @@ bool runtime_client_assemble_file_full(
     bool auto_run);
 bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out);
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length);
+bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length);
 bool runtime_client_cycle_turbo_speed(runtime_client *client);
 bool runtime_client_apply_machine_config(
     runtime_client *client,

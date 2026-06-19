@@ -846,10 +846,19 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                         client,
                         event.key.keysym.sym == SDLK_1 ? 1u : 2u);
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
-                           frontend_input_has_option_modifier(&event.key)) {
+                           frontend_input_has_option_modifier(&event.key) &&
+                           frontend_input_has_shift_modifier(&event.key)) {
                     char *text = SDL_GetClipboardText();
                     if (text && text[0] != '\0') {
                         runtime_client_paste_text(client, text, strlen(text));
+                    }
+                    SDL_free(text);
+                } else if (event.key.keysym.sym == SDLK_INSERT &&
+                           frontend_input_has_option_modifier(&event.key) &&
+                           !frontend_input_has_shift_modifier(&event.key)) {
+                    char *text = SDL_GetClipboardText();
+                    if (text && text[0] != '\0') {
+                        runtime_client_paste_text_buffer(client, text, strlen(text));
                     }
                     SDL_free(text);
                 } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {

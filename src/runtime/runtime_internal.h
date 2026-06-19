@@ -43,6 +43,7 @@ typedef struct paste_state {
     uint64_t phase_end_cycle;
     bool shift_needed;
     bool in_gap;
+    bool use_buffer;
 } paste_state;
 
 typedef struct runtime_frame_slot {

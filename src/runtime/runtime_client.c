@@ -464,5 +464,25 @@ bool runtime_client_paste_text(runtime_client *client, const char *text, size_t 
 
     memcpy(command.data.paste_text.text, text, length);
     command.data.paste_text.length = length;
+    command.data.paste_text.use_buffer = 0;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_PASTE_TEXT,
+    };
+
+    if (!client || !text || length == 0) {
+        return false;
+    }
+
+    if (length > RUNTIME_PASTE_TEXT_MAX) {
+        length = RUNTIME_PASTE_TEXT_MAX;
+    }
+
+    memcpy(command.data.paste_text.text, text, length);
+    command.data.paste_text.length = length;
+    command.data.paste_text.use_buffer = 1;
     return message_queue_push(client->command_queue, &command);
 }

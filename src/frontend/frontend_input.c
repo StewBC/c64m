@@ -10,6 +10,10 @@ bool frontend_input_has_option_modifier(const SDL_KeyboardEvent *key) {
     return key != NULL && (key->keysym.mod & KMOD_ALT) != 0;
 }
 
+bool frontend_input_has_shift_modifier(const SDL_KeyboardEvent *key) {
+    return has_shift_modifier(key);
+}
+
 bool frontend_input_is_host_quit_shortcut(const SDL_KeyboardEvent *key) {
     SDL_Keymod modifiers;
 
