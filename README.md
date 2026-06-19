@@ -37,15 +37,13 @@ POKE 53280,1
 SYS 64738
 ```
 
-Now, after 19 hours, the VIC-II is quite alive: text modes, graphics, and sprites.
+Now, after 32 hours, the C64 is quite alive: text modes, graphics, and sprites.  Some .d64's load.  Loads of one-load collection PRGs work.  The intergrated assembler is working.  The massive obviously missing piece is SID.
 
 ## Next Steps
 
 Development will continue. In truth, ChatGPT and Codex are doing the implementation work. Perhaps this process works especially well because I have previously written an emulator and can clearly describe the architecture and requirements.
 
 Regardless, what AI is capable of today is genuinely impressive.
-
-FWIW - At the 19-hour mark, I very much prefer Codex over Claude AI. It is more consistent, and GPT-5.5 Low performs better than Sonnet 4.6 Medium for this project. I have Codex speed set to Standard, and it is much faster at comparable tasks than Claude on Medium.
 
 Stefan Wessels
 [swessels@email.com](mailto:swessels@email.com)
