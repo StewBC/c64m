@@ -952,7 +952,7 @@ static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
 
     expect_true("create RAM read watchpoint", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 1);
-    expect_true("step into RAM read watchpoint", runtime_client_step_instruction(client));
+    expect_true("run instruction into RAM read watchpoint", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
         fail("PAUSED event not received for RAM read watchpoint");
     }
@@ -974,7 +974,7 @@ static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
     definition.access = RUNTIME_BREAKPOINT_ACCESS_WRITE;
     expect_true("create RAM write watchpoint", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 1);
-    expect_true("step into RAM write watchpoint", runtime_client_step_instruction(client));
+    expect_true("run instruction into RAM write watchpoint", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
         fail("PAUSED event not received for RAM write watchpoint");
     }
@@ -1014,12 +1014,12 @@ static void test_runtime_breakpoint_counters_gate_triggers(void) {
     expect_true("create counted execute breakpoint", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 1);
 
-    expect_true("first counted step does not break", runtime_client_step_instruction(client));
+    expect_true("first counted instruction does not break", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
-        fail("STEP_COMPLETE not received for first counted step");
+        fail("STEP_COMPLETE not received for first counted instruction");
     }
     if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
-        fail("CPU snapshot not received for first counted step");
+        fail("CPU snapshot not received for first counted instruction");
     }
     expect_true("request counted breakpoint after first hit", runtime_client_request_breakpoints(client));
     if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
@@ -1028,7 +1028,7 @@ static void test_runtime_breakpoint_counters_gate_triggers(void) {
     expect_u64("first counted hit count", 1, event.data.breakpoints.entries[0].current_hits);
     expect_u64("first counted counter", 1, event.data.breakpoints.entries[0].counter);
 
-    expect_true("second counted step breaks", runtime_client_step_instruction(client));
+    expect_true("second counted instruction breaks", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
         fail("PAUSED event not received for counted breakpoint");
     }
@@ -1068,7 +1068,7 @@ static void test_runtime_breakpoint_counter_zero_and_disabled_rules(void) {
 
     expect_true("create count zero breakpoint", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 1);
-    expect_true("count zero step breaks immediately", runtime_client_step_instruction(client));
+    expect_true("count zero run-instruction breaks immediately", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
         fail("PAUSED event not received for count zero breakpoint");
     }
@@ -1129,7 +1129,7 @@ static void test_runtime_non_break_actions_do_not_pause(void) {
 
     expect_true("create tron-only breakpoint", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 1);
-    expect_true("step over tron-only breakpoint", runtime_client_step_instruction(client));
+    expect_true("run instruction over tron-only breakpoint", runtime_client_run_instructions(client, 1));
     if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
         fail("STEP_COMPLETE not received for tron-only breakpoint");
     }

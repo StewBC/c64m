@@ -449,7 +449,7 @@ Implemented:
   - runtime owns execute breakpoints with stable IDs, enabled/disabled state, and hit counters
   - runtime owns and publishes a copied stop reason in machine snapshots
   - runtime_client supports set, clear, clear-all, enable/disable, and snapshot request commands
-  - runtime checks enabled execute breakpoints while running, stepping, and bounded-running, then pauses and publishes copied state
+  - runtime checks enabled execute breakpoints while running and bounded-running, then pauses and publishes copied state
   - frontend renders breakpoint snapshots only, with disabled breakpoints kept visible as bookmarks
   - disassembly View 2 shows copied breakpoint snapshots in the gutter and Option+B toggles an execute breakpoint at the cursor while paused
   - misc/debugger view shows debug status, stop reason, cycle/frame counters, breakpoint rows, View PC, Enable/Disable, Clear, and conditional Clear All
@@ -458,6 +458,7 @@ Implemented:
   - runtime breakpoint model supports stable runtime IDs, duplicate addresses/ranges, enabled state, start/end address ranges, access masks, mapping filters, action masks, hit counts, and counters
   - runtime_client supports create, update, duplicate, clear, clear-all, enable/disable, and copied breakpoint snapshot commands
   - runtime evaluates execute/read/write breakpoints and watchpoints, including inclusive ranges and Map/ROM/RAM filters
+  - debugger single-step intentionally executes one opcode without evaluating breakpoints/watchpoints; scheduler tests use bounded instruction/run paths for trigger coverage
   - machine reports generic CPU memory access events to runtime; machine does not know debugger UI concepts
   - runtime uses machine-side visibility decoding for ROM/RAM filters, with IO matching Map only
   - counters are runtime-owned; count zero triggers immediately, reset zero triggers every later match, and disabled breakpoints do not decrement counters
