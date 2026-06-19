@@ -86,6 +86,7 @@ static int test_assemble_imports_symbols(void) {
     }
 
     symbol_table_add(symbols, 0x1234, "STALE", SYMBOL_SOURCE_ASSEMBLER, "current", false);
+    symbol_table_add(symbols, 0x1235, "OLD_STALE", SYMBOL_SOURCE_ASSEMBLER, "old", false);
     symbol_table_add(symbols, 0xffd2, "CHROUT", SYMBOL_SOURCE_BUILTIN, "kernal", false);
 
     if (!c64_assemble_file(&machine, symbols, path, 0x0801, "current", error, sizeof(error))) {
@@ -100,6 +101,10 @@ static int test_assemble_imports_symbols(void) {
     failures += expect_symbol(symbols, "Inner::target", 0x0803);
     if (symbol_table_find_by_name(symbols, "STALE", &(symbol_info){0}) != SYMBOL_NOT_FOUND) {
         fprintf(stderr, "stale assembler symbol was not removed\n");
+        failures++;
+    }
+    if (symbol_table_find_by_name(symbols, "OLD_STALE", &(symbol_info){0}) != SYMBOL_NOT_FOUND) {
+        fprintf(stderr, "old-source stale assembler symbol was not removed\n");
         failures++;
     }
     if (symbol_table_find_by_name(symbols, "CHROUT", &(symbol_info){0}) != SYMBOL_OK) {

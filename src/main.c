@@ -248,6 +248,13 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
         }
     }
 
+    if (ui != NULL) {
+        runtime_symbol_snapshot symbols;
+        if (runtime_client_poll_symbols(client, &symbols)) {
+            frontend_update_symbols(ui, &symbols);
+        }
+    }
+
     while (ui != NULL && runtime_client_poll_frame(client, &frame)) {
         if (frontend_submit_frame(ui, &frame) && debug_state != NULL) {
             debug_state->frame_number = frame.frame_number;
@@ -797,6 +804,7 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                         &machine_config,
                         &runtime_options,
                         options->ini_path,
+                        options->symbol_files,
                         intent.config_result.needs_reboot,
                         options->save_ini && !options->no_save_ini);
                     frontend_set_config_state(ui, options);
@@ -980,6 +988,7 @@ int main(int argc, char **argv) {
     runtime_cfg.kernal_rom_path = options.kernal_rom_path;
     runtime_cfg.system_rom_path = options.system_rom_path;
     runtime_cfg.ini_path = options.ini_path;
+    runtime_cfg.symbol_files = options.symbol_files;
     runtime_cfg.use_ini = options.use_ini;
     runtime_cfg.save_ini = (options.save_ini || options.remember) && !options.no_save_ini;
     runtime_cfg.machine_config = machine_config_from_options(&options);

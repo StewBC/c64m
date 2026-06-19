@@ -136,6 +136,7 @@ runtime *runtime_create(const runtime_config *config) {
         rt->kernal_rom_path = runtime_copy_string(config->kernal_rom_path);
         rt->system_rom_path = runtime_copy_string(config->system_rom_path);
         rt->ini_path = runtime_copy_string(config->ini_path);
+        rt->symbol_files = runtime_copy_string(config->symbol_files);
         rt->use_ini = config->use_ini;
         rt->save_ini = config->save_ini;
         rt->machine_config = config->machine_config;
@@ -154,7 +155,8 @@ runtime *runtime_create(const runtime_config *config) {
             (config->char_rom_path && !rt->char_rom_path) ||
             (config->kernal_rom_path && !rt->kernal_rom_path) ||
             (config->system_rom_path && !rt->system_rom_path) ||
-            (config->ini_path && !rt->ini_path)) {
+            (config->ini_path && !rt->ini_path) ||
+            (config->symbol_files && !rt->symbol_files)) {
             runtime_destroy(rt);
             return NULL;
         }
@@ -175,6 +177,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->kernal_rom_path);
     free(rt->system_rom_path);
     free(rt->ini_path);
+    free(rt->symbol_files);
     mutex_destroy(rt->frame_slot.mutex);
     mutex_destroy(rt->symbol_slot.mutex);
     message_queue_destroy(rt->event_queue);

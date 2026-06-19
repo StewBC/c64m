@@ -9,6 +9,7 @@
 #include "disasm_6502.h"
 
 #include <SDL.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +96,8 @@ static void runtime_publish_error(
     rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
     runtime_publish_event(rt, &event);
 }
+
+static void runtime_publish_symbols(runtime *rt);
 
 static void runtime_publish_cpu_state(runtime *rt) {
     runtime_event event = {
@@ -564,7 +567,78 @@ static bool runtime_replace_string(char **target, const char *value) {
     return true;
 }
 
+static bool runtime_string_equal(const char *a, const char *b) {
+    if (a == NULL) {
+        a = "";
+    }
+    if (b == NULL) {
+        b = "";
+    }
+    return strcmp(a, b) == 0;
+}
+
+static void runtime_load_symbol_files(runtime *rt) {
+    const char *cursor;
+
+    if (rt == NULL || rt->symbols == NULL) {
+        return;
+    }
+
+    symbol_table_remove_kind(rt->symbols, SYMBOL_SOURCE_FILE);
+    cursor = rt->symbol_files != NULL ? rt->symbol_files : "";
+    while (*cursor != '\0') {
+        const char *start;
+        const char *end;
+        char path[RUNTIME_COMMAND_PATH_MAX];
+        size_t length;
+        size_t loaded = 0;
+        symbol_result result;
+
+        while (*cursor == ',' || isspace((unsigned char)*cursor)) {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        end = cursor;
+        while (end > start && isspace((unsigned char)end[-1])) {
+            end--;
+        }
+
+        length = (size_t)(end - start);
+        if (length == 0) {
+            continue;
+        }
+        if (length >= sizeof(path)) {
+            length = sizeof(path) - 1u;
+        }
+        memcpy(path, start, length);
+        path[length] = '\0';
+
+        result = symbol_table_load_file(rt->symbols, path, path, &loaded);
+        (void)loaded;
+        if (result == SYMBOL_OUT_OF_MEMORY) {
+            runtime_publish_error(rt, "out of memory while loading symbol file");
+            break;
+        }
+        if (result != SYMBOL_OK) {
+            char message[1152];
+            snprintf(message, sizeof(message), "failed to load symbol file: %s", path);
+            runtime_publish_error(rt, message);
+        }
+    }
+
+    runtime_publish_symbols(rt);
+}
+
 static void runtime_apply_machine_config(runtime *rt, const runtime_command *command) {
+    bool symbols_changed;
+
     rt->machine_config = command->data.apply_machine_config.config;
     rt->save_ini = command->data.apply_machine_config.save_ini != 0;
     memcpy(rt->turbo_speeds, command->data.apply_machine_config.turbo_speeds, sizeof(rt->turbo_speeds));
@@ -581,6 +655,14 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     if (!runtime_replace_string(&rt->ini_path, command->data.apply_machine_config.ini_path)) {
         runtime_publish_error(rt, "failed to update runtime INI path");
         return;
+    }
+    symbols_changed = !runtime_string_equal(rt->symbol_files, command->data.apply_machine_config.symbol_files);
+    if (!runtime_replace_string(&rt->symbol_files, command->data.apply_machine_config.symbol_files)) {
+        runtime_publish_error(rt, "failed to update symbol file list");
+        return;
+    }
+    if (symbols_changed) {
+        runtime_load_symbol_files(rt);
     }
     c64_set_config(&rt->machine, &rt->machine_config);
     if (command->data.apply_machine_config.reset != 0) {
@@ -1351,6 +1433,8 @@ static void runtime_publish_symbols(runtime *rt) {
     size_t i;
     symbol_info info;
 
+    mutex_lock(slot->mutex);
+
     total = symbol_table_count(rt->symbols);
     snap->total = total;
     snap->count = total < RUNTIME_SYMBOL_SNAPSHOT_MAX ? total : RUNTIME_SYMBOL_SNAPSHOT_MAX;
@@ -1365,7 +1449,6 @@ static void runtime_publish_symbols(runtime *rt) {
         }
     }
 
-    mutex_lock(slot->mutex);
     slot->has_symbols = true;
     mutex_unlock(slot->mutex);
 }
@@ -2099,6 +2182,7 @@ int runtime_thread_main(void *userdata) {
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
+    runtime_load_symbol_files(rt);
     if (runtime_load_configured_roms(rt)) {
         runtime_reset_machine(rt);
         if (runtime_load_breakpoints_from_ini(rt)) {

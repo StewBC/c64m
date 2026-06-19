@@ -1,6 +1,7 @@
 # src/tools/symbols/CMakeLists.txt
 
 add_library(symbols STATIC
+    symbol_file.c
     symbol_table.c
 )
 

@@ -94,6 +94,7 @@ struct runtime {
     char *kernal_rom_path;
     char *system_rom_path;
     char *ini_path;
+    char *symbol_files;
     bool use_ini;
     bool save_ini;
     c64_config machine_config;

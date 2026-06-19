@@ -120,7 +120,7 @@ bool c64_assemble_file(
             import.symbols = symbols;
             import.source_name = source_name != NULL && source_name[0] != '\0' ? source_name : path;
             import.ok = true;
-            symbol_table_remove_source(symbols, SYMBOL_SOURCE_ASSEMBLER, import.source_name);
+            symbol_table_remove_kind(symbols, SYMBOL_SOURCE_ASSEMBLER);
             assembler_walk_symbols(&assembler, runtime_assembler_import_symbol, &import);
             if (!import.ok) {
                 ok = false;

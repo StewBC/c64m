@@ -485,8 +485,9 @@ Implemented:
   - `[config]` INI keys now persist scroll wheel speed, turbo speeds, symbol files, and `Save=yes`
   - turbo speed CSV is parsed into runtime-owned available multipliers; the first entry becomes the active paced multiplier
   - Option-T cycles the active paced turbo multiplier through the configured turbo speed list
-  - symbol file changes currently trigger view refresh plumbing only; real symbol
-    file parsing and UI-driven load/unload into `src/tools/symbols` remain future work
+  - symbol file changes reload configured file symbols through `src/tools/symbols`;
+    configured file symbols are removed/reloaded on change and published to the
+    frontend resolver
 - Phase 16 timed bus event and live VIC-II raster foundation:
   - machine owns a monotonic master cycle and advances VIC-II/CIA/SID hooks to
     timestamped CPU bus event cycles before applying CPU-visible side effects

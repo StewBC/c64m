@@ -1,7 +1,9 @@
 #include "symbol_table.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int expect_result(symbol_result actual, symbol_result expected, const char *label)
 {
@@ -185,6 +187,10 @@ static int test_source_removal_clear_and_nearest(void)
         symbol_table_add(table, 0x0810, "CURRENT", SYMBOL_SOURCE_ASSEMBLER, "current", false),
         SYMBOL_OK,
         "add current");
+    failures += expect_result(
+        symbol_table_add(table, 0x1000, "FILE_LABEL", SYMBOL_SOURCE_FILE, "main.sym", false),
+        SYMBOL_OK,
+        "add file label");
 
     failures += expect_result(
         symbol_table_find_nearest_before(table, 0x0805, 4, &info, &offset),
@@ -212,10 +218,23 @@ static int test_source_removal_clear_and_nearest(void)
         symbol_table_find_by_name(table, "BASIC_START", &info),
         SYMBOL_OK,
         "kept builtin symbol");
-    if (symbol_table_count(table) != 1) {
-        fprintf(stderr, "expected one symbol after source removal, got %zu\n", symbol_table_count(table));
+    if (symbol_table_count(table) != 2) {
+        fprintf(stderr, "expected two symbols after source removal, got %zu\n", symbol_table_count(table));
         failures++;
     }
+
+    failures += expect_result(
+        symbol_table_remove_kind(table, SYMBOL_SOURCE_FILE),
+        SYMBOL_OK,
+        "remove file symbols");
+    failures += expect_result(
+        symbol_table_find_by_name(table, "FILE_LABEL", &info),
+        SYMBOL_NOT_FOUND,
+        "removed file symbol");
+    failures += expect_result(
+        symbol_table_find_by_name(table, "BASIC_START", &info),
+        SYMBOL_OK,
+        "kept builtin after kind removal");
 
     symbol_table_clear(table);
     if (symbol_table_count(table) != 0) {
@@ -227,6 +246,101 @@ static int test_source_removal_clear_and_nearest(void)
     return failures;
 }
 
+static int write_symbol_file(char *path, size_t path_size, const char *source)
+{
+    FILE *file;
+    int fd;
+
+    snprintf(path, path_size, "/tmp/c64m_symbols_XXXXXX");
+    fd = mkstemp(path);
+    if (fd < 0) {
+        perror("mkstemp");
+        return 1;
+    }
+
+    file = fdopen(fd, "w");
+    if (file == NULL) {
+        perror("fdopen");
+        close(fd);
+        unlink(path);
+        return 1;
+    }
+
+    fputs(source, file);
+    if (fclose(file) != 0) {
+        perror("fclose");
+        unlink(path);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_symbol_file_best_effort_load(void)
+{
+    char path[128];
+    symbol_table *table;
+    symbol_info info;
+    size_t loaded = 0;
+    int failures = 0;
+    const char *source =
+        "\n"
+        "    AF08 EVSTR And this is ignored\n"
+        "bad line\n"
+        "0xC000 Start\n"
+        "$FFD2 CHROUT trailing words\n"
+        "wordAF09 nope\n"
+        "12345 TOO_LONG\n"
+        "$D020 BORDER\n";
+
+    if (write_symbol_file(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    table = symbol_table_create();
+    if (table == NULL) {
+        unlink(path);
+        return 1;
+    }
+
+    failures += expect_result(
+        symbol_table_load_file(table, path, path, &loaded),
+        SYMBOL_OK,
+        "load symbol file");
+    if (loaded != 4) {
+        fprintf(stderr, "expected 4 loaded symbols, got %zu\n", loaded);
+        failures++;
+    }
+    if (symbol_table_find_by_name(table, "EVSTR", &info) != SYMBOL_OK || info.address != 0xaf08) {
+        fprintf(stderr, "EVSTR not loaded from indented bare address\n");
+        failures++;
+    }
+    if (symbol_table_find_by_address(table, 0xc000, &info) != SYMBOL_OK ||
+        strcmp(info.name, "Start") != 0) {
+        fprintf(stderr, "Start not loaded from 0x address\n");
+        failures++;
+    }
+    if (symbol_table_find_by_name(table, "CHROUT", &info) != SYMBOL_OK || info.address != 0xffd2) {
+        fprintf(stderr, "CHROUT not loaded from $ address\n");
+        failures++;
+    }
+    if (symbol_table_find_by_name(table, "BORDER", &info) != SYMBOL_OK || info.address != 0xd020) {
+        fprintf(stderr, "BORDER not loaded\n");
+        failures++;
+    }
+    if (symbol_table_find_by_name(table, "TOO_LONG", &info) != SYMBOL_NOT_FOUND) {
+        fprintf(stderr, "oversized address token was loaded\n");
+        failures++;
+    }
+    if (symbol_table_find_by_name(table, "nope", &info) != SYMBOL_NOT_FOUND) {
+        fprintf(stderr, "embedded address token was loaded\n");
+        failures++;
+    }
+
+    symbol_table_destroy(table);
+    unlink(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -234,6 +348,7 @@ int main(void)
     failures += test_add_find_and_resolver();
     failures += test_conflicts_and_overwrite();
     failures += test_source_removal_clear_and_nearest();
+    failures += test_symbol_file_best_effort_load();
 
     return failures == 0 ? 0 : 1;
 }

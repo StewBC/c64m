@@ -147,6 +147,7 @@ typedef struct runtime_command {
         struct {
             c64_config config;
             char ini_path[RUNTIME_COMMAND_PATH_MAX];
+            char symbol_files[RUNTIME_COMMAND_PATH_MAX];
             uint32_t turbo_speeds[16];
             uint8_t turbo_speed_count;
             uint32_t active_turbo_multiplier;

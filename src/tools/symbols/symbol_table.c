@@ -327,6 +327,36 @@ symbol_result symbol_table_remove_source(
     return SYMBOL_OK;
 }
 
+symbol_result symbol_table_remove_kind(
+    symbol_table *table,
+    symbol_source_kind source_kind)
+{
+    int removed = 0;
+    int i;
+
+    if (table == NULL || !symbol_source_kind_valid(source_kind)) {
+        return SYMBOL_INVALID;
+    }
+
+    for (i = 0; i < arrlen(table->entries);) {
+        symbol_record *entry = &table->entries[i];
+        if (table->sources[entry->source_id].kind == source_kind) {
+            symbol_free_entry(entry);
+            arrdel(table->entries, i);
+            removed = 1;
+            continue;
+        }
+        ++i;
+    }
+
+    if (!removed) {
+        return SYMBOL_NOT_FOUND;
+    }
+
+    symbol_rebuild_indexes(table);
+    return SYMBOL_OK;
+}
+
 symbol_result symbol_table_find_by_address(
     const symbol_table *table,
     uint16_t address,

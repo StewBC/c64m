@@ -14,6 +14,7 @@ typedef struct runtime_config {
     const char *kernal_rom_path;
     const char *system_rom_path;
     const char *ini_path;
+    const char *symbol_files;
     bool use_ini;
     bool save_ini;
     c64_config machine_config;

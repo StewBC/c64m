@@ -98,6 +98,7 @@ bool runtime_client_apply_machine_config(
     const c64_config *config,
     const runtime_config *runtime_options,
     const char *ini_path,
+    const char *symbol_files,
     bool reset,
     bool save_ini);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);

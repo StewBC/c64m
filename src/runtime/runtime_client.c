@@ -430,6 +430,7 @@ bool runtime_client_apply_machine_config(
     const c64_config *config,
     const runtime_config *runtime_options,
     const char *ini_path,
+    const char *symbol_files,
     bool reset,
     bool save_ini) {
     runtime_command command = {
@@ -452,6 +453,13 @@ bool runtime_client_apply_machine_config(
     }
     if (ini_path != NULL) {
         snprintf(command.data.apply_machine_config.ini_path, sizeof(command.data.apply_machine_config.ini_path), "%s", ini_path);
+    }
+    if (symbol_files != NULL) {
+        snprintf(
+            command.data.apply_machine_config.symbol_files,
+            sizeof(command.data.apply_machine_config.symbol_files),
+            "%s",
+            symbol_files);
     }
     command.data.apply_machine_config.reset = reset ? 1u : 0u;
     command.data.apply_machine_config.save_ini = save_ini ? 1u : 0u;

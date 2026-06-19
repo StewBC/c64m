@@ -49,6 +49,10 @@ symbol_result symbol_table_remove_source(
     symbol_source_kind source_kind,
     const char *source_name);
 
+symbol_result symbol_table_remove_kind(
+    symbol_table *table,
+    symbol_source_kind source_kind);
+
 symbol_result symbol_table_find_by_address(
     const symbol_table *table,
     uint16_t address,
@@ -71,5 +75,11 @@ symbol_result symbol_table_get(
     const symbol_table *table,
     size_t index,
     symbol_info *out_symbol);
+
+symbol_result symbol_table_load_file(
+    symbol_table *table,
+    const char *path,
+    const char *source_name,
+    size_t *out_loaded);
 
 void symbol_table_make_resolver(symbol_table *table, symbol_resolver *resolver);
