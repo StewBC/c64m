@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "audio_buffer.h"
 #include "c64.h"
 
 typedef struct runtime runtime;
@@ -21,6 +22,13 @@ typedef struct runtime_config {
     uint32_t turbo_speeds[16];
     uint8_t turbo_speed_count;
     uint32_t active_turbo_multiplier;
+    /* Audio: pointer to the shared util audio buffer (not owned by runtime).
+       Null and zero are valid — runtime runs silently if audio is unavailable. */
+    audio_buffer *audio_out;
+    int audio_sample_rate;
+    /* When non-zero, runtime emits a 440 Hz square-wave smoke tone instead of
+       silence, proving the audio path without needing SID. */
+    int audio_smoke;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

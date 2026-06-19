@@ -13,6 +13,7 @@ The emulator is complete through:
 - PRG loader polish: reset-before-load, pending injection after BASIC warm-start at $E38B, keyboard-buffer autostart PRGs supported.
 - Assembler UI integration: Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, symbol snapshot handoff to disassembler.
 - Host file load/save UI: unified Load and Save buttons on Machine tab; Load dialog has From File address, Reset, and Basic Program checkboxes; Save dialog has Basic Program checkbox (reads $2B–$2E, forces header), Write address header, and Start/End range fields.
+- Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters. SID deferred to C64AUDFID_2.
 
 ## Important implemented details
 
@@ -53,9 +54,22 @@ The emulator is complete through:
 - Symbol table is tools/frontend/debug-session-owned, separate from emulator machine and assembler internals.
 - INI supports config and breakpoint persistence; invalid breakpoint entries are skipped while valid entries load.
 
+### Audio output infrastructure (C64AUDFID_1)
+
+- Lock-free SPSC ring buffer (`util/audio_buffer`) delivers float mono samples from the runtime thread to the SDL audio callback without blocking either side.
+- SDL audio device managed by `platform/platform_audio`: opens at 48 kHz stereo float (`AUDIO_F32SYS`), accepts frequency/channel changes from SDL; expands internal mono to actual output channels in the callback.
+- Runtime thread calls `runtime_audio_produce()` each batch: fractional cycle accumulator converts PAL (985248 Hz) or NTSC (1022727 Hz) machine cycles to host sample rate; clock frequency is looked up via `c64_config_clock_hz()`.
+- Overrun policy: reject excess samples, increment counter once per write call.
+- Underrun policy: return available samples, callback fills silence, increment counter once per read call.
+- Turbo (RUNTIME_SPEED_MODE_FAST): audio writes are skipped entirely to prevent buffer flooding; state advances normally.
+- `--audio-smoke` CLI flag emits a 440 Hz square wave (±0.2f, phase accumulator, no math.h) to prove the path before SID is wired.
+- Startup order: `audio_buffer_create` → `platform_audio_create` (calls `SDL_InitSubSystem(SDL_INIT_AUDIO)`) → `runtime_create` (receives buffer and actual rate) → `runtime_start` → `platform_audio_start`.
+- SDL audio dependency is confined to `platform/`; `runtime/` and `util/` targets remain SDL-free.
+- `audio_buffer.c` uses C11 `_Atomic` via a per-file CMake property; the public header is C99-compatible (fully opaque struct).
+
 ## Not implemented / deferred
 
-- SID.
+- SID audio (C64AUDFID_2 and later).
 - Full CIA accuracy and pin/race-level timing.
 - Cycle-perfect video/audio timing.
 - VIC-II light pen (`$D013/$D014` stubbed; Phase F skipped).

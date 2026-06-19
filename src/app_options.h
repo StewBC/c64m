@@ -36,6 +36,9 @@ typedef struct app_options {
     char *char_rom_path;
     char *kernal_rom_path;
     char *system_rom_path;
+    /* When true, runtime emits a 440 Hz square wave via the audio path to
+       verify that samples reach the host audio device without needing SID. */
+    bool audio_smoke;
 } app_options;
 
 void app_options_init(app_options *options);

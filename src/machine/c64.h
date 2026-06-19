@@ -78,6 +78,10 @@ typedef struct c64_config {
     c64_video_standard video_standard;
 } c64_config;
 
+/* Returns the master clock frequency in Hz for the given config.
+   PAL: 985248 Hz.  NTSC: 1022727 Hz. */
+uint32_t c64_config_clock_hz(const c64_config *config);
+
 typedef enum c64_drive_image_kind {
     C64_DRIVE_IMAGE_NONE = 0,
     C64_DRIVE_IMAGE_D64

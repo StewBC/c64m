@@ -2,6 +2,7 @@
 
 add_library(platform STATIC
     platform.c
+    platform_audio.c
 )
 
 target_include_directories(platform PUBLIC

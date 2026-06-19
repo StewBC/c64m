@@ -31,6 +31,13 @@ static const uint8_t c64_d64_sectors_per_track[35] = {
     17, 17, 17, 17, 17
 };
 
+uint32_t c64_config_clock_hz(const c64_config *config) {
+    if (config != NULL && config->video_standard == C64_VIDEO_STANDARD_NTSC) {
+        return 1022727u;
+    }
+    return 985248u;
+}
+
 static void c64_set_error(char *error, size_t error_size, const char *message) {
     if (!error || error_size == 0) {
         return;

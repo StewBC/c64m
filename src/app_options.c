@@ -433,6 +433,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int no_save_ini = 0;
     int remember = 0;
     int save_ini = 0;
+    int audio_smoke = 0;
     const char *breakpoint = NULL;
     const char *disk = NULL;
     const char *ini_path = NULL;
@@ -444,6 +445,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         NULL,
     };
     struct argparse_option parse_options[] = {
+        OPT_BOOLEAN('A', "audio-smoke", &audio_smoke, "emit 440 Hz tone to verify audio path", NULL, 0, OPT_NONEG),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive contains image", NULL, 0, 0),
@@ -496,6 +498,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     if (no_save_ini) {
         options->no_save_ini = true;
         options->save_ini = false;
+    }
+    if (audio_smoke) {
+        options->audio_smoke = true;
     }
 
     return true;

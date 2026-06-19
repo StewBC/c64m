@@ -1,5 +1,7 @@
 #include "runtime_internal.h"
 
+#include "audio_buffer.h"
+#include "c64.h"
 #include "message_queue.h"
 #include "runtime_breakpoint_ini.h"
 #include "runtime_command.h"
@@ -67,6 +69,66 @@ static void runtime_pace_after_frame(runtime *rt) {
     if (rt->next_frame_counter < now) {
         rt->next_frame_counter = now + rt->frame_counter_step;
     }
+}
+
+/* Emit host-rate audio samples proportional to machine cycles elapsed since
+   the last call. In smoke mode a 440 Hz square wave is produced; otherwise
+   silence is written (future SID samples will replace this path).
+   Turbo mode (RUNTIME_SPEED_MODE_FAST) mutes audio to avoid buffer flooding.
+   Batch point: called once per RUNTIME_RUN_BATCH_CYCLES in the main run loop. */
+static void runtime_audio_produce(runtime *rt) {
+    uint64_t now, elapsed;
+    uint32_t clock_hz, sample_rate;
+    float sample;
+
+    if (rt->audio_out == NULL || rt->audio_sample_rate <= 0) {
+        return;
+    }
+
+    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
+        /* Turbo: mute. Don't write stale samples; let callback fill silence. */
+        rt->audio_last_cycle = rt->machine.clock.cycle;
+        return;
+    }
+
+    now = rt->machine.clock.cycle;
+    elapsed = now - rt->audio_last_cycle;
+    rt->audio_last_cycle = now;
+
+    if (elapsed == 0) {
+        return;
+    }
+
+    clock_hz    = c64_config_clock_hz(&rt->machine_config);
+    sample_rate = (uint32_t)rt->audio_sample_rate;
+
+    rt->audio_cycle_accum += (double)elapsed * (double)sample_rate;
+
+    while (rt->audio_cycle_accum >= (double)clock_hz) {
+        rt->audio_cycle_accum -= (double)clock_hz;
+
+        if (rt->audio_smoke) {
+            /* 440 Hz square wave at 0.2 amplitude. */
+            rt->audio_smoke_phase += 440.0f / (float)sample_rate;
+            if (rt->audio_smoke_phase >= 1.0f) {
+                rt->audio_smoke_phase -= 1.0f;
+            }
+            sample = rt->audio_smoke_phase < 0.5f ? 0.2f : -0.2f;
+        } else {
+            sample = 0.0f;
+        }
+
+        audio_buffer_write(rt->audio_out, &sample, 1);
+    }
+}
+
+static void runtime_audio_reset(runtime *rt) {
+    if (rt->audio_out != NULL) {
+        audio_buffer_reset(rt->audio_out);
+    }
+    rt->audio_cycle_accum = 0.0;
+    rt->audio_last_cycle  = 0;
+    rt->audio_smoke_phase = 0.0f;
 }
 
 static bool runtime_publish_event(
@@ -516,6 +578,8 @@ static bool runtime_reset_machine(runtime *rt) {
     rt->frame_slot.consumed_frames = 0;
     rt->frame_slot.dropped_frames = 0;
     mutex_unlock(rt->frame_slot.mutex);
+
+    runtime_audio_reset(rt);
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_RESET;
@@ -2413,6 +2477,9 @@ int runtime_thread_main(void *userdata) {
     rt->next_breakpoint_id = 1;
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
+    rt->audio_cycle_accum = 0.0;
+    rt->audio_last_cycle  = 0;
+    rt->audio_smoke_phase = 0.0f;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     runtime_load_symbol_files(rt);
     if (runtime_load_configured_roms(rt)) {
@@ -2494,6 +2561,9 @@ int runtime_thread_main(void *userdata) {
                     }
                 }
             }
+
+            /* Produce audio samples for cycles advanced in this batch. */
+            runtime_audio_produce(rt);
 
             continue;
         }

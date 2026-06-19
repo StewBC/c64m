@@ -1,7 +1,9 @@
 #include "app_options.h"
+#include "audio_buffer.h"
 #include "frontend.h"
 #include "frontend_input.h"
 #include "platform.h"
+#include "platform_audio.h"
 #include "runtime.h"
 #include "runtime_client.h"
 
@@ -1081,13 +1083,38 @@ int main(int argc, char **argv) {
     platform_window *window;
     platform_window_config window_config;
     frontend_layout_state layout_state;
+    audio_buffer *abuf = NULL;
+    platform_audio *paudio = NULL;
     int exit_code = 0;
 
     if (!app_options_load_startup(&options, argc, argv)) {
         return 1;
     }
 
+    /* Create the shared audio buffer and open the SDL audio device before
+       starting the runtime thread so the actual sample rate is known at
+       runtime_create time.  platform_audio_init initialises SDL_INIT_AUDIO
+       internally, so this may safely precede platform_init(). */
+    abuf = audio_buffer_create(8192);
+    if (abuf != NULL) {
+        platform_audio_desc audio_desc;
+        audio_desc.requested_rate             = 48000;
+        audio_desc.requested_channels         = 2;
+        audio_desc.requested_callback_samples = 512;
+        audio_desc.buffer                     = abuf;
+        paudio = platform_audio_create(&audio_desc);
+        if (paudio == NULL) {
+            SDL_Log("audio: failed to open device, running without audio");
+            audio_buffer_destroy(abuf);
+            abuf = NULL;
+        }
+    } else {
+        SDL_Log("audio: failed to allocate buffer, running without audio");
+    }
+
     if (!runtime_init()) {
+        platform_audio_destroy(paudio);
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
@@ -1101,6 +1128,9 @@ int main(int argc, char **argv) {
     runtime_cfg.use_ini = options.use_ini;
     runtime_cfg.save_ini = (options.save_ini || options.remember) && !options.no_save_ini;
     runtime_cfg.machine_config = machine_config_from_options(&options);
+    runtime_cfg.audio_out         = abuf;
+    runtime_cfg.audio_sample_rate = platform_audio_actual_rate(paudio);
+    runtime_cfg.audio_smoke       = options.audio_smoke ? 1 : 0;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));
@@ -1111,6 +1141,8 @@ int main(int argc, char **argv) {
     rt = runtime_create(&runtime_cfg);
     if (rt == NULL) {
         runtime_shutdown();
+        platform_audio_destroy(paudio);
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
@@ -1118,14 +1150,21 @@ int main(int argc, char **argv) {
     if (!runtime_start(rt)) {
         runtime_destroy(rt);
         runtime_shutdown();
+        platform_audio_destroy(paudio);
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
     client = runtime_get_client(rt);
 
+    /* Start audio playback now that the runtime thread is producing samples. */
+    platform_audio_start(paudio);
+
     if (!platform_init()) {
         runtime_destroy(rt);
         runtime_shutdown();
+        platform_audio_destroy(paudio);
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
@@ -1137,9 +1176,11 @@ int main(int argc, char **argv) {
 
     window = platform_window_create(&window_config);
     if (window == NULL) {
+        platform_audio_destroy(paudio);
         platform_shutdown();
         runtime_destroy(rt);
         runtime_shutdown();
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
@@ -1147,9 +1188,11 @@ int main(int argc, char **argv) {
     ui = frontend_create(window);
     if (ui == NULL) {
         platform_window_destroy(window);
+        platform_audio_destroy(paudio);
         platform_shutdown();
         runtime_destroy(rt);
         runtime_shutdown();
+        audio_buffer_destroy(abuf);
         app_options_destroy(&options);
         return 1;
     }
@@ -1188,9 +1231,13 @@ int main(int argc, char **argv) {
 
     frontend_destroy(ui);
     platform_window_destroy(window);
+    /* Stop and destroy the audio device before SDL_Quit so the device handle
+       remains valid.  Runtime thread is already joined at this point. */
+    platform_audio_destroy(paudio);
     platform_shutdown();
     runtime_destroy(rt);
     runtime_shutdown();
+    audio_buffer_destroy(abuf);
     app_options_destroy(&options);
     return exit_code;
 }

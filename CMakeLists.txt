@@ -41,6 +41,18 @@ target_include_directories(c64m PRIVATE
     ${SDL2_INCLUDE_DIRS}
 )
 
+add_executable(test_audio_buffer
+    tests/util/test_audio_buffer.c
+)
+
+target_compile_features(test_audio_buffer PRIVATE c_std_99)
+
+target_link_libraries(test_audio_buffer PRIVATE
+    util
+)
+
+add_test(NAME audio_buffer COMMAND test_audio_buffer)
+
 add_executable(test_c64_bus
     tests/machine/test_c64_bus.c
 )

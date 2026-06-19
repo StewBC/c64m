@@ -4,6 +4,7 @@
 #include "runtime_client.h"
 #include "runtime_command.h"
 
+#include "audio_buffer.h"
 #include "c64.h"
 #include "c64_rom.h"
 #include "mutex.h"
@@ -118,6 +119,13 @@ struct runtime {
     uint64_t frame_counter_step;
     bool pace_initialized;
     bool started;
+    /* Audio: shared buffer pointer (not owned). Null when audio is disabled. */
+    audio_buffer *audio_out;
+    int audio_sample_rate;
+    double audio_cycle_accum;   /* fractional cycle accumulator for sample timing */
+    uint64_t audio_last_cycle;  /* machine cycle at last audio produce call */
+    float audio_smoke_phase;    /* square-wave phase accumulator for smoke tone */
+    int audio_smoke;            /* non-zero: emit smoke tone instead of silence */
     bool paste_active;
     paste_state paste;
     char *pending_prg_path;

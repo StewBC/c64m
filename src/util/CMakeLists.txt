@@ -1,12 +1,19 @@
 # src/util/CMakeLists.txt
 
 add_library(util STATIC
+    audio_buffer.c
     config.c
     cond.c
     message_queue.c
     mutex.c
     thread.c
     util.c
+)
+
+# audio_buffer.c uses C11 _Atomic for lock-free SPSC; the rest of util stays C99.
+set_source_files_properties(audio_buffer.c PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
 )
 
 target_include_directories(util PUBLIC
