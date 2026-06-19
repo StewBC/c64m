@@ -384,7 +384,8 @@ bool runtime_client_assemble_file_full(
     const char *path,
     uint16_t address,
     uint16_t run_address,
-    bool auto_run) {
+    bool auto_run,
+    bool reset_first) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_ASSEMBLE_FILE,
     };
@@ -397,7 +398,7 @@ bool runtime_client_assemble_file_full(
     command.data.assemble_file.address = address;
     command.data.assemble_file.run_address = run_address;
     command.data.assemble_file.auto_run = auto_run ? 1u : 0u;
-    command.data.assemble_file.reset_first = 1u;
+    command.data.assemble_file.reset_first = reset_first ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 
@@ -534,6 +535,52 @@ bool runtime_client_paste_text(runtime_client *client, const char *text, size_t 
     memcpy(command.data.paste_text.text, text, length);
     command.data.paste_text.length = length;
     command.data.paste_text.use_buffer = 0;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_load_bin(
+    runtime_client *client,
+    const char *path,
+    uint16_t address,
+    bool use_file_address,
+    bool reset_first,
+    bool is_basic) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_LOAD_BIN,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.load_bin.path, sizeof(command.data.load_bin.path), "%s", path);
+    command.data.load_bin.address = address;
+    command.data.load_bin.use_file_address = use_file_address ? 1u : 0u;
+    command.data.load_bin.reset_first = reset_first ? 1u : 0u;
+    command.data.load_bin.is_basic = is_basic ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_save_bin(
+    runtime_client *client,
+    const char *path,
+    uint16_t start_address,
+    uint16_t end_address,
+    bool write_file_address,
+    bool is_basic) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SAVE_BIN,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.save_bin.path, sizeof(command.data.save_bin.path), "%s", path);
+    command.data.save_bin.start_address = start_address;
+    command.data.save_bin.end_address = end_address;
+    command.data.save_bin.write_file_address = write_file_address ? 1u : 0u;
+    command.data.save_bin.is_basic = is_basic ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 

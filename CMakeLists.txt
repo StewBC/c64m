@@ -344,3 +344,15 @@ target_link_libraries(test_runtime_assembler PRIVATE
 )
 
 add_test(NAME runtime_assembler COMMAND test_runtime_assembler)
+
+add_executable(test_runtime_fileio
+    tests/runtime/test_runtime_fileio.c
+)
+
+target_compile_features(test_runtime_fileio PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_fileio PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_fileio COMMAND test_runtime_fileio)

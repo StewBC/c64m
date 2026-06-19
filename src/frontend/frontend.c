@@ -194,6 +194,8 @@ struct frontend {
     frontend_config_dialog_state config_dialog;
     frontend_breakpoint_dialog_state breakpoint_dialog;
     frontend_assembler_state assembler;
+    frontend_load_bin_dialog_state load_bin_dialog;
+    frontend_save_bin_dialog_state save_bin_dialog;
     symbol_resolver symbols;
     symbol_table *symbol_table;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
@@ -305,7 +307,8 @@ static bool frontend_push_assemble_run_intent(
     const char *path,
     uint16_t address,
     uint16_t run_address,
-    bool auto_run);
+    bool auto_run,
+    bool reset_first);
 
 static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height);
 
@@ -650,7 +653,8 @@ static bool frontend_push_assemble_run_intent(
     const char *path,
     uint16_t address,
     uint16_t run_address,
-    bool auto_run)
+    bool auto_run,
+    bool reset_first)
 {
     size_t next;
 
@@ -672,6 +676,7 @@ static bool frontend_push_assemble_run_intent(
     ui->intents[ui->intent_write].assemble_address = address;
     ui->intents[ui->intent_write].assemble_run_address = run_address;
     ui->intents[ui->intent_write].assemble_auto_run = auto_run;
+    ui->intents[ui->intent_write].assemble_reset_first = reset_first;
     ui->intent_write = next;
     return true;
 }
@@ -3453,47 +3458,70 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
     }
 
     ctx = ui->ctx;
+
+    /* Disks */
     nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Machine", NK_TEXT_LEFT);
+    nk_label(ctx, "Disks", NK_TEXT_LEFT);
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+    nk_layout_row_push(ctx, 0.12f);
+    if (nk_button_label(ctx, "8")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 8);
+    }
+    nk_layout_row_push(ctx, 0.20f);
+    if (nk_button_label(ctx, "Eject")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 8);
+    }
+    nk_layout_row_push(ctx, 0.68f);
+    nk_label(ctx, frontend_disk_label(debug_state, 8), NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+    nk_layout_row_push(ctx, 0.12f);
+    if (nk_button_label(ctx, "9")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 9);
+    }
+    nk_layout_row_push(ctx, 0.20f);
+    if (nk_button_label(ctx, "Eject")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 9);
+    }
+    nk_layout_row_push(ctx, 0.68f);
+    nk_label(ctx, frontend_disk_label(debug_state, 9), NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+
+    /* Programs */
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Programs", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 24.0f, 2);
+    if (nk_button_label(ctx, "Load")) {
+        frontend_load_bin_dialog_state *dlg = &ui->load_bin_dialog;
+        if (!dlg->initialized) {
+            memset(dlg, 0, sizeof(*dlg));
+            dlg->use_file_address = true;
+            snprintf(dlg->address_buf, sizeof(dlg->address_buf), "0000");
+            dlg->initialized = true;
+        }
+        dlg->open = true;
+    }
+    if (nk_button_label(ctx, "Save")) {
+        frontend_save_bin_dialog_state *dlg = &ui->save_bin_dialog;
+        if (!dlg->initialized) {
+            memset(dlg, 0, sizeof(*dlg));
+            dlg->write_file_address = true;
+            snprintf(dlg->start_address_buf, sizeof(dlg->start_address_buf), "0801");
+            snprintf(dlg->end_address_buf, sizeof(dlg->end_address_buf), "0801");
+            dlg->initialized = true;
+        }
+        dlg->open = true;
+    }
+
+    /* Emulator */
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Emulator", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "Configure...")) {
         frontend_config_dialog_open(ui);
     }
     nk_layout_row_dynamic(ctx, 24.0f, 1);
-    if (nk_button_label(ctx, "Load PRG...")) {
-        frontend_push_debugger_intent(
-            ui,
-            FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
-            0);
-    }
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Disks", NK_TEXT_LEFT);
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
-    nk_layout_row_push(ctx, 0.15f);
-    if (nk_button_label(ctx, "8")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 8);
-    }
-    nk_layout_row_push(ctx, 0.15f);
-    if (nk_button_label(ctx, "-")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 8);
-    }
-    nk_layout_row_push(ctx, 0.70f);
-    nk_label(ctx, frontend_disk_label(debug_state, 8), NK_TEXT_LEFT);
-    nk_layout_row_end(ctx);
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
-    nk_layout_row_push(ctx, 0.15f);
-    if (nk_button_label(ctx, "9")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 9);
-    }
-    nk_layout_row_push(ctx, 0.15f);
-    if (nk_button_label(ctx, "-")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 9);
-    }
-    nk_layout_row_push(ctx, 0.70f);
-    nk_label(ctx, frontend_disk_label(debug_state, 9), NK_TEXT_LEFT);
-    nk_layout_row_end(ctx);
-    nk_layout_row_dynamic(ctx, 24.0f, 1);
-    if (nk_button_label(ctx, "RESET")) {
+    if (nk_button_label(ctx, "Reset")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_MACHINE_RESET);
     }
 }
@@ -3713,6 +3741,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
         snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "8000");
         asm_state->run_address_user_edited = false;
         asm_state->auto_run = false;
+        asm_state->reset_first = true;
         asm_state->initialized = true;
     }
 
@@ -3763,6 +3792,18 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
     nk_layout_row_end(ctx);
 
+    /* Reset checkbox */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+    nk_layout_row_push(ctx, 0.35f);
+    nk_label(ctx, "Reset", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.65f);
+    {
+        nk_bool reset_nk = asm_state->reset_first ? nk_true : nk_false;
+        nk_checkbox_label(ctx, "", &reset_nk);
+        asm_state->reset_first = (reset_nk != nk_false);
+    }
+    nk_layout_row_end(ctx);
+
     /* Assemble button */
     nk_layout_row_dynamic(ctx, 28.0f, 1);
     if (nk_button_label(ctx, "Assemble")) {
@@ -3772,7 +3813,8 @@ static void frontend_draw_misc_assembler(frontend *ui)
                 asm_state->file_path,
                 (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
                 (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
-                asm_state->auto_run);
+                asm_state->auto_run,
+                asm_state->reset_first);
         }
     }
 }
@@ -4078,6 +4120,24 @@ void frontend_show_assembler_errors(frontend *ui, const char *errors)
     ui->misc.active_tab = FRONTEND_MISC_TAB_ASSEMBLER;
 }
 
+void frontend_set_load_bin_path(frontend *ui, const char *path)
+{
+    if (ui == NULL || path == NULL) {
+        return;
+    }
+
+    snprintf(ui->load_bin_dialog.path, sizeof(ui->load_bin_dialog.path), "%s", path);
+}
+
+void frontend_set_save_bin_path(frontend *ui, const char *path)
+{
+    if (ui == NULL || path == NULL) {
+        return;
+    }
+
+    snprintf(ui->save_bin_dialog.path, sizeof(ui->save_bin_dialog.path), "%s", path);
+}
+
 void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot)
 {
     size_t i;
@@ -4230,6 +4290,273 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
     ui->current_frame = *frame;
     ui->has_frame = true;
     return true;
+}
+
+static bool frontend_push_load_bin_execute_intent(
+    frontend *ui,
+    const char *path,
+    uint16_t address,
+    bool use_file_address,
+    bool reset_first,
+    bool is_basic)
+{
+    size_t next;
+
+    if (ui == NULL || path == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE;
+    snprintf(
+        ui->intents[ui->intent_write].load_bin_path,
+        sizeof(ui->intents[ui->intent_write].load_bin_path),
+        "%s", path);
+    ui->intents[ui->intent_write].load_bin_address = address;
+    ui->intents[ui->intent_write].load_bin_use_file_address = use_file_address;
+    ui->intents[ui->intent_write].load_bin_reset_first = reset_first;
+    ui->intents[ui->intent_write].load_bin_is_basic = is_basic;
+    ui->intent_write = next;
+    return true;
+}
+
+static bool frontend_push_save_bin_execute_intent(
+    frontend *ui,
+    const char *path,
+    uint16_t start,
+    uint16_t end,
+    bool write_file_address,
+    bool is_basic)
+{
+    size_t next;
+
+    if (ui == NULL || path == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE;
+    snprintf(
+        ui->intents[ui->intent_write].save_bin_path,
+        sizeof(ui->intents[ui->intent_write].save_bin_path),
+        "%s", path);
+    ui->intents[ui->intent_write].save_bin_start = start;
+    ui->intents[ui->intent_write].save_bin_end = end;
+    ui->intents[ui->intent_write].save_bin_write_file_address = write_file_address;
+    ui->intents[ui->intent_write].save_bin_is_basic = is_basic;
+    ui->intent_write = next;
+    return true;
+}
+
+static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
+{
+    frontend_load_bin_dialog_state *dlg;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+    uint16_t address;
+
+    if (ui == NULL || !ui->load_bin_dialog.open || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    dlg = &ui->load_bin_dialog;
+    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 240) * 0.5f, 420.0f, 240.0f);
+    if (bounds.x < 8.0f) bounds.x = 8.0f;
+    if (bounds.y < 8.0f) bounds.y = 8.0f;
+
+    if (nk_begin(ctx, "Load", bounds,
+                 NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        if (!nk_window_is_closed(ctx, "Load")) {
+            /* Name / Browse row */
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+            nk_layout_row_push(ctx, 0.18f);
+            nk_label(ctx, "Name", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.60f);
+            nk_edit_string_zero_terminated(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
+            nk_layout_row_push(ctx, 0.22f);
+            if (nk_button_label(ctx, "Browse...")) {
+                frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE);
+            }
+            nk_layout_row_end(ctx);
+
+            /* File address checkbox + address box row */
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+            nk_layout_row_push(ctx, 0.18f);
+            nk_label(ctx, "Address", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.38f);
+            frontend_checkbox_bool(ctx, "From file", &dlg->use_file_address);
+            nk_layout_row_push(ctx, 0.44f);
+            nk_edit_string_zero_terminated(
+                ctx, dlg->use_file_address ? (edit_flags | NK_EDIT_READ_ONLY) : edit_flags,
+                dlg->address_buf, (int)sizeof(dlg->address_buf), nk_filter_hex);
+            nk_layout_row_end(ctx);
+
+            /* Reset and Basic Program checkboxes */
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            frontend_checkbox_bool(ctx, "Reset before load", &dlg->reset_first);
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            frontend_checkbox_bool(ctx, "Basic Program (fix BASIC pointers)", &dlg->basic_program);
+
+            /* Error / spacer */
+            if (dlg->error[0] != '\0') {
+                nk_layout_row_dynamic(ctx, 18.0f, 1);
+                nk_label_colored(ctx, dlg->error, NK_TEXT_LEFT, nk_rgb(255, 128, 118));
+            } else {
+                nk_layout_row_dynamic(ctx, 8.0f, 1);
+                nk_spacing(ctx, 1);
+            }
+
+            /* Buttons */
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            if (nk_button_label(ctx, "Cancel")) {
+                dlg->open = false;
+            }
+            if (nk_button_label(ctx, "OK")) {
+                if (dlg->path[0] == '\0') {
+                    snprintf(dlg->error, sizeof(dlg->error), "No file selected");
+                } else if (!dlg->use_file_address &&
+                           !frontend_parse_hex16_text(dlg->address_buf, &address)) {
+                    snprintf(dlg->error, sizeof(dlg->error), "Invalid address (XXXX hex required)");
+                } else {
+                    if (dlg->use_file_address) {
+                        address = 0;
+                    }
+                    frontend_push_load_bin_execute_intent(
+                        ui, dlg->path, address,
+                        dlg->use_file_address, dlg->reset_first, dlg->basic_program);
+                    dlg->open = false;
+                }
+            }
+        } else {
+            dlg->open = false;
+        }
+    } else if (nk_window_is_closed(ctx, "Load")) {
+        dlg->open = false;
+    }
+    nk_end(ctx);
+}
+
+static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
+{
+    frontend_save_bin_dialog_state *dlg;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+    nk_flags ro_flags   = edit_flags | NK_EDIT_READ_ONLY;
+    uint16_t start_addr;
+    uint16_t end_addr;
+
+    if (ui == NULL || !ui->save_bin_dialog.open || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    dlg = &ui->save_bin_dialog;
+    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 260) * 0.5f, 420.0f, 260.0f);
+    if (bounds.x < 8.0f) bounds.x = 8.0f;
+    if (bounds.y < 8.0f) bounds.y = 8.0f;
+
+    if (nk_begin(ctx, "Save", bounds,
+                 NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        if (!nk_window_is_closed(ctx, "Save")) {
+            /* Name / Browse row */
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+            nk_layout_row_push(ctx, 0.18f);
+            nk_label(ctx, "Name", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.60f);
+            nk_edit_string_zero_terminated(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
+            nk_layout_row_push(ctx, 0.22f);
+            if (nk_button_label(ctx, "Browse...")) {
+                frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE);
+            }
+            nk_layout_row_end(ctx);
+
+            /* Basic Program checkbox — when on, forces header and disables Start/End */
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            frontend_checkbox_bool(ctx, "Basic Program (use BASIC pointers)", &dlg->basic_program);
+            if (dlg->basic_program) {
+                dlg->write_file_address = true;
+            }
+
+            /* Write address header checkbox (locked on when basic_program) */
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            if (dlg->basic_program) {
+                nk_label(ctx, "  Write address header (on)", NK_TEXT_LEFT);
+            } else {
+                frontend_checkbox_bool(ctx, "Write address header", &dlg->write_file_address);
+            }
+
+            /* Start / End address row (read-only when basic_program) */
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 4);
+            nk_layout_row_push(ctx, 0.22f);
+            nk_label(ctx, "Start", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.28f);
+            nk_edit_string_zero_terminated(
+                ctx, dlg->basic_program ? ro_flags : edit_flags,
+                dlg->start_address_buf, (int)sizeof(dlg->start_address_buf), nk_filter_hex);
+            nk_layout_row_push(ctx, 0.22f);
+            nk_label(ctx, "End", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.28f);
+            nk_edit_string_zero_terminated(
+                ctx, dlg->basic_program ? ro_flags : edit_flags,
+                dlg->end_address_buf, (int)sizeof(dlg->end_address_buf), nk_filter_hex);
+            nk_layout_row_end(ctx);
+
+            /* Error / spacer */
+            if (dlg->error[0] != '\0') {
+                nk_layout_row_dynamic(ctx, 18.0f, 1);
+                nk_label_colored(ctx, dlg->error, NK_TEXT_LEFT, nk_rgb(255, 128, 118));
+            } else {
+                nk_layout_row_dynamic(ctx, 8.0f, 1);
+                nk_spacing(ctx, 1);
+            }
+
+            /* Buttons */
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            if (nk_button_label(ctx, "Cancel")) {
+                dlg->open = false;
+            }
+            if (nk_button_label(ctx, "OK")) {
+                if (dlg->path[0] == '\0') {
+                    snprintf(dlg->error, sizeof(dlg->error), "No file selected");
+                } else if (!dlg->basic_program &&
+                           !frontend_parse_hex16_text(dlg->start_address_buf, &start_addr)) {
+                    snprintf(dlg->error, sizeof(dlg->error), "Invalid start address (XXXX hex required)");
+                } else if (!dlg->basic_program &&
+                           !frontend_parse_hex16_text(dlg->end_address_buf, &end_addr)) {
+                    snprintf(dlg->error, sizeof(dlg->error), "Invalid end address (XXXX hex required)");
+                } else if (!dlg->basic_program && start_addr > end_addr) {
+                    snprintf(dlg->error, sizeof(dlg->error), "Start must be <= end");
+                } else {
+                    if (dlg->basic_program) {
+                        start_addr = 0;
+                        end_addr   = 0;
+                    }
+                    frontend_push_save_bin_execute_intent(
+                        ui, dlg->path, start_addr, end_addr,
+                        dlg->write_file_address, dlg->basic_program);
+                    dlg->open = false;
+                }
+            }
+        } else {
+            dlg->open = false;
+        }
+    } else if (nk_window_is_closed(ctx, "Save")) {
+        dlg->open = false;
+    }
+    nk_end(ctx);
 }
 
 static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height)
@@ -4399,6 +4726,8 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     frontend_draw_corner_handle(ui->ctx, ui->layout.hit_display_corner, display_corner_active);
     frontend_draw_config_dialog(ui, width, height);
     frontend_draw_breakpoint_editor(ui, width, height);
+    frontend_draw_load_bin_dialog(ui, width, height);
+    frontend_draw_save_bin_dialog(ui, width, height);
     frontend_draw_assembler_error_dialog(ui, width, height);
     nk_sdl_render(NK_ANTI_ALIASING_ON);
 }

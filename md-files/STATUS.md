@@ -12,6 +12,7 @@ The emulator is complete through:
 - D64 disk support through Phase G: read-only tools parser, runtime mount/unmount for devices 8 and 9, KERNAL LOAD traps for PRG loads, LOAD "$" directory loads, exact/wildcard filename matching, Machine-tab disk UI/status.
 - PRG loader polish: reset-before-load, pending injection after BASIC warm-start at $E38B, keyboard-buffer autostart PRGs supported.
 - Assembler UI integration: Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, symbol snapshot handoff to disassembler.
+- Host file load/save UI: unified Load and Save buttons on Machine tab; Load dialog has From File address, Reset, and Basic Program checkboxes; Save dialog has Basic Program checkbox (reads $2B–$2E, forces header), Write address header, and Start/End range fields.
 
 ## Important implemented details
 
@@ -64,7 +65,6 @@ The emulator is complete through:
 - NTSC sprite BA timing table; current sprite BA table is PAL-only.
 - D64 writes, SAVE to disk, error channel, 1541 CPU/ROM emulation, IEC timing/protocol, fast loaders, devices beyond 8/9, full Commodore DOS pattern/type suffix semantics.
 - Phase 13 deferred breakpoint actions: Type, Swap, and trace output/details.
-- Host load/save UI beyond current PRG and D64 paths.
 
 ## Runtime note
 
@@ -81,8 +81,16 @@ CIA #1 ICR reads = 0
 
 This is expected in that trace because the CPU interrupt-disable flag remains set, so the pending CIA #1 IRQ is not entered.
 
+### Host file load/save
+
+- Machine tab layout: Disks ([8]/[9] mount + Eject), Programs ([Load]/[Save]), Emulator ([Configure...]/[Reset]).
+- Load dialog: Name + Browse (no type filter); From File checkbox reads 2-byte address header (default on), manual hex field active when unchecked; Reset checkbox resets machine and waits for $E38B before injecting (default off); Basic Program checkbox fixes TXTTAB ($2B/$2C) and VARTAB ($2D/$2E) after load (default off).
+- Save dialog: Name + Browse; Basic Program checkbox reads $2B/$2C (start) and $2D/$2E (end, exclusive) at save time and forces Write address header on (default off); Write address header checkbox (default on); Start/End hex fields are read-only when Basic Program is checked.
+- Assembler tab: Reset checkbox above Assemble button (default on); when unchecked, assembles directly into live RAM in any exec state — if Auto Run is set, jumps to run address and resumes running.
+
 ## Human smoke still useful
 
 - GUI D64 picker: mount a D64, type BASIC LOAD commands, confirm directory and PRG loads.
 - Reset/PRG loader: verify reset-before-load and autostart collection PRGs.
-- Assembler tab: assemble success, assemble error dialog, auto-run, and symbol display in disassembly.
+- Assembler tab: assemble with Reset on (existing flow) and Reset off (live inject + auto-run); error dialog; symbol display in disassembly.
+- Host load/save: Load with file-address header; Load with Basic Program (check $2B–$2E updated); Save as Basic Program and reload; Save raw range with and without header; verify Eject button and Machine tab section order.

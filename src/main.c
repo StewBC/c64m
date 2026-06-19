@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 enum {
     C64M_CONTROLLER_MAX = 2,
@@ -73,7 +74,7 @@ static bool choose_file_path(char *out_path, size_t out_size, const char *prompt
 }
 
 static bool choose_prg_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Load PRG", " of type {\"prg\"}");
+    return choose_file_path(out_path, out_size, "Load PRG/BAS", NULL);
 }
 
 static bool choose_disk_path(char *out_path, size_t out_size) {
@@ -86,6 +87,71 @@ static bool choose_ini_path(char *out_path, size_t out_size) {
 
 static bool choose_symbol_path(char *out_path, size_t out_size) {
     return choose_file_path(out_path, out_size, "Select Symbol File", NULL);
+}
+
+static bool choose_save_path(char *out_path, size_t out_size, const char *prompt) {
+#if defined(__APPLE__)
+    FILE *pipe;
+    char *newline;
+    char command[512];
+
+    if (out_path == NULL || out_size == 0) {
+        return false;
+    }
+
+    out_path[0] = '\0';
+    snprintf(
+        command,
+        sizeof(command),
+        "osascript -e 'POSIX path of (choose file name with prompt \"%s\")'",
+        prompt);
+    pipe = popen(command, "r");
+    if (pipe == NULL) {
+        return false;
+    }
+
+    if (fgets(out_path, (int)out_size, pipe) == NULL) {
+        pclose(pipe);
+        out_path[0] = '\0';
+        return false;
+    }
+    pclose(pipe);
+
+    newline = strchr(out_path, '\n');
+    if (newline != NULL) {
+        *newline = '\0';
+    }
+
+    return out_path[0] != '\0';
+#else
+    (void)out_path;
+    (void)out_size;
+    (void)prompt;
+    return false;
+#endif
+}
+
+static void make_relative_path(const char *abs_path, char *out, size_t out_size) {
+    char cwd[1024];
+    size_t cwd_len;
+
+    if (abs_path == NULL || out == NULL || out_size == 0) {
+        return;
+    }
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        snprintf(out, out_size, "%s", abs_path);
+        return;
+    }
+
+    cwd_len = strlen(cwd);
+    if (cwd_len > 0 &&
+        strncmp(abs_path, cwd, cwd_len) == 0 &&
+        abs_path[cwd_len] == '/') {
+        snprintf(out, out_size, ".%s", abs_path + cwd_len);
+    } else {
+        snprintf(out, out_size, "%s", abs_path);
+    }
 }
 
 static c64_config machine_config_from_options(const app_options *options) {
@@ -829,7 +895,50 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     intent.assemble_path,
                     intent.assemble_address,
                     intent.assemble_run_address,
-                    intent.assemble_auto_run);
+                    intent.assemble_auto_run,
+                    intent.assemble_reset_first);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE:
+                {
+                    char abs_path[1024];
+                    char rel_path[1024];
+                    if (choose_file_path(abs_path, sizeof(abs_path), "Select Binary File", NULL)) {
+                        make_relative_path(abs_path, rel_path, sizeof(rel_path));
+                        frontend_set_load_bin_path(ui, rel_path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
+                sent = runtime_client_load_bin(
+                    client,
+                    intent.load_bin_path,
+                    intent.load_bin_address,
+                    intent.load_bin_use_file_address,
+                    intent.load_bin_reset_first,
+                    intent.load_bin_is_basic);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE:
+                {
+                    char abs_path[1024];
+                    char rel_path[1024];
+                    if (choose_save_path(abs_path, sizeof(abs_path), "Save File")) {
+                        make_relative_path(abs_path, rel_path, sizeof(rel_path));
+                        frontend_set_save_bin_path(ui, rel_path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE:
+                sent = runtime_client_save_bin(
+                    client,
+                    intent.save_bin_path,
+                    intent.save_bin_start,
+                    intent.save_bin_end,
+                    intent.save_bin_write_file_address,
+                    intent.save_bin_is_basic);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:

@@ -46,7 +46,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_SET_JOYSTICK,
     RUNTIME_COMMAND_STEP_OUT,
     RUNTIME_COMMAND_STEP_OVER,
-    RUNTIME_COMMAND_RUN_TO_CURSOR
+    RUNTIME_COMMAND_RUN_TO_CURSOR,
+    RUNTIME_COMMAND_LOAD_BIN,
+    RUNTIME_COMMAND_SAVE_BIN
 } runtime_command_type;
 
 enum {
@@ -169,5 +171,21 @@ typedef struct runtime_command {
         struct {
             uint16_t address;
         } run_to_cursor;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+            uint16_t address;
+            uint8_t use_file_address;
+            uint8_t reset_first;
+            uint8_t is_basic;
+        } load_bin;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+            uint16_t start_address;
+            uint16_t end_address;
+            uint8_t write_file_address;
+            uint8_t is_basic;
+        } save_bin;
     } data;
 } runtime_command;

@@ -88,7 +88,8 @@ bool runtime_client_assemble_file_full(
     const char *path,
     uint16_t address,
     uint16_t run_address,
-    bool auto_run);
+    bool auto_run,
+    bool reset_first);
 bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out);
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length);
 bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length);
@@ -106,6 +107,21 @@ bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 bool runtime_client_step_out(runtime_client *client);
 bool runtime_client_step_over(runtime_client *client);
 bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address);
+
+bool runtime_client_load_bin(
+    runtime_client *client,
+    const char *path,
+    uint16_t address,
+    bool use_file_address,
+    bool reset_first,
+    bool is_basic);
+bool runtime_client_save_bin(
+    runtime_client *client,
+    const char *path,
+    uint16_t start_address,
+    uint16_t end_address,
+    bool write_file_address,
+    bool is_basic);
 
 bool runtime_client_poll_event(
     runtime_client *client,

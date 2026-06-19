@@ -540,6 +540,8 @@ static void runtime_reset_command(runtime *rt) {
     rt->pending_prg_resume_running = false;
     free(rt->pending_asm_path);
     rt->pending_asm_path = NULL;
+    free(rt->pending_bin_path);
+    rt->pending_bin_path = NULL;
 
     if (was_running) {
         rt->exec_state = RUNTIME_EXEC_RUNNING;
@@ -1529,12 +1531,7 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
         return;
     }
 
-    /* Legacy path: requires paused runtime. */
-    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
-        runtime_publish_error(rt, "assembly requires paused runtime");
-        return;
-    }
-
+    /* No-reset path: assemble directly into live RAM, works in any exec state. */
     if (!runtime_assemble_file(
             &rt->machine,
             rt->symbols,
@@ -1543,11 +1540,19 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
             command->data.assemble_file.path,
             error,
             sizeof(error))) {
-        runtime_publish_error(rt, error[0] != '\0' ? error : "assembly failed");
+        runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
         return;
     }
 
     runtime_publish_symbols(rt);
+    if (command->data.assemble_file.auto_run) {
+        rt->machine.cpu.cpu.pc = command->data.assemble_file.run_address;
+        rt->machine.cpu.cpu.sp = 0x0100u + 0xFFu;
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    }
     runtime_publish_assemble_complete(rt, command->data.assemble_file.path, command->data.assemble_file.address);
     runtime_publish_memory(rt, command->data.assemble_file.address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     runtime_publish_machine_state(rt);
@@ -1715,6 +1720,225 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             return true;
         }
     }
+}
+
+static bool runtime_load_bin_bytes(
+    runtime *rt,
+    const char *path,
+    uint16_t address,
+    bool use_file_address,
+    bool is_basic) {
+    FILE *file;
+    uint8_t *bytes;
+    size_t length;
+    size_t payload_length;
+    uint16_t load_address;
+    size_t i;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        runtime_publish_error(rt, "failed to open bin file");
+        return false;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to inspect bin file");
+        return false;
+    }
+    length = (size_t)ftell(file);
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to seek bin file");
+        return false;
+    }
+
+    if (use_file_address) {
+        if (length < 2) {
+            fclose(file);
+            runtime_publish_error(rt, "bin file too short for address header");
+            return false;
+        }
+        if (length > 65538u) {
+            fclose(file);
+            runtime_publish_error(rt, "bin file too large");
+            return false;
+        }
+    } else {
+        if (length == 0 || length > 65536u) {
+            fclose(file);
+            runtime_publish_error(rt, "invalid bin file size");
+            return false;
+        }
+    }
+
+    bytes = malloc(length);
+    if (bytes == NULL) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to allocate bin buffer");
+        return false;
+    }
+
+    if (fread(bytes, 1, length, file) != length) {
+        free(bytes);
+        fclose(file);
+        runtime_publish_error(rt, "failed to read bin file");
+        return false;
+    }
+    fclose(file);
+
+    if (use_file_address) {
+        load_address = (uint16_t)bytes[0] | (uint16_t)((uint16_t)bytes[1] << 8);
+        payload_length = length - 2u;
+        if ((uint32_t)load_address + payload_length > 0x10000u) {
+            free(bytes);
+            runtime_publish_error(rt, "bin load range overflows address space");
+            return false;
+        }
+        for (i = 0; i < payload_length; ++i) {
+            c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i + 2u]);
+        }
+        runtime_publish_memory(
+            rt,
+            load_address,
+            payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
+            RUNTIME_MEMORY_MODE_RAM);
+    } else {
+        load_address = address;
+        payload_length = length;
+        if ((uint32_t)load_address + payload_length > 0x10000u) {
+            free(bytes);
+            runtime_publish_error(rt, "bin load range overflows address space");
+            return false;
+        }
+        for (i = 0; i < payload_length; ++i) {
+            c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i]);
+        }
+        runtime_publish_memory(
+            rt,
+            load_address,
+            payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
+            RUNTIME_MEMORY_MODE_RAM);
+    }
+
+    free(bytes);
+
+    if (is_basic) {
+        uint16_t vartab = (uint16_t)(load_address + payload_length);
+        c64_debug_write_ram(&rt->machine, 0x2Bu, (uint8_t)(load_address & 0xFFu));
+        c64_debug_write_ram(&rt->machine, 0x2Cu, (uint8_t)((load_address >> 8) & 0xFFu));
+        c64_debug_write_ram(&rt->machine, 0x2Du, (uint8_t)(vartab & 0xFFu));
+        c64_debug_write_ram(&rt->machine, 0x2Eu, (uint8_t)((vartab >> 8) & 0xFFu));
+    }
+
+    return true;
+}
+
+static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
+    bool loaded = runtime_load_bin_bytes(
+        rt, path, rt->pending_bin_address,
+        rt->pending_bin_use_file_address != 0,
+        rt->pending_bin_is_basic != 0);
+
+    free(path);
+
+    if (!loaded) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+        runtime_publish_machine_state(rt);
+        return;
+    }
+
+    rt->exec_state = RUNTIME_EXEC_RUNNING;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+    runtime_reset_pacer(rt);
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    runtime_publish_machine_state(rt);
+}
+
+static void runtime_load_bin(runtime *rt, const runtime_command *command) {
+    if (command->data.load_bin.reset_first) {
+        if (!runtime_reset_machine(rt)) {
+            return;
+        }
+        free(rt->pending_bin_path);
+        rt->pending_bin_path = NULL;
+        if (!runtime_replace_string(&rt->pending_bin_path, command->data.load_bin.path)) {
+            runtime_publish_error(rt, "failed to store bin path");
+            return;
+        }
+        rt->pending_bin_address = command->data.load_bin.address;
+        rt->pending_bin_use_file_address = command->data.load_bin.use_file_address;
+        rt->pending_bin_is_basic = command->data.load_bin.is_basic;
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        return;
+    }
+
+    runtime_load_bin_bytes(
+        rt,
+        command->data.load_bin.path,
+        command->data.load_bin.address,
+        command->data.load_bin.use_file_address != 0,
+        command->data.load_bin.is_basic != 0);
+}
+
+static void runtime_save_bin(runtime *rt, const runtime_command *command) {
+    const char *path = command->data.save_bin.path;
+    uint16_t start_addr;
+    uint16_t end_addr;
+    bool write_header;
+    uint32_t length;
+    FILE *file;
+    uint32_t i;
+
+    if (command->data.save_bin.is_basic) {
+        start_addr = (uint16_t)c64_debug_read_ram(&rt->machine, 0x2Bu) |
+                     (uint16_t)((uint16_t)c64_debug_read_ram(&rt->machine, 0x2Cu) << 8);
+        end_addr   = (uint16_t)c64_debug_read_ram(&rt->machine, 0x2Du) |
+                     (uint16_t)((uint16_t)c64_debug_read_ram(&rt->machine, 0x2Eu) << 8);
+        write_header = true;
+        if (end_addr <= start_addr) {
+            runtime_publish_error(rt, "BASIC program appears empty");
+            return;
+        }
+        /* VARTAB is one-past-end */
+        length = (uint32_t)end_addr - start_addr;
+    } else {
+        start_addr   = command->data.save_bin.start_address;
+        end_addr     = command->data.save_bin.end_address;
+        write_header = command->data.save_bin.write_file_address != 0;
+        if (start_addr > end_addr) {
+            runtime_publish_error(rt, "bin save start address exceeds end address");
+            return;
+        }
+        /* end address is inclusive */
+        length = (uint32_t)end_addr - start_addr + 1u;
+    }
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        runtime_publish_error(rt, "failed to open bin save file");
+        return;
+    }
+
+    if (write_header) {
+        fputc((int)(start_addr & 0xFFu), file);
+        fputc((int)((start_addr >> 8) & 0xFFu), file);
+    }
+
+    for (i = 0; i < length; ++i) {
+        fputc((int)c64_debug_read_ram(&rt->machine, (uint16_t)(start_addr + i)), file);
+    }
+
+    if (ferror(file)) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to write bin save file");
+        return;
+    }
+    fclose(file);
 }
 
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
@@ -1936,6 +2160,14 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             rt->temp_bp_address = command->data.run_to_cursor.address;
             rt->exec_state = RUNTIME_EXEC_RUNNING;
             runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+            break;
+
+        case RUNTIME_COMMAND_LOAD_BIN:
+            runtime_load_bin(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_SAVE_BIN:
+            runtime_save_bin(rt, command);
             break;
 
         case RUNTIME_COMMAND_NONE:
@@ -2229,6 +2461,12 @@ int runtime_thread_main(void *userdata) {
                     rt->pending_asm_path = NULL;
                     runtime_complete_pending_asm(rt, path);
                 }
+                if (rt->pending_bin_path != NULL &&
+                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                    char *path = rt->pending_bin_path;
+                    rt->pending_bin_path = NULL;
+                    runtime_complete_pending_bin_load(rt, path);
+                }
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
@@ -2271,6 +2509,8 @@ int runtime_thread_main(void *userdata) {
     rt->pending_prg_path = NULL;
     free(rt->pending_asm_path);
     rt->pending_asm_path = NULL;
+    free(rt->pending_bin_path);
+    rt->pending_bin_path = NULL;
     if (rt->trace_file != NULL) {
         fprintf(rt->trace_file, "--- STOP  CYC=%08llX ---\n",
             (unsigned long long)rt->machine.clock.cycle);

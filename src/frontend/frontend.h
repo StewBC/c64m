@@ -49,6 +49,7 @@ typedef struct frontend_assembler_state {
     char run_address_buf[8];
     bool run_address_user_edited;
     bool auto_run;
+    bool reset_first;
     bool error_dialog_open;
     char error_text[4096];
     unsigned int error_scroll_x;
@@ -81,7 +82,11 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY,
     FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE,
-    FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN
+    FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN,
+    FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE,
+    FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE,
+    FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE,
+    FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE
 } frontend_debugger_intent_type;
 
 typedef struct frontend_config_apply_result {
@@ -107,8 +112,43 @@ typedef struct frontend_debugger_intent {
     uint16_t assemble_address;
     uint16_t assemble_run_address;
     bool assemble_auto_run;
+    bool assemble_reset_first;
     uint8_t disk_device;
+    /* Load */
+    char load_bin_path[1024];
+    uint16_t load_bin_address;
+    bool load_bin_use_file_address;
+    bool load_bin_reset_first;
+    bool load_bin_is_basic;
+    /* Save */
+    char save_bin_path[1024];
+    uint16_t save_bin_start;
+    uint16_t save_bin_end;
+    bool save_bin_write_file_address;
+    bool save_bin_is_basic;
 } frontend_debugger_intent;
+
+typedef struct frontend_load_bin_dialog_state {
+    bool open;
+    bool initialized;
+    char path[1024];
+    bool use_file_address;
+    char address_buf[5];
+    bool reset_first;
+    bool basic_program;
+    char error[128];
+} frontend_load_bin_dialog_state;
+
+typedef struct frontend_save_bin_dialog_state {
+    bool open;
+    bool initialized;
+    char path[1024];
+    bool basic_program;
+    bool write_file_address;
+    char start_address_buf[5];
+    char end_address_buf[5];
+    char error[128];
+} frontend_save_bin_dialog_state;
 
 typedef struct frontend_layout_state {
     float split_display_right;
@@ -137,3 +177,5 @@ void frontend_append_symbol_file(frontend *ui, const char *path);
 void frontend_set_assembler_path(frontend *ui, const char *path);
 void frontend_show_assembler_errors(frontend *ui, const char *errors);
 void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot);
+void frontend_set_load_bin_path(frontend *ui, const char *path);
+void frontend_set_save_bin_path(frontend *ui, const char *path);
