@@ -738,6 +738,7 @@ static void runtime_memory_access(
 
 static void runtime_pause_for_breakpoint(runtime *rt) {
     rt->breakpoint_hit_pending = false;
+    rt->suppress_execute_bp = true;
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_BREAKPOINT;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
@@ -767,19 +768,13 @@ static bool runtime_step_cycle(runtime *rt) {
 }
 
 static bool runtime_step_cycle_command(runtime *rt) {
-    if (runtime_breakpoint_matches_pc(rt)) {
-        runtime_pause_for_breakpoint(rt);
-        return true;
-    }
+    rt->suppress_execute_bp = false;
 
     if (!runtime_step_cycle(rt)) {
         return false;
     }
 
-    if (runtime_pause_if_breakpoint_pending(rt)) {
-        return true;
-    }
-
+    rt->breakpoint_hit_pending = false;
     rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
     runtime_publish_machine_state(rt);
@@ -790,20 +785,14 @@ static bool runtime_step_instruction(runtime *rt) {
     char error[256];
     c64_cpu_snapshot snapshot;
 
-    if (runtime_breakpoint_matches_pc(rt)) {
-        runtime_pause_for_breakpoint(rt);
-        return true;
-    }
+    rt->suppress_execute_bp = false;
 
     if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
         runtime_publish_error(rt, error);
         return false;
     }
 
-    if (runtime_pause_if_breakpoint_pending(rt)) {
-        return true;
-    }
-
+    rt->breakpoint_hit_pending = false;
     c64_copy_cpu_snapshot(&rt->machine, &snapshot);
     fprintf(
         stderr,
@@ -821,10 +810,11 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
     size_t i;
 
     for (i = 0; i < count; i++) {
-        if (runtime_breakpoint_matches_pc(rt)) {
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
             runtime_pause_for_breakpoint(rt);
             return true;
         }
+        rt->suppress_execute_bp = false;
 
         if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
             runtime_publish_error(rt, error);
@@ -846,13 +836,17 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     size_t i;
 
     for (i = 0; i < count; i++) {
-        if (runtime_breakpoint_matches_pc(rt)) {
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
             runtime_pause_for_breakpoint(rt);
             return true;
         }
 
         if (!runtime_step_cycle(rt)) {
             return false;
+        }
+
+        if (rt->suppress_execute_bp && c64_consume_instruction_complete(&rt->machine)) {
+            rt->suppress_execute_bp = false;
         }
 
         if (runtime_pause_if_breakpoint_pending(rt)) {
@@ -1729,7 +1723,7 @@ int runtime_thread_main(void *userdata) {
             }
 
             for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
-                if (runtime_breakpoint_matches_pc(rt)) {
+                if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
                     runtime_pause_for_breakpoint(rt);
                     break;
                 }
@@ -1748,8 +1742,14 @@ int runtime_thread_main(void *userdata) {
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
-                if (rt->trace_enabled && c64_consume_instruction_complete(&rt->machine)) {
-                    runtime_write_trace_line(rt);
+                {
+                    bool instr_done = c64_consume_instruction_complete(&rt->machine);
+                    if (rt->trace_enabled && instr_done) {
+                        runtime_write_trace_line(rt);
+                    }
+                    if (rt->suppress_execute_bp && instr_done) {
+                        rt->suppress_execute_bp = false;
+                    }
                 }
                 if (rt->paste_active) {
                     runtime_advance_paste(rt);
