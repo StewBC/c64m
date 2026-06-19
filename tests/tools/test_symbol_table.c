@@ -28,6 +28,27 @@ static int expect_string(const char *actual, const char *expected, const char *l
     return 0;
 }
 
+static int expect_span(
+    const char *actual,
+    size_t actual_length,
+    const char *expected,
+    const char *label)
+{
+    size_t expected_length = strlen(expected);
+
+    if (actual == NULL || actual_length != expected_length ||
+        strncmp(actual, expected, expected_length) != 0) {
+        fprintf(stderr, "%s: expected span '%s', got '%.*s'\n",
+            label,
+            expected,
+            (int)actual_length,
+            actual == NULL ? "" : actual);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int expect_symbol(
     const symbol_info *info,
     uint16_t address,
@@ -43,12 +64,79 @@ static int expect_symbol(
         failures++;
     }
     failures += expect_string(info->name, name, label);
+    failures += expect_string(info->display_name, name, label);
+    if (info->scope_path_length != 0) {
+        fprintf(stderr, "%s: expected empty scope path, got length %zu\n", label, info->scope_path_length);
+        failures++;
+    }
     if (info->source_kind != source_kind) {
         fprintf(stderr, "%s: expected source kind %d, got %d\n", label, source_kind, info->source_kind);
         failures++;
     }
     failures += expect_string(info->source_name, source_name, label);
 
+    return failures;
+}
+
+static int test_scoped_names_and_display_resolver(void)
+{
+    int failures = 0;
+    symbol_table *table;
+    symbol_info info;
+    symbol_resolver resolver;
+    disasm_6502_line line;
+    uint8_t jsr[] = {0x20, 0x10, 0x20};
+    uint16_t address = 0;
+    symbol_entry entries[4];
+    size_t count;
+
+    table = symbol_table_create();
+    if (table == NULL) {
+        fprintf(stderr, "symbol_table_create failed\n");
+        return 1;
+    }
+
+    failures += expect_result(
+        symbol_table_add(table, 0x2010, "anon_0001::main::loop", SYMBOL_SOURCE_ASSEMBLER, "current", false),
+        SYMBOL_OK,
+        "add scoped main loop");
+    failures += expect_result(
+        symbol_table_add(table, 0x2020, "anon_0001::render::loop", SYMBOL_SOURCE_ASSEMBLER, "current", false),
+        SYMBOL_OK,
+        "add scoped render loop");
+
+    failures += expect_result(
+        symbol_table_find_by_name(table, "anon_0001::main::loop", &info),
+        SYMBOL_OK,
+        "find scoped full name");
+    failures += expect_string(info.name, "anon_0001::main::loop", "scoped full name");
+    failures += expect_span(info.scope_path, info.scope_path_length, "anon_0001::main", "scoped path");
+    failures += expect_string(info.display_name, "loop", "scoped display name");
+    if (info.display_name_length != 4) {
+        fprintf(stderr, "scoped display length: expected 4, got %zu\n", info.display_name_length);
+        failures++;
+    }
+
+    symbol_table_make_resolver(table, &resolver);
+    line = disasm_6502_decode_line(0x0801, jsr, sizeof(jsr), &resolver);
+    failures += expect_string(line.text, "JSR loop", "scoped resolver disassembly");
+
+    if (resolver.label_to_address(resolver.userdata, "anon_0001::render::loop", &address) != SYMBOL_LOOKUP_FOUND ||
+        address != 0x2020) {
+        fprintf(stderr, "qualified label_to_address failed\n");
+        failures++;
+    }
+
+    count = resolver.enumerate(resolver.userdata, entries, 4);
+    if (count != 2 ||
+        strcmp(entries[0].label, "anon_0001::main::loop") != 0 ||
+        strcmp(entries[0].display_name, "loop") != 0 ||
+        entries[0].scope_path_length != strlen("anon_0001::main")) {
+        fprintf(stderr, "scoped enumerate mismatch\n");
+        failures++;
+    }
+
+    symbol_table_destroy(table);
     return failures;
 }
 
@@ -346,6 +434,7 @@ int main(void)
     int failures = 0;
 
     failures += test_add_find_and_resolver();
+    failures += test_scoped_names_and_display_resolver();
     failures += test_conflicts_and_overwrite();
     failures += test_source_removal_clear_and_nearest();
     failures += test_symbol_file_best_effort_load();

@@ -27,6 +27,10 @@ typedef enum symbol_result {
 
 typedef struct symbol_info {
     const char *name;
+    const char *scope_path;
+    const char *display_name;
+    size_t scope_path_length;
+    size_t display_name_length;
     uint16_t address;
     symbol_source_kind source_kind;
     const char *source_name;

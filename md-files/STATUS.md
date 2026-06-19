@@ -423,8 +423,8 @@ Implemented:
   - `src/tools/symbols` implements a frontend/debug-session-owned symbol table,
     separate from emulator machine state and separate from the assembler's
     internal symbol machinery
-  - symbols store an owned name, 16-bit address, source kind, and owned exact
-    source name
+  - symbols store an owned qualified name, precomputed scope/display-name spans,
+    16-bit address, source kind, and owned exact source name
   - source kinds cover file, assembler, user, and built-in symbols
   - exact address lookup uses a 65536-entry primary index storing entry indexes
   - name lookup uses `stb_ds` and keeps one current binding per name
@@ -436,7 +436,8 @@ Implemented:
   - nearest-symbol lookup is available for future debugger/UI use, while current
     disassembler formatting remains exact-only
   - `symbol_table_make_resolver()` backs the existing disassembler
-    `symbol_resolver` interface
+    `symbol_resolver` interface; address-to-label lookups return the precomputed
+    display name while qualified name lookup remains available
   - `stb_ds` implementation is centralized in `external/stb/stb_ds_impl.c`
     instead of being embedded in individual users
   - regression coverage validates add/find, conflict and overwrite behavior,

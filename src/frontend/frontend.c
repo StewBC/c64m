@@ -2578,7 +2578,8 @@ static void frontend_draw_disassembly_view(
             for (row = 0; row < rows; ++row) {
                 disasm_6502_line *line = &view->lines[row];
                 char bytes[16];
-                char rendered[96];
+                char address_label[32] = "";
+                char rendered[128];
                 struct nk_rect row_bounds;
                 const runtime_breakpoint_snapshot_entry *breakpoint =
                     frontend_find_execute_breakpoint(debug_state, line->address);
@@ -2601,10 +2602,18 @@ static void frontend_draw_disassembly_view(
                     snprintf(bytes, sizeof(bytes), "%02X      ", line->bytes[0]);
                 }
 
-                snprintf(rendered, sizeof(rendered), "%c%c %04X  %-8s  %s",
-                    is_pc ? '>' : ' ',
-                    is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
+                if (ui->symbols.address_to_label != NULL) {
+                    (void)ui->symbols.address_to_label(
+                        ui->symbols.userdata,
+                        line->address,
+                        address_label,
+                        sizeof(address_label));
+                }
+                address_label[15] = '\0';
+
+                snprintf(rendered, sizeof(rendered), "%04X %-15s  %-8s  %s",
                     line->address,
+                    address_label,
                     bytes,
                     line->text);
 

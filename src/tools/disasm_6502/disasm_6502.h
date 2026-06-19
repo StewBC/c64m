@@ -13,6 +13,10 @@ typedef enum symbol_lookup_result {
 
 typedef struct symbol_entry {
     const char *label;
+    const char *scope_path;
+    const char *display_name;
+    size_t scope_path_length;
+    size_t display_name_length;
     uint16_t address;
 } symbol_entry;
 

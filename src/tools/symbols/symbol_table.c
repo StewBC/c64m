@@ -16,6 +16,8 @@ typedef struct symbol_source_record {
 
 typedef struct symbol_record {
     char *name;
+    uint16_t scope_path_length;
+    uint16_t display_name_offset;
     uint16_t address;
     uint32_t source_id;
 } symbol_record;
@@ -65,6 +67,33 @@ static char *symbol_strdup(const char *text)
 
     memcpy(copy, text, length + 1);
     return copy;
+}
+
+static void symbol_split_name(
+    const char *name,
+    uint16_t *out_scope_path_length,
+    uint16_t *out_display_name_offset)
+{
+    size_t length;
+    size_t last_sep;
+
+    length = strlen(name);
+    last_sep = SIZE_MAX;
+    for (size_t i = 0; i + 1 < length; ++i) {
+        if (name[i] == ':' && name[i + 1] == ':') {
+            last_sep = i;
+            ++i;
+        }
+    }
+
+    if (last_sep == SIZE_MAX) {
+        *out_scope_path_length = 0;
+        *out_display_name_offset = 0;
+        return;
+    }
+
+    *out_scope_path_length = (uint16_t)last_sep;
+    *out_display_name_offset = (uint16_t)(last_sep + 2);
 }
 
 static int symbol_find_source_id(
@@ -125,6 +154,10 @@ static void symbol_info_fill(
 
     source = &table->sources[entry->source_id];
     out_symbol->name = entry->name;
+    out_symbol->scope_path = entry->scope_path_length > 0 ? entry->name : "";
+    out_symbol->display_name = entry->name + entry->display_name_offset;
+    out_symbol->scope_path_length = entry->scope_path_length;
+    out_symbol->display_name_length = strlen(out_symbol->display_name);
     out_symbol->address = entry->address;
     out_symbol->source_kind = source->kind;
     out_symbol->source_name = source->name;
@@ -274,6 +307,7 @@ symbol_result symbol_table_add(
     if (entry.name == NULL) {
         return SYMBOL_OUT_OF_MEMORY;
     }
+    symbol_split_name(entry.name, &entry.scope_path_length, &entry.display_name_offset);
     entry.address = address;
     entry.source_id = source_id;
 
@@ -467,7 +501,7 @@ static symbol_lookup_result symbol_resolver_address_to_label(
         return SYMBOL_LOOKUP_NOT_FOUND;
     }
 
-    snprintf(out_label, out_label_size, "%s", info.name);
+    snprintf(out_label, out_label_size, "%s", info.display_name);
     return SYMBOL_LOOKUP_FOUND;
 }
 
@@ -506,6 +540,13 @@ static size_t symbol_resolver_enumerate(
     if (out_entries != NULL) {
         for (i = 0; i < copy_count; ++i) {
             out_entries[i].label = table->entries[i].name;
+            out_entries[i].scope_path = table->entries[i].scope_path_length > 0 ?
+                table->entries[i].name :
+                "";
+            out_entries[i].display_name =
+                table->entries[i].name + table->entries[i].display_name_offset;
+            out_entries[i].scope_path_length = table->entries[i].scope_path_length;
+            out_entries[i].display_name_length = strlen(out_entries[i].display_name);
             out_entries[i].address = table->entries[i].address;
         }
     }
