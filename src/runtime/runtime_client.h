@@ -102,6 +102,10 @@ bool runtime_client_apply_machine_config(
     bool save_ini);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 
+bool runtime_client_step_out(runtime_client *client);
+bool runtime_client_step_over(runtime_client *client);
+bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address);
+
 bool runtime_client_poll_event(
     runtime_client *client,
     runtime_event *out_event);

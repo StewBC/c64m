@@ -110,6 +110,8 @@ struct runtime {
     uint32_t next_breakpoint_id;
     bool breakpoint_hit_pending;
     bool suppress_execute_bp;
+    bool temp_bp_active;
+    uint16_t temp_bp_address;
     uint64_t next_frame_cycle;
     uint64_t next_frame_counter;
     uint64_t frame_counter_step;

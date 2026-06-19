@@ -4405,3 +4405,11 @@ bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_i
     ui->intent_read = (ui->intent_read + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
     return true;
 }
+
+bool frontend_get_disassembly_cursor(const frontend *ui, uint16_t *out_address) {
+    if (ui == NULL || out_address == NULL || !ui->disassembly.has_user_cursor) {
+        return false;
+    }
+    *out_address = ui->disassembly.cursor_address;
+    return true;
+}

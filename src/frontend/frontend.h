@@ -132,6 +132,7 @@ void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state)
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);
 void frontend_set_config_state(frontend *ui, const app_options *options);
 bool frontend_apply_selected_ini(frontend *ui, const app_options *options);
+bool frontend_get_disassembly_cursor(const frontend *ui, uint16_t *out_address);
 void frontend_append_symbol_file(frontend *ui, const char *path);
 void frontend_set_assembler_path(frontend *ui, const char *path);
 void frontend_show_assembler_errors(frontend *ui, const char *errors);

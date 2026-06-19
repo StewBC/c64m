@@ -284,6 +284,31 @@ static void send_step_instruction_command(runtime_client *client) {
     }
 }
 
+static void send_step_out_command(runtime_client *client) {
+    SDL_Log("STEP OUT requested");
+    if (runtime_client_step_out(client)) {
+        request_debug_state(client);
+    }
+}
+
+static void send_step_over_command(runtime_client *client) {
+    SDL_Log("STEP OVER requested");
+    if (runtime_client_step_over(client)) {
+        request_debug_state(client);
+    }
+}
+
+static void send_run_to_cursor_command(runtime_client *client, frontend *ui) {
+    uint16_t addr;
+    if (!frontend_get_disassembly_cursor(ui, &addr)) {
+        return;
+    }
+    SDL_Log("RUN TO CURSOR requested: $%04X", addr);
+    if (runtime_client_run_to_cursor(client, addr)) {
+        request_debug_state(client);
+    }
+}
+
 static void dispatch_input_actions(
     runtime_client *client,
     const frontend_input_action *actions,
@@ -854,18 +879,27 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
-                } else if (event.key.keysym.sym == SDLK_F10 ||
-                           (event.key.keysym.sym == SDLK_r &&
-                            frontend_input_has_option_modifier(&event.key))) {
-                    send_run_command(client);
+                } else if (event.key.keysym.sym == SDLK_F10 &&
+                           !frontend_input_has_shift_modifier(&event.key)) {
+                    /* F10: pause if running, step if paused */
+                    if (debug_state.runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+                        send_pause_command(client);
+                    } else {
+                        send_step_instruction_command(client);
+                    }
+                } else if (event.key.keysym.sym == SDLK_F10 &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    send_step_out_command(client);
                 } else if (event.key.keysym.sym == SDLK_F11 ||
                            (event.key.keysym.sym == SDLK_s &&
                             frontend_input_has_option_modifier(&event.key))) {
-                    send_step_instruction_command(client);
-                } else if (event.key.keysym.sym == SDLK_F12 ||
-                           (event.key.keysym.sym == SDLK_p &&
-                            frontend_input_has_option_modifier(&event.key))) {
-                    send_pause_command(client);
+                    send_step_over_command(client);
+                } else if (event.key.keysym.sym == SDLK_F12 &&
+                           !frontend_input_has_shift_modifier(&event.key)) {
+                    send_run_command(client);
+                } else if (event.key.keysym.sym == SDLK_F12 &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    send_run_to_cursor_command(client, ui);
                 } else if (event.key.keysym.sym == SDLK_t &&
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);

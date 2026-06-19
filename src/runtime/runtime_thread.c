@@ -940,6 +940,7 @@ static void runtime_memory_access(
 static void runtime_pause_for_breakpoint(runtime *rt) {
     rt->breakpoint_hit_pending = false;
     rt->suppress_execute_bp = true;
+    rt->temp_bp_active = false;
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_BREAKPOINT;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
@@ -1469,6 +1470,170 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
     runtime_publish_machine_state(rt);
 }
 
+/* Returns true if the step-out/over loop should abort. Drains only the
+   commands that alter execution state; everything else is dropped for now. */
+static bool runtime_flow_abort_requested(runtime *rt, bool *alive) {
+    runtime_command command;
+
+    while (message_queue_try_pop(rt->command_queue, &command)) {
+        switch (command.type) {
+            case RUNTIME_COMMAND_QUIT:
+                *alive = false;
+                return true;
+            case RUNTIME_COMMAND_PAUSE:
+                rt->exec_state = RUNTIME_EXEC_PAUSED;
+                rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
+                runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+                runtime_publish_machine_state(rt);
+                return true;
+            case RUNTIME_COMMAND_RUN:
+                rt->temp_bp_active = false;
+                rt->exec_state = RUNTIME_EXEC_RUNNING;
+                runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+static bool runtime_step_out(runtime *rt, bool *alive) {
+    char error[256];
+    int jsr_counter = 1;
+    int interrupt_depth = 0;
+    uint64_t irq_before, nmi_before;
+    uint8_t opcode;
+    bool interrupt_taken;
+
+    for (;;) {
+        if (runtime_flow_abort_requested(rt, alive)) {
+            return *alive;
+        }
+
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+
+        opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
+        irq_before = rt->machine.cpu.cpu.irq_entries;
+        nmi_before = rt->machine.cpu.cpu.nmi_entries;
+
+        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
+            runtime_publish_error(rt, error);
+            return false;
+        }
+
+        rt->suppress_execute_bp = false;
+
+        interrupt_taken =
+            rt->machine.cpu.cpu.irq_entries != irq_before ||
+            rt->machine.cpu.cpu.nmi_entries != nmi_before;
+
+        if (interrupt_taken) {
+            interrupt_depth++;
+        } else if (opcode == 0x40u /* RTI */ && interrupt_depth > 0) {
+            interrupt_depth--;
+        } else if (interrupt_depth == 0) {
+            if (opcode == 0x20u /* JSR */) {
+                jsr_counter++;
+            } else if (opcode == 0x60u /* RTS */) {
+                jsr_counter--;
+                if (jsr_counter <= 0) {
+                    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+                    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+                    runtime_publish_cpu_state(rt);
+                    return true;
+                }
+            }
+        }
+
+        if (runtime_pause_if_breakpoint_pending(rt)) {
+            return true;
+        }
+    }
+}
+
+static bool runtime_step_over(runtime *rt, bool *alive) {
+    char error[256];
+    uint8_t opcode;
+    uint16_t stop_pc;
+    int jsr_counter;
+    int interrupt_depth;
+    uint64_t irq_before, nmi_before;
+    bool interrupt_taken;
+
+    opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
+
+    if (opcode != 0x20u /* JSR */) {
+        rt->suppress_execute_bp = false;
+        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
+            runtime_publish_error(rt, error);
+            return false;
+        }
+        rt->breakpoint_hit_pending = false;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+        runtime_publish_cpu_state(rt);
+        return true;
+    }
+
+    stop_pc = (uint16_t)(rt->machine.cpu.cpu.pc + 3u);
+    jsr_counter = 0;
+    interrupt_depth = 0;
+
+    for (;;) {
+        if (runtime_flow_abort_requested(rt, alive)) {
+            return *alive;
+        }
+
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+
+        opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
+        irq_before = rt->machine.cpu.cpu.irq_entries;
+        nmi_before = rt->machine.cpu.cpu.nmi_entries;
+
+        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
+            runtime_publish_error(rt, error);
+            return false;
+        }
+
+        rt->suppress_execute_bp = false;
+
+        interrupt_taken =
+            rt->machine.cpu.cpu.irq_entries != irq_before ||
+            rt->machine.cpu.cpu.nmi_entries != nmi_before;
+
+        if (interrupt_taken) {
+            interrupt_depth++;
+        } else if (opcode == 0x40u /* RTI */ && interrupt_depth > 0) {
+            interrupt_depth--;
+        } else if (interrupt_depth == 0) {
+            if (opcode == 0x20u /* JSR */) {
+                jsr_counter++;
+            } else if (opcode == 0x60u /* RTS */) {
+                jsr_counter--;
+            }
+        }
+
+        if (runtime_pause_if_breakpoint_pending(rt)) {
+            return true;
+        }
+
+        if (interrupt_depth == 0 && jsr_counter <= 0 &&
+            rt->machine.cpu.cpu.pc == stop_pc) {
+            rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+            runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+            runtime_publish_cpu_state(rt);
+            return true;
+        }
+    }
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -1672,6 +1837,23 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             rt->paste_active = true;
             break;
         }
+
+        case RUNTIME_COMMAND_STEP_OUT:
+            rt->exec_state = RUNTIME_EXEC_PAUSED;
+            runtime_step_out(rt, alive);
+            break;
+
+        case RUNTIME_COMMAND_STEP_OVER:
+            rt->exec_state = RUNTIME_EXEC_PAUSED;
+            runtime_step_over(rt, alive);
+            break;
+
+        case RUNTIME_COMMAND_RUN_TO_CURSOR:
+            rt->temp_bp_active = true;
+            rt->temp_bp_address = command->data.run_to_cursor.address;
+            rt->exec_state = RUNTIME_EXEC_RUNNING;
+            runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+            break;
 
         case RUNTIME_COMMAND_NONE:
         default:
@@ -1939,6 +2121,16 @@ int runtime_thread_main(void *userdata) {
             for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
                 if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
                     runtime_pause_for_breakpoint(rt);
+                    break;
+                }
+                if (rt->temp_bp_active &&
+                    rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
+                    rt->temp_bp_active = false;
+                    rt->suppress_execute_bp = false;
+                    rt->exec_state = RUNTIME_EXEC_PAUSED;
+                    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+                    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+                    runtime_publish_machine_state(rt);
                     break;
                 }
                 if (rt->pending_prg_path != NULL &&

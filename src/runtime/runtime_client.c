@@ -489,6 +489,27 @@ bool runtime_client_poll_event(
     return message_queue_try_pop(client->event_queue, out_event);
 }
 
+bool runtime_client_step_out(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_STEP_OUT);
+}
+
+bool runtime_client_step_over(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_STEP_OVER);
+}
+
+bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_RUN_TO_CURSOR,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.run_to_cursor.address = address;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_PASTE_TEXT,

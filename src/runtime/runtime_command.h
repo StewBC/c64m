@@ -43,7 +43,10 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_CYCLE_TURBO_SPEED,
     RUNTIME_COMMAND_PASTE_TEXT,
-    RUNTIME_COMMAND_SET_JOYSTICK
+    RUNTIME_COMMAND_SET_JOYSTICK,
+    RUNTIME_COMMAND_STEP_OUT,
+    RUNTIME_COMMAND_STEP_OVER,
+    RUNTIME_COMMAND_RUN_TO_CURSOR
 } runtime_command_type;
 
 enum {
@@ -161,5 +164,9 @@ typedef struct runtime_command {
             uint8_t port;
             uint8_t inputs;
         } set_joystick;
+
+        struct {
+            uint16_t address;
+        } run_to_cursor;
     } data;
 } runtime_command;
