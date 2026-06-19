@@ -92,7 +92,7 @@ static void c64_step_cia2(c64_t *machine) {
 }
 
 static void c64_step_sid(c64_t *machine) {
-    (void)machine;
+    sid_advance_cycles(&machine->sid, 1);
 }
 
 static void c64_configure_cia_tod(c64_t *machine) {
@@ -919,8 +919,10 @@ void c64_init(c64_t *machine) {
     c64_keyboard_reset(&machine->keyboard);
     cia_attach_port_input(&machine->cia1, c64_cia1_port_inputs, machine);
     cia_attach_port_input(&machine->cia2, c64_cia2_port_inputs, machine);
+    sid_init(&machine->sid);
     c64_bus_attach_vicii(&machine->bus, &machine->vic);
     c64_bus_attach_cias(&machine->bus, &machine->cia1, &machine->cia2);
+    c64_bus_attach_sid(&machine->bus, &machine->sid);
     c6510_init(&machine->cpu, machine, c64_cpu_read, c64_cpu_write);
     c6510_set_irq_pending_callback(&machine->cpu, c64_cpu_irq_pending);
     c6510_set_nmi_pending_callback(&machine->cpu, c64_cpu_nmi_pending);
@@ -988,6 +990,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     }
 
     c64_bus_reset(&machine->bus);
+    sid_reset(&machine->sid);
     vicii_reset(&machine->vic);
     vicii_set_video_standard(
         &machine->vic,

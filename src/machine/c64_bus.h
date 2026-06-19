@@ -14,6 +14,11 @@ typedef struct vicii vicii;
 typedef struct cia cia;
 #endif
 
+#ifndef C64M_SID_TYPEDEF
+#define C64M_SID_TYPEDEF
+typedef struct sid sid;
+#endif
+
 enum {
     C64_RAM_SIZE = 0x10000,
     C64_COLOR_RAM_SIZE = 0x0400,
@@ -36,6 +41,7 @@ struct c64_bus_t {
     vicii *vic;
     cia *cia1;
     cia *cia2;
+    sid *sid;
     uint8_t cpu_port_direction;
     uint8_t cpu_port_data;
     uint64_t screen_ram_writes;
@@ -43,12 +49,14 @@ struct c64_bus_t {
     uint64_t vic_register_writes;
     uint64_t cia1_register_writes;
     uint64_t cia2_register_writes;
+    uint64_t sid_register_writes;
 };
 
 void c64_bus_init(c64_bus_t *bus);
 void c64_bus_reset(c64_bus_t *bus);
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v);
 void c64_bus_attach_cias(c64_bus_t *bus, cia *cia1, cia *cia2);
+void c64_bus_attach_sid(c64_bus_t *bus, sid *s);
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address);
 void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value);

@@ -27,6 +27,7 @@ c64m is a Commodore 64 emulator written in C99.  It was (almost) entirely writte
 - Character ROM mapped through VIC bus at $1000–$1FFF (bank 0) and $9000–$9FFF (bank 2)
 - Debugger-safe bus peek API that avoids side effects (CIA ICR clear-on-read, etc.)
 - VIC-II bank base derived from CIA #2 port A pins (four 16K banks)
+- SID audio registers mapped at `$D400–$D41F` on the CPU bus
 
 ---
 
@@ -94,6 +95,30 @@ c64m is a Commodore 64 emulator written in C99.  It was (almost) entirely writte
 - Coherent read latching: reading hours latches all TOD fields; reading tenths releases latch
 - Alarm with ICR bit 2 flagging and IRQ/NMI routing through Phase D mask logic
 - Debugger-safe TOD peek without creating or releasing the CPU-visible latch
+
+---
+
+### Audio & SID
+
+- Audio output infrastructure with lock-free SPSC ring buffer feeding SDL audio without blocking runtime or callback threads
+- 48 kHz float audio path with internal mono sample generation expanded to the actual output channels by the platform callback
+- PAL/NTSC cycle-to-sample conversion through a fractional cycle accumulator
+- Turbo mode mutes audio output to prevent buffer flooding while SID state continues to advance
+- Audio overrun and underrun counters for diagnostics
+- `--audio-smoke` CLI flag for a 440 Hz square-wave audio-path test
+- Functional MOS 6581 SID emulation mapped at `$D400–$D41F`
+- Three SID voices with triangle, sawtooth, pulse, and noise waveforms
+- ADSR envelope generation, sustain levels, and voice 3 oscillator/envelope read-back
+- 3-voice mixer with master volume and voice 3 disconnect (`$D418` bit 7)
+- Chamberlin state-variable filter with low-pass, band-pass, and high-pass modes
+- SID tests cover register mapping, voice behavior, ADSR, mixer/filter, and audio-flow smoke cases
+
+**SID deferred items:**
+- Per-voice filter routing (`$D417` bits 0–2)
+- Exact 6581/8580 combined-waveform analog blending
+- Ring modulation and oscillator sync
+- Connected paddle/potentiometer input beyond the current not-connected read policy
+- NTSC-specific SID rate tables
 
 ---
 
@@ -222,6 +247,7 @@ Full two-pass 6502 assembler integrated into the emulator:
 - Resizable window; size saved to INI on quit
 - Adjustable splitter layout between debugger panels; layout saved to INI
 - Disk activity LED visibility option
+- Machine tab groups Disks, Programs, and Emulator controls, including D64 mount/eject, host Load/Save, Configure, and Reset
 
 ---
 
@@ -254,6 +280,18 @@ Full two-pass 6502 assembler integrated into the emulator:
 - Reset-before-load with automatic resume of pre-load run state
 - Collection PRGs (keyboard buffer pre-fills) work correctly via deferred injection at BASIC warm-start ($E38B)
 - Manual RESET cancels any pending PRG injection
+- Host file load path can optionally repair BASIC pointers and defer injection until BASIC warm-start
+
+---
+
+### Host File Load/Save
+
+- Unified Load and Save buttons on the Machine tab
+- Load dialog supports host file selection, optional PRG address-header use, manual load address, reset-before-load, and BASIC-program pointer repair
+- Save dialog supports raw memory ranges, optional address header, and BASIC Program mode using `$2B–$2E`
+- BASIC Program save mode forces address-header output and uses TXTTAB/VARTAB to choose the save range
+- Reset-before-load waits for BASIC warm-start (`$E38B`) before injecting program data
+- Live assembler injection is supported when assembler Reset is unchecked; Auto Run can jump to the run address and resume execution
 
 ---
 
@@ -264,6 +302,7 @@ Full two-pass 6502 assembler integrated into the emulator:
 - All cross-thread data is passed as copied snapshots — no live machine pointers cross threads
 - Command/event message queue between frontend and runtime
 - Snapshot rule enforced: frontend receives only copied state and never reads live machine memory
+- Machine owns monotonic master cycle; VIC, CIA, and SID hooks advance to timestamped CPU bus events before visible side effects
 
 ## Keyboard Quick Reference
 
@@ -410,17 +449,24 @@ On macOS, **Opt** = Option/Alt.
 
 ## Notes
 
-As of end-of-day June 18, the total time spent on this project is 32 hours.  That includes the time I was thinking, describing, and typing, as well as the time the agents thought and coded.  It also includes all the time testing and playing.  I mostly used one agent or the other, but there is some overlap where I used both at the same time.
+As of end-of-day June 18, the total time spent on this project was 32 hours.  That includes the time I was thinking, describing, and typing, as well as the time the agents thought and coded.  It also includes all the time testing and playing.  I mostly used one agent or the other, but there is some overlap where I used both at the same time.
 
-There is no SID support at all yet, as of June 18.
+June 19, at almost 6 hours, audio output infrastructure and functional SID audio support have been added.  The SID is now in: the emulator has a MOS 6581 register map at `$D400-$D41F`, three voices, waveform generation, ADSR envelopes, mixing, voice 3 read-back, and a first-pass filter.  This is not intended to mean cycle-perfect or analog-perfect SID emulation; several hardware-specific behaviors remain deferred.
 
 ## Issues
 
-The emulation is not at all perfect.
+The emulation is not at all perfect.  Recent work has added audio/SID and host file load/save support, but several accuracy and completeness gaps remain.
+
 * It does run the machine at "machine speed" and if I set the turbo to its maximum, 256, it is a tiny bit faster.  There's no real boost (a2m will run an Apple II on my M2 Mac at over 100 MHz, so 100x faster, for comparison).
 * There are UI issues.  For example, if you change the PC, you need to click out of that box and back in to change it again.  And then there's no overtype.
 * Step out is broken under some circumstances.
 * When you play Galencia (it does interesting things with the border and sprites), you need to "trick" the game into starting — I know how but I haven't looked at why yet — and the sprites do get mangled, so the emulation isn't quite good enough yet.
+
+* SID support is functional but incomplete: per-voice filter routing, exact combined-waveform behavior, ring modulation, oscillator sync, connected paddle input, and NTSC-specific SID rate tables are still deferred.
+* Audio/video timing is not cycle-perfect.
+* VIC-II light pen support is still stubbed/skipped.
+* D64 support is read-only; disk writes, SAVE to disk, error channel, 1541 CPU/ROM emulation, full IEC timing/protocol, fast loaders, and devices beyond 8/9 are not implemented.
+* Some lower-level bus details remain approximate, including exact RDY/AEC sub-cycle CPU pin timing, last-byte open-bus behavior, VIC idle-state fetches, and NTSC sprite BA timing.
 
 That's just a small subset of the issues I am aware of.  Testing has not been thorough — I am mostly still making.  But, on the other hand, many games from the one-load collection work perfectly.
 

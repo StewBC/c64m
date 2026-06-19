@@ -65,6 +65,19 @@ target_link_libraries(test_c64_bus PRIVATE
 
 add_test(NAME c64_bus COMMAND test_c64_bus)
 
+add_executable(test_sid
+    tests/machine/test_sid.c
+)
+
+target_compile_features(test_sid PRIVATE c_std_99)
+
+target_link_libraries(test_sid PRIVATE
+    machine
+    util
+)
+
+add_test(NAME sid COMMAND test_sid)
+
 add_executable(test_c64_rom
     tests/machine/test_c64_rom.c
 )

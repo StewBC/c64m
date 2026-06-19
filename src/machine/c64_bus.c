@@ -1,6 +1,7 @@
 #include "c64_bus.h"
 
 #include "cia.h"
+#include "sid.h"
 #include "vicii.h"
 
 #include <assert.h>
@@ -10,6 +11,8 @@ enum {
     C64_CPU_PORT_DIRECTION = 0x0000,
     C64_CPU_PORT_DATA = 0x0001,
     C64_DEFAULT_SCREEN_BASE = 0x0400,
+    C64_SID_BASE = 0xd400,
+    C64_SID_END  = 0xd41f,
     C64_COLOR_RAM_BASE = 0xd800,
     C64_COLOR_RAM_END = 0xdbff,
     C64_CIA1_BASE = 0xdc00,
@@ -60,6 +63,10 @@ static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
         return vicii_read_register(bus->vic, address);
     }
 
+    if (address >= C64_SID_BASE && address <= C64_SID_END && bus->sid) {
+        return sid_read(bus->sid, address);
+    }
+
     if (address >= C64_COLOR_RAM_BASE && address <= C64_COLOR_RAM_END) {
         return (uint8_t)(bus->color_ram[address - C64_COLOR_RAM_BASE] & 0x0f);
     }
@@ -79,6 +86,12 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
         vicii_write_register(bus->vic, address, value);
         bus->vic_register_writes++;
+        return;
+    }
+
+    if (address >= C64_SID_BASE && address <= C64_SID_END && bus->sid) {
+        sid_write(bus->sid, address, value);
+        bus->sid_register_writes++;
         return;
     }
 
@@ -111,17 +124,20 @@ void c64_bus_reset(c64_bus_t *bus) {
     vicii *vic;
     cia *cia1;
     cia *cia2;
+    sid *s;
 
     assert(bus);
 
-    vic = bus->vic;
+    vic  = bus->vic;
     cia1 = bus->cia1;
     cia2 = bus->cia2;
+    s    = bus->sid;
     memset(bus->ram, 0, sizeof(bus->ram));
     memset(bus->color_ram, 0, sizeof(bus->color_ram));
-    bus->vic = vic;
+    bus->vic  = vic;
     bus->cia1 = cia1;
     bus->cia2 = cia2;
+    bus->sid  = s;
     bus->cpu_port_direction = 0x2f;
     bus->cpu_port_data = 0x37;
     bus->screen_ram_writes = 0;
@@ -129,6 +145,7 @@ void c64_bus_reset(c64_bus_t *bus) {
     bus->vic_register_writes = 0;
     bus->cia1_register_writes = 0;
     bus->cia2_register_writes = 0;
+    bus->sid_register_writes = 0;
 }
 
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v) {
@@ -142,6 +159,12 @@ void c64_bus_attach_cias(c64_bus_t *bus, cia *cia1, cia *cia2) {
 
     bus->cia1 = cia1;
     bus->cia2 = cia2;
+}
+
+void c64_bus_attach_sid(c64_bus_t *bus, sid *s) {
+    assert(bus);
+
+    bus->sid = s;
 }
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {

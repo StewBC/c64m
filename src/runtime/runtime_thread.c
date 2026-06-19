@@ -115,7 +115,7 @@ static void runtime_audio_produce(runtime *rt) {
             }
             sample = rt->audio_smoke_phase < 0.5f ? 0.2f : -0.2f;
         } else {
-            sample = 0.0f;
+            sample = sid_sample(&rt->machine.sid);
         }
 
         audio_buffer_write(rt->audio_out, &sample, 1);

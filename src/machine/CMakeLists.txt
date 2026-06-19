@@ -7,6 +7,7 @@ add_library(machine STATIC
     c64_rom.c
     c6510.c
     keyboard.c
+    sid.c
     vicii.c
 )
 

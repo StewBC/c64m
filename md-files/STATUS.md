@@ -13,7 +13,8 @@ The emulator is complete through:
 - PRG loader polish: reset-before-load, pending injection after BASIC warm-start at $E38B, keyboard-buffer autostart PRGs supported.
 - Assembler UI integration: Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, symbol snapshot handoff to disassembler.
 - Host file load/save UI: unified Load and Save buttons on Machine tab; Load dialog has From File address, Reset, and Basic Program checkboxes; Save dialog has Basic Program checkbox (reads $2B–$2E, forces header), Write address header, and Start/End range fields.
-- Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters. SID deferred to C64AUDFID_2.
+- Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters.
+- SID functional audio (C64AUDFID_2): triangle/saw/pulse/noise waveforms, ADSR envelope, Chamberlin SVF filter, 3-voice mixer, voice 3 read-back, $D400–$D41F register map; deferred: per-voice filter routing, ring/sync mod, combined-waveform blending, NTSC tables.
 
 ## Important implemented details
 
@@ -67,9 +68,33 @@ The emulator is complete through:
 - SDL audio dependency is confined to `platform/`; `runtime/` and `util/` targets remain SDL-free.
 - `audio_buffer.c` uses C11 `_Atomic` via a per-file CMake property; the public header is C99-compatible (fully opaque struct).
 
+### SID functional audio (C64AUDFID_2)
+
+- MOS 6581 SID emulation in `machine/sid.h` / `machine/sid.c`; attached to the bus at $D400–$D41F via `c64_bus_attach_sid`.
+- Register map: voices at $D400–$D406 (v1), $D407–$D40D (v2), $D40E–$D414 (v3); filter at $D415–$D418; reads at $D419–$D41F.
+- Waveforms: triangle (24-bit phase fold), sawtooth (linear ramp), pulse (12-bit PW threshold), noise (23-bit LFSR, taps 22/17, clocked on phase bit-19 low→high). TEST bit freezes phase and silences output.
+- Combined-waveform priority: noise > pulse > saw > triangle (analog blend deferred).
+- 23-bit LFSR output mapped via documented bit positions (20,18,14,11,9,5,2,0).
+- ADSR envelope: fractional double accumulator; attack and decay/release rate tables at PAL 985248 Hz; sustain level = nibble × 17.
+- Mixer: each voice scaled by envelope/255, summed, divided by 3 (anti-clip), multiplied by volume/15 (`$D418` bits 0–3), clamped to [-1, +1].
+- Voice 3 disconnect: `$D418` bit 7 removes voice 3 from mix.
+- State-variable Chamberlin filter (per-cycle): f = (cutoff+1)/4096; q = 1 – res/20 (clamped 0.1..1.0); HP/BP/LP computed in that order; filter states clamped to [-2, +2]. Mode selected by `$D418` bits 4–6 (LP/BP/HP); no mode bits → bypass.
+- Voice 3 read-back: `$D41B` = phase bits 23..16; `$D41C` = current envelope byte.
+- Paddle reads (`$D419`, `$D41A`) return 0xFF (not connected).
+- `sid_sample()` is a trivially const read of `last_sample`; the SDL audio callback can call it safely with no machine pointers.
+- `runtime_thread.c` calls `sid_sample(&rt->machine.sid)` to fill the audio buffer each host sample.
+- 28 tests in `tests/machine/test_sid.c` (register, voice, ADSR, mixer/filter, audio-flow smoke); all pass.
+
+#### SID deferred items
+
+- Per-voice filter routing (`$D417` bits 2..0): full mix always passes through the filter; independent voice-to-filter routing pending.
+- Exact 6581/8580 analog waveform blending (combined waveforms produce hardware-specific shapes, not bitwise OR).
+- Ring modulation and oscillator sync (`$D404` bits 1–2).
+- Paddle/potentiometer (`$D419`, `$D41C`) — policy: 0xFF until connected input is emulated.
+- NTSC rate tables (current tables are PAL 985248 Hz only).
+
 ## Not implemented / deferred
 
-- SID audio (C64AUDFID_2 and later).
 - Full CIA accuracy and pin/race-level timing.
 - Cycle-perfect video/audio timing.
 - VIC-II light pen (`$D013/$D014` stubbed; Phase F skipped).

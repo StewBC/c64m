@@ -6,6 +6,7 @@
 #include "c6510.h"
 #include "cia.h"
 #include "keyboard.h"
+#include "sid.h"
 #include "vicii.h"
 
 #include <stdbool.h>
@@ -200,6 +201,7 @@ typedef struct c64_t {
     vicii vic;
     cia cia1;
     cia cia2;
+    sid sid;
     c64_keyboard keyboard;
     uint8_t joystick1;
     uint8_t joystick2;
