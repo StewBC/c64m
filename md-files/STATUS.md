@@ -4,6 +4,133 @@
 
 Completed through Phase 16 (timed bus events and live VIC-II raster) and assembler UI integration (Phase 16 of ASMDESIGN.md), VIC-II Phase E (sprite priority and collisions), VIC-II Phase G (open bus / unused register reads), VIC-II Phase H (sprite-fetch BA cycle stealing), VIC-II Phase J (DEN-off visual blanking), CIA Phase A (register map, mirroring, safe reads, and current-state reconciliation), CIA Phase B (Timer A/B core countdown and reload hardening), CIA Phase C (timer control modes, PB output, and cascade sources), CIA Phase D (interrupt control register and IRQ/NMI line behavior), CIA Phase E (CIA #1 keyboard, joystick, and RESTORE port integration), CIA Phase F (CIA #2 VIC bank and IEC port integration), and CIA Phase G (time-of-day clock and alarm). VIC-II Phase F (light pen) is skipped.
 
+D64 disk support Phase A is complete as a tools-only parser:
+
+- `src/tools/d64` parses standard 35-track D64 sector geometry and accepts the
+  common 35-track error-info size by ignoring the appended per-sector error bytes.
+- BAM metadata parsing exposes disk title, disk ID, DOS type, and free-block count.
+- Directory enumeration follows the track 18 sector 1 directory chain, lists ordinary
+  visible entries, preserves raw PETSCII filename bytes, and exposes ASCII debug names.
+- PRG extraction follows file track/sector chains and returns the full PRG byte stream,
+  including the two-byte little-endian load address.
+- Regression coverage includes `assets/disks/blank.d64`, `assets/disks/ODELLLAK.D64`,
+  generated minimal PRG images, malformed directory pointers, directory loops, file
+  chain loops, out-of-range file sectors, unsupported SEQ extraction, and too-short PRGs.
+- Runtime mount state, KERNAL LOAD traps, `LOAD "$",8` directory synthesis, disk writes,
+  1541 CPU/ROM emulation, IEC timing, fast loaders, 40/42-track variants, and full
+  error-info semantics remain not implemented.
+
+D64 disk support Phase B is complete for device 8 mount plumbing:
+
+- Runtime commands can mount a D64 path, unmount device 8, and request copied disk
+  status.
+- Runtime reads the host file and validates it with the tools-level D64 parser on the
+  runtime thread.
+- The live mounted state is machine-owned: device slots currently cover devices 8 and 9
+  structurally, with Phase B behavior implemented for device 8.
+- Machine drive state stores copied standard 35-track D64 bytes plus copied display
+  metadata; frontend/runtime events expose copied status only and no live pointers.
+- Replacing a valid mounted disk frees/replaces the previous owned image; failed mount
+  attempts report an error status while preserving the previous successful mount.
+- Regression coverage includes runtime mount of `blank.d64`, replacement with
+  `ODELLLAK.D64`, copied display name/title status, missing-file mount failure, and
+  unmount clearing copied status.
+- KERNAL LOAD traps, directory loads, PRG loads from D64, device 9 behavior, D64 writes,
+  1541 CPU/ROM emulation, IEC timing, and fast loaders remain not implemented.
+
+D64 disk support Phase C is complete for mounted device 8 PRG loads:
+
+- Machine-owned KERNAL LOAD trap handles PC `$FFD5` for device 8 only; other devices
+  fall through to ROM behavior.
+- `LOAD "NAME",8,1` loads PRG payload bytes at the embedded two-byte PRG load address
+  and returns carry clear with X/Y containing the final exclusive end address.
+- `LOAD "NAME",8` loads PRG payload bytes at the current BASIC start pointer
+  (`$2B/$2C`) and updates BASIC end pointers (`$2D/$2E`, `$2F/$30`, `$31/$32`) plus
+  the KERNAL end address pointer (`$AE/$AF`).
+- Exact filename matching supports ordinary C64/PETSCII names, with surrounding quotes
+  ignored and ASCII case folded for normal names.
+- Failure paths return carry set without corrupting unrelated memory for no mounted
+  disk, missing files, unsupported file types such as SEQ, malformed chains, oversized
+  target ranges, and unsupported load/verify modes.
+- Regression coverage includes `LOAD "MENU1",8,1`, `LOAD "MENU1",8`, missing-file
+  sentinel preservation, SEQ rejection for `LAKESTR.TXT`, device 9 fallthrough, and
+  no-disk failure.
+- `LOAD "$",8`, wildcard matching, device 9 disk behavior, D64 writes, error channel,
+  1541 CPU/ROM emulation, IEC timing, and fast loaders remain not implemented.
+
+D64 disk support Phase D is complete for `LOAD "$",8` directory loading:
+
+- KERNAL LOAD trap recognizes filename `$` on mounted device 8 and synthesizes a valid
+  tokenized BASIC directory program at the current BASIC start pointer.
+- Directory output uses stable first-pass formatting: line 0 contains disk title/ID/DOS
+  type, each visible entry shows block count, quoted filename, and file type, and the
+  final line reports blocks free.
+- BASIC line links are absolute C64 addresses and terminate with `$0000`, so `LIST`
+  can traverse the generated program.
+- BASIC end pointers (`$2D/$2E`, `$2F/$30`, `$31/$32`) and KERNAL end address pointer
+  (`$AE/$AF`) are updated consistently with the generated program end.
+- Regression coverage includes `blank.d64` directory load, `ODELLLAK.D64` directory
+  load, expected names (`MENU1`, `LAKESPT.BIN`, `LAKESTR.TXT`), file type text such as
+  `SEQ`, valid BASIC line links, end-pointer updates, no-disk failure, and existing
+  Phase C PRG load behavior.
+- Directory pattern filters, wildcard PRG matching, device 9 disk behavior, D64 writes,
+  error channel, 1541 CPU/ROM emulation, IEC timing, and fast loaders remain not
+  implemented.
+
+D64 disk support Phase E is complete for filename matching, wildcard loads, and tighter
+load failures:
+
+- Filename matching preserves raw mounted directory bytes and normalizes only ordinary
+  ASCII letter case for comparison; punctuation, digits, and spaces remain literal.
+- Surrounding quote characters in the KERNAL filename buffer are ignored for matching.
+- PRG loads support exact names, `*` for any suffix, prefix wildcards such as `LAKE*`,
+  and `?` as a single-character wildcard.
+- `LOAD "*",8` and `LOAD "*",8,1` select the first visible PRG in mounted directory
+  order; wildcard PRG loads skip unsupported file types such as SEQ.
+- Directory load `$` remains special and is not treated as a filename wildcard.
+- Failure paths are deterministic and preserve unrelated memory for no disk, missing
+  exact names, missing wildcard matches, unsupported file types, chain loops,
+  out-of-range sectors, target overflow, and unsupported load modes.
+- Regression coverage includes lowercase exact matching, `*`, `LAKE*`, `MENU?`,
+  wildcard SEQ skipping, missing wildcard failure, missing exact failure, SEQ rejection,
+  generated loop/out-of-range mounted images, and continued `$` directory load behavior.
+- Full Commodore DOS pattern semantics, file type suffix parsing, device 9 disk
+  behavior, D64 writes, error channel, 1541 CPU/ROM emulation, IEC timing, and fast
+  loaders remain not implemented.
+
+D64 disk support Phase F is complete for Machine-tab disk UI/status and validation:
+
+- Machine tab now has a compact Disks section with device 8 mount and unmount controls.
+- Device 8 mount opens the host file picker with broad/all-file selection and sends a
+  copied runtime mount command; unmount sends a copied runtime unmount command.
+- Frontend displays copied runtime disk status only, preferring disk title, then host
+  basename/status text.
+- Device 9 is displayed as deferred and does not imply working disk behavior.
+- Runtime disk status is requested with normal debugger refresh and updated from copied
+  `RUNTIME_EVENT_DISK_STATUS_RESPONSE` events.
+- Automated validation covers parser, mount/unmount status, KERNAL PRG load,
+  `LOAD "$",8` directory load, wildcard/error behavior, blank and ODELL fixtures, and
+  malformed mounted chains. Manual GUI validation remains the next human smoke step for
+  selecting a D64 through the native picker and typing BASIC commands.
+- Host load/save UI, D64 writes, SAVE to disk, device 9 disk behavior, error channel,
+  1541 CPU/ROM emulation, IEC timing, and fast loaders remain not implemented.
+
+D64 disk support Phase G is complete for optional device 9 support:
+
+- Devices 8 and 9 can independently mount/unmount read-only D64 images through runtime
+  commands and Machine-tab UI controls.
+- KERNAL LOAD trap supports `LOAD "$",9`, `LOAD "NAME",9`, and `LOAD "NAME",9,1`
+  with the same directory, PRG, wildcard, and failure behavior as device 8.
+- Copied status events and frontend labels update independently for device 8 and 9.
+- Device 8 and device 9 can hold different mounted images; unmounting one does not
+  disturb the other.
+- Regression coverage includes mounting `ODELLLAK.D64` as device 9, device 9 directory
+  load, device 9 `MENU1` PRG load, independent device 8/9 status, device 9 unmount
+  preserving device 8, missing device 9 disk failure, and unsupported device 10
+  fallthrough.
+- Device numbers beyond 8 and 9, D64 writes, SAVE to disk, error channel,
+  1541 CPU/ROM emulation, IEC timing, and fast loaders remain not implemented.
+
 Implemented:
 
 - 6510 CPU integrated through C64 bus.

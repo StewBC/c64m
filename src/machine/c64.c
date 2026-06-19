@@ -1,14 +1,34 @@
 #include "c64.h"
 
 #include <assert.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 enum {
     C64_VICII_REG_MEMORY_POINTER = 0x18,
+    C64_KERNAL_LOAD_ENTRY = 0xffd5,
+    C64_ZP_STATUS = 0x90,
+    C64_ZP_EAL = 0xae,
+    C64_ZP_FILENAME_LENGTH = 0xb7,
+    C64_ZP_SECONDARY_ADDRESS = 0xb9,
+    C64_ZP_DEVICE_NUMBER = 0xba,
+    C64_ZP_FILENAME_POINTER = 0xbb,
+    C64_BASIC_START_POINTER = 0x2b,
+    C64_BASIC_VARTAB_POINTER = 0x2d,
+    C64_BASIC_ARYTAB_POINTER = 0x2f,
+    C64_BASIC_STREND_POINTER = 0x31,
     C64_CPU_BUS_MODE_IMMEDIATE = 0,
     C64_CPU_BUS_MODE_TIMED_IMMEDIATE,
     C64_CPU_BUS_MODE_DEFER_WRITES,
+};
+
+static const uint8_t c64_d64_sectors_per_track[35] = {
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    19, 19, 19, 19, 19, 19, 19,
+    18, 18, 18, 18, 18, 18,
+    17, 17, 17, 17, 17
 };
 
 static void c64_set_error(char *error, size_t error_size, const char *message) {
@@ -17,6 +37,24 @@ static void c64_set_error(char *error, size_t error_size, const char *message) {
     }
 
     snprintf(error, error_size, "%s", message);
+}
+
+static int c64_drive_slot_index(uint8_t device) {
+    if (device < C64_DRIVE_MIN_DEVICE || device > C64_DRIVE_MAX_DEVICE) {
+        return -1;
+    }
+    return (int)(device - C64_DRIVE_MIN_DEVICE);
+}
+
+static void c64_copy_text(char *target, size_t target_size, const char *source) {
+    if (target == NULL || target_size == 0) {
+        return;
+    }
+    if (source == NULL) {
+        target[0] = '\0';
+        return;
+    }
+    snprintf(target, target_size, "%s", source);
 }
 
 static bool c64_cpu_io_visible(const c64_t *machine) {
@@ -77,6 +115,482 @@ static void c64_advance_devices_to(c64_t *machine, uint64_t target_cycle) {
 
 static void c64_trace_reset(c64_cpu_instruction_trace *trace) {
     memset(trace, 0, sizeof(*trace));
+}
+
+static bool c64_d64_track_sector_offset(uint8_t track, uint8_t sector, size_t *out_offset) {
+    size_t offset = 0;
+    uint8_t current_track;
+
+    if (out_offset == NULL || track < 1 || track > 35) {
+        return false;
+    }
+    if (sector >= c64_d64_sectors_per_track[track - 1]) {
+        return false;
+    }
+    for (current_track = 1; current_track < track; ++current_track) {
+        offset += (size_t)c64_d64_sectors_per_track[current_track - 1] * 256u;
+    }
+    offset += (size_t)sector * 256u;
+    if (offset + 256u > C64_DRIVE_D64_STANDARD_SIZE) {
+        return false;
+    }
+    *out_offset = offset;
+    return true;
+}
+
+static uint8_t c64_ascii_upper(uint8_t value) {
+    if (value >= 'a' && value <= 'z') {
+        return (uint8_t)(value - ('a' - 'A'));
+    }
+    return value;
+}
+
+static bool c64_drive_filename_matches(
+    const c64_drive_directory_entry *entry,
+    const uint8_t *name,
+    size_t name_length) {
+    size_t i;
+
+    while (name_length >= 2 && name[0] == '"' && name[name_length - 1] == '"') {
+        name++;
+        name_length -= 2;
+    }
+
+    if (entry->filename_length != name_length) {
+        return false;
+    }
+    for (i = 0; i < name_length; ++i) {
+        if (c64_ascii_upper(entry->filename[i]) != c64_ascii_upper(name[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool c64_drive_pattern_has_wildcard(const uint8_t *name, size_t name_length) {
+    size_t i;
+
+    for (i = 0; i < name_length; ++i) {
+        if (name[i] == '*' || name[i] == '?') {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool c64_drive_filename_pattern_matches(
+    const c64_drive_directory_entry *entry,
+    const uint8_t *pattern,
+    size_t pattern_length) {
+    size_t name_index = 0;
+    size_t pattern_index = 0;
+
+    while (pattern_length >= 2 && pattern[0] == '"' && pattern[pattern_length - 1] == '"') {
+        pattern++;
+        pattern_length -= 2;
+    }
+
+    while (pattern_index < pattern_length) {
+        uint8_t pattern_char = pattern[pattern_index++];
+
+        if (pattern_char == '*') {
+            return true;
+        }
+        if (name_index >= entry->filename_length) {
+            return false;
+        }
+        if (pattern_char != '?' &&
+            c64_ascii_upper(entry->filename[name_index]) != c64_ascii_upper(pattern_char)) {
+            return false;
+        }
+        name_index++;
+    }
+
+    return name_index == entry->filename_length;
+}
+
+static const c64_drive_directory_entry *c64_drive_find_entry(
+    const c64_drive_slot *slot,
+    const uint8_t *name,
+    size_t name_length) {
+    size_t i;
+    bool wildcard = c64_drive_pattern_has_wildcard(name, name_length);
+
+    for (i = 0; i < slot->entry_count; ++i) {
+        if (wildcard && slot->entries[i].type != C64_DRIVE_FILE_PRG) {
+            continue;
+        }
+        if (wildcard ?
+            c64_drive_filename_pattern_matches(&slot->entries[i], name, name_length) :
+            c64_drive_filename_matches(&slot->entries[i], name, name_length)) {
+            return &slot->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static uint16_t c64_read_zp16(const c64_t *machine, uint16_t address) {
+    return (uint16_t)machine->bus.ram[address] |
+        ((uint16_t)machine->bus.ram[(uint16_t)(address + 1u)] << 8);
+}
+
+static void c64_write_zp16(c64_t *machine, uint16_t address, uint16_t value) {
+    machine->bus.ram[address] = (uint8_t)(value & 0xffu);
+    machine->bus.ram[(uint16_t)(address + 1u)] = (uint8_t)(value >> 8);
+}
+
+static void c64_kernal_load_return(
+    c64_t *machine,
+    bool success,
+    uint8_t a,
+    uint16_t end_address) {
+    uint8_t lo;
+    uint8_t hi;
+    uint16_t return_address;
+
+    machine->cpu.cpu.A = a;
+    machine->cpu.cpu.X = (uint8_t)(end_address & 0xffu);
+    machine->cpu.cpu.Y = (uint8_t)(end_address >> 8);
+    if (success) {
+        machine->cpu.cpu.flags &= (uint8_t)~0x01u;
+        machine->bus.ram[C64_ZP_STATUS] = 0;
+    } else {
+        machine->cpu.cpu.flags |= 0x01u;
+        machine->bus.ram[C64_ZP_STATUS] = 0x40;
+    }
+
+    machine->cpu.cpu.sp++;
+    if (machine->cpu.cpu.sp >= 0x200) {
+        machine->cpu.cpu.sp = 0x100;
+    }
+    lo = machine->bus.ram[machine->cpu.cpu.sp];
+    machine->cpu.cpu.sp++;
+    if (machine->cpu.cpu.sp >= 0x200) {
+        machine->cpu.cpu.sp = 0x100;
+    }
+    hi = machine->bus.ram[machine->cpu.cpu.sp];
+    return_address = (uint16_t)lo | ((uint16_t)hi << 8);
+    machine->cpu.cpu.pc = (uint16_t)(return_address + 1u);
+}
+
+static bool c64_drive_load_prg_to_memory(
+    c64_t *machine,
+    const c64_drive_slot *slot,
+    const c64_drive_directory_entry *entry,
+    bool use_prg_address,
+    uint16_t *out_end_address) {
+    bool visited[683];
+    uint8_t track;
+    uint8_t sector_id;
+    uint16_t load_address = 0;
+    uint16_t target_address = 0;
+    uint32_t written = 0;
+    bool have_load_address = false;
+    bool have_target_address = false;
+    size_t offset;
+    size_t visited_index;
+
+    memset(visited, 0, sizeof(visited));
+    track = entry->first_track;
+    sector_id = entry->first_sector;
+
+    while (track != 0) {
+        const uint8_t *sector;
+        size_t data_size;
+        size_t data_index;
+
+        if (!c64_d64_track_sector_offset(track, sector_id, &offset)) {
+            return false;
+        }
+        visited_index = offset / 256u;
+        if (visited_index >= sizeof(visited) / sizeof(visited[0]) || visited[visited_index]) {
+            return false;
+        }
+        visited[visited_index] = true;
+
+        sector = &slot->image_bytes[offset];
+        data_size = sector[0] == 0 ? (sector[1] <= 1 ? 0 : (size_t)sector[1] - 1u) : 254u;
+        if (data_size > 254u) {
+            data_size = 254u;
+        }
+
+        for (data_index = 0; data_index < data_size; ++data_index) {
+            uint8_t value = sector[2u + data_index];
+
+            if (!have_load_address) {
+                load_address = value;
+                have_load_address = true;
+                continue;
+            }
+            if (!have_target_address) {
+                load_address |= (uint16_t)value << 8;
+                target_address = use_prg_address ?
+                    load_address :
+                    c64_read_zp16(machine, C64_BASIC_START_POINTER);
+                have_target_address = true;
+                continue;
+            }
+
+            if ((uint32_t)target_address + written > 0xffffu) {
+                return false;
+            }
+            c64_bus_write(&machine->bus, (uint16_t)(target_address + written), value);
+            written++;
+        }
+
+        if (sector[0] == 0) {
+            break;
+        }
+        track = sector[0];
+        sector_id = sector[1];
+    }
+
+    if (!have_target_address) {
+        return false;
+    }
+    if ((uint32_t)target_address + written > 0x10000u) {
+        return false;
+    }
+
+    *out_end_address = (uint16_t)(target_address + written);
+    if (!use_prg_address) {
+        c64_write_zp16(machine, C64_BASIC_VARTAB_POINTER, *out_end_address);
+        c64_write_zp16(machine, C64_BASIC_ARYTAB_POINTER, *out_end_address);
+        c64_write_zp16(machine, C64_BASIC_STREND_POINTER, *out_end_address);
+    }
+    c64_write_zp16(machine, C64_ZP_EAL, *out_end_address);
+    return true;
+}
+
+static const char *c64_drive_file_type_text(c64_drive_file_type type) {
+    switch (type) {
+    case C64_DRIVE_FILE_DEL:
+        return "DEL";
+    case C64_DRIVE_FILE_SEQ:
+        return "SEQ";
+    case C64_DRIVE_FILE_PRG:
+        return "PRG";
+    case C64_DRIVE_FILE_USR:
+        return "USR";
+    case C64_DRIVE_FILE_REL:
+        return "REL";
+    case C64_DRIVE_FILE_UNKNOWN:
+    default:
+        return "???";
+    }
+}
+
+static char c64_directory_name_char(uint8_t value) {
+    if (value >= 0x20 && value <= 0x7e) {
+        return (char)value;
+    }
+    if (value >= 0xc1 && value <= 0xda) {
+        return (char)('A' + (value - 0xc1));
+    }
+    return '?';
+}
+
+static void c64_directory_entry_name_ascii(
+    const c64_drive_directory_entry *entry,
+    char *out,
+    size_t out_size) {
+    size_t i;
+    size_t count;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    count = entry->filename_length;
+    if (count + 1u > out_size) {
+        count = out_size - 1u;
+    }
+    for (i = 0; i < count; ++i) {
+        out[i] = c64_directory_name_char(entry->filename[i]);
+    }
+    out[count] = '\0';
+}
+
+static bool c64_basic_append_line(
+    uint8_t *program,
+    size_t capacity,
+    size_t *offset,
+    uint16_t base_address,
+    uint16_t line_number,
+    const char *format,
+    ...) {
+    char text[96];
+    va_list args;
+    int length;
+    size_t start;
+    size_t next;
+
+    va_start(args, format);
+    length = vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    if (length < 0 || (size_t)length >= sizeof(text)) {
+        return false;
+    }
+
+    start = *offset;
+    next = start + 4u + (size_t)length + 1u;
+    if (next + 2u > capacity || next > 0xffffu) {
+        return false;
+    }
+
+    program[start + 0u] = (uint8_t)((base_address + next) & 0xffu);
+    program[start + 1u] = (uint8_t)((base_address + next) >> 8);
+    program[start + 2u] = (uint8_t)(line_number & 0xffu);
+    program[start + 3u] = (uint8_t)(line_number >> 8);
+    memcpy(&program[start + 4u], text, (size_t)length);
+    program[start + 4u + (size_t)length] = 0;
+    *offset = next;
+    return true;
+}
+
+static bool c64_drive_load_directory_to_memory(
+    c64_t *machine,
+    const c64_drive_slot *slot,
+    uint16_t *out_end_address) {
+    uint8_t *program;
+    size_t offset = 0;
+    size_t i;
+    uint16_t start_address;
+    uint16_t line_number = 10;
+    char title[C64_DRIVE_DISK_TITLE_MAX];
+    char id[3];
+    char dos[3];
+    bool ok = true;
+
+    program = (uint8_t *)malloc(32768u);
+    if (program == NULL) {
+        return false;
+    }
+
+    c64_copy_text(title, sizeof(title), slot->disk_title[0] != '\0' ? slot->disk_title : "                ");
+    c64_copy_text(id, sizeof(id), slot->disk_id);
+    c64_copy_text(dos, sizeof(dos), slot->dos_type);
+    if (id[0] == '\0') {
+        c64_copy_text(id, sizeof(id), "  ");
+    }
+    if (dos[0] == '\0') {
+        c64_copy_text(dos, sizeof(dos), "  ");
+    }
+
+    start_address = c64_read_zp16(machine, C64_BASIC_START_POINTER);
+
+    ok = c64_basic_append_line(program, 32768u, &offset, start_address, 0, "\"%s\" %s %s", title, id, dos);
+    for (i = 0; ok && i < slot->entry_count; ++i) {
+        char name[17];
+        c64_directory_entry_name_ascii(&slot->entries[i], name, sizeof(name));
+        ok = c64_basic_append_line(
+            program,
+            32768u,
+            &offset,
+            start_address,
+            line_number,
+            "%u \"%s\" %s",
+            slot->entries[i].block_count,
+            name,
+            c64_drive_file_type_text(slot->entries[i].type));
+        line_number = (uint16_t)(line_number + 10u);
+    }
+    if (ok) {
+        ok = c64_basic_append_line(
+            program,
+            32768u,
+            &offset,
+            start_address,
+            line_number,
+            "%u BLOCKS FREE.",
+            slot->free_blocks);
+    }
+    if (ok && offset + 2u <= 32768u) {
+        program[offset++] = 0;
+        program[offset++] = 0;
+    } else {
+        ok = false;
+    }
+
+    if (ok && (uint32_t)start_address + offset <= 0x10000u) {
+        for (i = 0; i < offset; ++i) {
+            c64_bus_write(&machine->bus, (uint16_t)(start_address + i), program[i]);
+        }
+        *out_end_address = (uint16_t)(start_address + offset);
+        c64_write_zp16(machine, C64_BASIC_VARTAB_POINTER, *out_end_address);
+        c64_write_zp16(machine, C64_BASIC_ARYTAB_POINTER, *out_end_address);
+        c64_write_zp16(machine, C64_BASIC_STREND_POINTER, *out_end_address);
+        c64_write_zp16(machine, C64_ZP_EAL, *out_end_address);
+    } else {
+        ok = false;
+    }
+
+    free(program);
+    return ok;
+}
+
+static bool c64_try_kernal_load_trap(c64_t *machine) {
+    uint8_t device;
+    uint8_t secondary_address;
+    uint8_t filename_length;
+    uint16_t filename_pointer;
+    uint8_t filename[16];
+    c64_drive_slot *slot;
+    const c64_drive_directory_entry *entry;
+    uint16_t end_address = 0;
+    size_t i;
+
+    if (machine->cpu.cpu.pc != C64_KERNAL_LOAD_ENTRY) {
+        return false;
+    }
+
+    device = machine->bus.ram[C64_ZP_DEVICE_NUMBER];
+    if (!c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    filename_length = machine->bus.ram[C64_ZP_FILENAME_LENGTH];
+    filename_pointer = c64_read_zp16(machine, C64_ZP_FILENAME_POINTER);
+    secondary_address = machine->bus.ram[C64_ZP_SECONDARY_ADDRESS];
+    if (machine->cpu.cpu.A != 0 || (secondary_address != 0 && secondary_address != 1)) {
+        c64_kernal_load_return(machine, false, 0x05, 0);
+        return true;
+    }
+    if (filename_length == 0 || filename_length > sizeof(filename)) {
+        c64_kernal_load_return(machine, false, 0x04, 0);
+        return true;
+    }
+    for (i = 0; i < filename_length; ++i) {
+        filename[i] = c64_debug_read_cpu_map(machine, (uint16_t)(filename_pointer + i));
+    }
+
+    slot = &machine->drives[device - C64_DRIVE_MIN_DEVICE];
+    if (!slot->mounted || slot->image_kind != C64_DRIVE_IMAGE_D64 || slot->image_bytes == NULL) {
+        c64_kernal_load_return(machine, false, 0x05, 0);
+        return true;
+    }
+
+    if (filename_length == 1 && filename[0] == '$') {
+        if (!c64_drive_load_directory_to_memory(machine, slot, &end_address)) {
+            c64_kernal_load_return(machine, false, 0x05, 0);
+            return true;
+        }
+        c64_kernal_load_return(machine, true, 0, end_address);
+        return true;
+    }
+
+    entry = c64_drive_find_entry(slot, filename, filename_length);
+    if (entry == NULL || entry->type != C64_DRIVE_FILE_PRG) {
+        c64_kernal_load_return(machine, false, 0x04, 0);
+        return true;
+    }
+
+    if (!c64_drive_load_prg_to_memory(machine, slot, entry, secondary_address == 1, &end_address)) {
+        c64_kernal_load_return(machine, false, 0x05, 0);
+        return true;
+    }
+
+    c64_kernal_load_return(machine, true, 0, end_address);
+    return true;
 }
 
 static c64_cpu_bus_event *c64_trace_append_event(
@@ -223,6 +737,13 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
 }
 
 static bool c64_step_cycle_internal(c64_t *machine) {
+    if (!machine->pending_cpu_trace_active && c64_try_kernal_load_trap(machine)) {
+        machine->instruction_complete = true;
+        machine->clock.cpu_cycles++;
+        machine->clock.cycle++;
+        return true;
+    }
+
     if (!machine->pending_cpu_trace_active && !vicii_ba_active(&machine->vic, machine->clock.cycle)) {
         c64_prepare_deferred_cpu_trace(machine);
     }
@@ -374,10 +895,14 @@ static void c64_cia2_port_inputs(
 
 void c64_init(c64_t *machine) {
     char error[256];
+    uint8_t device;
 
     assert(machine);
 
     memset(machine, 0, sizeof(*machine));
+    for (device = C64_DRIVE_MIN_DEVICE; device <= C64_DRIVE_MAX_DEVICE; ++device) {
+        machine->drives[device - C64_DRIVE_MIN_DEVICE].last_result = C64_DRIVE_STATUS_NOT_MOUNTED;
+    }
     machine->config.video_standard = C64_VIDEO_STANDARD_NTSC;
     c64_bus_init(&machine->bus);
     (void)vicii_init(&machine->vic, error, sizeof(error));
@@ -513,6 +1038,14 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
 
     c64_finish_pending_cpu_trace(machine);
 
+    if (c64_try_kernal_load_trap(machine)) {
+        machine->clock.cycle++;
+        machine->clock.cpu_cycles++;
+        machine->instruction_complete = true;
+        c64_set_error(error, error_size, "");
+        return true;
+    }
+
     start_cycle = machine->clock.cycle;
     c64_trace_reset(&machine->last_cpu_trace);
     machine->cpu_trace_start_cycle = start_cycle;
@@ -617,6 +1150,128 @@ void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callbac
 
     machine->memory_access = callback;
     machine->memory_access_user = user;
+}
+
+bool c64_drive_device_supported(uint8_t device) {
+    return c64_drive_slot_index(device) >= 0;
+}
+
+c64_drive_status_result c64_mount_d64(
+    c64_t *machine,
+    uint8_t device,
+    const uint8_t *standard_image_bytes,
+    size_t standard_image_size,
+    const c64_drive_directory_entry *entries,
+    size_t entry_count,
+    const char *display_name,
+    const char *disk_title,
+    const char *disk_id,
+    const char *dos_type,
+    uint16_t free_blocks) {
+    int slot_index;
+    c64_drive_slot *slot;
+    uint8_t *copy;
+    c64_drive_directory_entry *entry_copy = NULL;
+
+    assert(machine);
+
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return C64_DRIVE_STATUS_INVALID_DEVICE;
+    }
+    if (standard_image_bytes == NULL || standard_image_size != C64_DRIVE_D64_STANDARD_SIZE) {
+        machine->drives[slot_index].last_result = C64_DRIVE_STATUS_UNSUPPORTED_IMAGE;
+        return C64_DRIVE_STATUS_UNSUPPORTED_IMAGE;
+    }
+
+    copy = (uint8_t *)malloc(standard_image_size);
+    if (copy == NULL) {
+        machine->drives[slot_index].last_result = C64_DRIVE_STATUS_OUT_OF_MEMORY;
+        return C64_DRIVE_STATUS_OUT_OF_MEMORY;
+    }
+    if (entry_count > 0) {
+        entry_copy = (c64_drive_directory_entry *)malloc(entry_count * sizeof(*entry_copy));
+        if (entry_copy == NULL) {
+            free(copy);
+            machine->drives[slot_index].last_result = C64_DRIVE_STATUS_OUT_OF_MEMORY;
+            return C64_DRIVE_STATUS_OUT_OF_MEMORY;
+        }
+        memcpy(entry_copy, entries, entry_count * sizeof(*entry_copy));
+    }
+    memcpy(copy, standard_image_bytes, standard_image_size);
+
+    slot = &machine->drives[slot_index];
+    free(slot->image_bytes);
+    free(slot->entries);
+    memset(slot, 0, sizeof(*slot));
+    slot->mounted = true;
+    slot->image_kind = C64_DRIVE_IMAGE_D64;
+    slot->last_result = C64_DRIVE_STATUS_OK;
+    slot->image_bytes = copy;
+    slot->image_size = standard_image_size;
+    slot->entries = entry_copy;
+    slot->entry_count = entry_count;
+    c64_copy_text(slot->display_name, sizeof(slot->display_name), display_name);
+    c64_copy_text(slot->disk_title, sizeof(slot->disk_title), disk_title);
+    c64_copy_text(slot->disk_id, sizeof(slot->disk_id), disk_id);
+    c64_copy_text(slot->dos_type, sizeof(slot->dos_type), dos_type);
+    slot->free_blocks = free_blocks;
+    return C64_DRIVE_STATUS_OK;
+}
+
+void c64_unmount_drive(c64_t *machine, uint8_t device) {
+    int slot_index;
+    c64_drive_slot *slot;
+
+    assert(machine);
+
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return;
+    }
+
+    slot = &machine->drives[slot_index];
+    free(slot->image_bytes);
+    free(slot->entries);
+    memset(slot, 0, sizeof(*slot));
+    slot->last_result = C64_DRIVE_STATUS_NOT_MOUNTED;
+}
+
+void c64_unmount_all_drives(c64_t *machine) {
+    uint8_t device;
+
+    assert(machine);
+
+    for (device = C64_DRIVE_MIN_DEVICE; device <= C64_DRIVE_MAX_DEVICE; ++device) {
+        c64_unmount_drive(machine, device);
+    }
+}
+
+bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status) {
+    int slot_index;
+    const c64_drive_slot *slot;
+
+    assert(machine);
+
+    if (out_status == NULL) {
+        return false;
+    }
+
+    memset(out_status, 0, sizeof(*out_status));
+    out_status->device = device;
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        out_status->last_result = C64_DRIVE_STATUS_INVALID_DEVICE;
+        return false;
+    }
+
+    slot = &machine->drives[slot_index];
+    out_status->mounted = slot->mounted;
+    out_status->image_kind = slot->image_kind;
+    out_status->last_result = slot->last_result;
+    c64_copy_text(out_status->display_name, sizeof(out_status->display_name), slot->display_name);
+    c64_copy_text(out_status->disk_title, sizeof(out_status->disk_title), slot->disk_title);
+    return true;
 }
 
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out) {

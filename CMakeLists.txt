@@ -129,6 +129,23 @@ target_link_libraries(test_c64_keyboard PRIVATE
 
 add_test(NAME c64_keyboard COMMAND test_c64_keyboard)
 
+add_executable(test_c64_disk_load
+    tests/machine/test_c64_disk_load.c
+)
+
+target_compile_features(test_c64_disk_load PRIVATE c_std_99)
+
+target_compile_definitions(test_c64_disk_load PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_c64_disk_load PRIVATE
+    machine
+    d64
+)
+
+add_test(NAME c64_disk_load COMMAND test_c64_disk_load)
+
 add_executable(test_frontend_input
     tests/frontend/test_frontend_input.c
 )
@@ -199,6 +216,22 @@ target_link_libraries(test_symbol_table PRIVATE
 )
 
 add_test(NAME symbol_table COMMAND test_symbol_table)
+
+add_executable(test_d64
+    tests/tools/test_d64.c
+)
+
+target_compile_features(test_d64 PRIVATE c_std_99)
+
+target_compile_definitions(test_d64 PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_d64 PRIVATE
+    d64
+)
+
+add_test(NAME d64 COMMAND test_d64)
 
 add_executable(test_assembler_conditionals
     tests/tools/test_assembler_conditionals.c
@@ -283,6 +316,22 @@ target_link_libraries(test_runtime_frame PRIVATE
 )
 
 add_test(NAME runtime_frame COMMAND test_runtime_frame)
+
+add_executable(test_runtime_disk
+    tests/runtime/test_runtime_disk.c
+)
+
+target_compile_features(test_runtime_disk PRIVATE c_std_99)
+
+target_compile_definitions(test_runtime_disk PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_runtime_disk PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_disk COMMAND test_runtime_disk)
 
 add_executable(test_runtime_assembler
     tests/runtime/test_runtime_assembler.c

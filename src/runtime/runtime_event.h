@@ -1,5 +1,7 @@
 #pragma once
 
+#include "c64.h"
+
 #include <stdint.h>
 
 typedef enum runtime_event_type {
@@ -18,6 +20,7 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_MEMORY_RESPONSE,
     RUNTIME_EVENT_MEMORY_VIEW_RESPONSE,
     RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
+    RUNTIME_EVENT_DISK_STATUS_RESPONSE,
     RUNTIME_EVENT_ASSEMBLE_COMPLETE,
     RUNTIME_EVENT_ASSEMBLE_ERROR,
     RUNTIME_EVENT_FRAME_READY
@@ -155,6 +158,15 @@ typedef struct runtime_breakpoint_snapshot {
     runtime_breakpoint_snapshot_entry entries[RUNTIME_BREAKPOINT_SNAPSHOT_MAX];
 } runtime_breakpoint_snapshot;
 
+typedef struct runtime_disk_status_snapshot {
+    uint8_t device;
+    uint8_t mounted;
+    c64_drive_image_kind image_kind;
+    c64_drive_status_result last_result;
+    char display_name[C64_DRIVE_DISPLAY_NAME_MAX];
+    char disk_title[C64_DRIVE_DISK_TITLE_MAX];
+} runtime_disk_status_snapshot;
+
 typedef struct runtime_event {
     runtime_event_type type;
 
@@ -177,6 +189,7 @@ typedef struct runtime_event {
         runtime_machine_snapshot machine_state;
         runtime_memory_snapshot memory;
         runtime_breakpoint_snapshot breakpoints;
+        runtime_disk_status_snapshot disk_status;
         struct {
             uint16_t address;
             char path[1024];

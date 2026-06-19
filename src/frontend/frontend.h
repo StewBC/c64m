@@ -26,6 +26,7 @@ typedef struct frontend_debug_state {
     runtime_memory_snapshot memory;
     runtime_memory_snapshot memory_view;
     runtime_breakpoint_snapshot breakpoints;
+    runtime_disk_status_snapshot disk_status[2];
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
@@ -38,6 +39,7 @@ typedef struct frontend_debug_state {
     bool has_memory;
     bool has_memory_view;
     bool has_breakpoints;
+    bool has_disk_status[2];
 } frontend_debug_state;
 
 typedef struct frontend_assembler_state {
@@ -72,6 +74,8 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_UPDATE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT,
     FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT,
     FRONTEND_DEBUGGER_INTENT_MACHINE_RESET,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
@@ -103,6 +107,7 @@ typedef struct frontend_debugger_intent {
     uint16_t assemble_address;
     uint16_t assemble_run_address;
     bool assemble_auto_run;
+    uint8_t disk_device;
 } frontend_debugger_intent;
 
 typedef struct frontend_layout_state {

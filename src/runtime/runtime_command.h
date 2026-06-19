@@ -36,6 +36,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_DUPLICATE_BREAKPOINT,
     RUNTIME_COMMAND_REQUEST_BREAKPOINTS,
     RUNTIME_COMMAND_LOAD_PRG,
+    RUNTIME_COMMAND_MOUNT_D64,
+    RUNTIME_COMMAND_UNMOUNT_DISK,
+    RUNTIME_COMMAND_REQUEST_DISK_STATUS,
     RUNTIME_COMMAND_ASSEMBLE_FILE,
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_CYCLE_TURBO_SPEED,
@@ -120,6 +123,15 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
         } load_prg;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+            uint8_t device;
+        } mount_d64;
+
+        struct {
+            uint8_t device;
+        } disk_device;
 
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];

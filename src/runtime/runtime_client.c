@@ -325,6 +325,46 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_MOUNT_D64,
+    };
+
+    if (!client || !path || path[0] == '\0' || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.mount_d64.device = device;
+    snprintf(command.data.mount_d64.path, sizeof(command.data.mount_d64.path), "%s", path);
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_unmount_disk(runtime_client *client, uint8_t device) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_UNMOUNT_DISK,
+    };
+
+    if (!client || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.disk_device.device = device;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_request_disk_status(runtime_client *client, uint8_t device) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_REQUEST_DISK_STATUS,
+    };
+
+    if (!client || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.disk_device.device = device;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_ASSEMBLE_FILE,

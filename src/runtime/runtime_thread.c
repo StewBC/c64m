@@ -5,6 +5,7 @@
 #include "runtime_command.h"
 #include "runtime_event.h"
 #include "runtime_assembler.h"
+#include "d64.h"
 #include "disasm_6502.h"
 
 #include <SDL.h>
@@ -214,6 +215,206 @@ static void runtime_publish_breakpoints(runtime *rt) {
     }
 
     runtime_publish_event(rt, &event);
+}
+
+static void runtime_publish_drive_status(runtime *rt, uint8_t device) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_DISK_STATUS_RESPONSE,
+    };
+    c64_drive_status status;
+
+    c64_copy_drive_status(&rt->machine, device, &status);
+    event.data.disk_status.device = status.device;
+    event.data.disk_status.mounted = status.mounted ? 1u : 0u;
+    event.data.disk_status.image_kind = status.image_kind;
+    event.data.disk_status.last_result = status.last_result;
+    snprintf(event.data.disk_status.display_name, sizeof(event.data.disk_status.display_name), "%s", status.display_name);
+    snprintf(event.data.disk_status.disk_title, sizeof(event.data.disk_status.disk_title), "%s", status.disk_title);
+
+    runtime_publish_event(rt, &event);
+}
+
+static c64_drive_status_result runtime_drive_status_from_d64_result(d64_result result) {
+    switch (result) {
+    case D64_OK:
+        return C64_DRIVE_STATUS_OK;
+    case D64_OUT_OF_MEMORY:
+        return C64_DRIVE_STATUS_OUT_OF_MEMORY;
+    case D64_UNSUPPORTED_IMAGE:
+        return C64_DRIVE_STATUS_UNSUPPORTED_IMAGE;
+    default:
+        return C64_DRIVE_STATUS_PARSE_ERROR;
+    }
+}
+
+static const char *runtime_basename(const char *path) {
+    const char *slash;
+    const char *backslash;
+
+    if (path == NULL) {
+        return "";
+    }
+
+    slash = strrchr(path, '/');
+    backslash = strrchr(path, '\\');
+    if (slash == NULL || (backslash != NULL && backslash > slash)) {
+        slash = backslash;
+    }
+
+    return slash == NULL ? path : slash + 1;
+}
+
+static bool runtime_read_file_bytes(const char *path, uint8_t **out_bytes, size_t *out_size) {
+    FILE *file;
+    long size;
+    uint8_t *bytes;
+
+    if (path == NULL || out_bytes == NULL || out_size == NULL) {
+        return false;
+    }
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return false;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return false;
+    }
+    size = ftell(file);
+    if (size < 0) {
+        fclose(file);
+        return false;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return false;
+    }
+
+    bytes = (uint8_t *)malloc((size_t)size);
+    if (bytes == NULL) {
+        fclose(file);
+        return false;
+    }
+    if (fread(bytes, 1, (size_t)size, file) != (size_t)size) {
+        free(bytes);
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+
+    *out_bytes = bytes;
+    *out_size = (size_t)size;
+    return true;
+}
+
+static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    size_t entry_count = 0;
+    size_t i;
+    d64_result result;
+    d64_image *image;
+    c64_drive_directory_entry *entries = NULL;
+    c64_drive_status_result status_result;
+    const d64_disk_info *info;
+    d64_directory_entry title_entry;
+    d64_directory_entry d64_entry;
+    char disk_title[C64_DRIVE_DISK_TITLE_MAX];
+    char disk_id[3];
+    char dos_type[3];
+    uint16_t free_blocks = 0;
+
+    if (!runtime_read_file_bytes(command->data.mount_d64.path, &bytes, &size)) {
+        int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+        if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
+            rt->machine.drives[slot_index].last_result = C64_DRIVE_STATUS_IO_ERROR;
+        }
+        runtime_publish_drive_status(rt, command->data.mount_d64.device);
+        return;
+    }
+
+    image = d64_image_create(bytes, size, &result);
+    if (image == NULL) {
+        int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+        status_result = runtime_drive_status_from_d64_result(result);
+        if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
+            rt->machine.drives[slot_index].last_result = status_result;
+        }
+        free(bytes);
+        runtime_publish_drive_status(rt, command->data.mount_d64.device);
+        return;
+    }
+
+    disk_title[0] = '\0';
+    disk_id[0] = '\0';
+    dos_type[0] = '\0';
+    info = d64_image_disk_info(image);
+    if (info != NULL) {
+        memset(&title_entry, 0, sizeof(title_entry));
+        memcpy(title_entry.filename, info->title, D64_DIRECTORY_NAME_SIZE);
+        title_entry.filename_length = info->title_length;
+        (void)d64_entry_name_ascii(&title_entry, disk_title, sizeof(disk_title));
+        disk_id[0] = (char)info->disk_id[0];
+        disk_id[1] = (char)info->disk_id[1];
+        disk_id[2] = '\0';
+        dos_type[0] = (char)info->dos_type[0];
+        dos_type[1] = (char)info->dos_type[1];
+        dos_type[2] = '\0';
+        free_blocks = info->free_blocks;
+    }
+
+    entry_count = d64_image_directory_count(image);
+    if (entry_count > 0) {
+        entries = (c64_drive_directory_entry *)calloc(entry_count, sizeof(*entries));
+        if (entries == NULL) {
+            int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+            if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
+                rt->machine.drives[slot_index].last_result = C64_DRIVE_STATUS_OUT_OF_MEMORY;
+            }
+            d64_image_destroy(image);
+            free(bytes);
+            runtime_publish_drive_status(rt, command->data.mount_d64.device);
+            return;
+        }
+        for (i = 0; i < entry_count; ++i) {
+            if (d64_image_directory_entry(image, i, &d64_entry) != D64_OK) {
+                entry_count = i;
+                break;
+            }
+            entries[i].raw_type = d64_entry.raw_type;
+            entries[i].type = (c64_drive_file_type)d64_entry.type;
+            entries[i].first_track = d64_entry.first_track;
+            entries[i].first_sector = d64_entry.first_sector;
+            memcpy(entries[i].filename, d64_entry.filename, sizeof(entries[i].filename));
+            entries[i].filename_length = d64_entry.filename_length;
+            entries[i].block_count = d64_entry.block_count;
+        }
+    }
+
+    status_result = c64_mount_d64(
+        &rt->machine,
+        command->data.mount_d64.device,
+        bytes,
+        D64_STANDARD_IMAGE_SIZE,
+        entries,
+        entry_count,
+        runtime_basename(command->data.mount_d64.path),
+        disk_title,
+        disk_id,
+        dos_type,
+        free_blocks);
+    if (status_result != C64_DRIVE_STATUS_OK) {
+        int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+        if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
+            rt->machine.drives[slot_index].last_result = status_result;
+        }
+    }
+
+    d64_image_destroy(image);
+    free(entries);
+    free(bytes);
+    runtime_publish_drive_status(rt, command->data.mount_d64.device);
 }
 
 static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
@@ -1428,6 +1629,19 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_LOAD_PRG:
             runtime_load_prg(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_MOUNT_D64:
+            runtime_mount_d64(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_UNMOUNT_DISK:
+            c64_unmount_drive(&rt->machine, command->data.disk_device.device);
+            runtime_publish_drive_status(rt, command->data.disk_device.device);
+            break;
+
+        case RUNTIME_COMMAND_REQUEST_DISK_STATUS:
+            runtime_publish_drive_status(rt, command->data.disk_device.device);
             break;
 
         case RUNTIME_COMMAND_ASSEMBLE_FILE:

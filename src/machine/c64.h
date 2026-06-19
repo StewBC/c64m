@@ -78,6 +78,73 @@ typedef struct c64_config {
     c64_video_standard video_standard;
 } c64_config;
 
+typedef enum c64_drive_image_kind {
+    C64_DRIVE_IMAGE_NONE = 0,
+    C64_DRIVE_IMAGE_D64
+} c64_drive_image_kind;
+
+typedef enum c64_drive_status_result {
+    C64_DRIVE_STATUS_OK = 0,
+    C64_DRIVE_STATUS_INVALID_DEVICE,
+    C64_DRIVE_STATUS_NOT_MOUNTED,
+    C64_DRIVE_STATUS_UNSUPPORTED_IMAGE,
+    C64_DRIVE_STATUS_PARSE_ERROR,
+    C64_DRIVE_STATUS_IO_ERROR,
+    C64_DRIVE_STATUS_OUT_OF_MEMORY
+} c64_drive_status_result;
+
+enum {
+    C64_DRIVE_MIN_DEVICE = 8,
+    C64_DRIVE_MAX_DEVICE = 9,
+    C64_DRIVE_SLOT_COUNT = 2,
+    C64_DRIVE_DISPLAY_NAME_MAX = 128,
+    C64_DRIVE_DISK_TITLE_MAX = 17,
+    C64_DRIVE_D64_STANDARD_SIZE = 174848
+};
+
+typedef struct c64_drive_status {
+    uint8_t device;
+    bool mounted;
+    c64_drive_image_kind image_kind;
+    c64_drive_status_result last_result;
+    char display_name[C64_DRIVE_DISPLAY_NAME_MAX];
+    char disk_title[C64_DRIVE_DISK_TITLE_MAX];
+} c64_drive_status;
+
+typedef enum c64_drive_file_type {
+    C64_DRIVE_FILE_DEL = 0,
+    C64_DRIVE_FILE_SEQ = 1,
+    C64_DRIVE_FILE_PRG = 2,
+    C64_DRIVE_FILE_USR = 3,
+    C64_DRIVE_FILE_REL = 4,
+    C64_DRIVE_FILE_UNKNOWN = 255
+} c64_drive_file_type;
+
+typedef struct c64_drive_directory_entry {
+    uint8_t raw_type;
+    c64_drive_file_type type;
+    uint8_t first_track;
+    uint8_t first_sector;
+    uint8_t filename[16];
+    size_t filename_length;
+    uint16_t block_count;
+} c64_drive_directory_entry;
+
+typedef struct c64_drive_slot {
+    bool mounted;
+    c64_drive_image_kind image_kind;
+    c64_drive_status_result last_result;
+    char display_name[C64_DRIVE_DISPLAY_NAME_MAX];
+    char disk_title[C64_DRIVE_DISK_TITLE_MAX];
+    char disk_id[3];
+    char dos_type[3];
+    uint16_t free_blocks;
+    uint8_t *image_bytes;
+    size_t image_size;
+    c64_drive_directory_entry *entries;
+    size_t entry_count;
+} c64_drive_slot;
+
 typedef struct c64_machine_snapshot {
     uint64_t cycle;
     uint64_t cpu_cycles;
@@ -156,6 +223,7 @@ typedef struct c64_t {
     bool has_character_rom;
     bool ready;
     c64_config config;
+    c64_drive_slot drives[C64_DRIVE_SLOT_COUNT];
 } c64_t;
 
 void c64_init(c64_t *machine);
@@ -174,6 +242,22 @@ void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
+bool c64_drive_device_supported(uint8_t device);
+c64_drive_status_result c64_mount_d64(
+    c64_t *machine,
+    uint8_t device,
+    const uint8_t *standard_image_bytes,
+    size_t standard_image_size,
+    const c64_drive_directory_entry *entries,
+    size_t entry_count,
+    const char *display_name,
+    const char *disk_title,
+    const char *disk_id,
+    const char *dos_type,
+    uint16_t free_blocks);
+void c64_unmount_drive(c64_t *machine, uint8_t device);
+void c64_unmount_all_drives(c64_t *machine);
+bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);

@@ -20,6 +20,7 @@ target_link_libraries(runtime
     PUBLIC
         machine
         assembler
+        d64
         symbols
         util
     PRIVATE

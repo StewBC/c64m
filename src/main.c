@@ -76,6 +76,10 @@ static bool choose_prg_path(char *out_path, size_t out_size) {
     return choose_file_path(out_path, out_size, "Load PRG", " of type {\"prg\"}");
 }
 
+static bool choose_disk_path(char *out_path, size_t out_size) {
+    return choose_file_path(out_path, out_size, "Mount Disk Image", NULL);
+}
+
 static bool choose_ini_path(char *out_path, size_t out_size) {
     return choose_file_path(out_path, out_size, "Select INI File", " of type {\"ini\"}");
 }
@@ -111,6 +115,8 @@ static void request_debug_state(runtime_client *client) {
     runtime_client_request_cpu_state(client);
     runtime_client_request_machine_state(client);
     runtime_client_request_breakpoints(client);
+    runtime_client_request_disk_status(client, 8);
+    runtime_client_request_disk_status(client, 9);
 }
 
 static void update_debug_state_from_event(
@@ -177,6 +183,14 @@ static void update_debug_state_from_event(
         case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
             debug_state->breakpoints = event->data.breakpoints;
             debug_state->has_breakpoints = true;
+            break;
+
+        case RUNTIME_EVENT_DISK_STATUS_RESPONSE:
+            if (event->data.disk_status.device >= 8 && event->data.disk_status.device <= 9) {
+                size_t index = (size_t)(event->data.disk_status.device - 8u);
+                debug_state->disk_status[index] = event->data.disk_status;
+                debug_state->has_disk_status[index] = true;
+            }
             break;
 
         case RUNTIME_EVENT_FRAME_READY:
@@ -701,6 +715,22 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     if (choose_prg_path(path, sizeof(path))) {
                         sent = runtime_client_load_prg(client, path);
                     }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
+                {
+                    char path[1024];
+                    if ((intent.disk_device == 8 || intent.disk_device == 9) &&
+                        choose_disk_path(path, sizeof(path))) {
+                        sent = runtime_client_mount_d64(client, intent.disk_device, path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    sent = runtime_client_unmount_disk(client, intent.disk_device);
                 }
                 break;
 

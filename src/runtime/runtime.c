@@ -169,6 +169,7 @@ void runtime_destroy(runtime *rt) {
     }
 
     runtime_stop(rt);
+    c64_unmount_all_drives(&rt->machine);
     free(rt->basic_rom_path);
     free(rt->char_rom_path);
     free(rt->kernal_rom_path);

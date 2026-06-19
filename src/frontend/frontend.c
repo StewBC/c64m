@@ -695,6 +695,26 @@ static bool frontend_push_simple_intent(frontend *ui, frontend_debugger_intent_t
     return true;
 }
 
+static bool frontend_push_disk_intent(frontend *ui, frontend_debugger_intent_type type, uint8_t device)
+{
+    size_t next;
+
+    if (ui == NULL || type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = type;
+    ui->intents[ui->intent_write].disk_device = device;
+    ui->intent_write = next;
+    return true;
+}
+
 static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
 {
     frontend_breakpoint_dialog_state *dialog;
@@ -3382,7 +3402,40 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     nk_end(ui->ctx);
 }
 
-static void frontend_draw_misc_programs(frontend *ui)
+static const char *frontend_disk_label(const frontend_debug_state *debug_state, uint8_t device)
+{
+    size_t index;
+    const runtime_disk_status_snapshot *status;
+
+    if (debug_state == NULL || device < 8 || device > 9) {
+        return "No disk";
+    }
+    index = (size_t)(device - 8u);
+    if (!debug_state->has_disk_status[index]) {
+        return "No disk";
+    }
+
+    status = &debug_state->disk_status[index];
+    if (!status->mounted) {
+        if (status->last_result == C64_DRIVE_STATUS_IO_ERROR) {
+            return "Mount failed";
+        }
+        if (status->last_result == C64_DRIVE_STATUS_PARSE_ERROR ||
+            status->last_result == C64_DRIVE_STATUS_UNSUPPORTED_IMAGE) {
+            return "Unsupported disk";
+        }
+        return "No disk";
+    }
+    if (status->disk_title[0] != '\0') {
+        return status->disk_title;
+    }
+    if (status->display_name[0] != '\0') {
+        return status->display_name;
+    }
+    return "Mounted";
+}
+
+static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state *debug_state)
 {
     struct nk_context *ctx;
 
@@ -3404,12 +3457,36 @@ static void frontend_draw_misc_programs(frontend *ui)
             FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
             0);
     }
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Disks", NK_TEXT_LEFT);
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+    nk_layout_row_push(ctx, 0.15f);
+    if (nk_button_label(ctx, "8")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 8);
+    }
+    nk_layout_row_push(ctx, 0.15f);
+    if (nk_button_label(ctx, "-")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 8);
+    }
+    nk_layout_row_push(ctx, 0.70f);
+    nk_label(ctx, frontend_disk_label(debug_state, 8), NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
+    nk_layout_row_push(ctx, 0.15f);
+    if (nk_button_label(ctx, "9")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 9);
+    }
+    nk_layout_row_push(ctx, 0.15f);
+    if (nk_button_label(ctx, "-")) {
+        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 9);
+    }
+    nk_layout_row_push(ctx, 0.70f);
+    nk_label(ctx, frontend_disk_label(debug_state, 9), NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "RESET")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_MACHINE_RESET);
     }
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "D64 and CRT support deferred", NK_TEXT_LEFT);
 }
 
 static void frontend_draw_misc_debugger(frontend *ui, const frontend_debug_state *debug_state)
@@ -3744,7 +3821,7 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
         if (nk_group_begin(ctx, "misc-tab-content", NK_WINDOW_BORDER)) {
             switch (ui->misc.active_tab) {
                 case FRONTEND_MISC_TAB_PROGRAMS:
-                    frontend_draw_misc_programs(ui);
+                    frontend_draw_misc_programs(ui, debug_state);
                     break;
 
                 case FRONTEND_MISC_TAB_DEBUGGER:
