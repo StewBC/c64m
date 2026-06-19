@@ -1,49 +1,428 @@
 # c64m - Commodore 64 Emulator
 
-This emulator was written primarily by Codex, OpenAI's coding agent, working from task specifications generated through ChatGPT. My workflow is to interact with ChatGPT, have it write implementation tasks as `.md` files in the `md-files` folder, and then have Codex use those files to implement the required functionality.
+c64m is a Commodore 64 emulator written in C99.  It was (almost) entirely written using coding agents — Claude Code and ChatGPT's Codex.  There are two exceptions:
+1. Codex chose to use the CPU emulation I had written for [a2m - Apple II emulator - verbatim](https://github.com/StewBC/a2m)
+2. Codex brought the a2m built-in assembler in, but modified and improved it (and scaled it back to just 6502). In the bigger picture, it is now the way I wish I had written it initially.
 
-The VIC-II was primarily coded by Claude Code. I did use Codex and Claude interchangeably to compare the differences between them on various VIC-II tasks. I also used Claude to scope the work for bringing the `a2m` assembler, with improvements, into c64m. I then had Codex do the implementation work.
+## Features
 
-With three exceptions, all of the code in this project was written by Codex without me directly reviewing the implementation as it was being developed. The exceptions are:
+---
 
-1. The 6510 CPU implementation.
-2. Portions of the Nuklear layout code.
-3. The assembler, as mentioned above.
+### CPU
 
-In those cases, I asked Codex and Claude to refer to code from my `a2m` Apple II emulator. For the CPU, Codex reused my implementation almost verbatim. For the layout code, it wrote new code, but the examples I provided helped communicate the desired design and behavior. For the assembler, it was a mix: it kept a lot of the old code and concepts, more than I would have liked.
+- MOS 6510 CPU with full 6502 instruction set
+- Accurate instruction-level execution and cycle counting
+- IRQ and NMI interrupt handling (edge-triggered NMI latch)
+- RESTORE key routes through NMI path
+- Timed bus events: reads and writes are classified and timestamped within each opcode so mid-instruction side effects land at the correct cycle
+- Bad Line CPU stall via BA line (c-access windows and sprite p/s-access windows)
+- Read vs. write cycle discrimination for BA stall behavior
 
-The overall architecture of the emulator is my design. I specified a layered structure consisting of:
+---
 
-* Machine
-* Runtime
-* Platform
-* Frontend
+### Memory & Bus
 
-I also specified that the runtime and frontend should run on separate threads and communicate through message queues.
+- Full 64K address space with C64 bank-switching
+- RAM, BASIC ROM, KERNAL ROM, character ROM, and I/O banking controlled by CPU port ($0001)
+- Character ROM mapped through VIC bus at $1000–$1FFF (bank 0) and $9000–$9FFF (bank 2)
+- Debugger-safe bus peek API that avoids side effects (CIA ICR clear-on-read, etc.)
+- VIC-II bank base derived from CIA #2 port A pins (four 16K banks)
 
-In addition, I created a tools layer where utilities such as the assembler will live.
+---
 
-## Stats
+### VIC-II Graphics
 
-The times below are total elapsed development time, including my own time thinking through requirements, writing task specifications, refining plans, and communicating with ChatGPT and Codex. For example, the breakpoint system alone took about an hour for me to think through and write out clearly enough for an implementation plan to be produced.
+- PAL (6569) and NTSC timing selectable from configuration
+- Full 384×272 internal frame with border; presented as a balanced 352×240 crop
+- Live raster rendering: pixels are emitted cycle-by-cycle as VIC time advances; mid-frame register changes take effect at their exact event cycle
+- Border rendering with RSEL/CSEL 25/24-row and 40/38-column window clamps
+- XSCROLL and YSCROLL applied as delayed display-window edges
+- DEN bit: clearing blanks display and border pixels to background color ($D021)
 
-After approximately 6 hours and 40 minutes of development time, the emulator booted to BASIC, displayed the familiar startup screen, accepted keyboard input, and could run BASIC programs. At that point, the emulation speed was not yet correct.
+**Graphics modes:**
+- Standard text mode (40×25 characters from screen RAM and character ROM/RAM)
+- Multicolor text mode
+- Standard bitmap mode
+- Multicolor bitmap mode
+- ECM (Extended Color Mode) text
+- Invalid modes 5, 6, 7 (black background/display layer)
 
-After about 7 hours, the keyboard mapping had been refined to a very usable state, and the emulation speed was much closer to correct. BASIC was functioning well, including commands such as the following doing what you would expect:
+**Sprites:**
+- All 8 hardware sprites with independent X/Y position (9-bit X via MSB register)
+- Per-sprite enable, hires (24×21) and multicolor (12×21 logical pixels) modes
+- X-expand (double width) and Y-expand (double height) with correct flip-flop behavior
+- Sprite pointer (p-access) and data (s-access) fetched from VIC bank
+- Sprite-background priority ($D01B): per-sprite front/behind foreground selection
+- Sprite-sprite collision latch ($D01E) with read-clear and write-ignore
+- Sprite-background collision latch ($D01F) with foreground-pixel detection
+- Sprite collision IRQs (IMMC/IMBC) wired through VIC IRQ path
+- BA cycle stealing for sprite fetch windows with correct cross-line handling for sprites 3 and 4
 
-```basic
-POKE 53281,0
-POKE 53280,1
-SYS 64738
-```
+**Registers:**
+- Full register mirroring ($D000–$D3FF)
+- Unused register high-bit masking per hardware spec ($D016, color registers, unused block $D02F–$D03F read as $FF)
+- Open-bus high nibble on color registers reads as 1
 
-Now, after 32 hours, the C64 is quite alive: text modes, graphics, and sprites.  Some .d64's load.  Loads of one-load collection PRGs work.  The intergrated assembler is working.  The massive obviously missing piece is SID.
+**VIC-II IRQ:**
+- Raster IRQ (programmable raster compare line)
+- Sprite collision IRQs
+- IRQ status ($D019) and enable ($D01A) with aggregate enabled-pending summary in bit 7
 
-## Next Steps
+---
 
-Development will continue. In truth, ChatGPT and Codex are doing the implementation work. Perhaps this process works especially well because I have previously written an emulator and can clearly describe the architecture and requirements.
+### CIA
 
-Regardless, what AI is capable of today is genuinely impressive.
+**CIA #1** (keyboard / joystick / timer IRQ):
+- Timer A and Timer B: 16-bit down-counters, continuous and one-shot modes
+- Timer source selection: Phi2, CNT pulses, Timer A cascade, combined cascade+CNT
+- PB6/PB7 timer outputs: pulse and toggle modes
+- ICR interrupt mask, flag management, and clear-on-read
+- Timer underflow IRQ routed to CPU IRQ line
+- Bidirectional keyboard matrix scan (both Port A row and Port B column directions)
+- Multi-key simultaneous press with correct active-low electrical combining
+- Joystick port 1 (Port B bits 0–4) and joystick port 2 (Port A bits 0–4)
+- Keyboard and joystick inputs combine on shared CIA lines
+
+**CIA #2** (VIC bank / IEC / timer NMI):
+- VIC bank selection from Port A PA0/PA1 with correct inverted mapping
+- IEC ATN, CLK, DATA open-collector line representation
+- Timer NMI routed to CPU NMI with edge latch (avoids repeated NMI while line stays asserted)
+
+**Time-of-Day (TOD):**
+- BCD second, minute, hour (12-hour AM/PM with correct 11→12 and 12→1 rollover)
+- 60 Hz / 50 Hz source selection via CRA bit 7 (configurable PAL/NTSC frame cadence)
+- Coherent read latching: reading hours latches all TOD fields; reading tenths releases latch
+- Alarm with ICR bit 2 flagging and IRQ/NMI routing through Phase D mask logic
+- Debugger-safe TOD peek without creating or releasing the CPU-visible latch
+
+---
+
+### Disk (.d64)
+
+- Read-only D64 image support (standard 35-track geometry)
+- Two independent drive slots: device 8 and device 9
+- Mount and unmount from the Machine tab UI or runtime commands
+- KERNAL LOAD trap at $FFD5 for devices 8 and 9 (other devices fall through to ROM)
+- `LOAD "NAME",8` — PRG load at BASIC start pointer with BASIC end-pointer updates
+- `LOAD "NAME",8,1` — PRG load at embedded PRG load address
+- `LOAD "$",8` — directory synthesis as tokenized BASIC program (disk title, file list, blocks free)
+- Filename matching: exact, prefix wildcard (`LAKE*`), single-character wildcard (`?`), and `*` for first PRG
+- BAM metadata: disk title, disk ID, DOS type, free-block count
+- Directory enumeration with PETSCII filename preservation and ASCII debug names
+- Malformed-chain protection: loop detection and out-of-range sector guards
+- Device 8 and device 9 operate independently; unmounting one does not affect the other
+- Disk status displayed in Machine tab (disk title or host filename)
+
+---
+
+### Assembler
+
+Full two-pass 6502 assembler integrated into the emulator:
+
+- All standard 6502 addressing modes and opcodes (65C02 extensions excluded)
+- Labels, variables (`ident = expr`, `ident++`, `ident--`), and forward references
+- `.org` / `* =` origin control
+- Data directives: `.byte`, `.word`/`.addr`, `.dword`, `.qword`, reverse-order variants (`.drow` etc.), `.res`, `.align`
+- String directives: `.string`/`.asciiz`, `.strcode`
+- `.include` and `.incbin` with recursion guard and path resolution relative to the including file
+- `.define` text substitution (identifier word-boundary aware, skips string literals)
+- Conditional assembly: `.if`/`.else`/`.endif` with nesting, `.defined`, comparison operators (`.lt`, `.le`, `.gt`, `.ge`, `.eq`, `.ne`)
+- Loops: `.for`/`.endfor` and `.repeat`/`.endrepeat`/`.endrep` (up to 64K iterations)
+- Macros: `.macro`/`.endmacro` with parameter substitution and `.local` scoped names
+- Scopes and procedures: `.scope`/`.endscope`, `.proc`/`.endproc`
+- Named segments: `.segdef`/`.segment` with emit/noemit control
+- Assembly loads directly into C64 RAM at the specified address
+- Reset-and-assemble flow: machine resets, runs to BASIC ($E38B), then assembles
+- Auto Run option: sets PC to run address and resumes the emulator after assembly
+- Assembler labels are exported to the debugger symbol table immediately after assembly
+- Scrollable per-line assembly error dialog
+
+---
+
+### Debugger
+
+**CPU / Register View:**
+- Live PC, SP, A, X, Y, and N V - B D I Z C flags from runtime snapshots
+- Paused register and status flag editing
+
+**Disassembly View:**
+- 6502 disassembler with full addressing mode decode
+- PC-following and manual navigation (Up/Down, PageUp/PageDown, Home/End)
+- CPU-map and raw-RAM disassembly modes
+- Assembler label display in disassembly (symbol resolver)
+- Breakpoint gutter indicators; Option+B toggles an execute breakpoint at the cursor
+
+**Memory View:**
+- 16-byte hex + ASCII display of the full 64K address space
+- CPU-map and raw-RAM modes (CPU-map uses side-effect-free debug peeks)
+- Cursor navigation, PageUp/PageDown, Home/End
+- Custom scrollbar for 64K address space drag
+- Hex-nibble and ASCII in-place editing while paused
+
+**Breakpoints / Watchpoints:**
+- Execute, read, and write breakpoints with inclusive address ranges
+- Map/ROM/RAM filter for ROM vs. RAM discrimination
+- Stable runtime IDs, enabled/disabled state, hit counters, and reset counters
+- Actions: Break, Fast (turbo), Slow (restore pacing), Tron, Troff
+- Duplicate addresses and multiple breakpoints at the same address supported
+- Breakpoint editor modal: create, edit, duplicate, access checkboxes, range, mapping, counters, actions
+- Breakpoint persistence in INI file (`[DEBUG]` section, `break.<address>` keys)
+- Clear, clear-all, enable/disable from the Breakpoints tab
+
+**Symbol Table:**
+- Assembler-sourced, file-sourced, user-defined, and built-in symbol kinds
+- Exact-address and name lookup; nearest-symbol lookup
+- Source-kind removal for reassembly/reload workflows
+- Disassembler integration via symbol resolver
+
+**Step Controls:**
+- Instruction step (F10)
+- Step out (Shift+F10)
+- Step over (F11)
+- Run (F12)
+- Run to cursor (Shift+F12)
+- Pause stops execution at the next instruction boundary
+
+**Execution Trace (TRON/TROFF):**
+- TRON action enables per-instruction tracing
+- TROFF action disables tracing
+
+---
+
+### Keyboard Input
+
+- Semantic host-to-C64 key mapping (not physical layout mapping)
+- Letters A–Z, digits 0–9, common BASIC punctuation, shifted symbols
+- Shift+letter preserves C64 left graphics characters; Tab+letter gives Commodore graphics characters
+- C64 cursor keys from host arrow keys; Shift synthesized for left/up
+- C64 CONTROL from host Control; C64 Commodore from host Tab
+- RUN/STOP from ESC; DEL from Backspace; INST from Shift+Backspace; RESTORE from host Delete
+- HOST and C64 keyboard matrix combined with joystick on shared CIA lines
+- Clipboard paste (Option+Insert): injects host clipboard as C64 key events with cycle-accurate timing (~40ms hold, ~10ms gap per character, scales with turbo)
+- Matrix paste (Shift+Option+Insert): direct matrix injection for reliable bulk paste
+- All ASCII printable characters mapped; unmappable characters silently skipped
+
+---
+
+### Joystick
+
+- Joystick port 1 emulated via CIA #1 Port B bits 0–4 (up/down/left/right/fire)
+- Joystick port 2 emulated via CIA #1 Port A bits 0–4
+
+---
+
+### Display & UI
+
+- Single-window application (no popup windows or docked panels)
+- **Display-only mode**: C64 display fills the entire window
+- **Debugger mode** (F9 toggle): C64 display + CPU, disassembly, memory, and misc panels
+- Aspect-ratio-preserving scaling with letterbox/pillarbox
+- Integer scaling and aspect correction options
+- Configurable display dimensions
+- Resizable window; size saved to INI on quit
+- Adjustable splitter layout between debugger panels; layout saved to INI
+- Disk activity LED visibility option
+
+---
+
+### Configuration & Persistence
+
+- INI file (`c64m.ini`) for all persistent settings
+- `[config]` section: video standard (PAL/NTSC), display size, scaling, aspect correction, filter, scroll wheel speed, turbo speed list, symbol file paths, disk LED, auto-save flag
+- `[Window]` section: window width and height
+- `[Layout]` section: debugger splitter positions
+- `[DEBUG]` section: breakpoints with duplicate-suffix support
+- Configure dialog with Machine and Emulator tabs; OK applies immediately, Cancel discards
+- `--noini` skips startup INI load; `--nosaveini` disables save controls
+- Changing the INI filename auto-enables save-on-quit
+
+---
+
+### Turbo & Pacing
+
+- Normal PAL/NTSC paced running at ~60 Hz frame cadence
+- Configurable turbo multiplier list (e.g. `2,4,8,16`)
+- Option+T cycles through configured turbo speeds
+- Fast breakpoint action switches to maximum turbo; Slow action restores paced mode
+- Clipboard paste timing scales correctly with the active turbo multiplier
+
+---
+
+### PRG Loader
+
+- Load `.prg` files directly into C64 RAM from the Machine tab
+- Reset-before-load with automatic resume of pre-load run state
+- Collection PRGs (keyboard buffer pre-fills) work correctly via deferred injection at BASIC warm-start ($E38B)
+- Manual RESET cancels any pending PRG injection
+
+---
+
+### Architecture
+
+- Layered C99 architecture: Machine → Runtime → Frontend, with a Tools layer
+- Machine and runtime run on a dedicated runtime thread; UI runs on the main thread
+- All cross-thread data is passed as copied snapshots — no live machine pointers cross threads
+- Command/event message queue between frontend and runtime
+- Snapshot rule enforced: frontend receives only copied state and never reads live machine memory
+
+## Keyboard Quick Reference
+
+Keys listed here control the **emulator** — they are intercepted before reaching the C64.
+On macOS, **Opt** = Option/Alt.
+
+---
+
+### Emulator Controls
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| F9             | Toggle debugger UI on/off                                     |
+| Cmd+Q (mac)    | Quit                                                          |
+
+---
+
+### Run / Step (active in all modes)
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| F12            | Run (resume)                                                  |
+| Shift+F12      | Run to cursor (disassembly cursor address)                    |
+| F10            | Step instruction (if paused) — or Pause (if running)         |
+| Shift+F10      | Step out (run until return from current subroutine)           |
+| F11            | Step over (step across JSR without entering)                  |
+| Opt+S          | Step over (same as F11)                                       |
+
+---
+
+### Turbo
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| Opt+T          | Cycle through configured turbo speeds (default: 2×/4×/8×/16×)|
+
+---
+
+### Clipboard / Paste
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| Opt+Ins        | Paste clipboard as timed C64 keystrokes (~40 ms/key)          |
+| Shift+Opt+Ins  | Paste clipboard via direct keyboard-matrix injection          |
+
+---
+
+### Gamepad / Joystick Port Mapping
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| Opt+1          | Map single gamepad to joystick port 1                        |
+| Opt+2          | Map single gamepad to joystick port 2 (default)              |
+| Opt+1 or Opt+2 | With two gamepads connected: swap port assignment             |
+
+---
+
+### Disassembly View  *(focus must be in the disassembly panel)*
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| Opt+B          | Toggle execute breakpoint at cursor (paused only)             |
+| Ctrl+A         | Enter address-jump mode (type 4 hex digits, Enter to jump)   |
+| Tab / Shift+Tab| Cycle symbol display mode (none → label → address+label)      |
+| Up / Down      | Move cursor one instruction                                   |
+| PgUp / PgDn    | Scroll one page                                               |
+| Home / End     | Jump to start / end of view                                   |
+
+---
+
+### Memory View  *(focus must be in the memory panel)*
+
+| Key            | Action                                                        |
+|----------------|---------------------------------------------------------------|
+| Ctrl+A         | Toggle address-entry mode (type 4 hex digits to jump)        |
+| Ctrl+T         | Toggle hex ↔ ASCII edit mode                                  |
+| Up / Down      | Move cursor one row (16 bytes)                               |
+| Left / Right   | Move cursor one byte / nibble                                 |
+| PgUp / PgDn    | Scroll one page                                               |
+| Home           | Move cursor to start of current row (or first address digit) |
+| Ctrl+Home      | Move cursor to start of visible window                       |
+| End            | Move cursor to end of current row (or last address digit)    |
+| Ctrl+End       | Move cursor to end of visible window                         |
+| 0–9, A–F       | Edit hex nibble or ASCII byte at cursor (paused only)        |
+
+---
+
+### C64 Key Mappings (semantic, not physical layout)
+
+| Host Key           | C64 Key                       |
+|--------------------|-------------------------------|
+| Letters A–Z        | A–Z                           |
+| Shift+Letter       | Shifted letter (left graphics set) |
+| Tab+Letter         | Commodore+Letter (right graphics set) |
+| Digits 0–9         | 0–9                           |
+| Shift+!            | !  (Shift+1)                  |
+| Shift+"  or  '     | " (Shift+2 → @)               |
+| Shift+#            | #  (Shift+3)                  |
+| Shift+$            | $  (Shift+4)                  |
+| Shift+%            | %  (Shift+5)                  |
+| Shift+^  or  \     | ↑ (up-arrow key)              |
+| Shift+&            | &  (Shift+6)                  |
+| Shift+* or  ]      | *                             |
+| Shift+(            | (  (Shift+8)                  |
+| Shift+)            | )  (Shift+9)                  |
+| =                  | =                             |
+| Shift+=            | + (plus)                      |
+| -                  | −                             |
+| ;                  | ;                             |
+| Shift+;            | :                             |
+| '  (single quote)  | ' → synthesises Shift+7       |
+| "  (double quote)  | " → synthesises Shift+2       |
+| ,                  | ,                             |
+| .                  | .                             |
+| /                  | /                             |
+| +  (or numpad +)   | +                             |
+| −  (or numpad −)   | −                             |
+| *  (or numpad *)   | *                             |
+| /  (or numpad /)   | /                             |
+| [  or  (           | @                             |
+| `  (backtick)      | ← (left-arrow key)            |
+| Return / KP Enter  | Return                        |
+| Space              | Space                         |
+| Backspace          | DEL                           |
+| Shift+Backspace    | INST (insert)                 |
+| Escape             | RUN/STOP                      |
+| Delete             | RESTORE (triggers NMI)        |
+| Home               | HOME / CLR HOME               |
+| Shift+Home         | CLR (clear screen)            |
+| Right arrow        | Cursor right                  |
+| Left arrow         | Cursor left  (Shift+Right)    |
+| Down arrow         | Cursor down                   |
+| Up arrow           | Cursor up    (Shift+Down)     |
+| Ctrl               | CONTROL                       |
+| Tab                | Commodore (C= key)            |
+| F1                 | F1                            |
+| F2                 | F2  (Shift+F1)                |
+| F3                 | F3                            |
+| F4                 | F4  (Shift+F3)                |
+| F5                 | F5                            |
+| F6                 | F6  (Shift+F5)                |
+| F7                 | F7                            |
+| F8                 | F8  (Shift+F7)                |
+
+## Notes
+
+As of end-of-day June 18, the total time spent on this project is 32 hours.  That includes the time I was thinking, describing, and typing, as well as the time the agents thought and coded.  It also includes all the time testing and playing.  I mostly used one agent or the other, but there is some overlap where I used both at the same time.
+
+There is no SID support at all yet, as of June 18.
+
+## Issues
+
+The emulation is not at all perfect.
+* It does run the machine at "machine speed" and if I set the turbo to its maximum, 256, it is a tiny bit faster.  There's no real boost (a2m will run an Apple II on my M2 Mac at over 100 MHz, so 100x faster, for comparison).
+* There are UI issues.  For example, if you change the PC, you need to click out of that box and back in to change it again.  And then there's no overtype.
+* Step out is broken under some circumstances.
+* When you play Galencia (it does interesting things with the border and sprites), you need to "trick" the game into starting — I know how but I haven't looked at why yet — and the sprites do get mangled, so the emulation isn't quite good enough yet.
+
+That's just a small subset of the issues I am aware of.  Testing has not been thorough — I am mostly still making.  But, on the other hand, many games from the one-load collection work perfectly.
 
 Stefan Wessels
 [swessels@email.com](mailto:swessels@email.com)
