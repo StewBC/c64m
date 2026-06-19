@@ -5,6 +5,7 @@
 #include "runtime_command.h"
 #include "runtime_event.h"
 #include "runtime_assembler.h"
+#include "disasm_6502.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -589,6 +590,57 @@ static bool runtime_breakpoint_record_match(runtime_breakpoint *breakpoint) {
     return true;
 }
 
+static void runtime_write_trace_line(runtime *rt) {
+    c64_cpu_instruction_trace trace;
+    c64_cpu_snapshot snapshot;
+    symbol_resolver resolver;
+    disasm_6502_line line;
+    uint8_t bytes[3];
+    char bytes_str[9];
+    char flags[9];
+    uint8_t p;
+
+    if (rt->trace_file == NULL) {
+        return;
+    }
+
+    c64_debug_copy_last_cpu_trace(&rt->machine, &trace);
+    c64_copy_cpu_snapshot(&rt->machine, &snapshot);
+
+    bytes[0] = c64_debug_read_cpu_map(&rt->machine, trace.opcode_pc);
+    bytes[1] = c64_debug_read_cpu_map(&rt->machine, trace.opcode_pc + 1);
+    bytes[2] = c64_debug_read_cpu_map(&rt->machine, trace.opcode_pc + 2);
+
+    symbol_table_make_resolver(rt->symbols, &resolver);
+    line = disasm_6502_decode_line(trace.opcode_pc, bytes, 3, &resolver);
+
+    switch (line.length) {
+        case 1:  snprintf(bytes_str, sizeof(bytes_str), "%02X      ", bytes[0]); break;
+        case 2:  snprintf(bytes_str, sizeof(bytes_str), "%02X %02X   ", bytes[0], bytes[1]); break;
+        default: snprintf(bytes_str, sizeof(bytes_str), "%02X %02X %02X", bytes[0], bytes[1], bytes[2]); break;
+    }
+
+    p = snapshot.p;
+    flags[0] = (p & 0x80) ? 'N' : 'n';
+    flags[1] = (p & 0x40) ? 'V' : 'v';
+    flags[2] = '-';
+    flags[3] = (p & 0x10) ? 'B' : 'b';
+    flags[4] = (p & 0x08) ? 'D' : 'd';
+    flags[5] = (p & 0x04) ? 'I' : 'i';
+    flags[6] = (p & 0x02) ? 'Z' : 'z';
+    flags[7] = (p & 0x01) ? 'C' : 'c';
+    flags[8] = '\0';
+
+    fprintf(rt->trace_file,
+        "%04X  %s  %-12s  A=%02X X=%02X Y=%02X SP=%02X  %s  CYC=%08llX\n",
+        trace.opcode_pc,
+        bytes_str,
+        line.text,
+        snapshot.a, snapshot.x, snapshot.y, snapshot.sp,
+        flags,
+        (unsigned long long)rt->machine.clock.cycle);
+}
+
 static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakpoint *breakpoint) {
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_BREAK) != 0) {
         return true;
@@ -606,10 +658,23 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TRON) != 0) {
         rt->trace_enabled = true;
+        if (rt->trace_file == NULL) {
+            rt->trace_file = fopen("trace.log", "a");
+            if (rt->trace_file != NULL) {
+                fprintf(rt->trace_file, "--- TRON  CYC=%08llX ---\n",
+                    (unsigned long long)rt->machine.clock.cycle);
+            }
+        }
     }
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TROFF) != 0) {
         rt->trace_enabled = false;
+        if (rt->trace_file != NULL) {
+            fprintf(rt->trace_file, "--- TROFF CYC=%08llX ---\n",
+                (unsigned long long)rt->machine.clock.cycle);
+            fclose(rt->trace_file);
+            rt->trace_file = NULL;
+        }
     }
 
     /*
@@ -1638,6 +1703,7 @@ int runtime_thread_main(void *userdata) {
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;
     rt->trace_enabled = false;
+    rt->trace_file = NULL;
     rt->breakpoint_count = 0;
     rt->next_breakpoint_id = 1;
     rt->next_frame_cycle = 0;
@@ -1682,6 +1748,9 @@ int runtime_thread_main(void *userdata) {
                 if (!runtime_step_cycle(rt)) {
                     break;
                 }
+                if (rt->trace_enabled && c64_consume_instruction_complete(&rt->machine)) {
+                    runtime_write_trace_line(rt);
+                }
                 if (rt->paste_active) {
                     runtime_advance_paste(rt);
                 }
@@ -1692,6 +1761,9 @@ int runtime_thread_main(void *userdata) {
                     runtime_publish_completed_frame(rt);
                     rt->next_frame_cycle = rt->machine.clock.cycle;
                     runtime_pace_after_frame(rt);
+                    if (rt->trace_file != NULL) {
+                        fflush(rt->trace_file);
+                    }
                 }
             }
 
@@ -1709,6 +1781,12 @@ int runtime_thread_main(void *userdata) {
     rt->pending_prg_path = NULL;
     free(rt->pending_asm_path);
     rt->pending_asm_path = NULL;
+    if (rt->trace_file != NULL) {
+        fprintf(rt->trace_file, "--- STOP  CYC=%08llX ---\n",
+            (unsigned long long)rt->machine.clock.cycle);
+        fclose(rt->trace_file);
+        rt->trace_file = NULL;
+    }
     symbol_table_destroy(rt->symbols);
     rt->symbols = NULL;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STOPPED);

@@ -236,6 +236,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         if (machine->pending_cpu_elapsed >= machine->pending_cpu_trace.total_cycles) {
             c64_apply_pending_cpu_events_at_elapsed(machine);
             machine->pending_cpu_trace_active = false;
+            machine->instruction_complete = true;
             machine->pending_cpu_event_index = 0;
             machine->pending_cpu_elapsed = 0;
         }
@@ -486,6 +487,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->pending_cpu_elapsed = 0;
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
     machine->pending_cpu_trace_active = false;
+    machine->instruction_complete = false;
     vector = (uint16_t)c64_bus_read(&machine->bus, 0xfffc) |
         ((uint16_t)c64_bus_read(&machine->bus, 0xfffd) << 8);
 
@@ -568,6 +570,16 @@ bool c64_consume_frame_complete(c64_t *machine) {
     assert(machine);
 
     return vicii_consume_frame_complete(&machine->vic);
+}
+
+bool c64_consume_instruction_complete(c64_t *machine) {
+    assert(machine);
+
+    if (!machine->instruction_complete) {
+        return false;
+    }
+    machine->instruction_complete = false;
+    return true;
 }
 
 void c64_set_key(c64_t *machine, c64_key key, bool pressed) {

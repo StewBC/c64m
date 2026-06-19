@@ -147,6 +147,7 @@ typedef struct c64_t {
     size_t pending_cpu_elapsed;
     uint8_t cpu_bus_mode;
     bool pending_cpu_trace_active;
+    bool instruction_complete;
     bool restore_pending;
     bool cia2_nmi_line;
     size_t cpu_cycles_remaining;
@@ -167,6 +168,7 @@ bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
+bool c64_consume_instruction_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
 void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);

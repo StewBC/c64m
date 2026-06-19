@@ -10,6 +10,7 @@
 #include "symbol_table.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #define RUNTIME_COMMAND_QUEUE_CAPACITY 256
 #define RUNTIME_EVENT_QUEUE_CAPACITY 256
@@ -103,6 +104,7 @@ struct runtime {
     runtime_stop_reason last_stop_reason;
     runtime_speed_mode speed_mode;
     bool trace_enabled;
+    FILE *trace_file;
     runtime_breakpoint breakpoints[RUNTIME_BREAKPOINT_CAPACITY];
     size_t breakpoint_count;
     uint32_t next_breakpoint_id;

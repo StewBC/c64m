@@ -55,8 +55,6 @@ typedef uint8_t (*c6510_read_fn)(void *user, uint16_t address);
 typedef void (*c6510_write_fn)(void *user, uint16_t address, uint8_t value);
 typedef uint8_t (*c6510_irq_pending_fn)(void *user);
 typedef uint8_t (*c6510_nmi_pending_fn)(void *user);
-typedef void (*c6510_trace_fn)(void *user);
-
 typedef struct C6510 {
     CPU cpu;
     void *user;
@@ -64,7 +62,6 @@ typedef struct C6510 {
     c6510_write_fn write;
     c6510_irq_pending_fn irq_pending;
     c6510_nmi_pending_fn nmi_pending;
-    c6510_trace_fn trace;
 } C6510;
 
 typedef enum {
@@ -120,6 +117,6 @@ typedef enum {
 void c6510_init(C6510 *m, void *user, c6510_read_fn read, c6510_write_fn write);
 void c6510_set_irq_pending_callback(C6510 *m, c6510_irq_pending_fn irq_pending);
 void c6510_set_nmi_pending_callback(C6510 *m, c6510_nmi_pending_fn nmi_pending);
-void c6510_set_trace_callback(C6510 *m, c6510_trace_fn trace);
+
 void c6510_reset(C6510 *m);
 size_t c6510_step(C6510 *m);

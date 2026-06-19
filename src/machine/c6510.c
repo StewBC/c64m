@@ -29,11 +29,6 @@ void c6510_set_nmi_pending_callback(C6510 *m, c6510_nmi_pending_fn nmi_pending) 
     m->nmi_pending = nmi_pending;
 }
 
-void c6510_set_trace_callback(C6510 *m, c6510_trace_fn trace) {
-    assert(m);
-    m->trace = trace;
-}
-
 void c6510_reset(C6510 *m) {
     assert(m);
     assert(m->read);
@@ -59,9 +54,6 @@ size_t c6510_step(C6510 *m) {
         return m->cpu.cycles - start_cycle;
     }
     m->cpu.opcode_pc = m->cpu.pc;
-    if(m->trace) {
-        m->trace(m->user);
-    }
     uint8_t opcode = read_from_memory(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.pc++;

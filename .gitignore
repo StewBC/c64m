@@ -7,4 +7,5 @@ disks/
 programs/
 samples/
 *.ini
+trace*.log
 !CMakeLists.txt
