@@ -2,7 +2,12 @@
 
 # c64m Architecture Master Plan
 
-c64m is a Commodore 64 emulator written in C. It uses SDL2 for host platform services and Nuklear for the UI. The emulator is organized around responsibility boundaries, not around implementation convenience.
+c64m is a Commodore 64 emulator written in C. It uses SDL2 for host platform
+services and Nuklear for the UI. The emulator is organized around responsibility
+boundaries, not around implementation convenience.
+
+The current product milestone is PAL and NTSC C64 fidelity for ordinary software,
+not complete hardware recreation and not full external peripheral emulation.
 
 ## Top-Level Layout
 
@@ -21,14 +26,16 @@ src/
 
 ### machine/
 
-The emulated Commodore 64 hardware. This is the source of truth for the machine state.
+The emulated Commodore 64 hardware. This is the source of truth for the machine
+state.
 
 Owns:
 
 ```text
-CPU, RAM, ROM, memory map, VIC-II, SID, CIA, cartridge,
-keyboard matrix, interrupts, cycle timing, bus behavior.
+CPU, RAM, ROM, memory map, VIC-II, SID, CIA, cartridge slot state,
+keyboard matrix, joystick line state, interrupts, cycle timing, bus behavior.
 ```
+
 Rules:
 
 ```text
@@ -37,13 +44,21 @@ No Nuklear.
 No frontend code.
 No platform code.
 No debugger UI concepts.
+No runtime ownership.
 ```
 
-The machine may produce host-side snapshots, such as CPU state, memory copies, SID state, VIC-II state, and completed video pixel buffers. These are data snapshots, not SDL objects.
+The machine may produce host-side data snapshots, such as CPU state, memory
+copies, SID state, VIC-II state, CIA state, and completed video pixel buffers.
+These are copied data snapshots, not SDL objects.
+
+SID emulation lives here. SID register reads and writes are machine-visible C64
+hardware behavior. SID sample generation may be driven by runtime stepping, but
+runtime does not own SID behavior.
 
 ### runtime/
 
-The execution/session controller. Runtime owns the live machine instance and is the only component allowed to directly control it.
+The execution/session controller. Runtime owns the live machine instance and is
+the only component allowed to directly control it.
 
 Owns:
 
@@ -52,7 +67,8 @@ run, pause, reset, step, speed mode,
 breakpoints, watchpoints,
 frame/cycle/instruction stepping,
 request/response access to machine state,
-publishing snapshots/events to the UI thread.
+publishing snapshots/events to the UI thread,
+feeding generated audio samples into an approved shared audio buffer.
 ```
 
 Rules:
@@ -62,18 +78,25 @@ Runtime and machine live on the emulation thread.
 Frontend does not call machine directly.
 Frontend talks to runtime through runtime_client.
 Runtime never calls SDL or Nuklear.
+Runtime never imports platform headers.
 Runtime publishes copies/snapshots, not live machine pointers.
 ```
 
+Runtime may write audio samples to a dependency-safe buffer type owned by `util/`
+or another approved shared module. Runtime must not know which host audio API
+will consume those samples.
+
 ### tools/
 
-Reusable development tools. These do not own the machine and do not control execution.
+Reusable development tools. These do not own the machine and do not control
+execution.
 
 Owns:
 
 ```text
 assembler, disassembler, symbol loading/parsing,
-PRG/CRT parsing if useful as reusable tooling.
+PRG/D64/CRT parsing if useful as reusable tooling,
+small offline validation helpers where appropriate.
 ```
 
 Rules:
@@ -86,6 +109,9 @@ Can be used by frontend and/or runtime.
 ```
 
 Disassembly logic belongs here. A disassembly view belongs in frontend.
+
+File-format parsing can live here when the parser is reusable and has no machine
+ownership. Runtime or frontend decides how parsed data is used.
 
 ### platform/
 
@@ -107,7 +133,12 @@ No runtime ownership.
 No Nuklear UI policy.
 ```
 
-The platform layer may expose host services to frontend. It should not know about C64 hardware semantics.
+The platform layer may expose host services to frontend. It should not know about
+C64 hardware semantics.
+
+The SDL audio device and SDL audio callback live here. The callback may read from
+an approved shared audio sample buffer. It must not call runtime, machine, tools,
+or frontend code.
 
 ### frontend/
 
@@ -118,6 +149,7 @@ Owns:
 ```text
 menus, memory view, register view, disassembly view,
 video output view, debugger panels, settings UI,
+configuration dialogs,
 command dispatch to runtime_client.
 ```
 
@@ -160,7 +192,8 @@ Owns:
 
 ```text
 logging, ring buffers, message queues, strings,
-small containers, assertions, common helpers.
+small containers, assertions, common helpers,
+dependency-safe audio sample buffer types.
 ```
 
 Rules:
@@ -171,9 +204,14 @@ No machine ownership.
 Keep this boring and small.
 ```
 
+The generic audio sample buffer should live here if both runtime and platform need
+to access it. It should be a narrow single-producer/single-consumer interface or
+another explicitly documented thread-safe design.
+
 ## Threading Model
 
-The emulator uses two threads from the beginning.
+The emulator has two primary application threads plus the SDL audio callback
+thread when audio is enabled.
 
 ```text
 UI/main thread:
@@ -189,6 +227,12 @@ Emulation thread:
     services command queue
     runs the C64
     publishes events/snapshots/frames
+    writes generated SID samples to the audio sample buffer
+
+SDL audio callback thread:
+    owned by SDL/platform
+    reads samples from the audio sample buffer
+    fills the host audio stream
 ```
 
 Runtime and machine must stay on the same thread.
@@ -197,6 +241,7 @@ Runtime and machine must stay on the same thread.
 Do not split runtime and machine.
 Do not let UI touch the live machine.
 Do not pass live machine pointers across threads.
+Do not let the SDL audio callback call runtime or machine.
 ```
 
 ## Message Passing
@@ -221,8 +266,12 @@ REQUEST_MEMORY
 REQUEST_CPU_STATE
 REQUEST_VIC_STATE
 REQUEST_SID_STATE
+REQUEST_CIA_STATE
 REQUEST_FRAME
 LOAD_PROGRAM
+MOUNT_D64
+UNMOUNT_D64
+APPLY_CONFIG
 QUIT
 ```
 
@@ -239,14 +288,22 @@ MEMORY_RESPONSE
 CPU_STATE_RESPONSE
 VIC_STATE_RESPONSE
 SID_STATE_RESPONSE
+CIA_STATE_RESPONSE
+DISK_STATUS_RESPONSE
+CONFIG_APPLIED
 ERROR
 ```
 
 The UI should treat runtime as asynchronous even when an operation is quick.
 
+Audio output is not routed through the command/event queue. SID samples flow
+through an approved shared audio buffer. That buffer is a narrow data path, not a
+back channel for control messages.
+
 ## Video Model
 
-The VIC-II belongs to machine. It produces emulated video state and host-side pixel snapshots.
+The VIC-II belongs to machine. It produces emulated video state and host-side
+pixel snapshots.
 
 ```text
 machine/VIC-II -> host-side pixel snapshot
@@ -257,7 +314,38 @@ frontend draws Nuklear UI
 
 The machine does not create SDL textures. The platform/frontend side does that.
 
-For turbo mode, runtime may produce more frames than UI displays. The UI should consume the latest available complete frame and may drop older frames.
+For turbo mode, runtime may produce more frames than UI displays. The UI should
+consume the latest available complete frame and may drop older frames.
+
+PAL and NTSC are both first-class configuration modes for the current milestone.
+Any timing table that differs between PAL and NTSC must be selected through the
+machine configuration path, not by hard-coded frontend policy.
+
+## Audio Model
+
+The SID belongs to machine. It produces emulated SID state and generated audio
+samples.
+
+```text
+machine/SID -> generated samples
+runtime writes samples into util audio buffer
+platform SDL audio callback reads samples from util audio buffer
+host audio device plays samples
+```
+
+Rules:
+
+```text
+Machine does not call SDL.
+Runtime does not call SDL.
+Platform does not know SID semantics.
+Frontend does not generate audio.
+The audio callback does not control emulation.
+```
+
+Audio generation must tolerate normal host jitter. Buffer underrun should produce
+silence or a documented fallback, not undefined behavior. Buffer overrun should
+drop or replace samples according to a documented policy.
 
 ## Debug Views
 
@@ -269,9 +357,14 @@ memory view       = frontend rendering copied memory bytes
 disassembly view  = frontend + tools/disasm over copied memory bytes
 text screen view  = frontend rendering copied screen/color memory
 video output      = frontend rendering VIC-II pixel snapshot
+SID view          = frontend rendering copied SID snapshot
+CIA view          = frontend rendering copied CIA snapshot, if present
 ```
 
 The frontend never reads live machine memory directly.
+
+Debugger memory reads of side-effecting hardware registers must use safe peek or
+snapshot paths, not normal CPU-visible reads.
 
 ## Dependency Direction
 
@@ -314,7 +407,9 @@ SDL2
 Nuklear, vendored directly into frontend
 ```
 
-SDL2 discovery may live at the root CMake level because this application is intentionally an SDL2 emulator. Individual targets should still link only what they use.
+SDL2 discovery may live at the root CMake level because this application is
+intentionally an SDL2 emulator. Individual targets should still link only what
+they use.
 
 ## Naming and Headers
 
@@ -329,11 +424,35 @@ typedef struct c64 c64;
 typedef struct cpu_6510 cpu_6510;
 typedef struct vicii vicii;
 typedef struct sid sid;
+typedef struct cia cia;
+typedef struct audio_ring audio_ring;
 ```
 
-Headers are contracts. They should be self-contained and expose the smallest useful interface.
+Headers are contracts. They should be self-contained and expose the smallest
+useful interface.
 
-Avoid exposing implementation structs unless there is a deliberate performance/debug reason.
+Avoid exposing implementation structs unless there is a deliberate performance or
+debug reason.
+
+## Milestone Boundary
+
+The current milestone is not allowed to silently grow into peripheral emulation.
+
+The following remain future work unless a later milestone explicitly changes the
+scope:
+
+```text
+IEC protocol
+1541 CPU/ROM emulation
+fast loaders
+D64 writes
+full Commodore DOS behavior
+advanced cartridge banking
+bit-perfect SID analog modeling
+full CIA pin/race accuracy
+VIC-II light pen
+open-bus recreation
+```
 
 ## Core Rule
 
@@ -348,4 +467,5 @@ frontend = how the user sees and commands it
 util = boring shared support
 ```
 
-The UI commands the emulator through runtime. Runtime owns the machine. The machine is the truth.
+The UI commands the emulator through runtime. Runtime owns the machine. The
+machine is the truth.
