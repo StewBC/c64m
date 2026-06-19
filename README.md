@@ -1,7 +1,7 @@
 # c64m - Commodore 64 Emulator
 
 c64m is a Commodore 64 emulator written in C99.  It was (almost) entirely written using coding agents — Claude Code and ChatGPT's Codex.  There are two exceptions:
-1. Codex chose to use the CPU emulation I had written for [a2m - Apple II emulator - verbatim](https://github.com/StewBC/a2m)
+1. Codex chose to use the CPU emulation I had written for [a2m](https://github.com/StewBC/a2m) - Apple II emulator - verbatim.
 2. Codex brought the a2m built-in assembler in, but modified and improved it (and scaled it back to just 6502). In the bigger picture, it is now the way I wish I had written it initially.
 
 ## Features
@@ -424,6 +424,6 @@ The emulation is not at all perfect.
 
 That's just a small subset of the issues I am aware of.  Testing has not been thorough — I am mostly still making.  But, on the other hand, many games from the one-load collection work perfectly.
 
-Stefan Wessels
-[swessels@email.com](mailto:swessels@email.com)
-June 14, 2026
+Stefan Wessels  
+swessels@email.com  
+June 14, 2026  
