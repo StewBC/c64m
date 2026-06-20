@@ -8,15 +8,32 @@
 #define HELP_INLINE_CODE_ON '\001'
 #define HELP_INLINE_CODE_OFF '\002'
 
-#define HELP_COLOR_BG nk_rgb(18, 24, 31)
-#define HELP_COLOR_PANEL nk_rgb(27, 36, 45)
-#define HELP_COLOR_HEADING nk_rgb(134, 209, 255)
-#define HELP_COLOR_BODY nk_rgb(231, 238, 240)
-#define HELP_COLOR_H3 nk_rgb(255, 212, 122)
-#define HELP_COLOR_BULLET nk_rgb(156, 231, 169)
-#define HELP_COLOR_NUMBER nk_rgb(178, 190, 255)
-#define HELP_COLOR_CODE nk_rgb(238, 198, 156)
-#define HELP_COLOR_TABLE nk_rgb(160, 216, 204)
+#define C64_HELP_BLACK nk_rgb(0x00, 0x00, 0x00)
+#define C64_HELP_WHITE nk_rgb(0xff, 0xff, 0xff)
+#define C64_HELP_CYAN nk_rgb(0xaa, 0xff, 0xee)
+#define C64_HELP_PURPLE nk_rgb(0xcc, 0x44, 0xcc)
+#define C64_HELP_GREEN nk_rgb(0x00, 0xcc, 0x55)
+#define C64_HELP_BLUE nk_rgb(0x00, 0x00, 0xaa)
+#define C64_HELP_YELLOW nk_rgb(0xee, 0xee, 0x77)
+#define C64_HELP_ORANGE nk_rgb(0xdd, 0x88, 0x55)
+#define C64_HELP_LIGHT_RED nk_rgb(0xff, 0x77, 0x77)
+#define C64_HELP_DARK_GRAY nk_rgb(0x33, 0x33, 0x33)
+#define C64_HELP_LIGHT_GREEN nk_rgb(0xaa, 0xff, 0x66)
+#define C64_HELP_LIGHT_BLUE nk_rgb(0x00, 0x88, 0xff)
+#define C64_HELP_LIGHT_GRAY nk_rgb(0xbb, 0xbb, 0xbb)
+
+#define HELP_COLOR_BG C64_HELP_BLUE
+#define HELP_COLOR_PANEL nk_rgb(0x1b, 0x2f, 0xa3)
+#define HELP_COLOR_BORDER C64_HELP_LIGHT_BLUE
+#define HELP_COLOR_HEADING C64_HELP_WHITE
+#define HELP_COLOR_BODY C64_HELP_CYAN
+#define HELP_COLOR_H3 C64_HELP_YELLOW
+#define HELP_COLOR_BULLET C64_HELP_LIGHT_GREEN
+#define HELP_COLOR_NUMBER C64_HELP_LIGHT_GREEN
+#define HELP_COLOR_CODE C64_HELP_ORANGE
+#define HELP_COLOR_TABLE C64_HELP_LIGHT_GRAY
+#define HELP_COLOR_SECTION_ACTIVE C64_HELP_PURPLE
+#define HELP_COLOR_SECTION_HOVER C64_HELP_LIGHT_BLUE
 
 void help_view_init(frontend_help_state *state)
 {
@@ -589,10 +606,12 @@ static void help_render_section_buttons(struct nk_context *ctx, frontend_help_st
     for (i = 0; i < help_section_count; ++i) {
         struct nk_style_button saved = ctx->style.button;
         if (i == state->section_index) {
-            ctx->style.button.normal = nk_style_item_color(nk_rgb(49, 83, 106));
-            ctx->style.button.hover = nk_style_item_color(nk_rgb(58, 96, 122));
-            ctx->style.button.active = nk_style_item_color(nk_rgb(72, 119, 150));
-            ctx->style.button.text_normal = nk_rgb(239, 247, 255);
+            ctx->style.button.normal = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
+            ctx->style.button.hover = nk_style_item_color(HELP_COLOR_SECTION_HOVER);
+            ctx->style.button.active = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
+            ctx->style.button.text_normal = HELP_COLOR_HEADING;
+            ctx->style.button.text_hover = HELP_COLOR_HEADING;
+            ctx->style.button.text_active = HELP_COLOR_HEADING;
         }
         if ((i % columns) == 0) {
             nk_layout_row_dynamic(ctx, 24.0f, columns);
@@ -643,6 +662,7 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
 
     saved_window = ctx->style.window;
     ctx->style.window.fixed_background = nk_style_item_color(HELP_COLOR_BG);
+    ctx->style.window.border_color = HELP_COLOR_BORDER;
     ctx->style.window.padding = nk_vec2(14.0f, 10.0f);
     ctx->style.window.spacing = nk_vec2(8.0f, 2.0f);
     ctx->style.window.group_padding = nk_vec2(10.0f, 4.0f);
