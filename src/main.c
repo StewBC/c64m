@@ -378,6 +378,26 @@ static void send_pause_command(runtime_client *client) {
     }
 }
 
+static void open_help(frontend *ui, runtime_client *client, const frontend_debug_state *debug_state) {
+    bool was_running = debug_state != NULL &&
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING;
+
+    if (was_running) {
+        send_pause_command(client);
+    }
+    frontend_open_help(ui, was_running);
+}
+
+static void close_help(frontend *ui, runtime_client *client, const frontend_debug_state *debug_state) {
+    bool paused_by_help = frontend_close_help(ui);
+
+    if (paused_by_help &&
+        debug_state != NULL &&
+        debug_state->runtime_state != FRONTEND_RUNTIME_STATE_ERROR) {
+        send_run_command(client);
+    }
+}
+
 static void send_step_instruction_command(runtime_client *client) {
     SDL_Log("STEP instruction requested");
     if (runtime_client_step_instruction(client)) {
@@ -1016,7 +1036,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
 
         frontend_begin_input(ui);
         while (SDL_PollEvent(&event)) {
-            bool send_event_to_frontend = ui_visible;
+            bool send_event_to_frontend = ui_visible || frontend_help_is_open(ui);
 
             sdl_c64_controller_handle_event(&controller_state, client, &event);
 
@@ -1025,6 +1045,19 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
                 if (frontend_input_is_host_quit_shortcut(&event.key)) {
                     running = false;
+                } else if (event.key.keysym.sym == SDLK_h &&
+                           frontend_input_has_option_modifier(&event.key)) {
+                    if (frontend_help_is_open(ui)) {
+                        close_help(ui, client, &debug_state);
+                    } else {
+                        open_help(ui, client, &debug_state);
+                    }
+                    send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_ESCAPE && frontend_help_is_open(ui)) {
+                    close_help(ui, client, &debug_state);
+                    send_event_to_frontend = false;
+                } else if (frontend_help_is_open(ui)) {
+                    send_event_to_frontend = true;
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
@@ -1079,6 +1112,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                     send_event_to_frontend = false;
                 }
             } else if (event.type == SDL_KEYUP &&
+                       !frontend_help_is_open(ui) &&
                        (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                 handle_keyboard_input(&input_mapper, client, &event.key);
                 send_event_to_frontend = false;

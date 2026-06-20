@@ -10,6 +10,7 @@ set(CMAKE_LINK_LIBRARIES_STRATEGY REORDER_FREELY)
 enable_testing()
 
 find_package(SDL2 CONFIG REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 add_subdirectory(external)
 

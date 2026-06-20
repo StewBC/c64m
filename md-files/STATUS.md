@@ -13,6 +13,7 @@ The emulator is complete through:
 - PRG loader polish: reset-before-load, pending injection after BASIC warm-start at $E38B, keyboard-buffer autostart PRGs supported.
 - Assembler UI integration: Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, symbol snapshot handoff to disassembler.
 - Host file load/save UI: unified Load and Save buttons on Machine tab; Load dialog has From File address, Reset, and Basic Program checkboxes; Save dialog has Basic Program checkbox (reads $2B–$2E, forces header), Write address header, and Start/End range fields.
+- Help UI Phase 1: build-time `manual/manual.md` to compiled help data, Nuklear help overlay, OPTION+H/ESC toggle, runtime-client pause/resume, fixed heading/footer with scrollable section content.
 - Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters.
 - SID functional audio (C64AUDFID_2): triangle/saw/pulse/noise waveforms, ADSR envelope, Chamberlin SVF filter, 3-voice mixer, voice 3 read-back, $D400–$D41F register map; deferred: per-voice filter routing, ring/sync mod, combined-waveform blending, NTSC tables.
 
