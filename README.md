@@ -365,11 +365,15 @@ On macOS, **Opt** = Option/Alt.
 | Key            | Action                                                        |
 |----------------|---------------------------------------------------------------|
 | Opt+B          | Toggle execute breakpoint at cursor (paused only)             |
-| Ctrl+A         | Enter address-jump mode (type 4 hex digits, Enter to jump)   |
+| Opt+A          | Enter address-jump mode (type 4 hex digits, Enter to jump)    |
+| Opt+S          | Reload/enumerate symbol table                                 |
+| Opt+Left       | Set PC to cursor address (paused only)                        |
 | Tab / Shift+Tab| Cycle symbol display mode (none → label → address+label)      |
 | Up / Down      | Move cursor one instruction                                   |
 | PgUp / PgDn    | Scroll one page                                               |
-| Home / End     | Jump to start / end of view                                   |
+| Home / End     | Jump to start / end of current view                           |
+| Opt+Home       | Jump to address $0000                                         |
+| Opt+End        | Jump to address $FFFF                                         |
 
 ---
 
@@ -377,15 +381,15 @@ On macOS, **Opt** = Option/Alt.
 
 | Key            | Action                                                        |
 |----------------|---------------------------------------------------------------|
-| Ctrl+A         | Toggle address-entry mode (type 4 hex digits to jump)        |
-| Ctrl+T         | Toggle hex ↔ ASCII edit mode                                  |
+| Opt+A          | Toggle address-entry mode (type 4 hex digits to jump)        |
+| Opt+X          | Toggle hex ↔ ASCII edit mode                                  |
 | Up / Down      | Move cursor one row (16 bytes)                               |
 | Left / Right   | Move cursor one byte / nibble                                 |
 | PgUp / PgDn    | Scroll one page                                               |
 | Home           | Move cursor to start of current row (or first address digit) |
-| Ctrl+Home      | Move cursor to start of visible window                       |
+| Opt+Home       | Move cursor to start of visible window                       |
 | End            | Move cursor to end of current row (or last address digit)    |
-| Ctrl+End       | Move cursor to end of visible window                         |
+| Opt+End        | Move cursor to end of visible window                         |
 | 0–9, A–F       | Edit hex nibble or ASCII byte at cursor (paused only)        |
 
 ---
@@ -457,11 +461,8 @@ June 19, at almost 6 hours, audio output infrastructure and functional SID audio
 
 The emulation is not at all perfect.  Recent work has added audio/SID and host file load/save support, but several accuracy and completeness gaps remain.
 
-* It does run the machine at "machine speed" and if I set the turbo to its maximum, 256, it is a tiny bit faster.  There's no real boost (a2m will run an Apple II on my M2 Mac at over 100 MHz, so 100x faster, for comparison).
-* There are UI issues.  For example, if you change the PC, you need to click out of that box and back in to change it again.  And then there's no overtype.
 * Step out is broken under some circumstances.
 * When you play Galencia (it does interesting things with the border and sprites), you need to "trick" the game into starting — I know how but I haven't looked at why yet — and the sprites do get mangled, so the emulation isn't quite good enough yet.
-
 * SID support is functional but incomplete: per-voice filter routing, exact combined-waveform behavior, ring modulation, oscillator sync, connected paddle input, and NTSC-specific SID rate tables are still deferred.
 * Audio/video timing is not cycle-perfect.
 * VIC-II light pen support is still stubbed/skipped.

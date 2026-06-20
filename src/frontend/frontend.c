@@ -720,6 +720,26 @@ static bool frontend_push_disk_intent(frontend *ui, frontend_debugger_intent_typ
     return true;
 }
 
+static nk_flags frontend_edit_replace(
+    struct nk_context *ctx,
+    nk_flags flags,
+    char *buffer,
+    int max,
+    nk_plugin_filter filter)
+{
+    nk_flags result = nk_edit_string_zero_terminated(
+        ctx,
+        (flags & ~(nk_flags)NK_EDIT_ALWAYS_INSERT_MODE) | NK_EDIT_SIG_ENTER,
+        buffer, max, filter);
+    if (result & NK_EDIT_ACTIVE) {
+        ctx->current->edit.mode = NK_TEXT_EDIT_MODE_REPLACE;
+    }
+    if (result & NK_EDIT_COMMITED) {
+        nk_edit_unfocus(ctx);
+    }
+    return result;
+}
+
 static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
 {
     frontend_breakpoint_dialog_state *dialog;
@@ -764,14 +784,14 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.20f);
             nk_label(ctx, "Start", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.25f);
-            nk_edit_string_zero_terminated(ctx, edit_flags, dialog->start_address, sizeof(dialog->start_address), nk_filter_hex);
+            frontend_edit_replace(ctx, edit_flags, dialog->start_address, sizeof(dialog->start_address), nk_filter_hex);
             nk_layout_row_push(ctx, 0.20f);
             frontend_checkbox_bool(ctx, "Range", &dialog->range);
             nk_layout_row_push(ctx, 0.25f);
             if (!dialog->range) {
                 edit_flags |= NK_EDIT_READ_ONLY;
             }
-            nk_edit_string_zero_terminated(ctx, edit_flags, dialog->end_address, sizeof(dialog->end_address), nk_filter_hex);
+            frontend_edit_replace(ctx, edit_flags, dialog->end_address, sizeof(dialog->end_address), nk_filter_hex);
             nk_layout_row_end(ctx);
             edit_flags = NK_EDIT_FIELD;
 
@@ -796,7 +816,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.16f);
             nk_label(ctx, "Initial", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.20f);
-            nk_edit_string_zero_terminated(
+            frontend_edit_replace(
                 ctx,
                 dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->initial_count,
@@ -805,7 +825,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.14f);
             nk_label(ctx, "Reset", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.20f);
-            nk_edit_string_zero_terminated(
+            frontend_edit_replace(
                 ctx,
                 dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->reset_count,
@@ -952,7 +972,7 @@ static void frontend_draw_config_machine_tab(frontend_config_dialog_state *dialo
     if (dialog->edited.video_filter == NULL) {
         app_options_set_string(&dialog->edited.video_filter, "nearest");
     }
-    nk_edit_string_zero_terminated(
+    frontend_edit_replace(
         ctx,
         NK_EDIT_FIELD,
         dialog->edited.video_filter,
@@ -978,7 +998,7 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     nk_layout_row_push(ctx, 0.30f);
     nk_label(ctx, "Turbo Speeds", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.70f);
-    nk_edit_string_zero_terminated(
+    frontend_edit_replace(
         ctx,
         NK_EDIT_FIELD,
         dialog->edited.turbo_multipliers,
@@ -997,7 +1017,7 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "Symbol Files", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 22.0f, 1);
-    nk_edit_string_zero_terminated(
+    frontend_edit_replace(
         ctx,
         NK_EDIT_FIELD,
         dialog->edited.symbol_files,
@@ -1102,15 +1122,19 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 frontend_copy_text(dialog->previous_ini_path, sizeof(dialog->previous_ini_path), dialog->edited.ini_path);
                 dialog->previous_save_ini = dialog->save_ini_on_quit;
             }
-            if (nk_edit_string_zero_terminated(
+            {
+                nk_flags ini_result = frontend_edit_replace(
                     ctx,
                     NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
                     dialog->edited.ini_path,
                     1024,
-                    nk_filter_default) & NK_EDIT_COMMITED) {
-                frontend_config_commit_ini_path(dialog);
-                if (frontend_file_exists(dialog->edited.ini_path)) {
-                    dialog->prompt = FRONTEND_INI_PROMPT_EXISTING;
+                    nk_filter_default);
+                if (ini_result & NK_EDIT_COMMITED) {
+                    frontend_config_commit_ini_path(dialog);
+                    if (frontend_file_exists(dialog->edited.ini_path)) {
+                        dialog->prompt = FRONTEND_INI_PROMPT_EXISTING;
+                    }
+                    nk_edit_unfocus(ctx);
                 }
             }
             nk_layout_row_push(ctx, 0.14f);
@@ -1543,7 +1567,10 @@ static void frontend_draw_register_edit(
     const frontend_debug_state *debug_state,
     bool editable)
 {
-    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SIG_ENTER;
+    /* NK_EDIT_FIELD includes NK_EDIT_ALWAYS_INSERT_MODE which forces insert
+       mode every frame. Use the component flags directly so we can stay in
+       replace (overwrite) mode. */
+    nk_flags edit_flags = NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD | NK_EDIT_SIG_ENTER;
     nk_flags result;
 
     if (!editable) {
@@ -1551,12 +1578,20 @@ static void frontend_draw_register_edit(
     }
 
     result = nk_edit_string_zero_terminated(ui->ctx, edit_flags, buffer, max, filter);
+    if ((result & NK_EDIT_ACTIVE) != 0 && editable) {
+        /* Keep the widget in replace (overwrite) mode so the user can type a
+           new value directly without deleting the old one first. */
+        ui->ctx->current->edit.mode = NK_TEXT_EDIT_MODE_REPLACE;
+    }
     if ((result & NK_EDIT_ACTIVATED) != 0 && editable) {
         ui->registers.active_field = field;
     }
     if ((result & NK_EDIT_COMMITED) != 0) {
         frontend_commit_register_edit(ui, field, debug_state);
         ui->registers.active_field = FRONTEND_REGISTER_FIELD_NONE;
+        /* NK_EDIT_SIG_ENTER signals the commit but does not deactivate the
+           widget; call unfocus so the field loses the cursor immediately. */
+        nk_edit_unfocus(ui->ctx);
     }
 }
 
@@ -2072,7 +2107,7 @@ static void frontend_disassembly_handle_key(
     frontend_disassembly_view_state *view;
     SDL_Keycode sym;
     SDL_Keymod mod;
-    bool ctrl;
+    bool alt;
     int row;
 
     if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN) {
@@ -2086,26 +2121,26 @@ static void frontend_disassembly_handle_key(
 
     sym = key->keysym.sym;
     mod = key->keysym.mod;
-    ctrl = (mod & KMOD_CTRL) != 0;
+    alt = (mod & KMOD_ALT) != 0;
 
-    if ((mod & KMOD_ALT) != 0 && sym == SDLK_b) {
+    if (alt && sym == SDLK_b) {
         frontend_disassembly_ensure_user_cursor(ui, debug_state);
         frontend_toggle_execute_breakpoint_at_cursor(ui, debug_state);
         return;
     }
 
-    if ((mod & KMOD_ALT) != 0 || sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
+    if (sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
         return;
     }
 
-    if (ctrl && sym == SDLK_a) {
+    if (alt && sym == SDLK_a) {
         frontend_disassembly_ensure_user_cursor(ui, debug_state);
         view->address_entry = !view->address_entry;
         view->active_address_digit = 0;
         return;
     }
 
-    if (ctrl && sym == SDLK_s) {
+    if (alt && sym == SDLK_s) {
         if (ui->symbols.enumerate != NULL) {
             (void)ui->symbols.enumerate(ui->symbols.userdata, NULL, 0);
         }
@@ -2181,7 +2216,7 @@ static void frontend_disassembly_handle_key(
     }
 
     if (sym == SDLK_HOME) {
-        if (ctrl) {
+        if (alt) {
             frontend_disassembly_scroll_to_top(ui, 0x0000);
         } else if (view->rows > 0) {
             frontend_disassembly_set_user_cursor(view, view->lines[0].address, 0, view->lines[0].length);
@@ -2190,7 +2225,7 @@ static void frontend_disassembly_handle_key(
     }
 
     if (sym == SDLK_END) {
-        if (ctrl) {
+        if (alt) {
             view->top_address = 0xffff;
             frontend_disassembly_set_user_cursor(
                 view,
@@ -2259,7 +2294,7 @@ static void frontend_disassembly_handle_key(
     }
 
     if (sym == SDLK_LEFT) {
-        if (ctrl && debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+        if (alt && debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
             frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC, view->cursor_address);
         } else if (row < 0) {
             frontend_disassembly_center_cursor(ui);
@@ -3133,7 +3168,7 @@ static void frontend_memory_handle_key(
 {
     SDL_Keycode sym;
     SDL_Keymod mod;
-    bool ctrl;
+    bool alt;
 
     if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN) {
         return;
@@ -3141,13 +3176,13 @@ static void frontend_memory_handle_key(
 
     sym = key->keysym.sym;
     mod = key->keysym.mod;
-    ctrl = (mod & KMOD_CTRL) != 0;
+    alt = (mod & KMOD_ALT) != 0;
 
-    if ((mod & KMOD_ALT) != 0 || sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
+    if (sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
         return;
     }
 
-    if (ctrl && sym == SDLK_a) {
+    if (alt && sym == SDLK_a) {
         if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
             ui->memory.edit_field = FRONTEND_MEMORY_EDIT_HEX;
         } else {
@@ -3161,7 +3196,7 @@ static void frontend_memory_handle_key(
         return;
     }
 
-    if (ctrl && sym == SDLK_t) {
+    if (alt && sym == SDLK_x) {
         ui->memory.edit_field = ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII ?
             FRONTEND_MEMORY_EDIT_HEX :
             FRONTEND_MEMORY_EDIT_ASCII;
@@ -3183,7 +3218,7 @@ static void frontend_memory_handle_key(
     if (sym == SDLK_HOME) {
         if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
             ui->memory.active_address_digit = 0;
-        } else if (ctrl) {
+        } else if (alt) {
             ui->memory.cursor_address = ui->memory.view_address;
         } else {
             uint16_t offset = (uint16_t)(ui->memory.cursor_address - ui->memory.view_address);
@@ -3196,7 +3231,7 @@ static void frontend_memory_handle_key(
     if (sym == SDLK_END) {
         if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
             ui->memory.active_address_digit = 3;
-        } else if (ctrl) {
+        } else if (alt) {
             ui->memory.cursor_address = (uint16_t)(ui->memory.view_address +
                 frontend_memory_visible_count(&ui->memory) - 1u);
         } else {
@@ -3542,8 +3577,9 @@ static void frontend_draw_misc_debugger(frontend *ui, const frontend_debug_state
         snprintf(
             status,
             sizeof(status),
-            "State: %s  PC: %04X  Stop: %s",
+            "State: %s  Turbo: %ux  PC: %04X  Stop: %s",
             debug_state != NULL ? frontend_runtime_state_name(debug_state->runtime_state) : "UNKNOWN",
+            debug_state != NULL ? (debug_state->active_turbo_multiplier > 0 ? debug_state->active_turbo_multiplier : 1u) : 1u,
             debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0,
             debug_state != NULL ? frontend_stop_reason_name(debug_state->stop_reason) : "none");
         nk_label(ctx, status, NK_TEXT_LEFT);
@@ -3750,7 +3786,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
     nk_layout_row_push(ctx, 0.22f);
     nk_label(ctx, "File Name", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.56f);
-    nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->file_path, (int)sizeof(asm_state->file_path), nk_filter_default);
+    frontend_edit_replace(ctx, edit_flags, asm_state->file_path, (int)sizeof(asm_state->file_path), nk_filter_default);
     nk_layout_row_push(ctx, 0.22f);
     if (nk_button_label(ctx, "Browse...")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE);
@@ -3762,7 +3798,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
     nk_layout_row_push(ctx, 0.35f);
     nk_label(ctx, "Address", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.65f);
-    if (nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->address_buf, (int)sizeof(asm_state->address_buf), nk_filter_hex) & NK_EDIT_DEACTIVATED) {
+    if (frontend_edit_replace(ctx, edit_flags, asm_state->address_buf, (int)sizeof(asm_state->address_buf), nk_filter_hex) & NK_EDIT_DEACTIVATED) {
         /* Keep run_address in sync if user hasn't edited it independently */
         if (!asm_state->run_address_user_edited) {
             snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "%s", asm_state->address_buf);
@@ -3775,7 +3811,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
     nk_layout_row_push(ctx, 0.35f);
     nk_label(ctx, "Run Address", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.65f);
-    if (nk_edit_string_zero_terminated(ctx, edit_flags, asm_state->run_address_buf, (int)sizeof(asm_state->run_address_buf), nk_filter_hex) & NK_EDIT_ACTIVE) {
+    if (frontend_edit_replace(ctx, edit_flags, asm_state->run_address_buf, (int)sizeof(asm_state->run_address_buf), nk_filter_hex) & NK_EDIT_ACTIVE) {
         asm_state->run_address_user_edited = true;
     }
     nk_layout_row_end(ctx);
@@ -4384,7 +4420,7 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.18f);
             nk_label(ctx, "Name", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.60f);
-            nk_edit_string_zero_terminated(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
+            frontend_edit_replace(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
             nk_layout_row_push(ctx, 0.22f);
             if (nk_button_label(ctx, "Browse...")) {
                 frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE);
@@ -4398,7 +4434,7 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.38f);
             frontend_checkbox_bool(ctx, "From file", &dlg->use_file_address);
             nk_layout_row_push(ctx, 0.44f);
-            nk_edit_string_zero_terminated(
+            frontend_edit_replace(
                 ctx, dlg->use_file_address ? (edit_flags | NK_EDIT_READ_ONLY) : edit_flags,
                 dlg->address_buf, (int)sizeof(dlg->address_buf), nk_filter_hex);
             nk_layout_row_end(ctx);
@@ -4476,7 +4512,7 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.18f);
             nk_label(ctx, "Name", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.60f);
-            nk_edit_string_zero_terminated(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
+            frontend_edit_replace(ctx, edit_flags, dlg->path, (int)sizeof(dlg->path), nk_filter_default);
             nk_layout_row_push(ctx, 0.22f);
             if (nk_button_label(ctx, "Browse...")) {
                 frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE);
@@ -4503,13 +4539,13 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.22f);
             nk_label(ctx, "Start", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.28f);
-            nk_edit_string_zero_terminated(
+            frontend_edit_replace(
                 ctx, dlg->basic_program ? ro_flags : edit_flags,
                 dlg->start_address_buf, (int)sizeof(dlg->start_address_buf), nk_filter_hex);
             nk_layout_row_push(ctx, 0.22f);
             nk_label(ctx, "End", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.28f);
-            nk_edit_string_zero_terminated(
+            frontend_edit_replace(
                 ctx, dlg->basic_program ? ro_flags : edit_flags,
                 dlg->end_address_buf, (int)sizeof(dlg->end_address_buf), nk_filter_hex);
             nk_layout_row_end(ctx);

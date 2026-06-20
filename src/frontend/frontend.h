@@ -34,6 +34,7 @@ typedef struct frontend_debug_state {
     uint64_t vic_cycles;
     uint64_t cia_cycles;
     runtime_stop_reason stop_reason;
+    uint32_t active_turbo_multiplier;
     bool has_frame;
     bool has_cpu;
     bool has_memory;

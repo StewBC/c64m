@@ -227,6 +227,7 @@ static void update_debug_state_from_event(
             debug_state->vic_cycles = event->data.machine_state.vic_cycles;
             debug_state->cia_cycles = event->data.machine_state.cia_cycles;
             debug_state->stop_reason = event->data.machine_state.stop_reason;
+            debug_state->active_turbo_multiplier = event->data.machine_state.active_turbo_multiplier;
             debug_state->frame_number = event->data.machine_state.frame_number;
             debug_state->frame_cycle = event->data.machine_state.frame_cycle;
             debug_state->dropped_frames = event->data.machine_state.dropped_frames;
