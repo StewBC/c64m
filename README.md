@@ -455,7 +455,13 @@ On macOS, **Opt** = Option/Alt.
 
 As of end-of-day June 18, the total time spent on this project was 32 hours.  That includes the time I was thinking, describing, and typing, as well as the time the agents thought and coded.  It also includes all the time testing and playing.  I mostly used one agent or the other, but there is some overlap where I used both at the same time.
 
-June 19, at almost 6 hours, audio output infrastructure and functional SID audio support have been added.  The SID is now in: the emulator has a MOS 6581 register map at `$D400-$D41F`, three voices, waveform generation, ADSR envelopes, mixing, voice 3 read-back, and a first-pass filter.  This is not intended to mean cycle-perfect or analog-perfect SID emulation; several hardware-specific behaviors remain deferred.
+June 19, at almost 36 hours, audio output infrastructure and functional SID audio support have been added.  The SID is now in: the emulator has a MOS 6581 register map at `$D400-$D41F`, three voices, waveform generation, ADSR envelopes, mixing, voice 3 read-back, and a first-pass filter.  This is not intended to mean cycle-perfect or analog-perfect SID emulation; several hardware-specific behaviors remain deferred. This took Claude about 40 minutes to do, from nothing for audio to this point.  
+  At about 38 hours in, there have been UI fixes an a big optimization pass, yielding for a release build:
+```
+Before optimization passes: ~6.1 MHz  
+After accepted passes:      ~14.8 MHz  
+Gain:                       ~2.4x, about +142%  
+```
 
 ## Issues
 
