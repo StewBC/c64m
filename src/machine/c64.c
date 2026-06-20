@@ -1087,7 +1087,6 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
     machine->cpu_cycles_remaining = machine->pending_cpu_trace_active ?
         machine->pending_cpu_trace.total_cycles - machine->pending_cpu_elapsed :
         0;
-    c64_set_error(error, error_size, "");
     return true;
 }
 
