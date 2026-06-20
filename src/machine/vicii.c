@@ -557,6 +557,16 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
     int n;
 
+    if (enable == 0u) {
+        if (vborder || hborder) {
+            if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
+                return bg.color;
+            }
+            return border_color;
+        }
+        return bg.color;
+    }
+
     for (n = 0; n < 8; n++) {
         sprites[n] = vicii_sprite_pixel_make(0, false);
         if (!((enable >> n) & 1u)) continue;
