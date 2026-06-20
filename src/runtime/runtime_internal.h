@@ -86,6 +86,7 @@ struct runtime {
     message_queue *event_queue;
     runtime_client client;
     runtime_frame_slot frame_slot;
+    c64_frame publish_frame;
     runtime_symbol_slot symbol_slot;
     symbol_table *symbols;
     c64_t machine;

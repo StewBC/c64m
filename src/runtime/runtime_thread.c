@@ -504,25 +504,21 @@ static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
 }
 
 static bool runtime_publish_debug_frame(runtime *rt) {
-    c64_frame frame;
-
-    if (!c64_make_frame_snapshot(&rt->machine, &frame)) {
+    if (!c64_make_frame_snapshot(&rt->machine, &rt->publish_frame)) {
         runtime_publish_error(rt, "failed to generate frame");
         return false;
     }
 
-    return runtime_publish_frame_copy(rt, &frame);
+    return runtime_publish_frame_copy(rt, &rt->publish_frame);
 }
 
 static bool runtime_publish_completed_frame(runtime *rt) {
-    c64_frame frame;
-
-    if (!c64_copy_completed_frame(&rt->machine, &frame)) {
+    if (!c64_copy_completed_frame(&rt->machine, &rt->publish_frame)) {
         runtime_publish_error(rt, "no completed live frame available");
         return false;
     }
 
-    return runtime_publish_frame_copy(rt, &frame);
+    return runtime_publish_frame_copy(rt, &rt->publish_frame);
 }
 
 static bool runtime_load_rom(
