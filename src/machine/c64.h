@@ -246,6 +246,7 @@ bool c64_consume_instruction_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
 void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
+void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
 bool c64_drive_device_supported(uint8_t device);

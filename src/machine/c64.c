@@ -1149,6 +1149,12 @@ void c64_set_iec_external_pull(c64_t *machine, uint8_t lines) {
     c64_bus_refresh_vic_bank_base(&machine->bus);
 }
 
+void c64_set_audio_output_enabled(c64_t *machine, bool enabled) {
+    assert(machine);
+
+    sid_set_sample_output_enabled(&machine->sid, enabled);
+}
+
 void c64_restore(c64_t *machine) {
     assert(machine);
 

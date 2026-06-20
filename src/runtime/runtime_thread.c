@@ -71,6 +71,16 @@ static void runtime_pace_after_frame(runtime *rt) {
     }
 }
 
+static void runtime_update_sid_sample_output(runtime *rt) {
+    bool enabled;
+
+    enabled = rt->audio_out != NULL &&
+        rt->audio_sample_rate > 0 &&
+        rt->speed_mode != RUNTIME_SPEED_MODE_FAST &&
+        rt->audio_smoke == 0;
+    c64_set_audio_output_enabled(&rt->machine, enabled);
+}
+
 /* Emit host-rate audio samples proportional to machine cycles elapsed since
    the last call. In smoke mode a 440 Hz square wave is produced; otherwise
    silence is written (future SID samples will replace this path).
@@ -129,6 +139,7 @@ static void runtime_audio_reset(runtime *rt) {
     rt->audio_cycle_accum = 0.0;
     rt->audio_last_cycle  = 0;
     rt->audio_smoke_phase = 0.0f;
+    runtime_update_sid_sample_output(rt);
 }
 
 static bool runtime_publish_event(
@@ -727,6 +738,7 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
         runtime_load_symbol_files(rt);
     }
     c64_set_config(&rt->machine, &rt->machine_config);
+    runtime_update_sid_sample_output(rt);
     if (command->data.apply_machine_config.reset != 0) {
         runtime_reset_machine(rt);
     } else {
@@ -994,11 +1006,13 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_FAST) != 0) {
         rt->speed_mode = RUNTIME_SPEED_MODE_FAST;
         rt->pace_initialized = false;
+        runtime_update_sid_sample_output(rt);
     }
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_SLOW) != 0) {
         rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;
         rt->pace_initialized = false;
+        runtime_update_sid_sample_output(rt);
     }
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TRON) != 0) {
@@ -2476,6 +2490,7 @@ int runtime_thread_main(void *userdata) {
     rt->audio_cycle_accum = 0.0;
     rt->audio_last_cycle  = 0;
     rt->audio_smoke_phase = 0.0f;
+    runtime_update_sid_sample_output(rt);
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     runtime_load_symbol_files(rt);
     if (runtime_load_configured_roms(rt)) {

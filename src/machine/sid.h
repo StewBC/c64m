@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -40,6 +41,7 @@ typedef struct sid {
     float      filter_hp;
 
     float      last_sample;         /* last mixed+filtered output */
+    bool       sample_output_enabled;
 
     uint8_t    voice3_osc_read;     /* $D41B shadow (top byte of voice 3 phase) */
     uint8_t    voice3_env_read;     /* $D41C shadow (voice 3 envelope) */
@@ -53,6 +55,7 @@ void    sid_reset(sid *s);
 
 /* CPU write: addr is the raw C64 address ($D400-$D41F); masked internally. */
 void    sid_write(sid *s, uint16_t addr, uint8_t value);
+void    sid_set_sample_output_enabled(sid *s, bool enabled);
 
 /* CPU read: addr is the raw C64 address.
    $D41B returns voice 3 oscillator byte; $D41C returns voice 3 envelope.

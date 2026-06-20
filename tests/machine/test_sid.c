@@ -183,6 +183,37 @@ static void test_voice3_env_changes(void) {
     }
 }
 
+static void test_disabled_sample_output_preserves_readback(void) {
+    sid s;
+    uint8_t first_osc;
+    uint8_t first_env;
+    uint32_t i;
+
+    sid_init(&s);
+    sid_write(&s, 0xD40E, 0x00);
+    sid_write(&s, 0xD40F, 0x10);
+    sid_write(&s, 0xD413, 0x00);
+    sid_write(&s, 0xD414, 0xF0);
+    sid_write(&s, 0xD412, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+
+    sid_set_sample_output_enabled(&s, false);
+    first_osc = s.voice3_osc_read;
+    first_env = s.voice3_env_read;
+
+    for (i = 0; i < 2000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+
+    if (s.voice3_osc_read == first_osc) {
+        fail("disabled_sample_output: $D41B did not change");
+    }
+    if (s.voice3_env_read == first_env) {
+        fail("disabled_sample_output: $D41C did not change");
+    }
+    expect_zero_float("disabled_sample_output: sample remains silent", sid_sample(&s));
+}
+
 static void test_paddle_unused_reads(void) {
     sid s;
     sid_init(&s);
@@ -817,6 +848,7 @@ int main(void) {
     test_gate_transitions();
     test_voice3_osc_changes();
     test_voice3_env_changes();
+    test_disabled_sample_output_preserves_readback();
     test_paddle_unused_reads();
 
     /* Voice tests */

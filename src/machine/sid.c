@@ -42,6 +42,7 @@ void sid_init(sid *s) {
     int i;
     if (!s) return;
     memset(s, 0, sizeof(*s));
+    s->sample_output_enabled = true;
     for (i = 0; i < 3; i++) {
         sid_voice_init(&s->voices[i]);
     }
@@ -120,6 +121,12 @@ void sid_write(sid *s, uint16_t addr, uint8_t value) {
         s->mode_volume = value;
     }
     /* 0x19-0x1F: stored in regs[] but no decoded mutable state */
+}
+
+void sid_set_sample_output_enabled(sid *s, bool enabled) {
+    if (!s) return;
+
+    s->sample_output_enabled = enabled;
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,13 +287,19 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
             if (!(v->control & 0x08u)) {   /* advance phase unless TEST bit */
                 v->phase = (v->phase + (uint32_t)v->freq) & 0x00FFFFFFu;
             }
-            v->last_wave = sid_voice_waveform(v, prev);
+            if (s->sample_output_enabled) {
+                v->last_wave = sid_voice_waveform(v, prev);
+            }
             sid_voice_advance_env(v);
         }
 
         /* --- Voice 3 read-back registers --- */
         s->voice3_osc_read = (uint8_t)(s->voices[2].phase >> 16);
         s->voice3_env_read =  s->voices[2].envelope;
+
+        if (!s->sample_output_enabled) {
+            continue;
+        }
 
         /* --- Mixer ---
          * Per-voice filter routing ($D417 bits 3..0) is deferred;
