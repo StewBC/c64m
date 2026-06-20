@@ -4553,6 +4553,7 @@ frontend *frontend_create(platform_window *window)
     ui->limits.gutter_px = 5;
     ui->limits.corner_px = 22;
     c64_layout_init(&ui->layout);
+    help_view_init(&ui->help);
 
     return ui;
 }
@@ -5343,6 +5344,35 @@ bool frontend_help_is_open(const frontend *ui)
 bool frontend_help_paused_by_help(const frontend *ui)
 {
     return ui != NULL && help_view_paused_by_help(&ui->help);
+}
+
+bool frontend_handle_help_key(frontend *ui, const SDL_KeyboardEvent *key)
+{
+    nk_uint page;
+
+    if (ui == NULL || ui->ctx == NULL || key == NULL || !help_view_is_open(&ui->help)) {
+        return false;
+    }
+
+    page = ui->help.content_page_y > 0 ? ui->help.content_page_y : 400u;
+    switch (key->keysym.sym) {
+        case SDLK_PAGEUP:
+            return help_view_scroll_content(ui->ctx, &ui->help, -(int)page);
+        case SDLK_PAGEDOWN:
+            return help_view_scroll_content(ui->ctx, &ui->help, (int)page);
+        case SDLK_HOME:
+            return help_view_scroll_content_to(ui->ctx, &ui->help, 0);
+        case SDLK_END:
+            return help_view_scroll_content_to(ui->ctx, &ui->help, 0x3fffffffu);
+        case SDLK_LEFT:
+            return help_view_select_section(ui->ctx, &ui->help, ui->help.section_index - 1);
+        case SDLK_RIGHT:
+            return help_view_select_section(ui->ctx, &ui->help, ui->help.section_index + 1);
+        default:
+            break;
+    }
+
+    return false;
 }
 
 bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent)

@@ -26,6 +26,10 @@ void help_view_init(frontend_help_state *state)
     state->open = false;
     state->paused_by_help = false;
     state->section_index = 0;
+    state->pending_scroll_y = 0;
+    state->content_page_y = 400;
+    state->pending_scroll_restore = false;
+    memset(state->section_scroll_y, 0, sizeof(state->section_scroll_y));
 }
 
 void help_view_open(frontend_help_state *state, bool paused_by_help)
@@ -37,6 +41,10 @@ void help_view_open(frontend_help_state *state, bool paused_by_help)
     state->paused_by_help = paused_by_help;
     if (state->section_index < 0 || state->section_index >= help_section_count) {
         state->section_index = 0;
+    }
+    if (state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+        state->pending_scroll_y = state->section_scroll_y[state->section_index];
+        state->pending_scroll_restore = true;
     }
 }
 
@@ -57,6 +65,107 @@ bool help_view_is_open(const frontend_help_state *state)
 bool help_view_paused_by_help(const frontend_help_state *state)
 {
     return state != NULL && state->paused_by_help;
+}
+
+static int help_view_clamp_section_index(int section_index)
+{
+    if (help_section_count <= 0) {
+        return 0;
+    }
+    if (section_index < 0) {
+        return 0;
+    }
+    if (section_index >= help_section_count) {
+        return help_section_count - 1;
+    }
+    return section_index;
+}
+
+static void help_view_store_current_scroll(struct nk_context *ctx, frontend_help_state *state)
+{
+    nk_uint x = 0;
+    nk_uint y = 0;
+
+    if (ctx == NULL || state == NULL ||
+        state->section_index < 0 ||
+        state->section_index >= FRONTEND_HELP_MAX_SECTIONS) {
+        return;
+    }
+
+    nk_group_get_scroll(ctx, "HelpContent", &x, &y);
+    state->section_scroll_y[state->section_index] = y;
+}
+
+static void help_view_request_restore(frontend_help_state *state)
+{
+    if (state == NULL ||
+        state->section_index < 0 ||
+        state->section_index >= FRONTEND_HELP_MAX_SECTIONS) {
+        return;
+    }
+
+    state->pending_scroll_y = state->section_scroll_y[state->section_index];
+    state->pending_scroll_restore = true;
+}
+
+bool help_view_select_section(struct nk_context *ctx, frontend_help_state *state, int section_index)
+{
+    int next;
+
+    if (ctx == NULL || state == NULL || help_section_count <= 0) {
+        return false;
+    }
+
+    next = help_view_clamp_section_index(section_index);
+    if (next == state->section_index) {
+        return true;
+    }
+
+    help_view_store_current_scroll(ctx, state);
+    state->section_index = next;
+    help_view_request_restore(state);
+    return true;
+}
+
+bool help_view_scroll_content(struct nk_context *ctx, frontend_help_state *state, int delta_y)
+{
+    nk_uint y = 0;
+
+    if (ctx == NULL || state == NULL) {
+        return false;
+    }
+
+    (void)ctx;
+    if (state->section_index >= 0 && state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+        y = state->section_scroll_y[state->section_index];
+    }
+    if (delta_y < 0) {
+        nk_uint amount = (nk_uint)(-delta_y);
+        y = amount > y ? 0 : y - amount;
+    } else {
+        y += (nk_uint)delta_y;
+    }
+    if (state->section_index >= 0 && state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+        state->section_scroll_y[state->section_index] = y;
+    }
+    state->pending_scroll_y = y;
+    state->pending_scroll_restore = true;
+    return true;
+}
+
+bool help_view_scroll_content_to(struct nk_context *ctx, frontend_help_state *state, nk_uint y)
+{
+    if (ctx == NULL || state == NULL) {
+        return false;
+    }
+
+    (void)ctx;
+    if (state->section_index >= 0 && state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+        state->section_scroll_y[state->section_index] = y;
+    }
+    state->pending_scroll_y = y;
+    state->pending_scroll_restore = true;
+    return true;
 }
 
 static float help_row_height(struct nk_context *ctx)
@@ -256,7 +365,7 @@ static void help_render_section_buttons(struct nk_context *ctx, frontend_help_st
             nk_layout_row_dynamic(ctx, 24.0f, columns);
         }
         if (nk_button_label(ctx, help_sections[i].title)) {
-            state->section_index = i;
+            help_view_select_section(ctx, state, i);
         }
         ctx->style.button = saved;
     }
@@ -266,6 +375,8 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
 {
     struct nk_rect bounds;
     struct nk_style_window saved_window;
+    nk_uint content_scroll_x = 0;
+    nk_uint content_scroll_y = 0;
     float margin;
     float heading_h = 34.0f;
     float footer_h = 78.0f;
@@ -295,6 +406,7 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
     if (content_h < 80.0f) {
         content_h = 80.0f;
     }
+    state->content_page_y = (nk_uint)(content_h > 40.0f ? content_h - 24.0f : 80.0f);
 
     saved_window = ctx->style.window;
     ctx->style.window.fixed_background = nk_style_item_color(HELP_COLOR_BG);
@@ -315,7 +427,15 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
         ctx->style.window.fixed_background = nk_style_item_color(HELP_COLOR_PANEL);
         nk_layout_row_dynamic(ctx, content_h, 1);
         if (nk_group_begin(ctx, "HelpContent", NK_WINDOW_BORDER)) {
+            if (state->pending_scroll_restore) {
+                nk_group_set_scroll(ctx, "HelpContent", 0, state->pending_scroll_y);
+                state->pending_scroll_restore = false;
+            }
             help_render_section(ctx, &help_sections[state->section_index]);
+            nk_group_get_scroll(ctx, "HelpContent", &content_scroll_x, &content_scroll_y);
+            if (state->section_index >= 0 && state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+                state->section_scroll_y[state->section_index] = content_scroll_y;
+            }
             nk_group_end(ctx);
         }
 

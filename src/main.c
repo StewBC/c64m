@@ -1056,6 +1056,8 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_ESCAPE && frontend_help_is_open(ui)) {
                     close_help(ui, client, &debug_state);
                     send_event_to_frontend = false;
+                } else if (frontend_handle_help_key(ui, &event.key)) {
+                    send_event_to_frontend = false;
                 } else if (frontend_help_is_open(ui)) {
                     send_event_to_frontend = true;
                 } else if (event.key.keysym.sym == SDLK_F9) {
