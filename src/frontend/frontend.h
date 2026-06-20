@@ -26,13 +26,32 @@ typedef struct frontend_debug_state {
     runtime_memory_snapshot memory;
     runtime_memory_snapshot memory_view;
     runtime_breakpoint_snapshot breakpoints;
+    runtime_memory_banking_snapshot memory_banking;
+    c64_vicii_hardware_snapshot vicii_hardware;
+    c64_cia_hardware_snapshot cia1_hardware;
+    c64_cia_hardware_snapshot cia2_hardware;
+    c64_sid_hardware_snapshot sid_hardware;
     runtime_disk_status_snapshot disk_status[2];
+    runtime_call_stack_snapshot call_stack;
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
     uint64_t machine_cycle;
     uint64_t vic_cycles;
     uint64_t cia_cycles;
+    uint64_t screen_ram_writes;
+    uint64_t color_ram_writes;
+    uint64_t vic_register_writes;
+    uint64_t cia1_register_writes;
+    uint64_t cia2_register_writes;
+    uint64_t sid_register_writes;
+    uint64_t keyboard_events;
+    uint64_t irq_entries;
+    uint64_t cia1_icr_reads;
+    uint64_t cia1_icr_writes;
+    uint64_t cia1_interrupt_assertions;
+    uint64_t nmi_entries;
+    uint64_t restore_requests;
     runtime_stop_reason stop_reason;
     uint32_t active_turbo_multiplier;
     bool has_frame;
@@ -40,7 +59,10 @@ typedef struct frontend_debug_state {
     bool has_memory;
     bool has_memory_view;
     bool has_breakpoints;
+    bool has_memory_banking;
+    bool has_hardware;
     bool has_disk_status[2];
+    bool has_call_stack;
 } frontend_debug_state;
 
 typedef struct frontend_assembler_state {
@@ -87,7 +109,8 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE,
     FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE,
     FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE,
-    FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE
+    FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE,
+    FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK
 } frontend_debugger_intent_type;
 
 typedef struct frontend_config_apply_result {

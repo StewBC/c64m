@@ -602,3 +602,7 @@ bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, 
     command.data.paste_text.use_buffer = 1;
     return message_queue_push(client->command_queue, &command);
 }
+
+bool runtime_client_request_call_stack(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_CALL_STACK);
+}

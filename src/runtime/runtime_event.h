@@ -23,7 +23,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_DISK_STATUS_RESPONSE,
     RUNTIME_EVENT_ASSEMBLE_COMPLETE,
     RUNTIME_EVENT_ASSEMBLE_ERROR,
-    RUNTIME_EVENT_FRAME_READY
+    RUNTIME_EVENT_FRAME_READY,
+    RUNTIME_EVENT_CALL_STACK_RESPONSE
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -43,7 +44,8 @@ typedef enum runtime_stop_reason {
 
 enum {
     RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
-    RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64
+    RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64,
+    RUNTIME_CALL_STACK_MAX = 16
 };
 
 typedef enum runtime_breakpoint_access {
@@ -91,6 +93,24 @@ typedef struct runtime_cpu_snapshot {
     uint64_t cycles;
 } runtime_cpu_snapshot;
 
+typedef struct runtime_memory_banking_snapshot {
+    uint8_t cpu_port_direction;
+    uint8_t cpu_port_data;
+    uint8_t loram;
+    uint8_t hiram;
+    uint8_t charen;
+    c64_memory_visibility basic_visibility;
+    c64_memory_visibility io_visibility;
+    c64_memory_visibility kernal_visibility;
+    uint8_t cia2_port_a_pins;
+    uint8_t vic_bank_select;
+    uint16_t vic_bank_base;
+    uint8_t vic_memory_pointer;
+    uint16_t vic_screen_base;
+    uint16_t vic_character_base;
+    uint16_t vic_bitmap_base;
+} runtime_memory_banking_snapshot;
+
 typedef struct runtime_machine_snapshot {
     uint64_t cycle;
     uint64_t cpu_cycles;
@@ -113,6 +133,7 @@ typedef struct runtime_machine_snapshot {
     uint64_t vic_register_writes;
     uint64_t cia1_register_writes;
     uint64_t cia2_register_writes;
+    uint64_t sid_register_writes;
     uint64_t keyboard_events;
     uint64_t irq_entries;
     uint64_t cia1_icr_reads;
@@ -124,6 +145,11 @@ typedef struct runtime_machine_snapshot {
     uint8_t turbo_speed_count;
     uint8_t cia1_irq_pending;
     uint8_t cia2_nmi_pending;
+    runtime_memory_banking_snapshot memory_banking;
+    c64_vicii_hardware_snapshot vicii_hardware;
+    c64_cia_hardware_snapshot cia1_hardware;
+    c64_cia_hardware_snapshot cia2_hardware;
+    c64_sid_hardware_snapshot sid_hardware;
 } runtime_machine_snapshot;
 
 typedef struct runtime_memory_snapshot {
@@ -158,6 +184,17 @@ typedef struct runtime_breakpoint_snapshot {
     runtime_breakpoint_snapshot_entry entries[RUNTIME_BREAKPOINT_SNAPSHOT_MAX];
 } runtime_breakpoint_snapshot;
 
+typedef struct runtime_call_stack_entry {
+    uint16_t jsr_address;
+    uint16_t dest_address;
+} runtime_call_stack_entry;
+
+typedef struct runtime_call_stack_snapshot {
+    uint8_t sp;
+    uint8_t count;
+    runtime_call_stack_entry entries[RUNTIME_CALL_STACK_MAX];
+} runtime_call_stack_snapshot;
+
 typedef struct runtime_disk_status_snapshot {
     uint8_t device;
     uint8_t mounted;
@@ -190,6 +227,7 @@ typedef struct runtime_event {
         runtime_memory_snapshot memory;
         runtime_breakpoint_snapshot breakpoints;
         runtime_disk_status_snapshot disk_status;
+        runtime_call_stack_snapshot call_stack;
         struct {
             uint16_t address;
             char path[1024];

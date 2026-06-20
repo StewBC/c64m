@@ -150,6 +150,12 @@ typedef struct c64_drive_slot {
     size_t entry_count;
 } c64_drive_slot;
 
+typedef enum c64_memory_visibility {
+    C64_MEMORY_VISIBILITY_RAM = 0,
+    C64_MEMORY_VISIBILITY_ROM,
+    C64_MEMORY_VISIBILITY_IO
+} c64_memory_visibility;
+
 typedef struct c64_machine_snapshot {
     uint64_t cycle;
     uint64_t cpu_cycles;
@@ -167,6 +173,7 @@ typedef struct c64_machine_snapshot {
     uint64_t vic_register_writes;
     uint64_t cia1_register_writes;
     uint64_t cia2_register_writes;
+    uint64_t sid_register_writes;
     uint64_t keyboard_events;
     uint64_t irq_entries;
     uint64_t cia1_icr_reads;
@@ -178,16 +185,114 @@ typedef struct c64_machine_snapshot {
     bool cia2_nmi_pending;
 } c64_machine_snapshot;
 
+typedef struct c64_memory_banking_snapshot {
+    uint8_t cpu_port_direction;
+    uint8_t cpu_port_data;
+    bool loram;
+    bool hiram;
+    bool charen;
+    c64_memory_visibility basic_visibility;
+    c64_memory_visibility io_visibility;
+    c64_memory_visibility kernal_visibility;
+    uint8_t cia2_port_a_pins;
+    uint8_t vic_bank_select;
+    uint16_t vic_bank_base;
+    uint8_t vic_memory_pointer;
+    uint16_t vic_screen_base;
+    uint16_t vic_character_base;
+    uint16_t vic_bitmap_base;
+} c64_memory_banking_snapshot;
+
+typedef struct c64_vicii_hardware_snapshot {
+    c64_video_standard standard;
+    uint32_t raster_line;
+    uint32_t cycle_in_line;
+    uint32_t cycles_per_line;
+    uint32_t lines_per_frame;
+    uint64_t frame_number;
+    uint16_t raster_compare;
+    uint8_t control_1;
+    uint8_t control_2;
+    uint8_t memory_pointer;
+    uint8_t irq_status;
+    uint8_t irq_enable;
+    bool irq_pending;
+    uint8_t border_color;
+    uint8_t background_color[4];
+    bool display_state;
+    bool bad_line;
+    bool ba_active;
+    uint16_t vc;
+    uint16_t vc_base;
+    uint8_t rc;
+    uint8_t sprite_enable;
+    uint8_t sprite_x_expand;
+    uint8_t sprite_y_expand;
+    uint8_t sprite_multicolor;
+    uint8_t sprite_priority;
+    uint8_t sprite_sprite_collision;
+    uint8_t sprite_background_collision;
+} c64_vicii_hardware_snapshot;
+
+typedef struct c64_cia_hardware_snapshot {
+    uint8_t port_a;
+    uint8_t port_b;
+    uint8_t ddra;
+    uint8_t ddrb;
+    uint16_t timer_a_counter;
+    uint16_t timer_a_latch;
+    uint8_t timer_a_control;
+    bool timer_a_underflow;
+    uint16_t timer_b_counter;
+    uint16_t timer_b_latch;
+    uint8_t timer_b_control;
+    bool timer_b_underflow;
+    uint8_t interrupt_flags;
+    uint8_t interrupt_mask;
+    bool interrupt_pending;
+    uint8_t tod_tenths;
+    uint8_t tod_seconds;
+    uint8_t tod_minutes;
+    uint8_t tod_hours;
+    uint8_t alarm_tenths;
+    uint8_t alarm_seconds;
+    uint8_t alarm_minutes;
+    uint8_t alarm_hours;
+} c64_cia_hardware_snapshot;
+
+typedef struct c64_sid_voice_hardware_snapshot {
+    uint16_t frequency;
+    uint16_t pulse_width;
+    uint8_t control;
+    uint8_t attack_decay;
+    uint8_t sustain_release;
+    uint8_t envelope;
+    sid_env_state envelope_state;
+    uint8_t phase_hi;
+    uint8_t waveform_mask;
+    bool gate;
+    bool sync;
+    bool ring;
+    bool test;
+} c64_sid_voice_hardware_snapshot;
+
+typedef struct c64_sid_hardware_snapshot {
+    c64_sid_voice_hardware_snapshot voices[3];
+    uint16_t filter_cutoff;
+    uint8_t filter_res_route;
+    uint8_t mode_volume;
+    uint8_t volume;
+    uint8_t filter_mode;
+    uint8_t voice3_osc_read;
+    uint8_t voice3_env_read;
+    float last_sample;
+    bool sample_output_enabled;
+} c64_sid_hardware_snapshot;
+
 typedef enum c64_memory_access_type {
     C64_MEMORY_ACCESS_READ = 0,
     C64_MEMORY_ACCESS_WRITE
 } c64_memory_access_type;
-
-typedef enum c64_memory_visibility {
-    C64_MEMORY_VISIBILITY_RAM = 0,
-    C64_MEMORY_VISIBILITY_ROM,
-    C64_MEMORY_VISIBILITY_IO
-} c64_memory_visibility;
 
 typedef void (*c64_memory_access_fn)(
     void *user,
@@ -269,6 +374,10 @@ void c64_unmount_all_drives(c64_t *machine);
 bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
+void c64_copy_memory_banking_snapshot(const c64_t *machine, c64_memory_banking_snapshot *out);
+void c64_copy_vicii_hardware_snapshot(const c64_t *machine, c64_vicii_hardware_snapshot *out);
+void c64_copy_cia_hardware_snapshot(const c64_t *machine, unsigned cia_index, c64_cia_hardware_snapshot *out);
+void c64_copy_sid_hardware_snapshot(const c64_t *machine, c64_sid_hardware_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);

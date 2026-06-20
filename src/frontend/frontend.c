@@ -2651,7 +2651,9 @@ static void frontend_draw_disassembly_view(
                 }
                 address_label[15] = '\0';
 
-                snprintf(rendered, sizeof(rendered), "%04X %-15s  %-8s  %s",
+                snprintf(rendered, sizeof(rendered), "%c%c %04X %-15s %-8s %s",
+                    is_pc ? '>' : ' ',
+                    is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
                     line->address,
                     address_label,
                     bytes,
@@ -3610,9 +3612,71 @@ static void frontend_draw_misc_debugger(frontend *ui, const frontend_debug_state
 
     nk_layout_row_dynamic(ctx, 8.0f, 1);
     nk_spacing(ctx, 1);
-    nk_layout_row_dynamic(ctx, 18.0f, 2);
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "Call Stack", NK_TEXT_LEFT);
-    nk_label(ctx, "No stack snapshot", NK_TEXT_LEFT);
+
+    frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK);
+
+    if (debug_state == NULL || !debug_state->has_call_stack ||
+        debug_state->call_stack.count == 0) {
+        nk_layout_row_dynamic(ctx, 15.0f, 1);
+        nk_label(ctx, "No stack entries", NK_TEXT_LEFT);
+    } else {
+        uint8_t cs_i;
+        for (cs_i = 0; cs_i < debug_state->call_stack.count; cs_i++) {
+            const runtime_call_stack_entry *cs_entry = &debug_state->call_stack.entries[cs_i];
+            frontend_disassembly_view_state *view = &ui->disassembly;
+            char jsr_label[8];
+            char dest_label[28];
+            char sym[17];
+            nk_bool selected;
+
+            snprintf(jsr_label, sizeof(jsr_label), "%04X", cs_entry->jsr_address);
+
+            sym[0] = '\0';
+            if (ui->symbols.address_to_label != NULL) {
+                (void)ui->symbols.address_to_label(
+                    ui->symbols.userdata,
+                    cs_entry->dest_address,
+                    sym,
+                    sizeof(sym));
+                sym[15] = '\0';
+            }
+            if (sym[0] != '\0') {
+                snprintf(dest_label, sizeof(dest_label), "JSR %s", sym);
+            } else {
+                snprintf(dest_label, sizeof(dest_label), "JSR %04X", cs_entry->dest_address);
+            }
+
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 15.0f, 2);
+
+            nk_layout_row_push(ctx, 0.12f);
+            selected = nk_false;
+            if (nk_selectable_label(ctx, jsr_label, NK_TEXT_LEFT, &selected) && selected) {
+                view->cursor_address = cs_entry->jsr_address;
+                view->top_address = frontend_disassembly_center_top(cs_entry->jsr_address, view->rows);
+                view->cursor_row = view->rows / 2u;
+                view->has_user_cursor = true;
+                view->request_pending = false;
+                view->follow_pc = false;
+                view->pc_lock_active = false;
+            }
+
+            nk_layout_row_push(ctx, 0.88f);
+            selected = nk_false;
+            if (nk_selectable_label(ctx, dest_label, NK_TEXT_LEFT, &selected) && selected) {
+                view->cursor_address = cs_entry->dest_address;
+                view->top_address = frontend_disassembly_center_top(cs_entry->dest_address, view->rows);
+                view->cursor_row = view->rows / 2u;
+                view->has_user_cursor = true;
+                view->request_pending = false;
+                view->follow_pc = false;
+                view->pc_lock_active = false;
+            }
+
+            nk_layout_row_end(ctx);
+        }
+    }
 }
 
 static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_state *debug_state)
@@ -3742,7 +3806,454 @@ static void frontend_draw_misc_breakpoints(frontend *ui, const frontend_debug_st
     }
 }
 
-static void frontend_draw_misc_hardware(frontend *ui)
+static const char *frontend_memory_visibility_name(
+    c64_memory_visibility visibility,
+    const char *rom_name)
+{
+    switch (visibility) {
+        case C64_MEMORY_VISIBILITY_RAM:
+            return "RAM";
+        case C64_MEMORY_VISIBILITY_ROM:
+            return rom_name;
+        case C64_MEMORY_VISIBILITY_IO:
+            return "I/O";
+        default:
+            return "?";
+    }
+}
+
+static void frontend_hardware_label_value(
+    struct nk_context *ctx,
+    const char *label,
+    const char *value)
+{
+    nk_layout_row_begin(ctx, NK_STATIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 150.0f);
+    nk_label(ctx, label, NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 660.0f);
+    nk_label(ctx, value, NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+}
+
+static const char *frontend_bool_text(bool value)
+{
+    return value ? "yes" : "no";
+}
+
+static const char *frontend_video_standard_text(c64_video_standard standard)
+{
+    return standard == C64_VIDEO_STANDARD_PAL ? "PAL" : "NTSC";
+}
+
+static const char *frontend_sid_env_state_text(sid_env_state state)
+{
+    switch (state) {
+        case SID_ENV_ATTACK:
+            return "attack";
+        case SID_ENV_DECAY:
+            return "decay";
+        case SID_ENV_SUSTAIN:
+            return "sustain";
+        case SID_ENV_RELEASE:
+        default:
+            return "release";
+    }
+}
+
+static void frontend_sid_waveform_text(uint8_t mask, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+
+    if ((mask & 0xf0u) == 0) {
+        snprintf(out, out_size, "none");
+        return;
+    }
+
+    snprintf(
+        out,
+        out_size,
+        "%s%s%s%s",
+        (mask & 0x10u) != 0 ? "tri " : "",
+        (mask & 0x20u) != 0 ? "saw " : "",
+        (mask & 0x40u) != 0 ? "pulse " : "",
+        (mask & 0x80u) != 0 ? "noise" : "");
+}
+
+static void frontend_draw_hardware_vicii(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    const c64_vicii_hardware_snapshot *vic;
+    char value[160];
+
+    if (debug_state == NULL || !debug_state->has_hardware) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No VIC-II snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    vic = &debug_state->vicii_hardware;
+    snprintf(
+        value,
+        sizeof(value),
+        "%s  line %u/%u  cycle %u/%u",
+        frontend_video_standard_text(vic->standard),
+        vic->raster_line,
+        vic->lines_per_frame,
+        vic->cycle_in_line,
+        vic->cycles_per_line);
+    frontend_hardware_label_value(ctx, "Raster", value);
+
+    snprintf(value, sizeof(value), "%llu", (unsigned long long)vic->frame_number);
+    frontend_hardware_label_value(ctx, "Frame", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "$%03X  pending %s  status $%02X  enable $%02X",
+        vic->raster_compare,
+        frontend_bool_text(vic->irq_pending),
+        vic->irq_status,
+        vic->irq_enable);
+    frontend_hardware_label_value(ctx, "IRQ", value);
+
+    snprintf(value, sizeof(value), "$%02X  $D016 $%02X  $D018 $%02X",
+        vic->control_1, vic->control_2, vic->memory_pointer);
+    frontend_hardware_label_value(ctx, "Registers", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "border %u  bg %u/%u/%u/%u",
+        vic->border_color,
+        vic->background_color[0],
+        vic->background_color[1],
+        vic->background_color[2],
+        vic->background_color[3]);
+    frontend_hardware_label_value(ctx, "Colors", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "display %s  bad-line %s  BA %s",
+        frontend_bool_text(vic->display_state),
+        frontend_bool_text(vic->bad_line),
+        frontend_bool_text(vic->ba_active));
+    frontend_hardware_label_value(ctx, "State", value);
+
+    snprintf(value, sizeof(value), "VC %u  VCBASE %u  RC %u", vic->vc, vic->vc_base, vic->rc);
+    frontend_hardware_label_value(ctx, "Counters", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "enable $%02X  xexp $%02X  yexp $%02X  mc $%02X",
+        vic->sprite_enable,
+        vic->sprite_x_expand,
+        vic->sprite_y_expand,
+        vic->sprite_multicolor);
+    frontend_hardware_label_value(ctx, "Sprites", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "priority $%02X  ss $%02X  sb $%02X",
+        vic->sprite_priority,
+        vic->sprite_sprite_collision,
+        vic->sprite_background_collision);
+    frontend_hardware_label_value(ctx, "Collisions", value);
+}
+
+static void frontend_draw_hardware_cia_one(
+    struct nk_context *ctx,
+    const char *name,
+    const c64_cia_hardware_snapshot *cia_state)
+{
+    char value[160];
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, name, NK_TEXT_LEFT);
+
+    snprintf(value, sizeof(value), "PA $%02X  PB $%02X  DDRA $%02X  DDRB $%02X",
+        cia_state->port_a, cia_state->port_b, cia_state->ddra, cia_state->ddrb);
+    frontend_hardware_label_value(ctx, "Ports", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "counter $%04X  latch $%04X  ctrl $%02X  underflow %s",
+        cia_state->timer_a_counter,
+        cia_state->timer_a_latch,
+        cia_state->timer_a_control,
+        frontend_bool_text(cia_state->timer_a_underflow));
+    frontend_hardware_label_value(ctx, "Timer A", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "counter $%04X  latch $%04X  ctrl $%02X  underflow %s",
+        cia_state->timer_b_counter,
+        cia_state->timer_b_latch,
+        cia_state->timer_b_control,
+        frontend_bool_text(cia_state->timer_b_underflow));
+    frontend_hardware_label_value(ctx, "Timer B", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "flags $%02X  mask $%02X  pending %s",
+        cia_state->interrupt_flags,
+        cia_state->interrupt_mask,
+        frontend_bool_text(cia_state->interrupt_pending));
+    frontend_hardware_label_value(ctx, "ICR", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "%02X:%02X:%02X.%X  alarm %02X:%02X:%02X.%X",
+        cia_state->tod_hours,
+        cia_state->tod_minutes,
+        cia_state->tod_seconds,
+        cia_state->tod_tenths,
+        cia_state->alarm_hours,
+        cia_state->alarm_minutes,
+        cia_state->alarm_seconds,
+        cia_state->alarm_tenths);
+    frontend_hardware_label_value(ctx, "TOD", value);
+}
+
+static void frontend_draw_hardware_cia(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    if (debug_state == NULL || !debug_state->has_hardware) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No CIA snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    frontend_draw_hardware_cia_one(ctx, "CIA #1", &debug_state->cia1_hardware);
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+    frontend_draw_hardware_cia_one(ctx, "CIA #2", &debug_state->cia2_hardware);
+}
+
+static void frontend_draw_hardware_sid(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    const c64_sid_hardware_snapshot *sid_state;
+    char value[160];
+    int i;
+
+    if (debug_state == NULL || !debug_state->has_hardware) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No SID snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    sid_state = &debug_state->sid_hardware;
+    for (i = 0; i < 3; ++i) {
+        const c64_sid_voice_hardware_snapshot *voice = &sid_state->voices[i];
+        char label[32];
+        char waveform[48];
+
+        frontend_sid_waveform_text(voice->waveform_mask, waveform, sizeof(waveform));
+        snprintf(label, sizeof(label), "Voice %d", i + 1);
+        snprintf(
+            value,
+            sizeof(value),
+            "freq $%04X  pw $%03X  ctrl $%02X  %s",
+            voice->frequency,
+            voice->pulse_width,
+            voice->control,
+            waveform);
+        frontend_hardware_label_value(ctx, label, value);
+
+        snprintf(
+            value,
+            sizeof(value),
+            "env %u %s  AD $%02X  SR $%02X  phase $%02X",
+            voice->envelope,
+            frontend_sid_env_state_text(voice->envelope_state),
+            voice->attack_decay,
+            voice->sustain_release,
+            voice->phase_hi);
+        frontend_hardware_label_value(ctx, "Envelope", value);
+    }
+
+    snprintf(
+        value,
+        sizeof(value),
+        "cutoff $%03X  res/route $%02X  mode/vol $%02X  volume %u",
+        sid_state->filter_cutoff,
+        sid_state->filter_res_route,
+        sid_state->mode_volume,
+        sid_state->volume);
+    frontend_hardware_label_value(ctx, "Filter", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "OSC3 $%02X  ENV3 $%02X  sample %.4f  output %s",
+        sid_state->voice3_osc_read,
+        sid_state->voice3_env_read,
+        (double)sid_state->last_sample,
+        frontend_bool_text(sid_state->sample_output_enabled));
+    frontend_hardware_label_value(ctx, "Readback", value);
+}
+
+static void frontend_draw_hardware_counters(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    char value[192];
+
+    if (debug_state == NULL || !debug_state->has_hardware) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No counter snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    snprintf(
+        value,
+        sizeof(value),
+        "machine %llu  CPU %llu  VIC %llu  CIA %llu",
+        (unsigned long long)debug_state->machine_cycle,
+        (unsigned long long)(debug_state->has_cpu ? debug_state->cpu.cycles : 0),
+        (unsigned long long)debug_state->vic_cycles,
+        (unsigned long long)debug_state->cia_cycles);
+    frontend_hardware_label_value(ctx, "Cycles", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "frame %llu  frame cycle %llu  dropped %llu",
+        (unsigned long long)debug_state->frame_number,
+        (unsigned long long)debug_state->frame_cycle,
+        (unsigned long long)debug_state->dropped_frames);
+    frontend_hardware_label_value(ctx, "Frames", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "screen %llu  color %llu",
+        (unsigned long long)debug_state->screen_ram_writes,
+        (unsigned long long)debug_state->color_ram_writes);
+    frontend_hardware_label_value(ctx, "RAM writes", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "VIC %llu  CIA1 %llu  CIA2 %llu  SID %llu",
+        (unsigned long long)debug_state->vic_register_writes,
+        (unsigned long long)debug_state->cia1_register_writes,
+        (unsigned long long)debug_state->cia2_register_writes,
+        (unsigned long long)debug_state->sid_register_writes);
+    frontend_hardware_label_value(ctx, "I/O writes", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "IRQ entries %llu  NMI entries %llu  RESTORE %llu",
+        (unsigned long long)debug_state->irq_entries,
+        (unsigned long long)debug_state->nmi_entries,
+        (unsigned long long)debug_state->restore_requests);
+    frontend_hardware_label_value(ctx, "Interrupts", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "reads %llu  writes %llu  assertions %llu",
+        (unsigned long long)debug_state->cia1_icr_reads,
+        (unsigned long long)debug_state->cia1_icr_writes,
+        (unsigned long long)debug_state->cia1_interrupt_assertions);
+    frontend_hardware_label_value(ctx, "CIA1 ICR", value);
+
+    snprintf(value, sizeof(value), "%llu", (unsigned long long)debug_state->keyboard_events);
+    frontend_hardware_label_value(ctx, "Keyboard events", value);
+}
+
+static void frontend_draw_hardware_memory_banking(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    const runtime_memory_banking_snapshot *banking;
+    char value[128];
+
+    if (debug_state == NULL || !debug_state->has_memory_banking) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No memory banking snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    banking = &debug_state->memory_banking;
+
+    snprintf(value, sizeof(value), "$%02X", banking->cpu_port_direction);
+    frontend_hardware_label_value(ctx, "$0000 DDR", value);
+
+    snprintf(value, sizeof(value), "$%02X", banking->cpu_port_data);
+    frontend_hardware_label_value(ctx, "$0001 DATA", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "LORAM %s  HIRAM %s  CHAREN %s",
+        banking->loram ? "on" : "off",
+        banking->hiram ? "on" : "off",
+        banking->charen ? "on" : "off");
+    frontend_hardware_label_value(ctx, "Bank bits", value);
+
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+    nk_layout_row_begin(ctx, NK_STATIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 150.0f);
+    nk_label(ctx, "Range", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 660.0f);
+    nk_label(ctx, "Visible", NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+
+    frontend_hardware_label_value(
+        ctx,
+        "$A000-$BFFF",
+        frontend_memory_visibility_name(banking->basic_visibility, "BASIC ROM"));
+    frontend_hardware_label_value(
+        ctx,
+        "$D000-$DFFF",
+        frontend_memory_visibility_name(banking->io_visibility, "CHAR ROM"));
+    frontend_hardware_label_value(
+        ctx,
+        "$E000-$FFFF",
+        frontend_memory_visibility_name(banking->kernal_visibility, "KERNAL ROM"));
+
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "$%04X  bank %u  CIA2 PA low bits %u",
+        banking->vic_bank_base,
+        banking->vic_bank_select,
+        (unsigned)(banking->cia2_port_a_pins & 0x03u));
+    frontend_hardware_label_value(ctx, "VIC bank base", value);
+
+    snprintf(value, sizeof(value), "$%02X", banking->vic_memory_pointer);
+    frontend_hardware_label_value(ctx, "$D018", value);
+
+    snprintf(value, sizeof(value), "$%04X", banking->vic_screen_base);
+    frontend_hardware_label_value(ctx, "Screen base", value);
+
+    snprintf(value, sizeof(value), "$%04X", banking->vic_character_base);
+    frontend_hardware_label_value(ctx, "Character base", value);
+
+    snprintf(value, sizeof(value), "$%04X", banking->vic_bitmap_base);
+    frontend_hardware_label_value(ctx, "Bitmap base", value);
+}
+
+static void frontend_draw_misc_hardware(frontend *ui, const frontend_debug_state *debug_state)
 {
     struct nk_context *ctx;
 
@@ -3751,12 +4262,26 @@ static void frontend_draw_misc_hardware(frontend *ui)
     }
 
     ctx = ui->ctx;
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Hardware", NK_TEXT_LEFT);
-    nk_label(ctx, "VIC-II details deferred", NK_TEXT_LEFT);
-    nk_label(ctx, "CIA details deferred", NK_TEXT_LEFT);
-    nk_label(ctx, "SID details deferred", NK_TEXT_LEFT);
-    nk_label(ctx, "Memory banking details deferred", NK_TEXT_LEFT);
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "Memory / Banks", NK_MAXIMIZED, 1)) {
+        frontend_draw_hardware_memory_banking(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "VIC-II", NK_MAXIMIZED, 2)) {
+        frontend_draw_hardware_vicii(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "CIA", NK_MAXIMIZED, 3)) {
+        frontend_draw_hardware_cia(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "SID", NK_MAXIMIZED, 4)) {
+        frontend_draw_hardware_sid(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "Counters", NK_MAXIMIZED, 5)) {
+        frontend_draw_hardware_counters(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
 }
 
 static void frontend_draw_misc_assembler(frontend *ui)
@@ -3920,7 +4445,7 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
                     break;
 
                 case FRONTEND_MISC_TAB_HARDWARE:
-                    frontend_draw_misc_hardware(ui);
+                    frontend_draw_misc_hardware(ui, debug_state);
                     break;
 
                 case FRONTEND_MISC_TAB_ASSEMBLER:

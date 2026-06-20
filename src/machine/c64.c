@@ -1350,6 +1350,7 @@ void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out) 
     out->vic_register_writes = machine->bus.vic_register_writes;
     out->cia1_register_writes = machine->bus.cia1_register_writes;
     out->cia2_register_writes = machine->bus.cia2_register_writes;
+    out->sid_register_writes = machine->bus.sid_register_writes;
     out->keyboard_events = machine->keyboard_events;
     out->irq_entries = machine->cpu.cpu.irq_entries;
     out->cia1_icr_reads = machine->cia1.icr_reads;
@@ -1430,6 +1431,141 @@ c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t ad
     }
 
     return C64_MEMORY_VISIBILITY_RAM;
+}
+
+void c64_copy_memory_banking_snapshot(const c64_t *machine, c64_memory_banking_snapshot *out) {
+    uint8_t d018;
+
+    assert(machine);
+    assert(out);
+
+    d018 = machine->vic.registers[0x18];
+
+    out->cpu_port_direction = machine->bus.cpu_port_direction;
+    out->cpu_port_data = machine->bus.cpu_port_data;
+    out->loram = (machine->bus.cpu_port_data & 0x01u) != 0;
+    out->hiram = (machine->bus.cpu_port_data & 0x02u) != 0;
+    out->charen = (machine->bus.cpu_port_data & 0x04u) != 0;
+    out->basic_visibility = c64_memory_visibility_at(machine, 0xa000);
+    out->io_visibility = c64_memory_visibility_at(machine, 0xd000);
+    out->kernal_visibility = c64_memory_visibility_at(machine, 0xe000);
+    out->cia2_port_a_pins = cia_read_port_a_pins(&machine->cia2);
+    out->vic_bank_select = (uint8_t)((~out->cia2_port_a_pins) & 0x03u);
+    out->vic_bank_base = c64_bus_vic_bank_base(&machine->bus);
+    out->vic_memory_pointer = d018;
+    out->vic_screen_base = (uint16_t)(out->vic_bank_base + (uint16_t)((d018 >> 4) & 0x0fu) * 0x0400u);
+    out->vic_character_base = (uint16_t)(out->vic_bank_base + (uint16_t)((d018 >> 1) & 0x07u) * 0x0800u);
+    out->vic_bitmap_base = (uint16_t)(out->vic_bank_base + (uint16_t)((d018 >> 3) & 0x01u) * 0x2000u);
+}
+
+void c64_copy_vicii_hardware_snapshot(const c64_t *machine, c64_vicii_hardware_snapshot *out) {
+    const vicii *v;
+
+    assert(machine);
+    assert(out);
+
+    v = &machine->vic;
+    out->standard = v->timing.standard == VICII_VIDEO_STANDARD_PAL ?
+        C64_VIDEO_STANDARD_PAL :
+        C64_VIDEO_STANDARD_NTSC;
+    out->raster_line = v->timing.raster_line;
+    out->cycle_in_line = v->timing.cycle_in_line;
+    out->cycles_per_line = v->timing.cycles_per_line;
+    out->lines_per_frame = v->timing.lines_per_frame;
+    out->frame_number = v->timing.frame_number;
+    out->raster_compare = v->timing.raster_compare;
+    out->control_1 = vicii_debug_read_register(v, 0xd011);
+    out->control_2 = vicii_debug_read_register(v, 0xd016);
+    out->memory_pointer = v->registers[0x18];
+    out->irq_status = v->irq_status;
+    out->irq_enable = v->irq_enable;
+    out->irq_pending = (v->irq_status & v->irq_enable) != 0;
+    out->border_color = (uint8_t)(v->registers[0x20] & 0x0fu);
+    out->background_color[0] = (uint8_t)(v->registers[0x21] & 0x0fu);
+    out->background_color[1] = (uint8_t)(v->registers[0x22] & 0x0fu);
+    out->background_color[2] = (uint8_t)(v->registers[0x23] & 0x0fu);
+    out->background_color[3] = (uint8_t)(v->registers[0x24] & 0x0fu);
+    out->display_state = v->display_state;
+    out->bad_line = v->bad_line;
+    out->ba_active = vicii_ba_active(v, machine->clock.cycle);
+    out->vc = v->vc;
+    out->vc_base = v->vc_base;
+    out->rc = v->rc;
+    out->sprite_enable = v->registers[0x15];
+    out->sprite_x_expand = v->registers[0x1d];
+    out->sprite_y_expand = v->registers[0x17];
+    out->sprite_multicolor = v->registers[0x1c];
+    out->sprite_priority = v->sprite_priority;
+    out->sprite_sprite_collision = v->sprite_sprite_collision;
+    out->sprite_background_collision = v->sprite_background_collision;
+}
+
+void c64_copy_cia_hardware_snapshot(const c64_t *machine, unsigned cia_index, c64_cia_hardware_snapshot *out) {
+    const cia *c;
+
+    assert(machine);
+    assert(out);
+
+    c = cia_index == 2u ? &machine->cia2 : &machine->cia1;
+    out->port_a = cia_debug_read_register(c, 0x00);
+    out->port_b = cia_debug_read_register(c, 0x01);
+    out->ddra = c->registers[0x02];
+    out->ddrb = c->registers[0x03];
+    out->timer_a_counter = c->timer_a.counter;
+    out->timer_a_latch = c->timer_a.latch;
+    out->timer_a_control = c->registers[0x0e];
+    out->timer_a_underflow = c->timer_a.underflow;
+    out->timer_b_counter = c->timer_b.counter;
+    out->timer_b_latch = c->timer_b.latch;
+    out->timer_b_control = c->registers[0x0f];
+    out->timer_b_underflow = c->timer_b.underflow;
+    out->interrupt_flags = c->interrupt_flags;
+    out->interrupt_mask = c->interrupt_mask;
+    out->interrupt_pending = cia_irq_pending(c);
+    out->tod_tenths = c->tod.tenth;
+    out->tod_seconds = c->tod.seconds;
+    out->tod_minutes = c->tod.minutes;
+    out->tod_hours = c->tod.hours;
+    out->alarm_tenths = c->tod_alarm.tenth;
+    out->alarm_seconds = c->tod_alarm.seconds;
+    out->alarm_minutes = c->tod_alarm.minutes;
+    out->alarm_hours = c->tod_alarm.hours;
+}
+
+void c64_copy_sid_hardware_snapshot(const c64_t *machine, c64_sid_hardware_snapshot *out) {
+    const sid *s;
+    size_t i;
+
+    assert(machine);
+    assert(out);
+
+    s = &machine->sid;
+    for (i = 0; i < 3; ++i) {
+        const sid_voice *voice = &s->voices[i];
+        out->voices[i].frequency = voice->freq;
+        out->voices[i].pulse_width = voice->pulse_width;
+        out->voices[i].control = voice->control;
+        out->voices[i].attack_decay = voice->attack_decay;
+        out->voices[i].sustain_release = voice->sustain_release;
+        out->voices[i].envelope = voice->envelope;
+        out->voices[i].envelope_state = voice->env_state;
+        out->voices[i].phase_hi = (uint8_t)(voice->phase >> 16);
+        out->voices[i].waveform_mask = (uint8_t)(voice->control & 0xf0u);
+        out->voices[i].gate = (voice->control & 0x01u) != 0;
+        out->voices[i].sync = (voice->control & 0x02u) != 0;
+        out->voices[i].ring = (voice->control & 0x04u) != 0;
+        out->voices[i].test = (voice->control & 0x08u) != 0;
+    }
+
+    out->filter_cutoff = s->filter_cutoff;
+    out->filter_res_route = s->filter_res_route;
+    out->mode_volume = s->mode_volume;
+    out->volume = (uint8_t)(s->mode_volume & 0x0fu);
+    out->filter_mode = (uint8_t)((s->mode_volume >> 4) & 0x07u);
+    out->voice3_osc_read = s->voice3_osc_read;
+    out->voice3_env_read = s->voice3_env_read;
+    out->last_sample = s->last_sample;
+    out->sample_output_enabled = s->sample_output_enabled;
 }
 
 size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_trace *out) {

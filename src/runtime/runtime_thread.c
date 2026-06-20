@@ -195,6 +195,11 @@ static void runtime_publish_machine_state(runtime *rt) {
         .type = RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
     };
     c64_machine_snapshot snapshot;
+    c64_memory_banking_snapshot banking;
+    c64_vicii_hardware_snapshot vicii_hardware;
+    c64_cia_hardware_snapshot cia1_hardware;
+    c64_cia_hardware_snapshot cia2_hardware;
+    c64_sid_hardware_snapshot sid_hardware;
 
     c64_copy_machine_snapshot(&rt->machine, &snapshot);
     event.data.machine_state.cycle = snapshot.cycle;
@@ -218,6 +223,7 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.vic_register_writes = snapshot.vic_register_writes;
     event.data.machine_state.cia1_register_writes = snapshot.cia1_register_writes;
     event.data.machine_state.cia2_register_writes = snapshot.cia2_register_writes;
+    event.data.machine_state.sid_register_writes = snapshot.sid_register_writes;
     event.data.machine_state.keyboard_events = snapshot.keyboard_events;
     event.data.machine_state.irq_entries = snapshot.irq_entries;
     event.data.machine_state.cia1_icr_reads = snapshot.cia1_icr_reads;
@@ -229,6 +235,32 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.turbo_speed_count = rt->turbo_speed_count;
     event.data.machine_state.cia1_irq_pending = snapshot.cia1_irq_pending ? 1 : 0;
     event.data.machine_state.cia2_nmi_pending = snapshot.cia2_nmi_pending ? 1 : 0;
+
+    c64_copy_memory_banking_snapshot(&rt->machine, &banking);
+    event.data.machine_state.memory_banking.cpu_port_direction = banking.cpu_port_direction;
+    event.data.machine_state.memory_banking.cpu_port_data = banking.cpu_port_data;
+    event.data.machine_state.memory_banking.loram = banking.loram ? 1 : 0;
+    event.data.machine_state.memory_banking.hiram = banking.hiram ? 1 : 0;
+    event.data.machine_state.memory_banking.charen = banking.charen ? 1 : 0;
+    event.data.machine_state.memory_banking.basic_visibility = banking.basic_visibility;
+    event.data.machine_state.memory_banking.io_visibility = banking.io_visibility;
+    event.data.machine_state.memory_banking.kernal_visibility = banking.kernal_visibility;
+    event.data.machine_state.memory_banking.cia2_port_a_pins = banking.cia2_port_a_pins;
+    event.data.machine_state.memory_banking.vic_bank_select = banking.vic_bank_select;
+    event.data.machine_state.memory_banking.vic_bank_base = banking.vic_bank_base;
+    event.data.machine_state.memory_banking.vic_memory_pointer = banking.vic_memory_pointer;
+    event.data.machine_state.memory_banking.vic_screen_base = banking.vic_screen_base;
+    event.data.machine_state.memory_banking.vic_character_base = banking.vic_character_base;
+    event.data.machine_state.memory_banking.vic_bitmap_base = banking.vic_bitmap_base;
+
+    c64_copy_vicii_hardware_snapshot(&rt->machine, &vicii_hardware);
+    c64_copy_cia_hardware_snapshot(&rt->machine, 1, &cia1_hardware);
+    c64_copy_cia_hardware_snapshot(&rt->machine, 2, &cia2_hardware);
+    c64_copy_sid_hardware_snapshot(&rt->machine, &sid_hardware);
+    event.data.machine_state.vicii_hardware = vicii_hardware;
+    event.data.machine_state.cia1_hardware = cia1_hardware;
+    event.data.machine_state.cia2_hardware = cia2_hardware;
+    event.data.machine_state.sid_hardware = sid_hardware;
 
     runtime_publish_event(rt, &event);
 }
@@ -2245,6 +2277,35 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_SAVE_BIN:
             runtime_save_bin(rt, command);
             break;
+
+        case RUNTIME_COMMAND_REQUEST_CALL_STACK: {
+            runtime_event cs_event = { .type = RUNTIME_EVENT_CALL_STACK_RESPONSE };
+            uint16_t sp16 = rt->machine.cpu.cpu.sp;
+            uint16_t cs_addr = (uint16_t)(sp16 + 1u);
+            cs_event.data.call_stack.sp = (uint8_t)(sp16 & 0xFFu);
+            cs_event.data.call_stack.count = 0;
+            while (cs_addr <= 0x01FEu &&
+                   cs_event.data.call_stack.count < RUNTIME_CALL_STACK_MAX) {
+                uint8_t lo = c64_debug_read_ram(&rt->machine, cs_addr);
+                uint8_t hi = c64_debug_read_ram(&rt->machine, (uint16_t)(cs_addr + 1u));
+                uint16_t stack_val = (uint16_t)((uint16_t)hi << 8u | lo);
+                if (stack_val >= 2u &&
+                    c64_debug_read_cpu_map(&rt->machine, (uint16_t)(stack_val - 2u)) == 0x20u) {
+                    uint8_t dst_lo = c64_debug_read_cpu_map(&rt->machine, (uint16_t)(stack_val - 1u));
+                    uint8_t dst_hi = c64_debug_read_cpu_map(&rt->machine, stack_val);
+                    uint8_t idx = cs_event.data.call_stack.count;
+                    cs_event.data.call_stack.entries[idx].jsr_address = (uint16_t)(stack_val - 2u);
+                    cs_event.data.call_stack.entries[idx].dest_address =
+                        (uint16_t)((uint16_t)dst_hi << 8u | dst_lo);
+                    cs_event.data.call_stack.count++;
+                    cs_addr += 2u;
+                } else {
+                    cs_addr++;
+                }
+            }
+            runtime_publish_event(rt, &cs_event);
+            break;
+        }
 
         case RUNTIME_COMMAND_NONE:
         default:

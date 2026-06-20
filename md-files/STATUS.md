@@ -7,7 +7,7 @@ The emulator is complete through:
 - Core C64 runtime: 6510 CPU, RAM/ROM/banking/address decode, reset/boot path, runtime command/event model, run/pause/reset, cycle/instruction step, frame handoff.
 - VIC-II through Phase J except skipped light pen: live raster timing, timed bus-visible writes, PAL/NTSC frame sizes, text/bitmap/multicolor/ECM/invalid modes, sprites, sprite priority/collisions, open/unused register reads, sprite BA stealing, DEN-off blanking.
 - CIA through Phase G: CIA #1/#2 routing, timers, ICR/IRQ/NMI behavior, keyboard/joystick/RESTORE, CIA #2 VIC bank and IEC port pins, TOD/alarm.
-- Debugger UI through Phase 13: CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, INI persistence.
+- Debugger UI through Phase 13: CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, INI persistence. Call stack view implemented in Misc|Debugger tab.
 - Configuration UI through Phase 14: Configure dialog, PAL/NTSC setting, display/turbo/symbol/INI options, runtime config apply and reboot on video-standard change.
 - D64 disk support through Phase G: read-only tools parser, runtime mount/unmount for devices 8 and 9, KERNAL LOAD traps for PRG loads, LOAD "$" directory loads, exact/wildcard filename matching, Machine-tab disk UI/status.
 - PRG loader polish: reset-before-load, pending injection after BASIC warm-start at $E38B, keyboard-buffer autostart PRGs supported.
@@ -64,6 +64,8 @@ The emulator is complete through:
 - Debugger input focus is explicit: C64 display vs debugger views.
 - Symbol table is tools/frontend/debug-session-owned, separate from emulator machine and assembler internals.
 - INI supports config and breakpoint persistence; invalid breakpoint entries are skipped while valid entries load.
+- Call stack view (Misc|Debugger tab): runtime walks the 6510 stack each frame, verifies JSR opcode at each candidate return address via the CPU memory map, and publishes up to 16 entries as a `runtime_call_stack_snapshot`. Displays `XXXX | JSR label/YYYY` rows; clicking either column centers the disassembly view on that address.
+- Hardware view (Misc|Hardware tab): collapsible `NK_TREE_TAB` sections render copied runtime snapshots for Memory/Banks, VIC-II, CIA #1/#2, SID, and counters. Memory/Banks shows CPU port banking, CPU-visible regions, VIC bank, and `$D018`-derived bases; VIC-II shows raster/IRQ/register/color/BA/sprite state; CIA shows ports, timers, ICR, TOD, and alarm; SID shows voice, filter, read-back, and sample state. The shared hardware rows use a wider static layout so the tab can scroll horizontally for long diagnostics.
 
 ### Audio output infrastructure (C64AUDFID_1)
 

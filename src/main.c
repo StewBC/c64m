@@ -231,7 +231,27 @@ static void update_debug_state_from_event(
             debug_state->frame_number = event->data.machine_state.frame_number;
             debug_state->frame_cycle = event->data.machine_state.frame_cycle;
             debug_state->dropped_frames = event->data.machine_state.dropped_frames;
+            debug_state->memory_banking = event->data.machine_state.memory_banking;
+            debug_state->vicii_hardware = event->data.machine_state.vicii_hardware;
+            debug_state->cia1_hardware = event->data.machine_state.cia1_hardware;
+            debug_state->cia2_hardware = event->data.machine_state.cia2_hardware;
+            debug_state->sid_hardware = event->data.machine_state.sid_hardware;
+            debug_state->screen_ram_writes = event->data.machine_state.screen_ram_writes;
+            debug_state->color_ram_writes = event->data.machine_state.color_ram_writes;
+            debug_state->vic_register_writes = event->data.machine_state.vic_register_writes;
+            debug_state->cia1_register_writes = event->data.machine_state.cia1_register_writes;
+            debug_state->cia2_register_writes = event->data.machine_state.cia2_register_writes;
+            debug_state->sid_register_writes = event->data.machine_state.sid_register_writes;
+            debug_state->keyboard_events = event->data.machine_state.keyboard_events;
+            debug_state->irq_entries = event->data.machine_state.irq_entries;
+            debug_state->cia1_icr_reads = event->data.machine_state.cia1_icr_reads;
+            debug_state->cia1_icr_writes = event->data.machine_state.cia1_icr_writes;
+            debug_state->cia1_interrupt_assertions = event->data.machine_state.cia1_interrupt_assertions;
+            debug_state->nmi_entries = event->data.machine_state.nmi_entries;
+            debug_state->restore_requests = event->data.machine_state.restore_requests;
             debug_state->has_cpu = true;
+            debug_state->has_memory_banking = true;
+            debug_state->has_hardware = true;
             if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_ERROR) {
                 debug_state->runtime_state = event->data.machine_state.running ?
                     FRONTEND_RUNTIME_STATE_RUNNING :
@@ -267,6 +287,11 @@ static void update_debug_state_from_event(
             debug_state->frame_cycle = event->data.frame_ready.machine_cycle;
             debug_state->dropped_frames = event->data.frame_ready.dropped_frames;
             debug_state->has_frame = true;
+            break;
+
+        case RUNTIME_EVENT_CALL_STACK_RESPONSE:
+            debug_state->call_stack = event->data.call_stack;
+            debug_state->has_call_stack = true;
             break;
 
         case RUNTIME_EVENT_STARTED:
@@ -942,6 +967,10 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     intent.save_bin_end,
                     intent.save_bin_write_file_address,
                     intent.save_bin_is_basic);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK:
+                sent = runtime_client_request_call_stack(client);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_NONE:
