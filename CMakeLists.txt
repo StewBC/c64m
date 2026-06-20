@@ -258,6 +258,26 @@ target_link_libraries(test_d64 PRIVATE
 
 add_test(NAME d64 COMMAND test_d64)
 
+add_executable(profile_c64_hotloop
+    tools/profile_c64_hotloop.c
+)
+
+target_compile_features(profile_c64_hotloop PRIVATE c_std_99)
+
+target_link_libraries(profile_c64_hotloop PRIVATE
+    machine
+)
+
+add_executable(profile_runtime_hotloop
+    tools/profile_runtime_hotloop.c
+)
+
+target_compile_features(profile_runtime_hotloop PRIVATE c_std_99)
+
+target_link_libraries(profile_runtime_hotloop PRIVATE
+    runtime
+)
+
 add_executable(test_assembler_conditionals
     tests/tools/test_assembler_conditionals.c
 )
