@@ -1,11 +1,13 @@
 # src/frontend/CMakeLists.txt
 
 set(C64M_HELP_CONTENT "${CMAKE_CURRENT_BINARY_DIR}/generated/help_content.inc")
+set(C64M_HELP_SECTION_LEVEL "2" CACHE STRING "Markdown heading level used for help sections")
 
 add_custom_command(
     OUTPUT "${C64M_HELP_CONTENT}"
     COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_SOURCE_DIR}/tools/gen_help.py"
+        --level "${C64M_HELP_SECTION_LEVEL}"
         "${CMAKE_SOURCE_DIR}/manual/manual.md"
         "${C64M_HELP_CONTENT}"
     DEPENDS

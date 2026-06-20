@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ORDERED_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 INLINE_CODE_ON = "\x01"
 INLINE_CODE_OFF = "\x02"
 
@@ -55,6 +56,10 @@ def add_span(sections, kind, text="", line_no=None):
     if not sections:
         sections.append({"title": "Introduction", "spans": []})
     sections[-1]["spans"].append((kind, strip_inline_markup(text, line_no)))
+
+
+def add_heading_span(sections, title, line_no=None):
+    add_span(sections, "HELP_SPAN_H3", title, line_no)
 
 
 def visible_len(text):
@@ -118,13 +123,14 @@ def flush_table(sections, table_lines):
             add_span(sections, "HELP_SPAN_TABLE", "  ".join(parts))
 
 
-def parse_manual(path):
+def parse_manual(path, section_level=2):
     lines = path.read_text(encoding="utf-8").splitlines()
     heading = None
     sections = []
     in_code = False
     code_lines = []
     table_lines = []
+    selected_level_count = 0
 
     for line_no, raw in enumerate(lines, 1):
         line = raw.rstrip("\r")
@@ -153,30 +159,26 @@ def parse_manual(path):
         flush_table(sections, table_lines)
         table_lines = []
 
-        if line.startswith("# "):
-            title = line[2:].strip()
+        heading_match = HEADING_RE.match(line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            title = heading_match.group(2).strip()
             if not title:
-                fail(f"empty top-level heading at line {line_no}")
-            if heading is None:
+                fail(f"empty heading at line {line_no}")
+
+            if level == 1:
+                if heading is not None:
+                    if sections:
+                        add_heading_span(sections, title, line_no)
+                    continue
                 heading = title
                 if not sections:
                     sections.append({"title": title, "spans": []})
-            else:
-                if not sections:
-                    sections.append({"title": title, "spans": []})
-                else:
-                    add_span(sections, "HELP_SPAN_H3", title, line_no)
-            continue
-
-        if line.startswith("## "):
-            title = line[3:].strip()
-            if not title:
-                fail(f"empty section heading at line {line_no}")
-            sections.append({"title": title, "spans": []})
-            continue
-
-        if line.startswith("### "):
-            add_span(sections, "HELP_SPAN_H3", line[4:].strip(), line_no)
+            elif level == section_level:
+                sections.append({"title": title, "spans": []})
+                selected_level_count += 1
+            elif sections:
+                add_heading_span(sections, title, line_no)
             continue
 
         if line.strip() == "":
@@ -203,8 +205,8 @@ def parse_manual(path):
         fail("unterminated fenced code block")
     if heading is None:
         fail("missing top-level # heading")
-    if not sections:
-        fail("missing at least one ## section")
+    if selected_level_count == 0:
+        fail(f"{path}: no level-{section_level} headings found for help sections")
     return heading, sections
 
 
@@ -256,11 +258,15 @@ def emit(heading, sections):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--level", type=int, default=2)
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
 
-    heading, sections = parse_manual(args.input)
+    if args.level < 2 or args.level > 6:
+        fail("--level must be an integer from 2 to 6")
+
+    heading, sections = parse_manual(args.input, args.level)
     text = emit(heading, sections)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8", newline="\n") as f:

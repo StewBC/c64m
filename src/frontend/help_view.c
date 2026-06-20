@@ -188,6 +188,69 @@ static float help_text_width(struct nk_context *ctx, const char *text, int len)
     return font->width(font->userdata, font->height, text, len);
 }
 
+static float help_encoded_text_width(struct nk_context *ctx, const char *text)
+{
+    const char *run;
+    const char *p;
+    float width = 0.0f;
+
+    if (ctx == NULL || text == NULL) {
+        return 0.0f;
+    }
+
+    run = text;
+    for (p = text; ; ++p) {
+        if (*p == HELP_INLINE_CODE_ON || *p == HELP_INLINE_CODE_OFF || *p == '\0') {
+            if (p > run) {
+                width += help_text_width(ctx, run, (int)(p - run));
+            }
+            if (*p == '\0') {
+                break;
+            }
+            run = p + 1;
+        }
+    }
+    return width;
+}
+
+static int help_append_char(char *out, int out_size, int pos, char ch)
+{
+    if (out == NULL || out_size <= 0 || pos >= out_size - 1) {
+        return pos;
+    }
+    out[pos++] = ch;
+    out[pos] = '\0';
+    return pos;
+}
+
+static int help_append_text(char *out, int out_size, int pos, const char *text, int len)
+{
+    int i;
+
+    for (i = 0; i < len; ++i) {
+        pos = help_append_char(out, out_size, pos, text[i]);
+    }
+    return pos;
+}
+
+static bool help_update_inline_code_state(bool code, const char *text)
+{
+    const char *p;
+
+    if (text == NULL) {
+        return code;
+    }
+
+    for (p = text; *p != '\0'; ++p) {
+        if (*p == HELP_INLINE_CODE_ON) {
+            code = true;
+        } else if (*p == HELP_INLINE_CODE_OFF) {
+            code = false;
+        }
+    }
+    return code;
+}
+
 static void help_draw_inline_at(
     struct nk_context *ctx,
     struct nk_command_buffer *canvas,
@@ -253,6 +316,158 @@ static void help_inline_row(struct nk_context *ctx, const char *text, struct nk_
     help_draw_inline_at(ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color);
 }
 
+static void help_inline_row_indented(
+    struct nk_context *ctx,
+    const char *text,
+    struct nk_color color,
+    float indent)
+{
+    struct nk_rect bounds;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
+    if (!nk_widget(&bounds, ctx)) {
+        return;
+    }
+
+    bounds.x += indent;
+    bounds.w -= indent;
+    help_draw_inline_at(ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color);
+}
+
+static void help_marker_text_row(
+    struct nk_context *ctx,
+    const char *marker,
+    const char *text,
+    struct nk_color marker_color,
+    struct nk_color text_color,
+    float text_indent)
+{
+    struct nk_rect bounds;
+    struct nk_command_buffer *canvas;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
+    if (!nk_widget(&bounds, ctx)) {
+        return;
+    }
+
+    canvas = nk_window_get_canvas(ctx);
+    if (marker != NULL && marker[0] != '\0') {
+        nk_draw_text(
+            canvas,
+            nk_rect(bounds.x, bounds.y, text_indent + 1.0f, bounds.h),
+            marker,
+            (int)strlen(marker),
+            ctx->style.font,
+            HELP_COLOR_PANEL,
+            marker_color);
+    }
+    bounds.x += text_indent;
+    bounds.w -= text_indent;
+    help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", text_color);
+}
+
+static void help_wrap_text(
+    struct nk_context *ctx,
+    const char *text,
+    struct nk_color color,
+    float first_indent,
+    float rest_indent,
+    const char *marker,
+    struct nk_color marker_color)
+{
+    char line[2048];
+    char candidate[2048];
+    char token[512];
+    const char *p;
+    int line_len = 0;
+    int row = 0;
+    bool code = false;
+
+    if (ctx == NULL || text == NULL) {
+        return;
+    }
+
+    p = text;
+    line[0] = '\0';
+    while (*p != '\0') {
+        int token_len = 0;
+        int candidate_len = 0;
+        float indent;
+        float available;
+
+        while (*p == ' ') {
+            ++p;
+        }
+        while (*p != '\0' && *p != ' ' && token_len < (int)sizeof(token) - 1) {
+            token[token_len++] = *p++;
+        }
+        token[token_len] = '\0';
+        if (token_len == 0) {
+            break;
+        }
+
+        candidate_len = help_append_text(candidate, sizeof(candidate), 0, line, line_len);
+        if (candidate_len > 0) {
+            candidate_len = help_append_char(candidate, sizeof(candidate), candidate_len, ' ');
+        } else if (code) {
+            candidate_len = help_append_char(candidate, sizeof(candidate), candidate_len, HELP_INLINE_CODE_ON);
+        }
+        candidate_len = help_append_text(candidate, sizeof(candidate), candidate_len, token, token_len);
+        candidate[candidate_len] = '\0';
+
+        indent = row == 0 ? first_indent : rest_indent;
+        available = nk_window_get_content_region(ctx).w - indent - 8.0f;
+        if (line_len > 0 && help_encoded_text_width(ctx, candidate) > available) {
+            if (row == 0 && marker != NULL) {
+                help_marker_text_row(ctx, marker, line, marker_color, color, first_indent);
+            } else {
+                help_inline_row_indented(ctx, line, color, indent);
+            }
+            ++row;
+            line_len = 0;
+            line[0] = '\0';
+            if (code) {
+                line_len = help_append_char(line, sizeof(line), line_len, HELP_INLINE_CODE_ON);
+            }
+            line_len = help_append_text(line, sizeof(line), line_len, token, token_len);
+        } else {
+            memcpy(line, candidate, (size_t)candidate_len + 1u);
+            line_len = candidate_len;
+        }
+        code = help_update_inline_code_state(code, token);
+    }
+
+    if (row == 0 && marker != NULL) {
+        help_marker_text_row(ctx, marker, line, marker_color, color, first_indent);
+    } else {
+        help_inline_row_indented(ctx, line, color, row == 0 ? first_indent : rest_indent);
+    }
+}
+
+static void help_inline_wrap_if_needed(struct nk_context *ctx, const char *text, struct nk_color color)
+{
+    float available;
+
+    if (ctx == NULL || text == NULL) {
+        return;
+    }
+
+    available = nk_window_get_content_region(ctx).w - 8.0f;
+    if (help_encoded_text_width(ctx, text) <= available) {
+        help_inline_row(ctx, text, color);
+        return;
+    }
+    help_wrap_text(ctx, text, color, 0.0f, 0.0f, NULL, color);
+}
+
 static void help_bullet_row(struct nk_context *ctx, const char *text)
 {
     struct nk_rect bounds;
@@ -283,6 +498,24 @@ static void help_bullet_row(struct nk_context *ctx, const char *text)
     help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", HELP_COLOR_BODY);
 }
 
+static void help_bullet_wrap_if_needed(struct nk_context *ctx, const char *text)
+{
+    float marker_w;
+    float available;
+
+    if (ctx == NULL || text == NULL) {
+        return;
+    }
+
+    marker_w = help_text_width(ctx, "- ", 2);
+    available = nk_window_get_content_region(ctx).w - marker_w - 8.0f;
+    if (help_encoded_text_width(ctx, text) <= available) {
+        help_bullet_row(ctx, text);
+        return;
+    }
+    help_wrap_text(ctx, text, HELP_COLOR_BODY, marker_w, marker_w, "- ", HELP_COLOR_BULLET);
+}
+
 static void help_render_span(struct nk_context *ctx, const help_span *span)
 {
     if (ctx == NULL || span == NULL) {
@@ -296,15 +529,15 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
             break;
 
         case HELP_SPAN_H3:
-            help_inline_row(ctx, span->text, HELP_COLOR_H3);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_H3);
             break;
 
         case HELP_SPAN_BULLET:
-            help_bullet_row(ctx, span->text);
+            help_bullet_wrap_if_needed(ctx, span->text);
             break;
 
         case HELP_SPAN_NUMBER:
-            help_inline_row(ctx, span->text, HELP_COLOR_NUMBER);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_NUMBER);
             break;
 
         case HELP_SPAN_CODE_BLOCK:
@@ -317,7 +550,7 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
 
         case HELP_SPAN_TEXT:
         default:
-            help_inline_row(ctx, span->text, HELP_COLOR_BODY);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_BODY);
             break;
     }
 }
