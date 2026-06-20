@@ -19,7 +19,20 @@ enum {
     C64_CIA1_END = 0xdcff,
     C64_CIA2_BASE = 0xdd00,
     C64_CIA2_END = 0xddff,
+    C64_CIA_REG_PORT_A = 0x00,
+    C64_CIA_REG_DDRA = 0x02,
 };
+
+static uint16_t c64_bus_compute_vic_bank_base(const c64_bus_t *bus) {
+    uint8_t pa;
+
+    if (!bus->cia2) {
+        return 0;
+    }
+
+    pa = cia_read_port_a_pins(bus->cia2);
+    return (uint16_t)(((~pa) & 3u) * 0x4000u);
+}
 
 static uint8_t c64_bus_cpu_port_read(const c64_bus_t *bus, uint16_t address) {
     if (address == C64_CPU_PORT_DIRECTION) {
@@ -108,7 +121,11 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     }
 
     if (address >= C64_CIA2_BASE && address <= C64_CIA2_END && bus->cia2) {
+        uint8_t reg = (uint8_t)(address & 0x0fu);
         cia_write_register(bus->cia2, address, value);
+        if (reg == C64_CIA_REG_PORT_A || reg == C64_CIA_REG_DDRA) {
+            c64_bus_refresh_vic_bank_base(bus);
+        }
         bus->cia2_register_writes++;
     }
 }
@@ -146,6 +163,7 @@ void c64_bus_reset(c64_bus_t *bus) {
     bus->cia1_register_writes = 0;
     bus->cia2_register_writes = 0;
     bus->sid_register_writes = 0;
+    c64_bus_refresh_vic_bank_base(bus);
 }
 
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v) {
@@ -159,12 +177,19 @@ void c64_bus_attach_cias(c64_bus_t *bus, cia *cia1, cia *cia2) {
 
     bus->cia1 = cia1;
     bus->cia2 = cia2;
+    c64_bus_refresh_vic_bank_base(bus);
 }
 
 void c64_bus_attach_sid(c64_bus_t *bus, sid *s) {
     assert(bus);
 
     bus->sid = s;
+}
+
+void c64_bus_refresh_vic_bank_base(c64_bus_t *bus) {
+    assert(bus);
+
+    bus->vic_bank_base = c64_bus_compute_vic_bank_base(bus);
 }
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {
@@ -293,10 +318,9 @@ bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
 }
 
 uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus) {
-    uint8_t pa;
-    if (!bus->cia2) return 0;
-    pa = cia_read_port_a_pins(bus->cia2);
-    return (uint16_t)(((~pa) & 3u) * 0x4000u);
+    assert(bus);
+
+    return bus->vic_bank_base;
 }
 
 bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {

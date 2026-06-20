@@ -330,21 +330,21 @@ static void test_cia2_vic_bank_uses_port_pins(void) {
     c64_t machine;
 
     c64_init(&machine);
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x00);
+    c64_bus_write(&machine.bus, 0xdd00, 0x00);
     expect_u16("cia2 input bank bits default high select bank 0", 0x0000, c64_bus_vic_bank_base(&machine.bus));
 
-    cia_write_register(&machine.cia2, CIA_REG_DDRA, 0x03);
+    c64_bus_write(&machine.bus, 0xdd02, 0x03);
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x03);
+    c64_bus_write(&machine.bus, 0xdd00, 0x03);
     expect_u16("cia2 bank bits 11 select bank 0", 0x0000, c64_bus_vic_bank_base(&machine.bus));
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x02);
+    c64_bus_write(&machine.bus, 0xdd00, 0x02);
     expect_u16("cia2 bank bits 10 select bank 1", 0x4000, c64_bus_vic_bank_base(&machine.bus));
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x01);
+    c64_bus_write(&machine.bus, 0xdd00, 0x01);
     expect_u16("cia2 bank bits 01 select bank 2", 0x8000, c64_bus_vic_bank_base(&machine.bus));
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x00);
+    c64_bus_write(&machine.bus, 0xdd00, 0x00);
     expect_u16("cia2 bank bits 00 select bank 3", 0xc000, c64_bus_vic_bank_base(&machine.bus));
 }
 

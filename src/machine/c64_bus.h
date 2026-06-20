@@ -50,6 +50,7 @@ struct c64_bus_t {
     uint64_t cia1_register_writes;
     uint64_t cia2_register_writes;
     uint64_t sid_register_writes;
+    uint16_t vic_bank_base;
 };
 
 void c64_bus_init(c64_bus_t *bus);
@@ -57,6 +58,7 @@ void c64_bus_reset(c64_bus_t *bus);
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v);
 void c64_bus_attach_cias(c64_bus_t *bus, cia *cia1, cia *cia2);
 void c64_bus_attach_sid(c64_bus_t *bus, sid *s);
+void c64_bus_refresh_vic_bank_base(c64_bus_t *bus);
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address);
 void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value);

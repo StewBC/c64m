@@ -1000,6 +1000,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x15);
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);
+    c64_bus_refresh_vic_bank_base(&machine->bus);
     c64_configure_cia_tod(machine);
     c64_keyboard_reset(&machine->keyboard);
     machine->joystick1 = 0;
@@ -1145,6 +1146,7 @@ void c64_set_iec_external_pull(c64_t *machine, uint8_t lines) {
     assert(machine);
 
     machine->iec_external_pull = (uint8_t)(lines & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
+    c64_bus_refresh_vic_bank_base(&machine->bus);
 }
 
 void c64_restore(c64_t *machine) {
