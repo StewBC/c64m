@@ -1017,6 +1017,7 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TRON) != 0) {
         rt->trace_enabled = true;
+        c64_set_cpu_trace_enabled(&rt->machine, true);
         if (rt->trace_file == NULL) {
             rt->trace_file = fopen("trace.log", "a");
             if (rt->trace_file != NULL) {
@@ -1028,6 +1029,7 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TROFF) != 0) {
         rt->trace_enabled = false;
+        c64_set_cpu_trace_enabled(&rt->machine, false);
         if (rt->trace_file != NULL) {
             fprintf(rt->trace_file, "--- TROFF CYC=%08llX ---\n",
                 (unsigned long long)rt->machine.clock.cycle);
@@ -2482,6 +2484,7 @@ int runtime_thread_main(void *userdata) {
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;
     rt->trace_enabled = false;
+    c64_set_cpu_trace_enabled(&rt->machine, false);
     rt->trace_file = NULL;
     rt->breakpoint_count = 0;
     rt->next_breakpoint_id = 1;

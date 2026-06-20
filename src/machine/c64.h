@@ -220,6 +220,7 @@ typedef struct c64_t {
     size_t pending_cpu_elapsed;
     uint8_t cpu_bus_mode;
     bool pending_cpu_trace_active;
+    bool cpu_trace_enabled;
     bool instruction_complete;
     bool restore_pending;
     bool cia2_nmi_line;
@@ -249,6 +250,7 @@ void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
+void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled);
 bool c64_drive_device_supported(uint8_t device);
 c64_drive_status_result c64_mount_d64(
     c64_t *machine,

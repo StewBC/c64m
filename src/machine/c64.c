@@ -121,7 +121,9 @@ static void c64_advance_devices_to(c64_t *machine, uint64_t target_cycle) {
 }
 
 static void c64_trace_reset(c64_cpu_instruction_trace *trace) {
-    memset(trace, 0, sizeof(*trace));
+    trace->opcode_pc = 0;
+    trace->event_count = 0;
+    trace->total_cycles = 0;
 }
 
 static bool c64_d64_track_sector_offset(uint8_t track, uint8_t sector, size_t *out_offset) {
@@ -605,9 +607,19 @@ static c64_cpu_bus_event *c64_trace_append_event(
     c64_cpu_bus_event_kind kind,
     uint16_t address,
     uint8_t value) {
-    c64_cpu_instruction_trace *trace = &machine->last_cpu_trace;
+    c64_cpu_instruction_trace *trace = NULL;
     c64_cpu_bus_event *event;
     uint64_t offset64;
+
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
+        trace = &machine->pending_cpu_trace;
+    } else if (machine->cpu_trace_enabled) {
+        trace = &machine->last_cpu_trace;
+    }
+
+    if (trace == NULL) {
+        return NULL;
+    }
 
     if (trace->event_count >= C64_CPU_TRACE_MAX_EVENTS) {
         return NULL;
@@ -725,19 +737,18 @@ static bool c64_cpu_cycle_stalled_by_ba(const c64_t *machine) {
 }
 
 static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
-    c64_trace_reset(&machine->last_cpu_trace);
+    c64_trace_reset(&machine->pending_cpu_trace);
     machine->cpu_trace_start_cycle = machine->clock.cycle;
     machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_DEFER_WRITES;
 
-    machine->last_cpu_trace.total_cycles = c6510_step(&machine->cpu);
-    machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
-    if (machine->last_cpu_trace.total_cycles == 0) {
-        machine->last_cpu_trace.total_cycles = 1;
+    machine->pending_cpu_trace.total_cycles = c6510_step(&machine->cpu);
+    machine->pending_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
+    if (machine->pending_cpu_trace.total_cycles == 0) {
+        machine->pending_cpu_trace.total_cycles = 1;
     }
 
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
-    machine->pending_cpu_trace = machine->last_cpu_trace;
     machine->pending_cpu_event_index = 0;
     machine->pending_cpu_elapsed = 0;
     machine->pending_cpu_trace_active = true;
@@ -763,6 +774,9 @@ static bool c64_step_cycle_internal(c64_t *machine) {
 
         if (machine->pending_cpu_elapsed >= machine->pending_cpu_trace.total_cycles) {
             c64_apply_pending_cpu_events_at_elapsed(machine);
+            if (machine->cpu_trace_enabled) {
+                machine->last_cpu_trace = machine->pending_cpu_trace;
+            }
             machine->pending_cpu_trace_active = false;
             machine->instruction_complete = true;
             machine->pending_cpu_event_index = 0;
@@ -1023,6 +1037,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->pending_cpu_elapsed = 0;
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
     machine->pending_cpu_trace_active = false;
+    machine->cpu_trace_enabled = false;
     machine->instruction_complete = false;
     vector = (uint16_t)c64_bus_read(&machine->bus, 0xfffc) |
         ((uint16_t)c64_bus_read(&machine->bus, 0xfffd) << 8);
@@ -1067,8 +1082,10 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
     if (total_cycles == 0) {
         total_cycles = 1;
     }
-    machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
-    machine->last_cpu_trace.total_cycles = total_cycles;
+    if (machine->cpu_trace_enabled) {
+        machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
+        machine->last_cpu_trace.total_cycles = total_cycles;
+    }
     c64_advance_devices_to(machine, start_cycle + total_cycles);
     machine->clock.cpu_cycles = machine->cpu.cpu.cycles;
     machine->cpu_cycles_remaining = 0;
@@ -1167,6 +1184,15 @@ void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callbac
 
     machine->memory_access = callback;
     machine->memory_access_user = user;
+}
+
+void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled) {
+    assert(machine);
+
+    machine->cpu_trace_enabled = enabled;
+    if (!enabled) {
+        c64_trace_reset(&machine->last_cpu_trace);
+    }
 }
 
 bool c64_drive_device_supported(uint8_t device) {

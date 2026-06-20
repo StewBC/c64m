@@ -369,6 +369,7 @@ static void test_sta_abs_bus_event_trace(void) {
     build_roms(&roms, TEST_RESET_VECTOR);
     copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
     reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
 
     step_machine(&machine, 1);
     step_machine(&machine, 1);
@@ -405,6 +406,7 @@ static void test_sta_d020_applies_at_event_cycle(void) {
     build_roms(&roms, TEST_RESET_VECTOR);
     copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
     reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
 
     step_machine(&machine, 1);
     start_cycle = machine.clock.cycle;
@@ -417,6 +419,46 @@ static void test_sta_d020_applies_at_event_cycle(void) {
     expect_u8("d020 final register", 0xfb, c64_bus_read(&machine.bus, 0xd020));
     expect_u64("d020 write absolute cycle", start_cycle + 3, trace.events[3].absolute_cycle);
     expect_u64("sta advances machine cycles", start_cycle + 4, machine.clock.cycle);
+}
+
+static void test_cpu_trace_disabled_leaves_debug_trace_empty(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    step_machine(&machine, 1);
+    expect_u64("disabled trace event count", 0, c64_debug_copy_last_cpu_trace(&machine, &trace));
+}
+
+static void test_cycle_step_trace_enabled_records_bus_events(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x8d, 0x34, 0x12  /* STA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine_cycles(&machine, 2);
+    step_machine_cycles(&machine, 4);
+
+    expect_u64("cycle trace event count", 4, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u16("cycle trace opcode pc", (uint16_t)(TEST_RESET_VECTOR + 2), trace.opcode_pc);
+    expect_u8("cycle trace write kind", C64_CPU_BUS_EVENT_WRITE, (uint8_t)trace.events[3].kind);
+    expect_u16("cycle trace write address", 0x1234, trace.events[3].address);
+    expect_u8("cycle trace write value", 0x5a, trace.events[3].value);
 }
 
 static void test_ba_allows_pending_write_cycle(void) {
@@ -593,6 +635,8 @@ int main(void) {
     test_banking_affects_execution();
     test_sta_abs_bus_event_trace();
     test_sta_d020_applies_at_event_cycle();
+    test_cpu_trace_disabled_leaves_debug_trace_empty();
+    test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
     test_ba_stalls_pending_read_cycle();
     test_runtime_run_instructions();
