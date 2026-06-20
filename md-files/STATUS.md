@@ -16,6 +16,16 @@ The emulator is complete through:
 - Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters.
 - SID functional audio (C64AUDFID_2): triangle/saw/pulse/noise waveforms, ADSR envelope, Chamberlin SVF filter, 3-voice mixer, voice 3 read-back, $D400–$D41F register map; deferred: per-voice filter routing, ring/sync mod, combined-waveform blending, NTSC tables.
 
+## Optimizations
+
+- Accepted: `ca16212` removed successful per-cycle error formatting from `c64_step_cycle`; hot-loop +26.9%, tests passed.
+- Accepted: `12ac7b7` moved runtime completed-frame publish buffer off stack; fixed optimized-build bus error, tests passed.
+- Accepted: `b0a6bc9` skipped VIC sprite composition when `$D015 == 0`; hot-loop +41.6%, tests passed.
+- Accepted: `e05c2dc` cached VIC bank base from CIA2 port state; hot-loop +13.4%, tests passed.
+- Accepted: `72ad283` skipped SID mixing/filter/sample output only when audio is explicitly disabled; SID still runs during normal audio playback and turbo multipliers; hot-loop +5.1%, tests passed.
+- Rejected: VIC background lazy color/base computation; measured speedup was within noise, reverted.
+- Accepted: `8efc9f5` gated CPU debug trace copies while preserving pending bus-event timing; hot-loop +10.4%, tests passed.
+
 ## Important implemented details
 
 ### VIC-II
