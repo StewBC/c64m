@@ -1030,6 +1030,24 @@ static void handle_keyboard_input(
     dispatch_input_actions(client, actions, count);
 }
 
+static void handle_drop_file(runtime_client *client, char *path) {
+    const char *dot;
+    const char *ext;
+
+    dot = strrchr(path, '.');
+    ext = dot != NULL ? dot + 1 : "";
+
+    if (SDL_strcasecmp(ext, "d64") == 0) {
+        runtime_client_mount_d64(client, 8, path);
+    } else if (SDL_strcasecmp(ext, "bas") == 0) {
+        runtime_client_load_bin(client, path, 0, true, true, true);
+    } else {
+        runtime_client_load_prg(client, path);
+    }
+
+    SDL_free(path);
+}
+
 static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui, app_options *options) {
     bool running = true;
     bool ui_visible = false;
@@ -1133,6 +1151,9 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                        !frontend_help_is_open(ui) &&
                        (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                 handle_keyboard_input(&input_mapper, client, &event.key);
+                send_event_to_frontend = false;
+            } else if (event.type == SDL_DROPFILE) {
+                handle_drop_file(client, event.drop.file);
                 send_event_to_frontend = false;
             }
 

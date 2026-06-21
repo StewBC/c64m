@@ -61,6 +61,21 @@ and updates the BASIC start and end pointers (`$2B–$2E`).
 For both options the file extension is irrelevant; the flag determines how the file is
 treated, not the filename.
 
+### Drag and Drop
+
+Files can be dragged onto the c64m window at any time while the emulator is running.
+The file extension determines how the file is handled:
+
+| Extension | Action                                                         |
+|-----------|----------------------------------------------------------------|
+| `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
+| `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B–$2E`) |
+| anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |
+
+Extension matching is case-insensitive (`.D64` and `.d64` are treated identically).
+Unlike the `--prg` and `--basic` startup flags, the extension drives the decision when
+dropping — there is no way to override it by name alone.
+
 ### Audio
 
 SID audio uses a MOS 6581 register model at `$D400-$D41F` with three voices, ADSR
