@@ -317,6 +317,7 @@ On macOS, **Opt** = Option/Alt.
 |----------------|---------------------------------------------------------------|
 | F9             | Toggle debugger UI on/off                                     |
 | Cmd+Q (mac)    | Quit                                                          |
+| Opt+H          | Show Help (the manual)                                        |
 
 ---
 
