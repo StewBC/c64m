@@ -1,6 +1,7 @@
 * text eol=lf
 *.gif -text
 *.bin binary
+*.rom binary -eol
 *.png binary
 
 # Font files are binary
