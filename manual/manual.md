@@ -143,9 +143,25 @@ Breakpoint addresses show an indicator in the left gutter.
 
 ### Display Modes
 
-The view can disassemble either the CPU-mapped address space (respecting the current
-bank configuration) or raw RAM. A mode indicator appears in the view header. **Tab** and
-**Shift+Tab** cycle the symbol display through `auto`, `names`, and `raw` modes.
+The disassembly view has three source modes that control which bytes are read for
+disassembly:
+
+| Mode    | Border | Bytes shown                                              |
+|---------|--------|----------------------------------------------------------|
+| **Map** | none   | CPU-visible address space (current bank configuration)   |
+| **ROM** | amber  | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
+| **RAM** | blue   | Raw RAM at every address, regardless of any ROM overlay  |
+
+The current mode is shown in the footer button. A colored border appears inside the
+content area when the mode is ROM (amber) or RAM (blue); Map mode has no border, which
+is the default.
+
+Switch modes with **right-click** anywhere in the view (a popup lists all three with a
+dot next to the active choice), by clicking the footer mode button (cycles
+Map->ROM->RAM), or with **Opt+M** from the keyboard.
+
+**Tab** and **Shift+Tab** cycle the symbol display through `auto`, `names`, and `raw`
+modes independently of the source mode.
 
 ### Keyboard Controls
 
@@ -153,6 +169,7 @@ bank configuration) or raw RAM. A mode indicator appears in the view header. **T
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Enter address-jump mode; type four hex digits then Enter   |
 | `Opt+B`         | Toggle execute breakpoint at cursor (paused only)          |
+| `Opt+M`         | Cycle source mode: Map → ROM → RAM → Map                   |
 | `Opt+S`         | Reload and enumerate the symbol table                      |
 | `Opt+Left`      | Set PC to cursor address (paused only)                     |
 | `Tab`           | Cycle symbol display mode forward                          |
@@ -181,14 +198,32 @@ C123: 48 65 6C 6C 6F 20 57 6F 72 6C 64 21 00 00 00 00  Hello World!....
 
 ### Display Modes
 
-Like the disassembly view, the memory view can show either the CPU-mapped address space
-(using side-effect-free debug reads) or raw RAM.
+The memory view has three source modes that control which bytes are displayed:
+
+| Mode    | Border | Bytes shown                                              |
+|---------|--------|----------------------------------------------------------|
+| **Map** | none   | CPU-visible address space (current bank configuration)   |
+| **ROM** | amber  | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
+| **RAM** | blue   | Raw RAM at every address, regardless of any ROM overlay  |
+
+The current mode is shown in the footer button. A colored border appears inside the
+content area when the mode is ROM (amber) or RAM (blue); Map mode has no border, which
+is the default.
+
+Switch modes with **right-click** anywhere in the view (a popup lists all three with a
+dot next to the active choice), by clicking the footer mode button (cycles
+Map→ROM→RAM), or with **Opt+M** from the keyboard.
+
+The memory and disassembly view modes are independent of each other — for example, you
+can watch raw RAM in the memory view while the disassembler follows the CPU map
+simultaneously.
 
 ### Keyboard Controls
 
 | Key             | Action                                                     |
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Toggle address-entry mode; type four hex digits to jump    |
+| `Opt+M`         | Cycle source mode: Map → ROM → RAM → Map                   |
 | `Opt+X`         | Toggle between hex and ASCII edit modes                    |
 | `Up` / `Down`   | Move cursor one row (16 bytes)                             |
 | `Left` / `Right`| Move cursor one byte (or nibble in hex mode)               |

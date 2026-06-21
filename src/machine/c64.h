@@ -381,6 +381,7 @@ void c64_copy_sid_hardware_snapshot(const c64_t *machine, c64_sid_hardware_snaps
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
+uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address);
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);
 c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address);

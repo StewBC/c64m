@@ -29,7 +29,8 @@ typedef enum runtime_event_type {
 
 typedef enum runtime_memory_mode {
     RUNTIME_MEMORY_MODE_CPU_MAP = 0,
-    RUNTIME_MEMORY_MODE_RAM
+    RUNTIME_MEMORY_MODE_RAM,
+    RUNTIME_MEMORY_MODE_ROM
 } runtime_memory_mode;
 
 typedef enum runtime_stop_reason {

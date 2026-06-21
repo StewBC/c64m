@@ -266,7 +266,9 @@ static void runtime_publish_machine_state(runtime *rt) {
 }
 
 static bool runtime_memory_mode_is_valid(uint8_t mode) {
-    return mode == RUNTIME_MEMORY_MODE_CPU_MAP || mode == RUNTIME_MEMORY_MODE_RAM;
+    return mode == RUNTIME_MEMORY_MODE_CPU_MAP ||
+           mode == RUNTIME_MEMORY_MODE_RAM ||
+           mode == RUNTIME_MEMORY_MODE_ROM;
 }
 
 static void runtime_publish_memory(
@@ -289,9 +291,13 @@ static void runtime_publish_memory(
 
     for (i = 0; i < length; ++i) {
         uint16_t current = (uint16_t)(address + i);
-        event.data.memory.bytes[i] = mode == RUNTIME_MEMORY_MODE_RAM ?
-            c64_debug_read_ram(&rt->machine, current) :
-            c64_debug_read_cpu_map(&rt->machine, current);
+        if (mode == RUNTIME_MEMORY_MODE_RAM) {
+            event.data.memory.bytes[i] = c64_debug_read_ram(&rt->machine, current);
+        } else if (mode == RUNTIME_MEMORY_MODE_ROM) {
+            event.data.memory.bytes[i] = c64_debug_read_rom(&rt->machine, current);
+        } else {
+            event.data.memory.bytes[i] = c64_debug_read_cpu_map(&rt->machine, current);
+        }
     }
 
     runtime_publish_event(rt, &event);
@@ -2138,9 +2144,13 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 mem_view_event.data.memory.length = mv_length;
                 for (i = 0; i < mv_length; ++i) {
                     uint16_t cur = (uint16_t)(mv_address + i);
-                    mem_view_event.data.memory.bytes[i] = mv_mode == RUNTIME_MEMORY_MODE_RAM ?
-                        c64_debug_read_ram(&rt->machine, cur) :
-                        c64_debug_read_cpu_map(&rt->machine, cur);
+                    if (mv_mode == RUNTIME_MEMORY_MODE_RAM) {
+                        mem_view_event.data.memory.bytes[i] = c64_debug_read_ram(&rt->machine, cur);
+                    } else if (mv_mode == RUNTIME_MEMORY_MODE_ROM) {
+                        mem_view_event.data.memory.bytes[i] = c64_debug_read_rom(&rt->machine, cur);
+                    } else {
+                        mem_view_event.data.memory.bytes[i] = c64_debug_read_cpu_map(&rt->machine, cur);
+                    }
                 }
                 runtime_publish_event(rt, &mem_view_event);
             } else {

@@ -2149,6 +2149,18 @@ static void frontend_disassembly_handle_key(
         return;
     }
 
+    if (alt && sym == SDLK_m) {
+        if (view->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+            view->mode = RUNTIME_MEMORY_MODE_ROM;
+        } else if (view->mode == RUNTIME_MEMORY_MODE_ROM) {
+            view->mode = RUNTIME_MEMORY_MODE_RAM;
+        } else {
+            view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+        }
+        view->request_pending = false;
+        return;
+    }
+
     if (sym == SDLK_TAB) {
         if ((mod & KMOD_SHIFT) != 0) {
             view->symbol_display_mode = (uint8_t)((view->symbol_display_mode + 2u) % 3u);
@@ -2713,11 +2725,19 @@ static void frontend_draw_disassembly_view(
 
         nk_layout_row_begin(ui->ctx, NK_DYNAMIC, footer_h, 4);
         nk_layout_row_push(ui->ctx, 0.30f);
-        if (nk_button_label(ui->ctx, view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? "CPU map" : "RAM")) {
-            view->mode = view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ?
-                RUNTIME_MEMORY_MODE_RAM :
-                RUNTIME_MEMORY_MODE_CPU_MAP;
-            view->request_pending = false;
+        {
+            const char *mode_label = view->mode == RUNTIME_MEMORY_MODE_ROM ? "ROM" :
+                (view->mode == RUNTIME_MEMORY_MODE_RAM ? "RAM" : "Map");
+            if (nk_button_label(ui->ctx, mode_label)) {
+                if (view->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+                    view->mode = RUNTIME_MEMORY_MODE_ROM;
+                } else if (view->mode == RUNTIME_MEMORY_MODE_ROM) {
+                    view->mode = RUNTIME_MEMORY_MODE_RAM;
+                } else {
+                    view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                }
+                view->request_pending = false;
+            }
         }
         nk_layout_row_push(ui->ctx, 0.25f);
         nk_label(ui->ctx, view->address_entry ? "Address" : "Cursor", NK_TEXT_LEFT);
@@ -2731,6 +2751,39 @@ static void frontend_draw_disassembly_view(
         nk_label(ui->ctx, view->symbol_display_mode == 0 ? "symbols: auto" :
             (view->symbol_display_mode == 1 ? "symbols: names" : "symbols: raw"), NK_TEXT_LEFT);
         nk_layout_row_end(ui->ctx);
+
+        if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
+            nk_layout_row_dynamic(ui->ctx, 22, 1);
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "Map", NK_TEXT_LEFT)) {
+                view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                view->request_pending = false;
+            }
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "ROM", NK_TEXT_LEFT)) {
+                view->mode = RUNTIME_MEMORY_MODE_ROM;
+                view->request_pending = false;
+            }
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "RAM", NK_TEXT_LEFT)) {
+                view->mode = RUNTIME_MEMORY_MODE_RAM;
+                view->request_pending = false;
+            }
+            nk_contextual_end(ui->ctx);
+        }
+
+        if (view->mode != RUNTIME_MEMORY_MODE_CPU_MAP) {
+            struct nk_command_buffer *canvas = nk_window_get_canvas(ui->ctx);
+            struct nk_rect content = nk_window_get_content_region(ui->ctx);
+            struct nk_color border_color = view->mode == RUNTIME_MEMORY_MODE_ROM ?
+                nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
+            nk_stroke_rect(canvas,
+                nk_rect(content.x + 1.0f, content.y + 1.0f, content.w - 2.0f, content.h - 2.0f),
+                0.0f, 2.0f, border_color);
+        }
 
         ui->ctx->style.window = saved_window_style;
     }
@@ -3207,6 +3260,18 @@ static void frontend_memory_handle_key(
         return;
     }
 
+    if (alt && sym == SDLK_m) {
+        if (ui->memory.mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+            ui->memory.mode = RUNTIME_MEMORY_MODE_ROM;
+        } else if (ui->memory.mode == RUNTIME_MEMORY_MODE_ROM) {
+            ui->memory.mode = RUNTIME_MEMORY_MODE_RAM;
+        } else {
+            ui->memory.mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+        }
+        ui->memory.request_pending = false;
+        return;
+    }
+
     if (sym == SDLK_PAGEUP && ui->memory.edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
         ui->memory.view_address = (uint16_t)(ui->memory.view_address - frontend_memory_visible_count(&ui->memory));
         ui->memory.request_pending = false;
@@ -3437,11 +3502,19 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
 
         nk_layout_row_begin(ui->ctx, NK_DYNAMIC, 22.0f, 4);
         nk_layout_row_push(ui->ctx, 0.30f);
-        if (nk_button_label(ui->ctx, memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? "CPU map" : "RAM")) {
-            memory->mode = memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP ?
-                RUNTIME_MEMORY_MODE_RAM :
-                RUNTIME_MEMORY_MODE_CPU_MAP;
-            memory->request_pending = false;
+        {
+            const char *mode_label = memory->mode == RUNTIME_MEMORY_MODE_ROM ? "ROM" :
+                (memory->mode == RUNTIME_MEMORY_MODE_RAM ? "RAM" : "Map");
+            if (nk_button_label(ui->ctx, mode_label)) {
+                if (memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+                    memory->mode = RUNTIME_MEMORY_MODE_ROM;
+                } else if (memory->mode == RUNTIME_MEMORY_MODE_ROM) {
+                    memory->mode = RUNTIME_MEMORY_MODE_RAM;
+                } else {
+                    memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                }
+                memory->request_pending = false;
+            }
         }
         nk_layout_row_push(ui->ctx, 0.25f);
         nk_label(ui->ctx, memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
@@ -3457,6 +3530,39 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
             debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED ? "editable" : "read-only",
             NK_TEXT_LEFT);
         nk_layout_row_end(ui->ctx);
+
+        if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
+            nk_layout_row_dynamic(ui->ctx, 22, 1);
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "Map", NK_TEXT_LEFT)) {
+                memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                memory->request_pending = false;
+            }
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    memory->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "ROM", NK_TEXT_LEFT)) {
+                memory->mode = RUNTIME_MEMORY_MODE_ROM;
+                memory->request_pending = false;
+            }
+            if (nk_contextual_item_symbol_label(ui->ctx,
+                    memory->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    "RAM", NK_TEXT_LEFT)) {
+                memory->mode = RUNTIME_MEMORY_MODE_RAM;
+                memory->request_pending = false;
+            }
+            nk_contextual_end(ui->ctx);
+        }
+
+        if (memory->mode != RUNTIME_MEMORY_MODE_CPU_MAP) {
+            struct nk_command_buffer *canvas = nk_window_get_canvas(ui->ctx);
+            struct nk_rect content = nk_window_get_content_region(ui->ctx);
+            struct nk_color border_color = memory->mode == RUNTIME_MEMORY_MODE_ROM ?
+                nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
+            nk_stroke_rect(canvas,
+                nk_rect(content.x + 1.0f, content.y + 1.0f, content.w - 2.0f, content.h - 2.0f),
+                0.0f, 2.0f, border_color);
+        }
 
         ui->ctx->style.window = saved_window_style;
     }

@@ -1614,6 +1614,21 @@ uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address) {
     return machine->bus.ram[address];
 }
 
+uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address) {
+    assert(machine);
+
+    if (address >= 0xa000u && address <= 0xbfffu && machine->has_basic_rom) {
+        return machine->bus.basic_rom[address - 0xa000u];
+    }
+    if (address >= 0xd000u && address <= 0xdfffu && machine->has_character_rom) {
+        return machine->bus.char_rom[address - 0xd000u];
+    }
+    if (address >= 0xe000u && machine->has_kernal_rom) {
+        return machine->bus.kernal_rom[address - 0xe000u];
+    }
+    return machine->bus.ram[address];
+}
+
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value) {
     assert(machine);
 
