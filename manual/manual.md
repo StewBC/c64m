@@ -329,6 +329,37 @@ The Debugger tab shows runtime counters and the call stack.
 | Machine cycles  | Master cycle counter                                 |
 | VIC cycles      | VIC-II cycles advanced                               |
 | CIA cycles      | CIA cycles advanced                                  |
+| Frame           | Frame number, cycle within frame, dropped frames     |
+
+### Step Counters
+
+```
+Step - CPU: 2  Machine: 2
+```
+
+The step counter line resets to zero each time a step or run command is issued (F10,
+Shift+F10, F11, F12, Shift+F12) and freezes when the CPU stops. It shows how many cycles
+elapsed during that operation.
+
+Two values are shown because they can differ:
+
+- **CPU** — cycles the 6510 actually spent executing. This is deterministic with respect
+  to your code and is the right metric when profiling or counting instruction cycles.
+
+- **Machine** — wall-clock cycles of the C64 chip: every tick of the crystal oscillator,
+  including cycles where the CPU was frozen while VIC-II held the bus. This reflects real
+  elapsed time on the hardware.
+
+The difference between the two is **BA stall cycles**. When VIC-II needs the bus to fetch
+sprite or bitmap data it asserts the BA (Bus Available) line low. The CPU sees RDY go low
+and freezes — it has no say in the matter. Depending on sprite configuration and timing,
+a stall can last 1–3 cycles or longer. Because stalls depend on what VIC-II is doing at
+that exact moment, machine cycle counts can vary between otherwise identical runs. CPU
+cycle counts will not.
+
+In practice the two numbers are identical whenever no sprites are active or the measured
+code does not overlap a BA window. When they differ, the gap is the VIC-II overhead, not
+your code.
 
 ### Call Stack
 

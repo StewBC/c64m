@@ -3850,6 +3850,20 @@ static void frontend_draw_misc_debugger(frontend *ui, const frontend_debug_state
             (unsigned long long)(debug_state != NULL ? debug_state->dropped_frames : 0));
         nk_label(ctx, status, NK_TEXT_LEFT);
     }
+    {
+        char status[48];
+        snprintf(
+            status,
+            sizeof(status),
+            "Step - CPU: %llu  Machine: %llu",
+            (unsigned long long)(debug_state != NULL
+                ? debug_state->cpu.cycles - debug_state->step_cpu_cycle_start
+                : 0),
+            (unsigned long long)(debug_state != NULL
+                ? debug_state->machine_cycle - debug_state->step_cycle_start
+                : 0));
+        nk_label(ctx, status, NK_TEXT_LEFT);
+    }
 
     nk_layout_row_dynamic(ctx, 8.0f, 1);
     nk_spacing(ctx, 1);

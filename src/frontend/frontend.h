@@ -39,6 +39,8 @@ typedef struct frontend_debug_state {
     uint64_t machine_cycle;
     uint64_t vic_cycles;
     uint64_t cia_cycles;
+    uint64_t step_cycle_start;
+    uint64_t step_cpu_cycle_start;
     uint64_t screen_ram_writes;
     uint64_t color_ram_writes;
     uint64_t vic_register_writes;
