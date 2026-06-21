@@ -762,6 +762,9 @@ static bool apply_disk_args(app_options *options, int argc, char **argv)
     for (i = 1; i < argc; ++i) {
         const char *arg = argv[i];
 
+        if (arg == NULL) {
+            break;
+        }
         if (strcmp(arg, "--disk") == 0 || strcmp(arg, "-d") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "%s requires a value\n", arg);
