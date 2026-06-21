@@ -48,7 +48,7 @@ loaders, and full 1541 emulation are not implemented. `LOAD "NAME",8` and
 
 ### Audio
 
-SID audio uses a MOS 6581 register model at `$D400–$D41F` with three voices, ADSR
+SID audio uses a MOS 6581 register model at `$D400-$D41F` with three voices, ADSR
 envelopes, a Chamberlin state-variable filter, and voice 3 read-back. Audio output uses
 a 48 kHz stereo path through SDL. Turbo mode mutes audio to prevent buffer overflow; SID
 state continues to advance normally.
@@ -92,7 +92,7 @@ the INI file on quit.
 
 ### Turbo Mode
 
-**Opt+T** cycles through the configured turbo multiplier list (default `2×, 4×, 8×, 16×`).
+**Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
 Turbo speeds are listed in the Configure dialog and stored in the INI file.
 
 ## CPU View
@@ -107,7 +107,7 @@ runtime snapshot:
 | A     | 8-bit  | Accumulator                     |
 | X     | 8-bit  | X index register                |
 | Y     | 8-bit  | Y index register                |
-| N V − B D I Z C | 1-bit each | Processor status flags |
+| N V - B D I Z C | 1-bit each | Processor status flags |
 
 When the CPU is paused, all fields are editable:
 
@@ -115,7 +115,7 @@ When the CPU is paused, all fields are editable:
 - SP, A, X, Y: two hex digits.
 - Flags: `0` (clear) or `1` (set).
 
-The `−` position in the flag row represents the unused bit; it is always 1 and cannot
+The `-` position in the flag row represents the unused bit; it is always 1 and cannot
 be modified.
 
 ## Disasm
@@ -169,7 +169,7 @@ modes independently of the source mode.
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Enter address-jump mode; type four hex digits then Enter   |
 | `Opt+B`         | Toggle execute breakpoint at cursor (paused only)          |
-| `Opt+M`         | Cycle source mode: Map → ROM → RAM → Map                   |
+| `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                   |
 | `Opt+S`         | Reload and enumerate the symbol table                      |
 | `Opt+Left`      | Set PC to cursor address (paused only)                     |
 | `Tab`           | Cycle symbol display mode forward                          |
@@ -193,8 +193,8 @@ C123: 48 65 6C 6C 6F 20 57 6F 72 6C 64 21 00 00 00 00  Hello World!....
 | Column       | Meaning                                    |
 |--------------|--------------------------------------------|
 | `C123`       | Hex address of the first byte in the row   |
-| `48 65 …`   | Byte values in hex                         |
-| `Hello …`    | ASCII representation (`.` for non-print)   |
+| `48 65 ...`   | Byte values in hex                         |
+| `Hello ...`    | ASCII representation (`.` for non-print)   |
 
 ### Display Modes
 
@@ -212,9 +212,9 @@ is the default.
 
 Switch modes with **right-click** anywhere in the view (a popup lists all three with a
 dot next to the active choice), by clicking the footer mode button (cycles
-Map→ROM→RAM), or with **Opt+M** from the keyboard.
+Map->ROM->RAM), or with **Opt+M** from the keyboard.
 
-The memory and disassembly view modes are independent of each other — for example, you
+The memory and disassembly view modes are independent of each other -- for example, you
 can watch raw RAM in the memory view while the disassembler follows the CPU map
 simultaneously.
 
@@ -223,7 +223,7 @@ simultaneously.
 | Key             | Action                                                     |
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Toggle address-entry mode; type four hex digits to jump    |
-| `Opt+M`         | Cycle source mode: Map → ROM → RAM → Map                   |
+| `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                   |
 | `Opt+X`         | Toggle between hex and ASCII edit modes                    |
 | `Up` / `Down`   | Move cursor one row (16 bytes)                             |
 | `Left` / `Right`| Move cursor one byte (or nibble in hex mode)               |
@@ -232,7 +232,7 @@ simultaneously.
 | `Opt+Home`      | Move cursor to the start of the visible window             |
 | `End`           | Move cursor to end of the current row                      |
 | `Opt+End`       | Move cursor to the end of the visible window               |
-| `0–9`, `A–F`   | Edit hex nibble at cursor (paused only, hex mode)          |
+| `0-9`, `A-F`   | Edit hex nibble at cursor (paused only, hex mode)          |
 
 The scrollbar on the right spans the full 64 K space and can be dragged to any position.
 
@@ -269,13 +269,13 @@ mount. Ejecting a device clears it; the other device is unaffected.
 | Field                | Meaning                                                 |
 |----------------------|---------------------------------------------------------|
 | Name + Browse        | Choose the output filename                              |
-| Basic Program        | Read start and end from `$2B–$2E`; forces header on    |
+| Basic Program        | Read start and end from `$2B-$2E`; forces header on    |
 | Write address header | Prefix the saved file with the two-byte load address   |
 | Start / End          | Hex address range for a raw memory save                |
 
 ### Emulator Controls
 
-**[Configure…]** opens the Configure dialog (see **Configure**).
+**[Configure...]** opens the Configure dialog (see **Configure**).
 
 **[Reset]** performs a hard reset of the emulated C64. Any pending PRG injection or
 assembler-queued run is cancelled.
@@ -336,7 +336,7 @@ W[C123-C1FF] (5/10)  [Edit] [Disable] [Clear]
 | Part           | Meaning                                              |
 |----------------|------------------------------------------------------|
 | `R`, `W`, `RW` | Access type (read, write, or either)                 |
-| `[C123]`       | Address; or `[C123–C1FF]` for a range                |
+| `[C123]`       | Address; or `[C123-C1FF]` for a range                |
 | `(5/10)`       | Counter: hit count / threshold (shown when non-zero) |
 | Action label   | `Fast`, `Slow`, `Tron`, `Troff`, or nothing (Break)  |
 
@@ -404,7 +404,7 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 
 | Field        | Meaning                                                        |
 |--------------|----------------------------------------------------------------|
-| File Name    | Path to the root assembly source file; use **Browse…** to pick |
+| File Name    | Path to the root assembly source file; use **Browse...** to pick |
 | Address      | Hex load and assembly origin address (default `$8000`)         |
 | Run Address  | Hex address to jump to after successful assembly               |
 | Auto Run     | If checked, sets PC to Run Address and resumes after assembly  |
@@ -453,7 +453,7 @@ a = *       ; a = $C001
 | `$`      | Hexadecimal |
 | `%`      | Binary      |
 | `0`      | Octal       |
-| `1`–`9`  | Decimal     |
+| `1`-`9`  | Decimal     |
 
 **Expressions** support the full C precedence table:
 
@@ -594,7 +594,7 @@ main:
 table:  .byte $01,$02,$03
 ```
 
-`noemit` segments advance the location counter but produce no output — useful for
+`noemit` segments advance the location counter but produce no output -- useful for
 mapping zero-page variables without emitting placeholder bytes.
 
 ### Strcode
@@ -607,14 +607,14 @@ the current character's ASCII value:
 .string "Hello"
 ```
 
-This remaps A–Z to 0–25 and a–z to 0–25, leaving other characters unchanged. Restore
+This remaps A-Z to 0-25 and a-z to 0-25, leaving other characters unchanged. Restore
 default behavior with `.strcode _`. Quoted escape sequences (`\n`, `\r`, `\t`, `\0`,
 `\\`, `\xNN`, `\0NN` octal) are processed in strings but are not passed through
 `.strcode`.
 
 ## Configure
 
-The Configure dialog (opened from **[Configure…]** in the Machine tab) has two tabs:
+The Configure dialog (opened from **[Configure...]** in the Machine tab) has two tabs:
 **Machine** and **Emulator**.
 
 ### Machine Tab
@@ -627,7 +627,7 @@ The Configure dialog (opened from **[Configure…]** in the Machine tab) has two
 
 | Control              | Effect                                          |
 |----------------------|-------------------------------------------------|
-| Scroll Wheel Lines   | Number of rows scrolled per wheel click (1–100) |
+| Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
 | Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
 | Symbol Files         | Comma-separated paths to symbol files loaded at startup |
 | Disk LEDs            | Show or hide the disk activity LED indicator    |
@@ -635,7 +635,7 @@ The Configure dialog (opened from **[Configure…]** in the Machine tab) has two
 
 ### INI File
 
-The INI file path is shown in the Configure dialog with a **Browse…** button. Changing
+The INI file path is shown in the Configure dialog with a **Browse...** button. Changing
 the path prompts to parse the selected file immediately. Save-on-quit behavior is
 controlled by the **Auto-save INI on Quit** checkbox.
 
@@ -653,7 +653,7 @@ emulator removes comments.
 
 | Key               | Value                                                  |
 |-------------------|--------------------------------------------------------|
-| `Save`            | `yes` — save INI on quit                               |
+| `Save`            | `yes` -- save INI on quit                               |
 | `scroll_wheel_lines` | Integer; lines scrolled per wheel click             |
 | `symbol_files`    | Comma-separated list of symbol file paths              |
 | `turbo_speeds`    | Comma-separated turbo multipliers, e.g. `2,4,8,16`    |
@@ -662,7 +662,7 @@ emulator removes comments.
 
 | Key    | Value                           |
 |--------|---------------------------------|
-| `leds` | `on` or `1` — show disk LEDs   |
+| `leds` | `on` or `1` -- show disk LEDs   |
 
 ### [Video]
 
@@ -671,8 +671,8 @@ emulator removes comments.
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
 | `display_width`  | Integer; internal display width in pixels               |
 | `display_height` | Integer; internal display height in pixels              |
-| `integer_scale`  | `1` — use integer-only scaling                          |
-| `aspect_correct` | `1` — preserve pixel aspect ratio (default on)          |
+| `integer_scale`  | `1` -- use integer-only scaling                          |
+| `aspect_correct` | `1` -- preserve pixel aspect ratio (default on)          |
 | `filter`         | `nearest` or `linear` (default `nearest`)               |
 
 ### [Window]
@@ -686,9 +686,9 @@ emulator removes comments.
 
 | Key                    | Value                                              |
 |------------------------|----------------------------------------------------|
-| `split_display_right`  | Float 0–1; vertical split between C64 and debugger |
-| `split_top_bottom`     | Float 0–1; horizontal split between top and bottom |
-| `split_memory_misc`    | Float 0–1; split between memory and misc panel     |
+| `split_display_right`  | Float 0-1; vertical split between C64 and debugger |
+| `split_top_bottom`     | Float 0-1; horizontal split between top and bottom |
+| `split_memory_misc`    | Float 0-1; split between memory and misc panel     |
 
 ### [rom] or [roms]
 
@@ -780,10 +780,10 @@ The host keyboard maps semantically to C64 keys. Common mappings:
 
 | Host Key           | C64 Key                                |
 |--------------------|----------------------------------------|
-| Letters A–Z        | A–Z                                    |
+| Letters A-Z        | A-Z                                    |
 | Shift + Letter     | Shifted letter (left graphics set)     |
 | Tab + Letter       | Commodore + Letter (right graphics set)|
-| Digits 0–9         | 0–9                                    |
+| Digits 0-9         | 0-9                                    |
 | Tab                | Commodore (C= key)                     |
 | Ctrl               | CONTROL                                |
 | Escape             | RUN/STOP                               |
@@ -793,24 +793,171 @@ The host keyboard maps semantically to C64 keys. Common mappings:
 | Home               | HOME / CLR HOME                        |
 | Shift+Home         | CLR (clear screen)                     |
 | Arrow keys         | Cursor keys (left/up synthesize Shift) |
-| F1–F8              | C64 F1–F8 (F2 = Shift+F1, F4 = Shift+F3, etc.) |
+| F1-F8              | C64 F1-F8 (F2 = Shift+F1, F4 = Shift+F3, etc.) |
 | Return             | Return                                 |
 | Space              | Space                                  |
 | `=`                | =                                      |
 | `Shift+=`          | + (plus)                               |
-| `-`                | − (minus)                              |
+| `-`                | - (minus)                              |
 | `;`                | ;                                      |
 | `Shift+;`          | :                                      |
 | `,`                | ,                                      |
 | `.`                | .                                      |
 | `/`                | /                                      |
-| backtick           | ← (left-arrow key)                     |
+| backtick           | <- (left-arrow key)                     |
 | `[` or `(`         | @                                      |
-| `\` or `Shift+^`   | ↑ (up-arrow key)                       |
+| `\` or `Shift+^`   | ^ (up-arrow key)                       |
 | `]` or `Shift+*`   | *                                      |
 
 All ASCII printable characters are mapped where possible. Characters with no C64
 equivalent are silently ignored during paste.
+
+## Details
+
+This section records implementation details that are not necessary for day-to-day use
+but are useful for understanding what the emulator actually does under the hood.
+
+### Architecture
+
+c64m uses a layered C99 architecture: Machine -> Runtime -> Frontend, with a shared Tools
+layer. The machine (CPU, VIC-II, CIA, SID, bus, and drives) runs entirely on a dedicated
+runtime thread. The UI and renderer run on the main thread. No live machine pointers
+cross threads -- all inter-thread data travels as copied snapshots through a
+command/event queue. The snapshot rule is strictly enforced: the frontend may only read
+runtime-provided copies and must never access live machine state directly.
+
+The machine owns a monotonic master cycle counter. VIC-II, CIA, and SID hooks receive
+timestamped CPU bus events and advance their own state to the exact event cycle before
+applying visible side effects.
+
+### CPU
+
+The MOS 6510 core is instruction-compatible with the 6502. Timed bus events classify
+each memory access (read or write) and timestamp it within the opcode so that
+mid-instruction side effects (CIA ICR reads, SID writes, VIC register writes with
+raster-timed effects) land at the correct cycle. IRQ is level-sensitive; NMI uses an
+edge-triggered latch so a single NMI edge triggers exactly once even if the NMI line
+stays asserted. RESTORE routes through the NMI path.
+
+BA stall: when VIC-II asserts BA, the CPU is held on read cycles only. Write cycles
+continue normally. The emulator classifies each bus event as read or write so the stall
+predicate is applied correctly. AEC is not modeled as separate emulator state.
+
+### Memory and Bus
+
+The full 64 K address space is backed by RAM. BASIC ROM ($A000-$BFFF), KERNAL ROM
+($E000-$FFFF), and character ROM ($D000-$DFFF) are mapped in or out by the CPU I/O port
+at $0001 (LORAM, HIRAM, CHAREN bits). I/O ($D000-$DFFF) takes priority over character
+ROM when CHAREN is set.
+
+Character ROM is also visible through the VIC-II bus in VIC banks 0 and 2 at the
+corresponding 4 K ranges. VIC bank selection uses CIA #2 Port A bits PA0/PA1 with
+inverted mapping (four 16 K banks).
+
+Debugger-safe read functions (`c64_debug_read_cpu_map`, `c64_debug_read_ram`,
+`c64_debug_read_rom`) let the UI inspect memory without triggering CIA ICR
+clear-on-read, TOD latching, or other bus side effects. The memory and disassembly views
+use these safe reads exclusively.
+
+### VIC-II
+
+Pixels are emitted cycle-by-cycle as VIC-II time advances. Mid-frame register changes
+(color, scroll, mode bits) take effect at their exact event cycle rather than at frame
+start. The internal frame is 384x272 (PAL) or 384x263 (NTSC); the displayed crop is a
+balanced 352x240 window.
+
+**Graphics modes:** standard text (40x25), multicolor text, standard bitmap, multicolor
+bitmap, ECM (extended color), and invalid modes 5/6/7 (black background and display
+layer). XSCROLL and YSCROLL are applied as delayed display-window edges. RSEL/CSEL
+control 25/24-row and 40/38-column window clamps. DEN=0 blanks display and border pixels
+to the background color ($D021).
+
+**Sprites:** all 8 hardware sprites with 9-bit X position (MSB register), per-sprite
+enable, hires (24x21) and multicolor (12x21 logical pixels) modes, X-expand and
+Y-expand with correct flip-flop behavior, front/behind-foreground priority ($D01B),
+sprite-sprite and sprite-background collision latches ($D01E/$D01F) with read-clear and
+write-ignore, and IRQs (IMMC/IMBC) wired through the VIC IRQ path. Sprite pointer
+(p-access) and data (s-access) fetches are bank-aware.
+
+BA cycle stealing for sprite fetch windows is implemented with correct cross-line
+handling for sprites 3 and 4.
+
+**Registers:** full mirroring at $D000-$D3FF; unused high-bit masking per hardware spec;
+open-bus high nibble on color register reads returns 1; unused block $D02F-$D03F reads
+as $FF.
+
+**VIC-II IRQ sources:** raster compare (programmable line), sprite-sprite collision, and
+sprite-background collision. IRQ status ($D019) and enable ($D01A) with aggregate
+enabled-pending bit 7.
+
+### CIA
+
+**CIA #1** drives keyboard and joystick input and generates IRQs via timer underflow.
+Timers A and B are 16-bit down-counters with separate latch and live counter, continuous
+and one-shot modes, Phi2/CNT/cascade source selection, PB6/PB7 output in pulse and
+toggle modes, and ICR flag/mask management with clear-on-read. The keyboard matrix scan
+supports bidirectional Port A/Port B scanning and multi-key simultaneous press with
+correct active-low combining. Joystick port 1 reads from Port B bits 0-4; port 2 from
+Port A bits 0-4. Keyboard and joystick inputs share CIA lines with correct combining.
+
+**CIA #2** provides VIC bank selection (Port A PA0/PA1, inverted), IEC ATN/CLK/DATA
+open-collector line modeling, and NMI via timer underflow. The NMI output uses an edge
+latch to avoid repeated NMI assertions while the line stays asserted.
+
+**Time-of-Day (TOD):** BCD tenths, seconds, minutes, hours in 12-hour AM/PM format with
+correct 11->12 and 12->1 rollover. Source frequency (50/60 Hz) is selected per CRA bit 7.
+Reading hours latches all TOD fields; reading tenths releases the latch. The alarm fires
+via ICR bit 2 and routes through the normal IRQ/NMI mask logic. Debugger peeks read TOD
+without creating or releasing the CPU-visible latch.
+
+### SID
+
+The MOS 6581 register map covers $D400-$D41F. Three voices each have a 24-bit phase
+accumulator, four waveforms (triangle, sawtooth, pulse with 12-bit width, noise via a
+23-bit LFSR), TEST bit, ADSR envelope with a fractional double accumulator and PAL rate
+tables, and gate control. Voice 3 oscillator (phase bits 23-16) and envelope are
+readable at $D41B/$D41C. Paddle reads ($D419/$D41A) return $FF.
+
+The mixer scales each voice by its envelope, sums all three, divides by 3 for headroom,
+and applies the master volume ($D418 bits 0-3). Voice 3 can be disconnected from the mix
+via $D418 bit 7.
+
+The Chamberlin state-variable filter runs once per cycle. Filter mode is selected by
+$D418 bits 4-6 (LP/BP/HP); no mode bits bypass the filter. Filter states are clamped
+to [-2, +2].
+
+Audio reaches the host via a lock-free SPSC ring buffer. A fractional cycle accumulator
+converts PAL (985248 Hz) or NTSC (1022727 Hz) machine cycles to the host sample rate
+(48 kHz). Turbo mode skips audio writes to prevent buffer flooding while SID state
+continues to advance. The SDL audio callback reads from the ring buffer on a separate
+thread; it never calls runtime or machine code.
+
+**SID deferred:** per-voice filter routing ($D417 bits 0-2), exact 6581/8580
+combined-waveform analog blending, ring modulation and oscillator sync, paddle input
+beyond not-connected policy, NTSC SID rate tables.
+
+### Disk
+
+Device 8 and device 9 each hold an independent read-only D64 image. The KERNAL LOAD
+trap intercepts $FFD5 for devices 8/9 only; all other devices fall through to ROM.
+`LOAD "NAME",8` loads at the BASIC start pointer and updates end-of-program pointers.
+`LOAD "NAME",8,1` loads at the embedded PRG load address. `LOAD "$",8` synthesises a
+tokenized BASIC directory listing with the disk title, file list, and blocks-free line.
+Filename matching supports exact names, `*` prefix wildcard, `?` single-character
+wildcard, and bare `*` for the first PRG. The parser validates chain links and guards
+against sector loops and out-of-range references.
+
+### Joystick
+
+Port 1 is emulated via CIA #1 Port B bits 0-4. Port 2 via CIA #1 Port A bits 0-4. A
+connected gamepad defaults to port 2; Opt+1 and Opt+2 reassign it.
+
+### Display and Scaling
+
+The C64 display is scaled to fit its panel with aspect-ratio correction and optional
+integer scaling. Letterbox or pillarbox fills the unused space. The internal pixel
+dimensions and scaling mode are configurable in the Configure dialog and saved to the
+INI file.
 
 ## Version History
 
