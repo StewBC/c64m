@@ -2,6 +2,7 @@
 #define C64M_TEST_FILE_H
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
