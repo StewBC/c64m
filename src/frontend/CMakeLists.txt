@@ -54,3 +54,7 @@ target_link_libraries(frontend
     tools
     util
 )
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(frontend PRIVATE m)
+endif()
