@@ -26,7 +26,9 @@ Useful flags:
 | `--saveini` / `-v`     | Save INI on quit (one-time override)                |
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
 | `--turbo <list>` / `-t`| Set turbo multipliers, e.g. `2,4,8,16`             |
-| `--disk <image>`       | Mount a D64 image at startup                        |
+| `--disk <drive>=<image>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64` |
+| `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
+| `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--leds on\|off`       | Show or hide disk activity LEDs                     |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 
@@ -45,6 +47,19 @@ c64m supports read-only D64 images on device 8 and device 9. D64 write operation
 loaders, and full 1541 emulation are not implemented. `LOAD "NAME",8` and
 `LOAD "NAME",8,1` work through a KERNAL trap. Wildcards `*` and `?` are supported, and
 `LOAD "$",8` returns a directory listing.
+
+### PRG and BASIC Files
+
+`--prg <file>` (or `-p`) loads any file as a PRG at startup. The machine resets, boots
+through KERNAL and BASIC, then injects the file bytes at the load address embedded in
+the file's first two bytes. Execution continues automatically — no key press needed.
+
+`--basic <file>` (or `-B`) loads any file as a BASIC program at startup. The machine
+resets, boots to BASIC, writes the file to RAM at the address in its two-byte header,
+and updates the BASIC start and end pointers (`$2B–$2E`).
+
+For both options the file extension is irrelevant; the flag determines how the file is
+treated, not the filename.
 
 ### Audio
 

@@ -1303,6 +1303,12 @@ int main(int argc, char **argv) {
 
     send_run_command(client);
 
+    if (options.prg_path != NULL) {
+        runtime_client_load_prg(client, options.prg_path);
+    } else if (options.basic_path != NULL) {
+        runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
+    }
+
     if (!run_main_loop(window, client, ui, &options)) {
         exit_code = 1;
     }

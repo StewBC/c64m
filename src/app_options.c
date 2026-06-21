@@ -826,10 +826,12 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int remember = 0;
     int save_ini = 0;
     int audio_smoke = 0;
+    const char *basic_path = NULL;
     const char *breakpoint = NULL;
     const char *disk = NULL;
     const char *ini_path = NULL;
     const char *leds = NULL;
+    const char *prg_path = NULL;
     const char *turbo = NULL;
     struct argparse argparse;
     const char *const usages[] = {
@@ -838,13 +840,15 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
     struct argparse_option parse_options[] = {
         OPT_BOOLEAN('A', "audio-smoke", &audio_smoke, "emit 440 Hz tone to verify audio path", NULL, 0, OPT_NONEG),
+        OPT_STRING('B', "basic", &basic_path, "load file as BASIC program at startup", NULL, 0, 0),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
-        OPT_STRING('d', "disk", &disk, "1541 drive contains image", NULL, 0, 0),
+        OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
         OPT_STRING('l', "leds", &leds, "show disk activity LEDs in window based ui", NULL, 0, 0),
         OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
+        OPT_STRING('p', "prg", &prg_path, "load file as PRG at startup", NULL, 0, 0),
         OPT_BOOLEAN('r', "remember", &remember, "add save at quit to ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('v', "saveini", &save_ini, "save to ini file at quit", NULL, 0, OPT_NONEG),
         OPT_STRING('t', "turbo", &turbo, "comma separated set of turbo multipliers", NULL, 0, 0),
@@ -853,7 +857,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
 
     argparse_init(&argparse, parse_options, usages, 0);
-    argparse_describe(&argparse, "Commodore 64 emulator", NULL);
+    argparse_describe(&argparse, "Commodore 64 emulator written by Codex and Claude Code, orchestrated by Stefan Wessels, 2026.", NULL);
     argparse_parse(&argparse, argc, (const char **)argv);
 
     if (defaults) {
@@ -871,6 +875,12 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (!apply_disk_args(options, argc, argv)) {
         return false;
+    }
+    if (prg_path != NULL) {
+        replace_string(&options->prg_path, prg_path);
+    }
+    if (basic_path != NULL) {
+        replace_string(&options->basic_path, basic_path);
     }
     if (leds != NULL && !parse_bool_value(leds, &options->show_leds)) {
         fprintf(stderr, "invalid leds value `%s`; expected on or off\n", leds);
@@ -975,7 +985,9 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->basic_rom_path, src->basic_rom_path) ||
         !replace_string(&dest->char_rom_path, src->char_rom_path) ||
         !replace_string(&dest->kernal_rom_path, src->kernal_rom_path) ||
-        !replace_string(&dest->system_rom_path, src->system_rom_path)) {
+        !replace_string(&dest->system_rom_path, src->system_rom_path) ||
+        !replace_string(&dest->prg_path, src->prg_path) ||
+        !replace_string(&dest->basic_path, src->basic_path)) {
         app_options_destroy(dest);
         return false;
     }
@@ -1124,6 +1136,8 @@ void app_options_destroy(app_options *options)
     free(options->char_rom_path);
     free(options->kernal_rom_path);
     free(options->system_rom_path);
+    free(options->prg_path);
+    free(options->basic_path);
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
         free(options->disk_images[i]);
     }
