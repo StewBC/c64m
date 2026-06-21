@@ -1244,6 +1244,15 @@ int main(int argc, char **argv) {
     }
     client = runtime_get_client(rt);
 
+    {
+        int i;
+        for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
+            if (options.disk_images[i] != NULL) {
+                runtime_client_mount_d64(client, (uint8_t)i, options.disk_images[i]);
+            }
+        }
+    }
+
     /* Start audio playback now that the runtime thread is producing samples. */
     platform_audio_start(paudio);
 
