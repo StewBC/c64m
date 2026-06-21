@@ -26,16 +26,16 @@
 #define C64_HELP_LIGHT_BLUE nk_rgb(0x70, 0x6d, 0xeb)
 #define C64_HELP_LIGHT_GRAY nk_rgb(0xb2, 0xb2, 0xb2)
 
-#define HELP_COLOR_BG C64_HELP_BLUE
+#define HELP_COLOR_BG C64_HELP_DARK_GRAY
 #define HELP_COLOR_PANEL C64_HELP_BLUE
 #define HELP_COLOR_BORDER C64_HELP_LIGHT_BLUE
 #define HELP_COLOR_HEADING C64_HELP_WHITE
-#define HELP_COLOR_BODY C64_HELP_CYAN
+#define HELP_COLOR_BODY C64_HELP_WHITE
 #define HELP_COLOR_H3 C64_HELP_YELLOW
 #define HELP_COLOR_BULLET C64_HELP_YELLOW
 #define HELP_COLOR_NUMBER C64_HELP_YELLOW
-#define HELP_COLOR_CODE C64_HELP_ORANGE
-#define HELP_COLOR_TABLE C64_HELP_WHITE
+#define HELP_COLOR_CODE C64_HELP_LIGHT_GRAY
+#define HELP_COLOR_TABLE C64_HELP_CYAN
 #define HELP_COLOR_TABLE_HEADER C64_HELP_LIGHT_RED
 #define HELP_COLOR_SECTION_ACTIVE C64_HELP_PURPLE
 #define HELP_COLOR_SECTION_HOVER C64_HELP_LIGHT_BLUE
@@ -195,7 +195,7 @@ static float help_row_height(struct nk_context *ctx)
     if (ctx != NULL && ctx->style.font != NULL) {
         return ctx->style.font->height + 2.0f;
     }
-    return 15.0f;
+    return 12.0f;
 }
 
 static float help_text_width(struct nk_context *ctx, const char *text, int len)
@@ -456,10 +456,55 @@ static void help_wrap_text(
             ++row;
             line_len = 0;
             line[0] = '\0';
+            candidate_len = 0;
             if (code) {
-                line_len = help_append_char(line, sizeof(line), line_len, HELP_INLINE_CODE_ON);
+                candidate_len = help_append_char(candidate, sizeof(candidate), candidate_len, HELP_INLINE_CODE_ON);
             }
-            line_len = help_append_text(line, sizeof(line), line_len, token, token_len);
+            candidate_len = help_append_text(candidate, sizeof(candidate), candidate_len, token, token_len);
+            candidate[candidate_len] = '\0';
+            indent = rest_indent;
+            available = nk_window_get_content_region(ctx).w - indent - 8.0f;
+        }
+
+        if (help_encoded_text_width(ctx, candidate) > available) {
+            /* Token alone overflows — split character by character. */
+            const char *cp = candidate;
+            char piece[2048];
+            int piece_len = 0;
+            while (*cp != '\0') {
+                float p_indent = row == 0 ? first_indent : rest_indent;
+                float p_avail = nk_window_get_content_region(ctx).w - p_indent - 8.0f;
+                while (*cp != '\0') {
+                    char test[2048];
+                    int tlen;
+                    if (*cp == HELP_INLINE_CODE_ON || *cp == HELP_INLINE_CODE_OFF) {
+                        piece_len = help_append_char(piece, sizeof(piece), piece_len, *cp++);
+                        continue;
+                    }
+                    tlen = help_append_text(test, sizeof(test), 0, piece, piece_len);
+                    tlen = help_append_char(test, sizeof(test), tlen, *cp);
+                    test[tlen] = '\0';
+                    if (help_encoded_text_width(ctx, test) > p_avail) {
+                        break;
+                    }
+                    piece_len = help_append_char(piece, sizeof(piece), piece_len, *cp++);
+                }
+                piece[piece_len] = '\0';
+                if (piece_len > 0) {
+                    if (row == 0 && marker != NULL) {
+                        help_marker_text_row(ctx, marker, piece, marker_color, color, first_indent);
+                    } else {
+                        help_inline_row_indented(ctx, piece, color, p_indent);
+                    }
+                    ++row;
+                    piece_len = 0;
+                    piece[0] = '\0';
+                } else if (*cp != '\0') {
+                    ++cp;
+                }
+            }
+            line_len = 0;
+            line[0] = '\0';
         } else {
             memcpy(line, candidate, (size_t)candidate_len + 1u);
             line_len = candidate_len;
@@ -563,7 +608,7 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
             break;
 
         case HELP_SPAN_CODE_BLOCK:
-            help_inline_row(ctx, span->text, HELP_COLOR_CODE);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_CODE);
             break;
 
         case HELP_SPAN_TABLE:
@@ -632,7 +677,7 @@ static void help_render_section_buttons(struct nk_context *ctx, frontend_help_st
     }
 }
 
-void help_view_render(struct nk_context *ctx, frontend_help_state *state, int width, int height)
+void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct nk_font *help_font, int width, int height)
 {
     struct nk_rect bounds;
     struct nk_style_window saved_window;
@@ -642,9 +687,15 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
     float heading_h = 34.0f;
     float footer_h = 78.0f;
     float content_h;
+    bool font_pushed = false;
 
     if (ctx == NULL || state == NULL || !state->open || width <= 0 || height <= 0) {
         return;
+    }
+
+    if (help_font != NULL) {
+        nk_style_push_font(ctx, &help_font->handle);
+        font_pushed = true;
     }
 
     if (state->section_index < 0 || state->section_index >= help_section_count) {
@@ -658,6 +709,9 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
         (float)width - margin * 2.0f,
         (float)height - margin * 2.0f);
     if (bounds.w < 100.0f || bounds.h < 100.0f) {
+        if (font_pushed) {
+            nk_style_pop_font(ctx);
+        }
         return;
     }
     if (bounds.h < 320.0f) {
@@ -710,4 +764,7 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, int wi
     }
     nk_end(ctx);
     ctx->style.window = saved_window;
+    if (font_pushed) {
+        nk_style_pop_font(ctx);
+    }
 }

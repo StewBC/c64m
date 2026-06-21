@@ -247,7 +247,7 @@ Memory editing is only possible while the CPU is paused. In hex mode, typing hex
 overwrites the nibble at the cursor. In ASCII mode, printable characters overwrite the
 byte at the cursor.
 
-## Machine Tab
+## Machine
 
 The Machine tab is the first tab in the Misc panel and groups controls for disks,
 programs, and emulator management.
@@ -287,7 +287,7 @@ mount. Ejecting a device clears it; the other device is unaffected.
 **[Reset]** performs a hard reset of the emulated C64. Any pending PRG injection or
 assembler-queued run is cancelled.
 
-## Debugger Tab
+## Debugger
 
 The Debugger tab shows runtime counters and the call stack.
 
@@ -386,7 +386,7 @@ Setting an execute breakpoint from the keyboard while the cursor is in the Disas
 view is faster: position the cursor and press **Opt+B**. A second press removes the
 breakpoint.
 
-## Hardware Tab
+## Hardware
 
 The Hardware tab provides a read-only view of the emulated C64 hardware state using
 data from the most recent runtime snapshot. All sections are collapsible tree views.
@@ -407,7 +407,7 @@ machine state.
 
 The Assembler tab provides access to the integrated two-pass 6502 assembler.
 
-### Assembler Tab Controls
+### Assembler Controls
 
 | Field        | Meaning                                                        |
 |--------------|----------------------------------------------------------------|
@@ -624,13 +624,13 @@ default behavior with `.strcode _`. Quoted escape sequences (`\n`, `\r`, `\t`, `
 The Configure dialog (opened from **[Configure...]** in the Machine tab) has two tabs:
 **Machine** and **Emulator**.
 
-### Machine Tab
+### Machine
 
 | Control       | Effect                                            |
 |---------------|---------------------------------------------------|
 | PAL / NTSC    | Select the video standard; changes take effect on reboot |
 
-### Emulator Tab
+### Emulator
 
 | Control              | Effect                                          |
 |----------------------|-------------------------------------------------|
@@ -968,7 +968,27 @@ integer scaling. Letterbox or pillarbox fills the unused space. The internal pix
 dimensions and scaling mode are configurable in the Configure dialog and saved to the
 INI file.
 
-## Version History
+### Vendored third-party code and assets
+- `C64_TrueType_v1.2.1-STYLE`
+  - Upstteam: <http://style64.org/c64-truetype>
+  - License: http://style64.org/c64-truetype/license
+- `stb/stb_ds.h`
+  - Upstream: <https://github.com/nothings/stb>
+  - License: public domain or MIT
+- `inih/ini.c`, `inih/ini.h`
+  - Upstream: <https://github.com/benhoyt/inih>
+  - License: BSD-3-Clause
+- `logc/log.c`, `logc/log.h`
+  - Upstream: <https://github.com/rxi/log.c>
+  - License: MIT
+- `argparse/argparse.c`, `argparse/argparse.h`
+  - Upstream: <https://github.com/cofyc/argparse>
+  - License: MIT
+- `whereami/whereami.c`, `whereami/whereami.h`
+  - Upstream: <https://github.com/gpakosz/whereami>
+  - License: MIT or WTFPL v2
+
+## Versions
 
 20 Jul 2026
 :   The 1 week into it version.  Not a release yet.

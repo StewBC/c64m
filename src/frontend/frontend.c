@@ -5,6 +5,7 @@
 #include "nuklear_sdl.h"
 
 #include "c64_layout.h"
+#include "c64_pro_mono_font_data.h"
 #include "disasm_6502.h"
 #include "symbol_table.h"
 
@@ -190,6 +191,7 @@ struct frontend {
     platform_window *window;
     struct nk_context *ctx;
     SDL_Renderer *renderer;
+    struct nk_font *help_font;
     SDL_Texture *display_texture;
     c64_frame current_frame;
     bool has_frame;
@@ -4772,6 +4774,12 @@ frontend *frontend_create(platform_window *window)
 
     nk_sdl_font_stash_begin(&atlas);
     font = nk_font_atlas_add_default(atlas, 13.0f, NULL);
+    ui->help_font = nk_font_atlas_add_from_memory(
+        atlas,
+        (void *)c64_pro_mono_font_data,
+        (nk_size)c64_pro_mono_font_data_len,
+        10.0f,
+        NULL);
     nk_sdl_font_stash_end();
     if (font != NULL) {
         nk_style_set_font(ui->ctx, &font->handle);
@@ -5529,7 +5537,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
 
     if (help_view_is_open(&ui->help)) {
         frontend_render_display_only(ui);
-        help_view_render(ui->ctx, &ui->help, width, height);
+        help_view_render(ui->ctx, &ui->help, ui->help_font, width, height);
         nk_sdl_render(NK_ANTI_ALIASING_ON);
         return;
     }

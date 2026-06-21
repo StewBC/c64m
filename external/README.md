@@ -4,7 +4,9 @@ These libraries are kept small and are intended to be wrapped by project-facing
 APIs under `src/util/` before broad use.
 
 ## Contents
-
+- C64_TrueType_v1.2.1-STYLE
+  - Upstteam: <http://style64.org/c64-truetype>
+  - License: http://style64.org/c64-truetype/license
 - `stb/stb_ds.h`
   - Upstream: <https://github.com/nothings/stb>
   - License: public domain or MIT

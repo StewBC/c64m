@@ -18,6 +18,7 @@ The emulator is complete through:
 - Help UI Phase 2: added per-section help scroll memory and keyboard navigation for PageUp/PageDown/Home/End plus Left/Right section switching, while preserving accepted Phase 1 rendering.
 - Help UI Phase 3: added compile-time C64-inspired help theme colors while preserving existing help rendering and navigation behavior.
 - Help UI Phase 4: added safe long-line wrapping for help text and a generator `--level N` option for selecting which Markdown heading level becomes the bottom-row help section list, defaulting to level 2.
+- Help UI Phase 5: embedded C64 Pro Mono TrueType font (compiled-in byte array, no runtime file load) used exclusively for help view text at 10 px via Nuklear font push/pop; extended `help_wrap_text` with character-level hard-wrap fallback so tokens with no spaces never overflow the panel; routed `HELP_SPAN_CODE_BLOCK` through `help_inline_wrap_if_needed` so code lines wrap identically to body text.
 - Audio output infrastructure (C64AUDFID_1): lock-free SPSC ring buffer, SDL audio device, PAL/NTSC cycle-to-sample conversion, 440 Hz smoke tone, turbo mute, overrun/underrun counters.
 - SID functional audio (C64AUDFID_2): triangle/saw/pulse/noise waveforms, ADSR envelope, Chamberlin SVF filter, 3-voice mixer, voice 3 read-back, $D400–$D41F register map; deferred: per-voice filter routing, ring/sync mod, combined-waveform blending, NTSC tables.
 

@@ -2,3 +2,10 @@
 *.gif -text
 *.bin binary
 *.png binary
+
+# Font files are binary
+*.eot binary
+*.otf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary

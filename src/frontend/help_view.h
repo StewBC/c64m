@@ -24,4 +24,4 @@ bool help_view_paused_by_help(const frontend_help_state *state);
 bool help_view_select_section(struct nk_context *ctx, frontend_help_state *state, int section_index);
 bool help_view_scroll_content(struct nk_context *ctx, frontend_help_state *state, int delta_y);
 bool help_view_scroll_content_to(struct nk_context *ctx, frontend_help_state *state, nk_uint y);
-void help_view_render(struct nk_context *ctx, frontend_help_state *state, int width, int height);
+void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct nk_font *help_font, int width, int height);
