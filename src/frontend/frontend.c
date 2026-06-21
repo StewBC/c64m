@@ -216,6 +216,15 @@ struct frontend {
 
 static const nk_flags pane_flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR;
 
+static bool frontend_any_dialog_open(const frontend *ui)
+{
+    return ui->config_dialog.open
+        || ui->breakpoint_dialog.open
+        || ui->load_bin_dialog.open
+        || ui->save_bin_dialog.open
+        || ui->assembler.error_dialog_open;
+}
+
 static SDL_Rect frontend_fit_rect(int area_x, int area_y, int area_w, int area_h, int source_w, int source_h)
 {
     SDL_Rect out = {area_x, area_y, 0, 0};
@@ -261,6 +270,43 @@ static bool frontend_point_in_rect(float x, float y, struct nk_rect rect)
 {
     return x >= rect.x && x < rect.x + rect.w &&
         y >= rect.y && y < rect.y + rect.h;
+}
+
+static bool frontend_click_in_any_dialog(const frontend *ui, float x, float y)
+{
+    struct nk_window *win;
+
+    if (ui->config_dialog.open) {
+        win = nk_window_find(ui->ctx, "Configure");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
+    if (ui->breakpoint_dialog.open) {
+        win = nk_window_find(ui->ctx, "Breakpoint Editor");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
+    if (ui->load_bin_dialog.open) {
+        win = nk_window_find(ui->ctx, "Load");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
+    if (ui->save_bin_dialog.open) {
+        win = nk_window_find(ui->ctx, "Save");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
+    if (ui->assembler.error_dialog_open) {
+        win = nk_window_find(ui->ctx, "Assembly Errors");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static const char *frontend_runtime_state_name(frontend_runtime_state state)
@@ -2578,14 +2624,15 @@ static void frontend_draw_disassembly_view(
         view->last_runtime_state = debug_state->runtime_state;
     }
 
-    if (nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
+    if (!frontend_any_dialog_open(ui) && nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
         view->active = nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) ? true : false;
         if (view->active) {
             ui->memory.active = false;
         }
     }
 
-    if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
+    if (!frontend_any_dialog_open(ui) &&
+        nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
         ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
         if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
             int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
@@ -3416,7 +3463,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height : 13.0f;
     footer_h = row_h + 3.0f;
 
-    if (nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
+    if (!frontend_any_dialog_open(ui) && nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
         memory->active = nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) ? true : false;
     }
 
@@ -3430,7 +3477,8 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     memory->rows = rows;
     visible_count = frontend_memory_visible_count(memory);
 
-    if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
+    if (!frontend_any_dialog_open(ui) &&
+        nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
         ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
         int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
         memory->view_address = (uint16_t)(memory->view_address + lines * memory->columns);
@@ -4890,7 +4938,16 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         return;
     }
 
-    if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT) {
+    if (frontend_any_dialog_open(ui) && event->type == SDL_MOUSEBUTTONDOWN) {
+        float x = (float)event->button.x;
+        float y = (float)event->button.y;
+        if (!frontend_click_in_any_dialog(ui, x, y)) {
+            return;
+        }
+    }
+
+    if (!frontend_any_dialog_open(ui) &&
+        event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT) {
         float x = (float)event->button.x;
         float y = (float)event->button.y;
 
@@ -5349,10 +5406,10 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     int width = 0;
     int height = 0;
     struct nk_rect parent;
-    int split_display_active;
-    int split_top_bottom_active;
-    int split_memory_misc_active;
-    int display_corner_active;
+    int split_display_active = 0;
+    int split_top_bottom_active = 0;
+    int split_memory_misc_active = 0;
+    int display_corner_active = 0;
     bool debugger_scrollbar_active = false;
 
     if (ui == NULL || ui->ctx == NULL) {
@@ -5388,16 +5445,20 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     if (ui_visible && debug_state != NULL) {
         parent = nk_rect(0.0f, 0.0f, (float)width, (float)height);
         c64_layout_compute(&ui->layout, parent, &ui->limits);
-        debugger_scrollbar_active = ui->memory.scrollbar_dragging ||
-            ui->disassembly.scrollbar_dragging ||
-            (ui->has_memory_scrollbar_bounds &&
-             nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
-             nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->memory_scrollbar_bounds)) ||
-            (ui->has_disassembly_scrollbar_bounds &&
-             nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
-             nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->disassembly_scrollbar_bounds));
-        if (!debugger_scrollbar_active) {
-            c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
+        if (!frontend_any_dialog_open(ui)) {
+            debugger_scrollbar_active = ui->memory.scrollbar_dragging ||
+                ui->disassembly.scrollbar_dragging ||
+                (ui->has_memory_scrollbar_bounds &&
+                 nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
+                 nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->memory_scrollbar_bounds)) ||
+                (ui->has_disassembly_scrollbar_bounds &&
+                 nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
+                 nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->disassembly_scrollbar_bounds));
+            if (!debugger_scrollbar_active) {
+                c64_layout_handle_drag(&ui->layout, &ui->ctx->input, parent, &ui->limits);
+            } else {
+                ui->layout.drag_active = C64_LAYOUT_DRAG_NONE;
+            }
         } else {
             ui->layout.drag_active = C64_LAYOUT_DRAG_NONE;
         }
@@ -5408,14 +5469,16 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         frontend_draw_memory(ui, ui->layout.memory, debug_state);
         frontend_draw_misc(ui, ui->layout.misc, debug_state);
 
-        split_display_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_DISPLAY ||
-            nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_display);
-        split_top_bottom_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_TOP_BOTTOM ||
-            nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_top_bottom);
-        split_memory_misc_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_BOTTOM ||
-            nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_memory_misc);
-        display_corner_active = ui->layout.drag_active == C64_LAYOUT_DRAG_DISPLAY_CORNER ||
-            nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_display_corner);
+        if (!frontend_any_dialog_open(ui)) {
+            split_display_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_DISPLAY ||
+                nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_display);
+            split_top_bottom_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_TOP_BOTTOM ||
+                nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_top_bottom);
+            split_memory_misc_active = ui->layout.drag_active == C64_LAYOUT_DRAG_SPLIT_BOTTOM ||
+                nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_split_memory_misc);
+            display_corner_active = ui->layout.drag_active == C64_LAYOUT_DRAG_DISPLAY_CORNER ||
+                nk_input_is_mouse_hovering_rect(&ui->ctx->input, ui->layout.hit_display_corner);
+        }
 
         frontend_draw_splitter(ui->ctx, "split-display", ui->layout.hit_split_display, split_display_active);
         frontend_draw_splitter(ui->ctx, "split-top-bottom", ui->layout.hit_split_top_bottom, split_top_bottom_active);
