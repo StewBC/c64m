@@ -194,6 +194,14 @@ For each phase:
 6. Update STATUS.md.
 ```
 
+**Running the binary directly opens an SDL window and blocks until the user quits
+(Cmd+Q on macOS, Alt+F4 on Windows). An automated step that launches `./build/c64m`
+without a time limit will hang indefinitely.** For build verification prefer
+`./build/c64m --help`, or the automated test suite (`ctest` / individual test
+binaries). If the running emulator must be observed, time-limit the launch, for
+example `timeout 5 ./build/c64m`, and accept that it will be killed rather than
+exiting cleanly.
+
 If a document disagrees with STATUS.md, do not guess. Treat it as a reconciliation task:
 
 ```text
