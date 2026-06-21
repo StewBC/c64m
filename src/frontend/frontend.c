@@ -4658,7 +4658,7 @@ static void frontend_draw_misc_tab_button(
 static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const frontend_debug_state *debug_state)
 {
     struct nk_context *ctx;
-    float tab_h = 24.0f;
+    float tab_h = 22.0f;
     float content_h;
 
     if (ui == NULL || ui->ctx == NULL) {
@@ -4679,7 +4679,7 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_HARDWARE, "Hardware");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_ASSEMBLER, "Assembler");
 
-        content_h = bounds.h - tab_h - 44.0f;
+        content_h = bounds.h - tab_h - 55.0f;
         if (content_h < 24.0f) {
             content_h = 24.0f;
         }
