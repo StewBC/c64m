@@ -909,16 +909,20 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 {
                     c64_config machine_config = machine_config_from_options(&intent.config);
                     runtime_config runtime_options = runtime_config_from_options(&intent.config);
+                    char absolute_symbol_files[1024];
                     app_options_destroy(options);
                     *options = intent.config;
                     memset(&intent.config, 0, sizeof(intent.config));
                     options->save_ini = intent.config_result.save_ini_on_quit || options->remember;
+                    if (!app_options_symbol_files_absolute(options, absolute_symbol_files, sizeof(absolute_symbol_files))) {
+                        snprintf(absolute_symbol_files, sizeof(absolute_symbol_files), "%s", options->symbol_files ? options->symbol_files : "");
+                    }
                     sent = runtime_client_apply_machine_config(
                         client,
                         &machine_config,
                         &runtime_options,
                         options->ini_path,
-                        options->symbol_files,
+                        absolute_symbol_files,
                         intent.config_result.needs_reboot,
                         options->save_ini && !options->no_save_ini);
                     frontend_set_config_state(ui, options);
@@ -1151,6 +1155,7 @@ int main(int argc, char **argv) {
     frontend_layout_state layout_state;
     audio_buffer *abuf = NULL;
     platform_audio *paudio = NULL;
+    char runtime_symbol_files[1024];
     int exit_code = 0;
 
     if (!app_options_load_startup(&options, argc, argv)) {
@@ -1190,7 +1195,11 @@ int main(int argc, char **argv) {
     runtime_cfg.kernal_rom_path = options.kernal_rom_path;
     runtime_cfg.system_rom_path = options.system_rom_path;
     runtime_cfg.ini_path = options.ini_path;
-    runtime_cfg.symbol_files = options.symbol_files;
+    if (app_options_symbol_files_absolute(&options, runtime_symbol_files, sizeof(runtime_symbol_files))) {
+        runtime_cfg.symbol_files = runtime_symbol_files;
+    } else {
+        runtime_cfg.symbol_files = options.symbol_files;
+    }
     runtime_cfg.use_ini = options.use_ini;
     runtime_cfg.save_ini = (options.save_ini || options.remember) && !options.no_save_ini;
     runtime_cfg.machine_config = machine_config_from_options(&options);

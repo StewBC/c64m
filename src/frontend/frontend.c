@@ -3304,7 +3304,15 @@ static void frontend_memory_handle_key(
             return;
         }
         if (sym >= 32 && sym <= 126) {
-            frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, (uint8_t)sym);
+            uint8_t byte = (uint8_t)sym;
+            if (sym >= 'a' && sym <= 'z') {
+                bool shift = (mod & KMOD_SHIFT) != 0;
+                bool caps = (mod & KMOD_CAPS) != 0;
+                if (shift ^ caps) {
+                    byte = (uint8_t)(sym - ('a' - 'A'));
+                }
+            }
+            frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, byte);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
@@ -4641,6 +4649,7 @@ bool frontend_apply_selected_ini(frontend *ui, const app_options *options)
 void frontend_append_symbol_file(frontend *ui, const char *path)
 {
     frontend_config_dialog_state *dialog;
+    char display_path[1024];
     char merged[1024];
 
     if (ui == NULL || path == NULL || path[0] == '\0') {
@@ -4652,10 +4661,14 @@ void frontend_append_symbol_file(frontend *ui, const char *path)
         return;
     }
 
+    if (!app_options_path_relative_to_ini(&dialog->edited, path, display_path, sizeof(display_path))) {
+        snprintf(display_path, sizeof(display_path), "%s", path);
+    }
+
     if (dialog->edited.symbol_files != NULL && dialog->edited.symbol_files[0] != '\0') {
-        snprintf(merged, sizeof(merged), "%s,%s", dialog->edited.symbol_files, path);
+        snprintf(merged, sizeof(merged), "%s,%s", dialog->edited.symbol_files, display_path);
     } else {
-        snprintf(merged, sizeof(merged), "%s", path);
+        snprintf(merged, sizeof(merged), "%s", display_path);
     }
     frontend_config_reserve_string(&dialog->edited.symbol_files, 1024);
     snprintf(dialog->edited.symbol_files, 1024, "%s", merged);

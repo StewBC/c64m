@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #define C64M_DRIVE_COUNT 16
 #define C64M_DEFAULT_DISPLAY_WIDTH 384
@@ -47,4 +48,13 @@ bool app_options_save_shutdown(const app_options *options);
 bool app_options_copy(app_options *dest, const app_options *src);
 bool app_options_apply_ini_file(app_options *options, const char *path);
 bool app_options_set_string(char **target, const char *value);
+bool app_options_path_relative_to_ini(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size);
+bool app_options_symbol_files_absolute(
+    const app_options *options,
+    char *out,
+    size_t out_size);
 void app_options_destroy(app_options *options);

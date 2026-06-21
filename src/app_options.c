@@ -6,9 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "argparse.h"
 #include "config.h"
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #define C64M_DEFAULT_INI "c64m.ini"
 #define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
@@ -58,6 +63,306 @@ static bool replace_string(char **target, const char *value)
 bool app_options_set_string(char **target, const char *value)
 {
     return replace_string(target, value);
+}
+
+static bool path_is_absolute(const char *path)
+{
+    return path != NULL && path[0] == '/';
+}
+
+static bool copy_path(char *out, size_t out_size, const char *path)
+{
+    int written;
+
+    if (out == NULL || out_size == 0 || path == NULL) {
+        return false;
+    }
+
+    written = snprintf(out, out_size, "%s", path);
+    return written >= 0 && (size_t)written < out_size;
+}
+
+static bool join_path_buffer(char *out, size_t out_size, const char *dir, const char *path)
+{
+    int written;
+
+    if (out == NULL || out_size == 0 || dir == NULL || path == NULL) {
+        return false;
+    }
+    if (dir[0] == '\0' || strcmp(dir, ".") == 0) {
+        written = snprintf(out, out_size, "%s", path);
+    } else if (strcmp(dir, "/") == 0) {
+        written = snprintf(out, out_size, "/%s", path);
+    } else {
+        written = snprintf(out, out_size, "%s/%s", dir, path);
+    }
+
+    return written >= 0 && (size_t)written < out_size;
+}
+
+static bool copy_resolved_or_original(char *out, size_t out_size, const char *path)
+{
+    char resolved[PATH_MAX];
+
+    if (realpath(path, resolved) != NULL) {
+        return copy_path(out, out_size, resolved);
+    }
+    return copy_path(out, out_size, path);
+}
+
+static bool ini_directory_absolute(const app_options *options, char *out, size_t out_size)
+{
+    char cwd[PATH_MAX];
+    char ini_copy[PATH_MAX];
+    char joined[PATH_MAX];
+    char *slash;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        return copy_path(out, out_size, ".");
+    }
+    if (options == NULL || options->ini_path == NULL || options->ini_path[0] == '\0') {
+        return copy_path(out, out_size, cwd);
+    }
+
+    if (!copy_path(ini_copy, sizeof(ini_copy), options->ini_path)) {
+        return false;
+    }
+
+    slash = strrchr(ini_copy, '/');
+    if (slash == NULL) {
+        return copy_path(out, out_size, cwd);
+    }
+    if (slash == ini_copy) {
+        return copy_path(out, out_size, "/");
+    }
+    *slash = '\0';
+    if (path_is_absolute(ini_copy)) {
+        return copy_resolved_or_original(out, out_size, ini_copy);
+    }
+    if (!join_path_buffer(joined, sizeof(joined), cwd, ini_copy)) {
+        return false;
+    }
+    return copy_resolved_or_original(out, out_size, joined);
+}
+
+static bool path_absolute_from_ini(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size)
+{
+    char ini_dir[PATH_MAX];
+    char joined[PATH_MAX];
+
+    if (path == NULL || path[0] == '\0') {
+        return copy_path(out, out_size, "");
+    }
+    if (path_is_absolute(path)) {
+        return copy_resolved_or_original(out, out_size, path);
+    }
+    if (!ini_directory_absolute(options, ini_dir, sizeof(ini_dir))) {
+        return false;
+    }
+    if (!join_path_buffer(joined, sizeof(joined), ini_dir, path)) {
+        return false;
+    }
+    return copy_resolved_or_original(out, out_size, joined);
+}
+
+static size_t path_component_length(const char *path)
+{
+    const char *slash;
+
+    slash = strchr(path, '/');
+    return slash != NULL ? (size_t)(slash - path) : strlen(path);
+}
+
+static bool append_relative_up(char *out, size_t out_size, size_t *used)
+{
+    int written;
+
+    written = snprintf(out + *used, out_size - *used, "%s..", *used > 0 ? "/" : "");
+    if (written < 0 || (size_t)written >= out_size - *used) {
+        return false;
+    }
+    *used += (size_t)written;
+    return true;
+}
+
+static bool relative_path_from_dir(
+    const char *base_dir,
+    const char *abs_path,
+    char *out,
+    size_t out_size)
+{
+    const char *base_cursor;
+    const char *path_cursor;
+    const char *base_remainder;
+    const char *path_remainder;
+    size_t used = 0;
+
+    if (!path_is_absolute(base_dir) || !path_is_absolute(abs_path)) {
+        return copy_path(out, out_size, abs_path);
+    }
+
+    base_cursor = base_dir;
+    path_cursor = abs_path;
+    while (*base_cursor == '/' && *path_cursor == '/') {
+        base_cursor++;
+        path_cursor++;
+    }
+
+    base_remainder = base_cursor;
+    path_remainder = path_cursor;
+    while (*base_cursor != '\0' && *path_cursor != '\0') {
+        size_t base_len = path_component_length(base_cursor);
+        size_t path_len = path_component_length(path_cursor);
+
+        if (base_len != path_len || strncmp(base_cursor, path_cursor, base_len) != 0) {
+            break;
+        }
+
+        base_cursor += base_len;
+        path_cursor += path_len;
+        if (*base_cursor == '/') {
+            base_cursor++;
+        }
+        if (*path_cursor == '/') {
+            path_cursor++;
+        }
+        base_remainder = base_cursor;
+        path_remainder = path_cursor;
+    }
+
+    while (*base_remainder != '\0') {
+        size_t component_len = path_component_length(base_remainder);
+        if (component_len > 0 && !append_relative_up(out, out_size, &used)) {
+            return false;
+        }
+        base_remainder += component_len;
+        if (*base_remainder == '/') {
+            base_remainder++;
+        }
+    }
+
+    if (*path_remainder != '\0') {
+        int written = snprintf(out + used, out_size - used, "%s%s", used > 0 ? "/" : "", path_remainder);
+        if (written < 0 || (size_t)written >= out_size - used) {
+            return false;
+        }
+    } else if (used == 0) {
+        return copy_path(out, out_size, ".");
+    }
+
+    return true;
+}
+
+bool app_options_path_relative_to_ini(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size)
+{
+    char ini_dir[PATH_MAX];
+    char resolved[PATH_MAX];
+
+    if (path == NULL || path[0] == '\0') {
+        return copy_path(out, out_size, "");
+    }
+    if (!path_is_absolute(path)) {
+        return copy_path(out, out_size, path);
+    }
+    if (!ini_directory_absolute(options, ini_dir, sizeof(ini_dir))) {
+        return false;
+    }
+    if (realpath(path, resolved) != NULL) {
+        return relative_path_from_dir(ini_dir, resolved, out, out_size);
+    }
+    return relative_path_from_dir(ini_dir, path, out, out_size);
+}
+
+static bool transform_symbol_files(
+    const app_options *options,
+    const char *symbol_files,
+    bool absolute,
+    char *out,
+    size_t out_size)
+{
+    const char *cursor;
+    size_t used = 0;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+
+    out[0] = '\0';
+    cursor = symbol_files != NULL ? symbol_files : "";
+    while (*cursor != '\0') {
+        const char *start;
+        const char *end;
+        char path[PATH_MAX];
+        char transformed[PATH_MAX];
+        size_t length;
+        int written;
+
+        while (*cursor == ',' || isspace((unsigned char)*cursor)) {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        end = cursor;
+        while (end > start && isspace((unsigned char)end[-1])) {
+            end--;
+        }
+
+        length = (size_t)(end - start);
+        if (length == 0) {
+            continue;
+        }
+        if (length >= sizeof(path)) {
+            return false;
+        }
+        memcpy(path, start, length);
+        path[length] = '\0';
+
+        if (absolute) {
+            if (!path_absolute_from_ini(options, path, transformed, sizeof(transformed))) {
+                return false;
+            }
+        } else {
+            if (!app_options_path_relative_to_ini(options, path, transformed, sizeof(transformed))) {
+                return false;
+            }
+        }
+
+        written = snprintf(out + used, out_size - used, "%s%s", used > 0 ? "," : "", transformed);
+        if (written < 0 || (size_t)written >= out_size - used) {
+            return false;
+        }
+        used += (size_t)written;
+    }
+
+    return true;
+}
+
+bool app_options_symbol_files_absolute(
+    const app_options *options,
+    char *out,
+    size_t out_size)
+{
+    if (options == NULL) {
+        return false;
+    }
+    return transform_symbol_files(options, options->symbol_files, true, out, out_size);
 }
 
 static bool string_equal_ignore_case(const char *a, const char *b)
@@ -635,6 +940,7 @@ bool app_options_save_shutdown(const app_options *options)
     bool ok;
     int drive;
     char key[8];
+    char relative_symbol_files[1024];
 
     if (options == NULL || options->no_save_ini || options->ini_path == NULL) {
         return true;
@@ -665,8 +971,9 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
-    if (options->symbol_files != NULL) {
-        config_set(cfg, "config", "symbol_files", options->symbol_files);
+    if (options->symbol_files != NULL &&
+        transform_symbol_files(options, options->symbol_files, false, relative_symbol_files, sizeof(relative_symbol_files))) {
+        config_set(cfg, "config", "symbol_files", relative_symbol_files);
     }
     if (options->remember) {
         config_set(cfg, "config", "Save", "yes");

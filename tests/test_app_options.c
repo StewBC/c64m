@@ -466,6 +466,63 @@ static void test_phase14_config_saved_to_ini(void) {
     remove("test_phase14_save.ini");
 }
 
+static void test_symbol_files_are_relative_to_ini(void) {
+    app_options options;
+    char cwd[1024];
+    char ini_path[1024];
+    char symbol_path[1024];
+    char expected_absolute[1024];
+    char relative[1024];
+    char absolute_list[1024];
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+
+    mkdir("test_symbol_ini", 0777);
+    mkdir("test_symbol_ini/configs", 0777);
+    mkdir("test_symbol_ini/symbols", 0777);
+    write_sized_file("test_symbol_ini/symbols/main.sym", 1);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_symbol_ini/configs/c64m.ini", cwd);
+    snprintf(symbol_path, sizeof(symbol_path), "%s/test_symbol_ini/symbols/main.sym", cwd);
+
+    app_options_init(&options);
+    app_options_set_string(&options.ini_path, ini_path);
+
+    if (!app_options_path_relative_to_ini(&options, symbol_path, relative, sizeof(relative))) {
+        fprintf(stderr, "app_options_path_relative_to_ini failed\n");
+        exit(1);
+    }
+    expect_string("symbol path relative to ini", "../symbols/main.sym", relative);
+
+    app_options_set_string(&options.symbol_files, relative);
+    if (!app_options_symbol_files_absolute(&options, absolute_list, sizeof(absolute_list))) {
+        fprintf(stderr, "app_options_symbol_files_absolute failed\n");
+        exit(1);
+    }
+    snprintf(expected_absolute, sizeof(expected_absolute), "%s/test_symbol_ini/symbols/main.sym", cwd);
+    expect_string("symbol path absolute for runtime", expected_absolute, absolute_list);
+
+    app_options_set_string(&options.symbol_files, symbol_path);
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "app_options_save_shutdown failed\n");
+        exit(1);
+    }
+    if (!file_contains(ini_path, "symbol_files=../symbols/main.sym")) {
+        fprintf(stderr, "saved symbol_files was not relative to ini\n");
+        exit(1);
+    }
+
+    app_options_destroy(&options);
+    remove("test_symbol_ini/configs/c64m.ini");
+    remove("test_symbol_ini/symbols/main.sym");
+    rmdir("test_symbol_ini/configs");
+    rmdir("test_symbol_ini/symbols");
+    rmdir("test_symbol_ini");
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
@@ -475,5 +532,6 @@ int main(void) {
     test_phase14_config_from_ini();
     test_config_turbo_speeds_ignores_runtime_turbo();
     test_phase14_config_saved_to_ini();
+    test_symbol_files_are_relative_to_ini();
     return 0;
 }

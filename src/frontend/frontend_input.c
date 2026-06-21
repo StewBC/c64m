@@ -164,7 +164,11 @@ static void map_keydown(const SDL_KeyboardEvent *event, frontend_input_chord *ch
             add_key(chord, C64_KEY_CONTROL, true);
             break;
         case SDLK_TAB:
-            add_key(chord, C64_KEY_COMMODORE, true);
+            if (shifted) {
+                add_shifted_key(chord, C64_KEY_COMMODORE, true);
+            } else {
+                add_key(chord, C64_KEY_COMMODORE, true);
+            }
             break;
         case SDLK_PLUS:
         case SDLK_KP_PLUS:
