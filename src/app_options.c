@@ -860,7 +860,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
 
     argparse_init(&argparse, parse_options, usages, 0);
-    argparse_describe(&argparse, "Commodore 64 emulator written by Codex and Claude Code, orchestrated by Stefan Wessels, 2026.", NULL);
+    argparse_describe(&argparse, "Commodore 64 emulator written by Codex and Claude Code, produced by Stefan Wessels, 2026.", NULL);
     argparse_parse(&argparse, argc, (const char **)argv);
 
     if (defaults) {

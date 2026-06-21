@@ -1,4 +1,4 @@
-# c64m - A Commodore 64 emulator written by Codex and Claude Code, orchestrated by Stefan Wessels, 2026
+# c64m - A Commodore 64 emulator written by Codex and Claude Code, produced by Stefan Wessels, 2026
 
 c64m is a Commodore 64 emulator written in C99. It supports both PAL (6569) and NTSC
 video standards and can run BASIC programs, PRG files, and D64 disk images. The built-in
