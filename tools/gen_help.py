@@ -115,12 +115,15 @@ def flush_table(sections, table_lines):
         for i, cell in enumerate(cells):
             widths[i] = max(widths[i], visible_len(cell))
 
-    for cells in rows:
+    for row_index, cells in enumerate(rows):
         parts = []
         for i, cell in enumerate(cells):
             parts.append(cell + (" " * (widths[i] - visible_len(cell))))
         if parts:
-            add_span(sections, "HELP_SPAN_TABLE", "  ".join(parts))
+            add_span(
+                sections,
+                "HELP_SPAN_TABLE_HEADER" if row_index == 0 else "HELP_SPAN_TABLE",
+                "  ".join(parts))
 
 
 def parse_manual(path, section_level=2):
@@ -221,7 +224,8 @@ def emit(heading, sections):
     out.append("    HELP_SPAN_BULLET,")
     out.append("    HELP_SPAN_NUMBER,")
     out.append("    HELP_SPAN_CODE_BLOCK,")
-    out.append("    HELP_SPAN_TABLE")
+    out.append("    HELP_SPAN_TABLE,")
+    out.append("    HELP_SPAN_TABLE_HEADER")
     out.append("} help_span_kind;")
     out.append("")
     out.append("typedef struct help_span {")

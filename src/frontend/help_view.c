@@ -7,31 +7,36 @@
 
 #define HELP_INLINE_CODE_ON '\001'
 #define HELP_INLINE_CODE_OFF '\002'
+#define HELP_TEXT_BG nk_rgba(0x00, 0x00, 0x00, 0x00)
 
 #define C64_HELP_BLACK nk_rgb(0x00, 0x00, 0x00)
 #define C64_HELP_WHITE nk_rgb(0xff, 0xff, 0xff)
+#define C64_HELP_RED nk_rgb(0x88, 0x00, 0x00)
 #define C64_HELP_CYAN nk_rgb(0xaa, 0xff, 0xee)
 #define C64_HELP_PURPLE nk_rgb(0xcc, 0x44, 0xcc)
 #define C64_HELP_GREEN nk_rgb(0x00, 0xcc, 0x55)
 #define C64_HELP_BLUE nk_rgb(0x00, 0x00, 0xaa)
 #define C64_HELP_YELLOW nk_rgb(0xee, 0xee, 0x77)
 #define C64_HELP_ORANGE nk_rgb(0xdd, 0x88, 0x55)
+#define C64_HELP_BROWN nk_rgb(0x66, 0x44, 0x00)
 #define C64_HELP_LIGHT_RED nk_rgb(0xff, 0x77, 0x77)
 #define C64_HELP_DARK_GRAY nk_rgb(0x33, 0x33, 0x33)
+#define C64_HELP_GRAY nk_rgb(0x77, 0x77, 0x77)
 #define C64_HELP_LIGHT_GREEN nk_rgb(0xaa, 0xff, 0x66)
 #define C64_HELP_LIGHT_BLUE nk_rgb(0x00, 0x88, 0xff)
 #define C64_HELP_LIGHT_GRAY nk_rgb(0xbb, 0xbb, 0xbb)
 
 #define HELP_COLOR_BG C64_HELP_BLUE
-#define HELP_COLOR_PANEL nk_rgb(0x1b, 0x2f, 0xa3)
+#define HELP_COLOR_PANEL C64_HELP_BLUE
 #define HELP_COLOR_BORDER C64_HELP_LIGHT_BLUE
 #define HELP_COLOR_HEADING C64_HELP_WHITE
 #define HELP_COLOR_BODY C64_HELP_CYAN
 #define HELP_COLOR_H3 C64_HELP_YELLOW
-#define HELP_COLOR_BULLET C64_HELP_LIGHT_GREEN
-#define HELP_COLOR_NUMBER C64_HELP_LIGHT_GREEN
+#define HELP_COLOR_BULLET C64_HELP_YELLOW
+#define HELP_COLOR_NUMBER C64_HELP_YELLOW
 #define HELP_COLOR_CODE C64_HELP_ORANGE
-#define HELP_COLOR_TABLE C64_HELP_LIGHT_GRAY
+#define HELP_COLOR_TABLE C64_HELP_WHITE
+#define HELP_COLOR_TABLE_HEADER C64_HELP_LIGHT_RED
 #define HELP_COLOR_SECTION_ACTIVE C64_HELP_PURPLE
 #define HELP_COLOR_SECTION_HOVER C64_HELP_LIGHT_BLUE
 
@@ -301,7 +306,7 @@ static void help_draw_inline_at(
                     run,
                     len,
                     font,
-                    HELP_COLOR_PANEL,
+                    HELP_TEXT_BG,
                     code ? HELP_COLOR_CODE : base_color);
                 x += w;
             }
@@ -383,7 +388,7 @@ static void help_marker_text_row(
             marker,
             (int)strlen(marker),
             ctx->style.font,
-            HELP_COLOR_PANEL,
+            HELP_TEXT_BG,
             marker_color);
     }
     bounds.x += text_indent;
@@ -508,7 +513,7 @@ static void help_bullet_row(struct nk_context *ctx, const char *text)
         "- ",
         2,
         ctx->style.font,
-        HELP_COLOR_PANEL,
+        HELP_TEXT_BG,
         HELP_COLOR_BULLET);
     bounds.x += marker_w;
     bounds.w -= marker_w;
@@ -563,6 +568,10 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
 
         case HELP_SPAN_TABLE:
             help_inline_row(ctx, span->text, HELP_COLOR_TABLE);
+            break;
+
+        case HELP_SPAN_TABLE_HEADER:
+            help_inline_row(ctx, span->text, HELP_COLOR_TABLE_HEADER);
             break;
 
         case HELP_SPAN_TEXT:
