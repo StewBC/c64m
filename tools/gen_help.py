@@ -52,6 +52,13 @@ def strip_inline_markup(text, line_no=None):
     return text
 
 
+def split_top_level_title(title):
+    if "-" not in title:
+        return title, title
+    section_title, heading = title.split("-", 1)
+    return section_title.rstrip(), heading.lstrip()
+
+
 def add_span(sections, kind, text="", line_no=None):
     if not sections:
         sections.append({"title": "Introduction", "spans": []})
@@ -174,9 +181,9 @@ def parse_manual(path, section_level=2):
                     if sections:
                         add_heading_span(sections, title, line_no)
                     continue
-                heading = title
+                section_title, heading = split_top_level_title(title)
                 if not sections:
-                    sections.append({"title": title, "spans": []})
+                    sections.append({"title": section_title, "spans": []})
             elif level == section_level:
                 sections.append({"title": title, "spans": []})
                 selected_level_count += 1
