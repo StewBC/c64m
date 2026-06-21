@@ -7,13 +7,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #define DEFAULT_SECONDS 12.0
 
 static double monotonic_seconds(void) {
+#if defined(_WIN32)
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+
+    if (frequency.QuadPart == 0) {
+        QueryPerformanceFrequency(&frequency);
+    }
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+#endif
 }
 
 static double parse_seconds(int argc, char **argv) {

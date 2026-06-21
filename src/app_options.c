@@ -1,12 +1,17 @@
 #include "app_options.h"
 
 #include <ctype.h>
-#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <direct.h>
+#include <windows.h>
+#else
+#include <dirent.h>
 #include <unistd.h>
+#endif
 
 #include "argparse.h"
 #include "config.h"
@@ -26,6 +31,28 @@
 #define C64M_BASIC_ROM_SIZE 8192
 #define C64M_KERNAL_ROM_SIZE 8192
 #define C64M_CHARACTER_ROM_SIZE 4096
+
+#if defined(_WIN32)
+#define C64M_STAT_ISREG(mode) (((mode) & _S_IFREG) != 0)
+#define c64m_getcwd _getcwd
+#else
+#define C64M_STAT_ISREG(mode) S_ISREG(mode)
+#define c64m_getcwd getcwd
+#endif
+
+static void normalize_path_separators(char *path)
+{
+    char *cursor;
+
+    if (path == NULL) {
+        return;
+    }
+    for (cursor = path; *cursor != '\0'; ++cursor) {
+        if (*cursor == '\\') {
+            *cursor = '/';
+        }
+    }
+}
 
 static char *copy_string(const char *value)
 {
@@ -67,7 +94,14 @@ bool app_options_set_string(char **target, const char *value)
 
 static bool path_is_absolute(const char *path)
 {
-    return path != NULL && path[0] == '/';
+    return path != NULL &&
+        (path[0] == '/'
+#if defined(_WIN32)
+         || path[0] == '\\' ||
+         (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+          (path[2] == '/' || path[2] == '\\'))
+#endif
+        );
 }
 
 static bool copy_path(char *out, size_t out_size, const char *path)
@@ -79,7 +113,11 @@ static bool copy_path(char *out, size_t out_size, const char *path)
     }
 
     written = snprintf(out, out_size, "%s", path);
-    return written >= 0 && (size_t)written < out_size;
+    if (written < 0 || (size_t)written >= out_size) {
+        return false;
+    }
+    normalize_path_separators(out);
+    return true;
 }
 
 static bool join_path_buffer(char *out, size_t out_size, const char *dir, const char *path)
@@ -104,9 +142,15 @@ static bool copy_resolved_or_original(char *out, size_t out_size, const char *pa
 {
     char resolved[PATH_MAX];
 
+#if defined(_WIN32)
+    if (_fullpath(resolved, path, sizeof(resolved)) != NULL) {
+        return copy_path(out, out_size, resolved);
+    }
+#else
     if (realpath(path, resolved) != NULL) {
         return copy_path(out, out_size, resolved);
     }
+#endif
     return copy_path(out, out_size, path);
 }
 
@@ -120,9 +164,10 @@ static bool ini_directory_absolute(const app_options *options, char *out, size_t
     if (out == NULL || out_size == 0) {
         return false;
     }
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
         return copy_path(out, out_size, ".");
     }
+    normalize_path_separators(cwd);
     if (options == NULL || options->ini_path == NULL || options->ini_path[0] == '\0') {
         return copy_path(out, out_size, cwd);
     }
@@ -278,9 +323,16 @@ bool app_options_path_relative_to_ini(
     if (!ini_directory_absolute(options, ini_dir, sizeof(ini_dir))) {
         return false;
     }
+#if defined(_WIN32)
+    if (_fullpath(resolved, path, sizeof(resolved)) != NULL) {
+        normalize_path_separators(resolved);
+        return relative_path_from_dir(ini_dir, resolved, out, out_size);
+    }
+#else
     if (realpath(path, resolved) != NULL) {
         return relative_path_from_dir(ini_dir, resolved, out, out_size);
     }
+#endif
     return relative_path_from_dir(ini_dir, path, out, out_size);
 }
 
@@ -410,7 +462,7 @@ static bool path_has_size(const char *path, size_t expected_size)
 {
     struct stat st;
 
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+    if (stat(path, &st) != 0 || !C64M_STAT_ISREG(st.st_mode)) {
         return false;
     }
 
@@ -436,14 +488,48 @@ static bool discover_rom_path(
     size_t expected_size,
     char **target)
 {
+#if defined(_WIN32)
+    WIN32_FIND_DATAA data;
+    HANDLE handle;
+    char search_path[1024];
+    char path[1024];
+#else
     DIR *handle;
     struct dirent *entry;
     char path[1024];
+#endif
 
     if (*target != NULL) {
         return true;
     }
 
+#if defined(_WIN32)
+    if (!join_path(search_path, sizeof(search_path), dir, "*")) {
+        return true;
+    }
+    handle = FindFirstFileA(search_path, &data);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return true;
+    }
+
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+            !rom_candidate_name_matches(data.cFileName, rom_name)) {
+            continue;
+        }
+        if (!join_path(path, sizeof(path), dir, data.cFileName)) {
+            continue;
+        }
+        if (!path_has_size(path, expected_size)) {
+            continue;
+        }
+
+        FindClose(handle);
+        return replace_string(target, path);
+    } while (FindNextFileA(handle, &data));
+
+    FindClose(handle);
+#else
     handle = opendir(dir);
     if (handle == NULL) {
         return true;
@@ -465,6 +551,7 @@ static bool discover_rom_path(
     }
 
     closedir(handle);
+#endif
     return true;
 }
 
@@ -925,7 +1012,9 @@ bool app_options_load_startup(app_options *options, int argc, char **argv)
         return false;
     }
 
-    if (!options->use_ini && !options->defaults && !discover_default_rom_paths(options)) {
+    if (!options->defaults &&
+        (!options->use_ini || cfg == NULL) &&
+        !discover_default_rom_paths(options)) {
         config_destroy(cfg);
         return false;
     }

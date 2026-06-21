@@ -1,10 +1,10 @@
 #include "asm.h"
 #include "errorlog.h"
+#include "../test_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 typedef struct {
     uint8_t memory[65536];
@@ -18,30 +18,7 @@ static void output_byte(void *user, uint16_t addr, uint8_t val)
 
 static int write_source(char *path, size_t path_size, const char *source)
 {
-    snprintf(path, path_size, "/tmp/c64m_assembler_loops_XXXXXX");
-    int fd = mkstemp(path);
-    if (fd < 0) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    FILE *fp = fdopen(fd, "w");
-    if (!fp) {
-        perror("fdopen");
-        close(fd);
-        unlink(path);
-        return 1;
-    }
-
-    fputs(source, fp);
-
-    if (fclose(fp) != 0) {
-        perror("fclose");
-        unlink(path);
-        return 1;
-    }
-
-    return 0;
+    return c64m_test_write_temp_file(path, path_size, "c64m_assembler_loops", source);
 }
 
 static int assemble_file_at(const char *path, test_memory *mem, ERRORLOG *log, uint16_t start)
@@ -131,7 +108,7 @@ static int test_loop_output(void)
     }
     failures += expect_bytes(&mem, expected, sizeof(expected));
     errlog_shutdown(&log);
-    unlink(path);
+    c64m_test_remove_file(path);
 
     return failures;
 }
@@ -176,7 +153,7 @@ static int test_loop_errors(void)
             failures++;
         }
         errlog_shutdown(&log);
-        unlink(path);
+        c64m_test_remove_file(path);
     }
 
     return failures;
@@ -238,7 +215,7 @@ static int test_anon_label_with_repeat(void)
     }
 
     errlog_shutdown(&log);
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 
@@ -282,7 +259,7 @@ static int test_org_below_start(void)
     }
 
     errlog_shutdown(&log);
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 
@@ -307,7 +284,7 @@ static int test_relative_error_path(void)
     if (log.log_array.items == 0) {
         fprintf(stderr, "relative-path: expected at least one error\n");
         errlog_shutdown(&log);
-        unlink(path);
+        c64m_test_remove_file(path);
         return 1;
     }
 
@@ -332,7 +309,7 @@ static int test_relative_error_path(void)
     }
 
     errlog_shutdown(&log);
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 

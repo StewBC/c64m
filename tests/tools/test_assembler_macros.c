@@ -1,10 +1,10 @@
 #include "asm.h"
 #include "errorlog.h"
+#include "../test_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 typedef struct {
     uint8_t memory[65536];
@@ -18,30 +18,7 @@ static void output_byte(void *user, uint16_t addr, uint8_t val)
 
 static int write_source(char *path, size_t path_size, const char *source)
 {
-    snprintf(path, path_size, "/tmp/c64m_assembler_macros_XXXXXX");
-    int fd = mkstemp(path);
-    if (fd < 0) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    FILE *fp = fdopen(fd, "w");
-    if (!fp) {
-        perror("fdopen");
-        close(fd);
-        unlink(path);
-        return 1;
-    }
-
-    fputs(source, fp);
-
-    if (fclose(fp) != 0) {
-        perror("fclose");
-        unlink(path);
-        return 1;
-    }
-
-    return 0;
+    return c64m_test_write_temp_file(path, path_size, "c64m_assembler_macros", source);
 }
 
 static int assemble_file(const char *path, test_memory *mem, ERRORLOG *log)
@@ -135,7 +112,7 @@ static int test_macro_output(void)
     }
     failures += expect_bytes(&mem, expected, sizeof(expected));
     errlog_shutdown(&log);
-    unlink(path);
+    c64m_test_remove_file(path);
 
     return failures;
 }
@@ -181,7 +158,7 @@ static int test_macro_errors(void)
             failures++;
         }
         errlog_shutdown(&log);
-        unlink(path);
+        c64m_test_remove_file(path);
     }
 
     return failures;

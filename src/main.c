@@ -12,7 +12,11 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <unistd.h>
+#endif
 
 enum {
     C64M_CONTROLLER_MAX = 2,
@@ -141,7 +145,13 @@ static void make_relative_path(const char *abs_path, char *out, size_t out_size)
         return;
     }
 
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (
+#if defined(_WIN32)
+        _getcwd(cwd, sizeof(cwd))
+#else
+        getcwd(cwd, sizeof(cwd))
+#endif
+        == NULL) {
         snprintf(out, out_size, "%s", abs_path);
         return;
     }
@@ -149,7 +159,7 @@ static void make_relative_path(const char *abs_path, char *out, size_t out_size)
     cwd_len = strlen(cwd);
     if (cwd_len > 0 &&
         strncmp(abs_path, cwd, cwd_len) == 0 &&
-        abs_path[cwd_len] == '/') {
+        (abs_path[cwd_len] == '/' || abs_path[cwd_len] == '\\')) {
         snprintf(out, out_size, ".%s", abs_path + cwd_len);
     } else {
         snprintf(out, out_size, "%s", abs_path);

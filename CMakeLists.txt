@@ -7,6 +7,12 @@ project(c64m
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_LINK_LIBRARIES_STRATEGY REORDER_FREELY)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+if(MSVC)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+    add_link_options(/STACK:8388608)
+endif()
 enable_testing()
 
 find_package(SDL2 CONFIG REQUIRED)
@@ -27,6 +33,8 @@ add_executable(c64m
 )
 
 target_compile_features(c64m PRIVATE c_std_99)
+
+target_compile_definitions(c64m PRIVATE SDL_MAIN_HANDLED)
 
 target_link_libraries(c64m PRIVATE
     c64m_argparse
@@ -177,6 +185,8 @@ add_executable(test_frontend_input
 )
 
 target_compile_features(test_frontend_input PRIVATE c_std_99)
+
+target_compile_definitions(test_frontend_input PRIVATE SDL_MAIN_HANDLED)
 
 target_include_directories(test_frontend_input PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend

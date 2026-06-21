@@ -4,7 +4,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <direct.h>
+#define c64m_chdir _chdir
+#define c64m_getcwd _getcwd
+#define c64m_mkdir(path, mode) _mkdir(path)
+#define c64m_rmdir _rmdir
+#else
 #include <unistd.h>
+#define c64m_chdir chdir
+#define c64m_getcwd getcwd
+#define c64m_mkdir(path, mode) mkdir(path, mode)
+#define c64m_rmdir rmdir
+#endif
 
 static void expect_string(const char *name, const char *expected, const char *actual) {
     if (!actual || strcmp(expected, actual) != 0) {
@@ -13,6 +25,19 @@ static void expect_string(const char *name, const char *expected, const char *ac
             expected,
             actual ? actual : "(null)");
         exit(1);
+    }
+}
+
+static void normalize_path(char *path) {
+    char *cursor;
+
+    if (path == NULL) {
+        return;
+    }
+    for (cursor = path; *cursor != '\0'; ++cursor) {
+        if (*cursor == '\\') {
+            *cursor = '/';
+        }
     }
 }
 
@@ -195,13 +220,15 @@ static void test_rom_paths_empty_without_ini(void) {
         "--noini",
     };
 
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
         fprintf(stderr, "failed to read cwd\n");
         exit(1);
     }
+    normalize_path(cwd);
+    normalize_path(cwd);
 
-    mkdir("test_noini_empty", 0777);
-    if (chdir("test_noini_empty") != 0) {
+    c64m_mkdir("test_noini_empty", 0777);
+    if (c64m_chdir("test_noini_empty") != 0) {
         fprintf(stderr, "failed to enter test_noini_empty\n");
         exit(1);
     }
@@ -218,11 +245,11 @@ static void test_rom_paths_empty_without_ini(void) {
 
     app_options_destroy(&options);
 
-    if (chdir(cwd) != 0) {
+    if (c64m_chdir(cwd) != 0) {
         fprintf(stderr, "failed to restore cwd\n");
         exit(1);
     }
-    rmdir("test_noini_empty");
+    c64m_rmdir("test_noini_empty");
 }
 
 static void test_rom_paths_discovered_without_ini(void) {
@@ -233,18 +260,19 @@ static void test_rom_paths_discovered_without_ini(void) {
         "--noini",
     };
 
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
         fprintf(stderr, "failed to read cwd\n");
         exit(1);
     }
+    normalize_path(cwd);
 
-    mkdir("test_noini_discovery", 0777);
-    if (chdir("test_noini_discovery") != 0) {
+    c64m_mkdir("test_noini_discovery", 0777);
+    if (c64m_chdir("test_noini_discovery") != 0) {
         fprintf(stderr, "failed to enter test_noini_discovery\n");
         exit(1);
     }
 
-    mkdir("roms", 0777);
+    c64m_mkdir("roms", 0777);
     write_sized_file("roms/SYSTEM.rom", 16384);
     write_sized_file("roms/basic.bin", 8192);
     write_sized_file("roms/Character", 4096);
@@ -268,13 +296,59 @@ static void test_rom_paths_discovered_without_ini(void) {
     remove("roms/Character");
     remove("roms/KERNAL.BIN");
     remove("roms/system.bad");
-    rmdir("roms");
+    c64m_rmdir("roms");
 
-    if (chdir(cwd) != 0) {
+    if (c64m_chdir(cwd) != 0) {
         fprintf(stderr, "failed to restore cwd\n");
         exit(1);
     }
-    rmdir("test_noini_discovery");
+    c64m_rmdir("test_noini_discovery");
+}
+
+static void test_rom_paths_discovered_when_default_ini_missing(void) {
+    app_options options;
+    char cwd[1024];
+    char *argv[] = {
+        "test_app_options",
+    };
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_missing_ini_discovery", 0777);
+    if (c64m_chdir("test_missing_ini_discovery") != 0) {
+        fprintf(stderr, "failed to enter test_missing_ini_discovery\n");
+        exit(1);
+    }
+
+    c64m_mkdir("roms", 0777);
+    write_sized_file("roms/system.rom", 16384);
+    write_sized_file("roms/character.rom", 4096);
+
+    if (!app_options_load_startup(&options, 1, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string("discovered system rom path", "roms/system.rom", options.system_rom_path);
+    expect_string("discovered char rom path", "roms/character.rom", options.char_rom_path);
+    expect_null("basic rom path covered by system rom", options.basic_rom_path);
+    expect_null("kernal rom path covered by system rom", options.kernal_rom_path);
+
+    app_options_destroy(&options);
+
+    remove("roms/system.rom");
+    remove("roms/character.rom");
+    c64m_rmdir("roms");
+
+    if (c64m_chdir(cwd) != 0) {
+        fprintf(stderr, "failed to restore cwd\n");
+        exit(1);
+    }
+    c64m_rmdir("test_missing_ini_discovery");
 }
 
 static void test_window_layout_from_ini(void) {
@@ -475,14 +549,15 @@ static void test_symbol_files_are_relative_to_ini(void) {
     char relative[1024];
     char absolute_list[1024];
 
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
         fprintf(stderr, "failed to read cwd\n");
         exit(1);
     }
+    normalize_path(cwd);
 
-    mkdir("test_symbol_ini", 0777);
-    mkdir("test_symbol_ini/configs", 0777);
-    mkdir("test_symbol_ini/symbols", 0777);
+    c64m_mkdir("test_symbol_ini", 0777);
+    c64m_mkdir("test_symbol_ini/configs", 0777);
+    c64m_mkdir("test_symbol_ini/symbols", 0777);
     write_sized_file("test_symbol_ini/symbols/main.sym", 1);
 
     snprintf(ini_path, sizeof(ini_path), "%s/test_symbol_ini/configs/c64m.ini", cwd);
@@ -518,15 +593,16 @@ static void test_symbol_files_are_relative_to_ini(void) {
     app_options_destroy(&options);
     remove("test_symbol_ini/configs/c64m.ini");
     remove("test_symbol_ini/symbols/main.sym");
-    rmdir("test_symbol_ini/configs");
-    rmdir("test_symbol_ini/symbols");
-    rmdir("test_symbol_ini");
+    c64m_rmdir("test_symbol_ini/configs");
+    c64m_rmdir("test_symbol_ini/symbols");
+    c64m_rmdir("test_symbol_ini");
 }
 
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
     test_rom_paths_discovered_without_ini();
+    test_rom_paths_discovered_when_default_ini_missing();
     test_window_layout_from_ini();
     test_window_layout_saved_to_ini();
     test_phase14_config_from_ini();

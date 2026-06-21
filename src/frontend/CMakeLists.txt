@@ -5,7 +5,7 @@ set(C64M_HELP_SECTION_LEVEL "2" CACHE STRING "Markdown heading level used for he
 
 add_custom_command(
     OUTPUT "${C64M_HELP_CONTENT}"
-    COMMAND ${Python3_EXECUTABLE}
+    COMMAND Python3::Interpreter
         "${CMAKE_SOURCE_DIR}/tools/gen_help.py"
         --level "${C64M_HELP_SECTION_LEVEL}"
         "${CMAKE_SOURCE_DIR}/manual/manual.md"

@@ -7,13 +7,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #define DEFAULT_CYCLES 20000000ULL
 
 static double monotonic_seconds(void) {
+#if defined(_WIN32)
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+
+    if (frequency.QuadPart == 0) {
+        QueryPerformanceFrequency(&frequency);
+    }
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+#endif
 }
 
 static bool load_default_roms(c64_rom_set *roms, char *error, size_t error_size) {

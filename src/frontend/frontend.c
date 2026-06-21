@@ -14,6 +14,12 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#if defined(_WIN32)
+#define C64M_STAT_ISREG(mode) (((mode) & _S_IFREG) != 0)
+#else
+#define C64M_STAT_ISREG(mode) S_ISREG(mode)
+#endif
+
 enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
     FRONTEND_DISPLAY_CROP_X = 8,
@@ -683,7 +689,7 @@ static bool frontend_file_exists(const char *path)
 {
     struct stat st;
 
-    return path != NULL && path[0] != '\0' && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+    return path != NULL && path[0] != '\0' && stat(path, &st) == 0 && C64M_STAT_ISREG(st.st_mode);
 }
 
 static bool frontend_string_equal(const char *a, const char *b)

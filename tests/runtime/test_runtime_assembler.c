@@ -2,35 +2,14 @@
 
 #include "c64.h"
 #include "symbol_table.h"
+#include "../test_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static int write_source(char *path, size_t path_size, const char *source) {
-    snprintf(path, path_size, "/tmp/c64m_runtime_assembler_XXXXXX");
-    int fd = mkstemp(path);
-    if (fd < 0) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    FILE *fp = fdopen(fd, "w");
-    if (fp == NULL) {
-        perror("fdopen");
-        close(fd);
-        unlink(path);
-        return 1;
-    }
-
-    fputs(source, fp);
-    if (fclose(fp) != 0) {
-        perror("fclose");
-        unlink(path);
-        return 1;
-    }
-    return 0;
+    return c64m_test_write_temp_file(path, path_size, "c64m_runtime_assembler", source);
 }
 
 static int expect_u8(const char *label, uint8_t expected, uint8_t actual) {
@@ -81,7 +60,7 @@ static int test_assemble_imports_symbols(void) {
     c64_init(&machine);
     symbols = symbol_table_create();
     if (symbols == NULL) {
-        unlink(path);
+        c64m_test_remove_file(path);
         return 1;
     }
 
@@ -113,7 +92,7 @@ static int test_assemble_imports_symbols(void) {
     }
 
     symbol_table_destroy(symbols);
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 
@@ -139,7 +118,7 @@ static int test_assemble_reports_errors(void) {
         failures++;
     }
 
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 

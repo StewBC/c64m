@@ -5,6 +5,10 @@
 #include "asm_lib.h"
 
 #include <limits.h>
+#if defined(_WIN32)
+#include <ctype.h>
+#include <stdlib.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -20,14 +24,37 @@ static char *asm_strdup(const char *s) {
 }
 
 static int is_absolute_path(const char *path) {
-    return path && path[0] == '/';
+    return path && (path[0] == '/'
+#if defined(_WIN32)
+        || path[0] == '\\' ||
+        (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+         (path[2] == '/' || path[2] == '\\'))
+#endif
+    );
+}
+
+static const char *find_last_path_separator(const char *path) {
+    const char *slash = strrchr(path, '/');
+#if defined(_WIN32)
+    const char *backslash = strrchr(path, '\\');
+    if(!slash || (backslash && backslash > slash)) {
+        return backslash;
+    }
+#endif
+    return slash;
 }
 
 static char *canonicalize_path(const char *path) {
     char resolved[PATH_MAX];
+#if defined(_WIN32)
+    if(_fullpath(resolved, path, sizeof(resolved))) {
+        return asm_strdup(resolved);
+    }
+#else
     if(realpath(path, resolved)) {
         return asm_strdup(resolved);
     }
+#endif
     return asm_strdup(path);
 }
 
@@ -41,7 +68,7 @@ char *file_resolve_path(ASSEMBLER *as, const char *path) {
     }
 
     const char *base = file_stack_top(as)->file->display_name;
-    const char *slash = strrchr(base, '/');
+    const char *slash = find_last_path_separator(base);
     if(!slash) {
         return canonicalize_path(path);
     }

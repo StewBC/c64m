@@ -1,9 +1,9 @@
 #include "symbol_table.h"
+#include "../test_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static int expect_result(symbol_result actual, symbol_result expected, const char *label)
 {
@@ -336,31 +336,7 @@ static int test_source_removal_clear_and_nearest(void)
 
 static int write_symbol_file(char *path, size_t path_size, const char *source)
 {
-    FILE *file;
-    int fd;
-
-    snprintf(path, path_size, "/tmp/c64m_symbols_XXXXXX");
-    fd = mkstemp(path);
-    if (fd < 0) {
-        perror("mkstemp");
-        return 1;
-    }
-
-    file = fdopen(fd, "w");
-    if (file == NULL) {
-        perror("fdopen");
-        close(fd);
-        unlink(path);
-        return 1;
-    }
-
-    fputs(source, file);
-    if (fclose(file) != 0) {
-        perror("fclose");
-        unlink(path);
-        return 1;
-    }
-    return 0;
+    return c64m_test_write_temp_file(path, path_size, "c64m_symbols", source);
 }
 
 static int test_symbol_file_best_effort_load(void)
@@ -386,7 +362,7 @@ static int test_symbol_file_best_effort_load(void)
 
     table = symbol_table_create();
     if (table == NULL) {
-        unlink(path);
+        c64m_test_remove_file(path);
         return 1;
     }
 
@@ -425,7 +401,7 @@ static int test_symbol_file_best_effort_load(void)
     }
 
     symbol_table_destroy(table);
-    unlink(path);
+    c64m_test_remove_file(path);
     return failures;
 }
 
