@@ -464,6 +464,10 @@ After accepted passes:      ~14.8 MHz
 Gain:                       ~2.4x, about +142%  
 ```
 
+## User manual
+
+Codex wrote the manual.  It is In the game as Opt+H and can be viewed here as [c64m Manual](./manual/manual.md)
+
 ## Issues
 
 The emulation is not at all perfect.  Recent work has added audio/SID and host file load/save support, but several accuracy and completeness gaps remain.
