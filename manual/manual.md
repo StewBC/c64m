@@ -76,9 +76,12 @@ In Debug Mode the window is divided into four main areas:
 | Lower left    | Memory view                                                 |
 | Lower right   | Misc panel (Machine, Debugger, Breakpoints, Hardware, Assembler tabs) |
 
-c64m uses the Nuklear immediate-mode GUI library with a hover-active input model. When
-the CPU is paused, the view the mouse is over becomes active and receives keyboard input.
-Active views have a highlighted header; inactive views use the default color.
+c64m tracks an active view for keyboard input. When no modal dialog is open, the active
+C64 display, Disassembly, Misc, or Memory view is outlined with a neutral gray rectangle.
+Click a view to make it active, or press **Opt+Tab** to cycle
+C64->Disassembly->Misc->Memory. Press **Shift+Opt+Tab** to cycle in reverse. Modal
+dialogs keep input to themselves, so these view-cycling keys do not work while a dialog
+is open.
 
 ### Layout
 
@@ -146,19 +149,18 @@ Breakpoint addresses show an indicator in the left gutter.
 The disassembly view has three source modes that control which bytes are read for
 disassembly:
 
-| Mode    | Border | Bytes shown                                              |
-|---------|--------|----------------------------------------------------------|
-| **Map** | none   | CPU-visible address space (current bank configuration)   |
-| **ROM** | amber  | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
-| **RAM** | blue   | Raw RAM at every address, regardless of any ROM overlay  |
+| Mode    | Mode border | Bytes shown                                              |
+|---------|-------------|----------------------------------------------------------|
+| **Map** | none        | CPU-visible address space (current bank configuration)   |
+| **ROM** | amber       | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
+| **RAM** | blue        | Raw RAM at every address, regardless of any ROM overlay  |
 
-The current mode is shown in the footer button. A colored border appears inside the
-content area when the mode is ROM (amber) or RAM (blue); Map mode has no border, which
-is the default.
+ROM and RAM draw a colored source-mode border inside the content area. Map has no
+source-mode color; if the view is active, the separate neutral active-view border is
+still shown.
 
 Switch modes with **right-click** anywhere in the view (a popup lists all three with a
-dot next to the active choice), by clicking the footer mode button (cycles
-Map->ROM->RAM), or with **Opt+M** from the keyboard.
+dot next to the active choice), or with **Opt+M** from the keyboard.
 
 **Tab** and **Shift+Tab** cycle the symbol display through `auto`, `names`, and `raw`
 modes independently of the source mode.
@@ -200,23 +202,28 @@ C123: 48 65 6C 6C 6F 20 57 6F 72 6C 64 21 00 00 00 00  Hello World!....
 
 The memory view has three source modes that control which bytes are displayed:
 
-| Mode    | Border | Bytes shown                                              |
-|---------|--------|----------------------------------------------------------|
-| **Map** | none   | CPU-visible address space (current bank configuration)   |
-| **ROM** | amber  | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
-| **RAM** | blue   | Raw RAM at every address, regardless of any ROM overlay  |
+| Mode    | Mode border | Bytes shown                                              |
+|---------|-------------|----------------------------------------------------------|
+| **Map** | none        | CPU-visible address space (current bank configuration)   |
+| **ROM** | amber       | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
+| **RAM** | blue        | Raw RAM at every address, regardless of any ROM overlay  |
 
-The current mode is shown in the footer button. A colored border appears inside the
-content area when the mode is ROM (amber) or RAM (blue); Map mode has no border, which
-is the default.
+ROM and RAM draw a colored source-mode border inside the content area. Map has no
+source-mode color; if the view is active, the separate neutral active-view border is
+still shown.
 
 Switch modes with **right-click** anywhere in the view (a popup lists all three with a
-dot next to the active choice), by clicking the footer mode button (cycles
-Map->ROM->RAM), or with **Opt+M** from the keyboard.
+dot next to the active choice), or with **Opt+M** from the keyboard.
 
 The memory and disassembly view modes are independent of each other -- for example, you
 can watch raw RAM in the memory view while the disassembler follows the CPU map
 simultaneously.
+
+### Status Row
+
+The bottom of the Memory view shows the active edit field (`Hex`, `ASCII`, or
+`Address`), the current cursor address as `Address: XXXX`, and whether memory editing
+is currently `editable` or `read-only`.
 
 ### Keyboard Controls
 
@@ -760,6 +767,8 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **F12**         | Run (resume execution)                                     |
 | **Shift+F12**   | Run to the cursor address in the Disassembly view          |
 | **Opt+T**       | Cycle turbo speed                                          |
+| **Opt+Tab**     | Cycle active view: C64 -> Disassembly -> Misc -> Memory    |
+| **Shift+Opt+Tab** | Cycle active view in reverse                            |
 | **Opt+1**       | Map gamepad to joystick port 1                             |
 | **Opt+2**       | Map gamepad to joystick port 2 (default)                   |
 | **Cmd+Q**       | Quit (macOS)                                               |

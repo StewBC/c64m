@@ -122,7 +122,16 @@ typedef enum frontend_misc_tab {
 typedef struct frontend_misc_view_state {
     frontend_misc_tab active_tab;
     bool initialized;
+    bool active;
 } frontend_misc_view_state;
+
+typedef enum frontend_active_view {
+    FRONTEND_ACTIVE_VIEW_NONE = 0,
+    FRONTEND_ACTIVE_VIEW_C64,
+    FRONTEND_ACTIVE_VIEW_DISASSEMBLY,
+    FRONTEND_ACTIVE_VIEW_MISC,
+    FRONTEND_ACTIVE_VIEW_MEMORY
+} frontend_active_view;
 
 typedef enum frontend_config_tab {
     FRONTEND_CONFIG_TAB_MACHINE = 0,
@@ -186,6 +195,7 @@ struct frontend {
     bool has_frame;
     c64_layout layout;
     c64_layout_limits limits;
+    frontend_active_view active_view;
     bool c64_input_active;
     bool input_focus_initialized;
     frontend_register_view_state registers;
@@ -223,6 +233,80 @@ static bool frontend_any_dialog_open(const frontend *ui)
         || ui->load_bin_dialog.open
         || ui->save_bin_dialog.open
         || ui->assembler.error_dialog_open;
+}
+
+static void frontend_set_active_view(frontend *ui, frontend_active_view view)
+{
+    if (ui == NULL) {
+        return;
+    }
+
+    ui->active_view = view;
+    ui->c64_input_active = view == FRONTEND_ACTIVE_VIEW_C64;
+    ui->disassembly.active = view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY;
+    ui->misc.active = view == FRONTEND_ACTIVE_VIEW_MISC;
+    ui->memory.active = view == FRONTEND_ACTIVE_VIEW_MEMORY;
+}
+
+static frontend_active_view frontend_next_active_view(frontend_active_view view, bool reverse)
+{
+    static const frontend_active_view cycle[] = {
+        FRONTEND_ACTIVE_VIEW_C64,
+        FRONTEND_ACTIVE_VIEW_DISASSEMBLY,
+        FRONTEND_ACTIVE_VIEW_MISC,
+        FRONTEND_ACTIVE_VIEW_MEMORY
+    };
+    size_t count = sizeof(cycle) / sizeof(cycle[0]);
+    size_t i;
+
+    for (i = 0; i < count; ++i) {
+        if (cycle[i] == view) {
+            return reverse ? cycle[(i + count - 1u) % count] : cycle[(i + 1u) % count];
+        }
+    }
+
+    return reverse ? cycle[count - 1u] : cycle[0];
+}
+
+static void frontend_draw_view_border(struct nk_context *ctx, struct nk_color color, float inset, float thickness)
+{
+    struct nk_command_buffer *canvas;
+    struct nk_rect content;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    canvas = nk_window_get_canvas(ctx);
+    content = nk_window_get_content_region(ctx);
+    if (content.w <= inset * 2.0f || content.h <= inset * 2.0f) {
+        return;
+    }
+
+    nk_stroke_rect(
+        canvas,
+        nk_rect(content.x + inset, content.y + inset, content.w - inset * 2.0f, content.h - inset * 2.0f),
+        0.0f,
+        thickness,
+        color);
+}
+
+static void frontend_draw_active_view_border(struct nk_context *ctx)
+{
+    frontend_draw_view_border(ctx, nk_rgb(188, 198, 190), 1.0f, 2.0f);
+}
+
+static void frontend_draw_memory_mode_border(struct nk_context *ctx, runtime_memory_mode mode, bool view_active)
+{
+    struct nk_color border_color;
+
+    if (mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+        return;
+    }
+
+    border_color = mode == RUNTIME_MEMORY_MODE_ROM ?
+        nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
+    frontend_draw_view_border(ctx, border_color, view_active ? 4.0f : 1.0f, 2.0f);
 }
 
 static SDL_Rect frontend_fit_rect(int area_x, int area_y, int area_w, int area_h, int source_w, int source_h)
@@ -1602,6 +1686,10 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
                 nk_rgb(17, 22, 28),
                 nk_rgb(196, 214, 228));
         }
+
+        if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_C64) {
+            frontend_draw_active_view_border(ui->ctx);
+        }
     }
     nk_end(ui->ctx);
 }
@@ -2437,15 +2525,11 @@ static void frontend_disassembly_handle_mouse_row(
     }
 
     if (debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
-        ui->c64_input_active = false;
-        ui->disassembly.active = true;
-        ui->memory.active = false;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
         return;
     }
 
-    ui->c64_input_active = false;
-    ui->disassembly.active = true;
-    ui->memory.active = false;
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
     frontend_disassembly_set_user_cursor(
         &ui->disassembly,
         ui->disassembly.lines[row].address,
@@ -2509,8 +2593,7 @@ static void frontend_disassembly_draw_scrollbar(
     if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb) &&
         nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
         !view->scrollbar_dragging) {
-        view->active = true;
-        ui->memory.active = false;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
         view->scrollbar_dragging = true;
         view->scrollbar_grab_offset = mouse->pos.y - thumb.y;
     }
@@ -2541,8 +2624,7 @@ static void frontend_disassembly_draw_scrollbar(
     } else if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, track) &&
         nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) &&
         !nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb)) {
-        view->active = true;
-        ui->memory.active = false;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
         if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
             if (mouse->pos.y < thumb.y) {
                 view->top_address = (uint16_t)(view->top_address - (uint16_t)(view->rows * 2u));
@@ -2576,7 +2658,6 @@ static void frontend_draw_disassembly_view(
     uint8_t row;
     uint8_t rows;
     float row_h;
-    float footer_h;
     float scrollbar_w = 24.0f;
     float scrollbar_margin = 8.0f;
     float content_h;
@@ -2584,7 +2665,6 @@ static void frontend_draw_disassembly_view(
     if (!view->initialized) {
         view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
         view->follow_pc = true;
-        view->active = false;
         view->initialized = true;
         if (debug_state != NULL && debug_state->has_cpu) {
             view->top_address = debug_state->cpu.pc;
@@ -2592,9 +2672,11 @@ static void frontend_draw_disassembly_view(
     }
 
     row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height : 13.0f;
-    footer_h = 22.0f;
-    content_h = bounds.h - 28.0f - footer_h;
+    content_h = bounds.h - 28.0f;
     rows = (uint8_t)((content_h > row_h) ? (content_h / row_h) : 1);
+    if (rows > 1) {
+        rows--;
+    }
     if (rows == 0) {
         rows = 1;
     }
@@ -2622,13 +2704,6 @@ static void frontend_draw_disassembly_view(
     }
     if (debug_state != NULL) {
         view->last_runtime_state = debug_state->runtime_state;
-    }
-
-    if (!frontend_any_dialog_open(ui) && nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
-        view->active = nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) ? true : false;
-        if (view->active) {
-            ui->memory.active = false;
-        }
     }
 
     if (!frontend_any_dialog_open(ui) &&
@@ -2747,8 +2822,7 @@ static void frontend_draw_disassembly_view(
                 frontend_disassembly_handle_mouse_row(ui, debug_state, row_bounds, row);
                 if (nk_selectable_label(ui->ctx, rendered, NK_TEXT_LEFT, &selected)) {
                     if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
-                        view->active = true;
-                        ui->memory.active = false;
+                        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
                         frontend_disassembly_set_user_cursor(view, line->address, row, line->length);
                         view->address_entry = false;
                         view->follow_pc = false;
@@ -2768,35 +2842,6 @@ static void frontend_draw_disassembly_view(
         }
         nk_layout_row_push(ui->ctx, scrollbar_margin);
         nk_spacing(ui->ctx, 1);
-        nk_layout_row_end(ui->ctx);
-
-        nk_layout_row_begin(ui->ctx, NK_DYNAMIC, footer_h, 4);
-        nk_layout_row_push(ui->ctx, 0.30f);
-        {
-            const char *mode_label = view->mode == RUNTIME_MEMORY_MODE_ROM ? "ROM" :
-                (view->mode == RUNTIME_MEMORY_MODE_RAM ? "RAM" : "Map");
-            if (nk_button_label(ui->ctx, mode_label)) {
-                if (view->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
-                    view->mode = RUNTIME_MEMORY_MODE_ROM;
-                } else if (view->mode == RUNTIME_MEMORY_MODE_ROM) {
-                    view->mode = RUNTIME_MEMORY_MODE_RAM;
-                } else {
-                    view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                }
-                view->request_pending = false;
-            }
-        }
-        nk_layout_row_push(ui->ctx, 0.25f);
-        nk_label(ui->ctx, view->address_entry ? "Address" : "Cursor", NK_TEXT_LEFT);
-        nk_layout_row_push(ui->ctx, 0.25f);
-        {
-            char label[32];
-            snprintf(label, sizeof(label), "PC: %04X", debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : 0);
-            nk_label(ui->ctx, label, NK_TEXT_LEFT);
-        }
-        nk_layout_row_push(ui->ctx, 0.20f);
-        nk_label(ui->ctx, view->symbol_display_mode == 0 ? "symbols: auto" :
-            (view->symbol_display_mode == 1 ? "symbols: names" : "symbols: raw"), NK_TEXT_LEFT);
         nk_layout_row_end(ui->ctx);
 
         if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
@@ -2822,15 +2867,13 @@ static void frontend_draw_disassembly_view(
             nk_contextual_end(ui->ctx);
         }
 
-        if (view->mode != RUNTIME_MEMORY_MODE_CPU_MAP) {
-            struct nk_command_buffer *canvas = nk_window_get_canvas(ui->ctx);
-            struct nk_rect content = nk_window_get_content_region(ui->ctx);
-            struct nk_color border_color = view->mode == RUNTIME_MEMORY_MODE_ROM ?
-                nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
-            nk_stroke_rect(canvas,
-                nk_rect(content.x + 1.0f, content.y + 1.0f, content.w - 2.0f, content.h - 2.0f),
-                0.0f, 2.0f, border_color);
+        if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY) {
+            frontend_draw_active_view_border(ui->ctx);
         }
+        frontend_draw_memory_mode_border(
+            ui->ctx,
+            view->mode,
+            !frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
 
         ui->ctx->style.window = saved_window_style;
     }
@@ -3167,7 +3210,7 @@ static void frontend_memory_draw_scrollbar(
     if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb) &&
         nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
         !memory->scrollbar_dragging) {
-        memory->active = true;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
         memory->scrollbar_dragging = true;
         memory->scrollbar_grab_offset = mouse->pos.y - thumb.y;
     }
@@ -3193,7 +3236,7 @@ static void frontend_memory_draw_scrollbar(
     } else if (nk_input_is_mouse_hovering_rect(&ui->ctx->input, track) &&
         nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) &&
         !nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb)) {
-        memory->active = true;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
         if (mouse->pos.y < thumb.y) {
             memory->view_address = (uint16_t)(memory->view_address - visible_count);
         } else {
@@ -3210,6 +3253,63 @@ static void frontend_memory_draw_scrollbar(
         nk_input_is_mouse_hovering_rect(&ui->ctx->input, thumb) || memory->scrollbar_dragging ?
             nk_rgb(160, 174, 186) :
             nk_rgb(103, 124, 139));
+}
+
+static void frontend_memory_draw_status_footer(
+    frontend *ui,
+    const frontend_debug_state *debug_state,
+    struct nk_rect content,
+    float footer_h)
+{
+    struct nk_command_buffer *canvas;
+    struct nk_rect footer;
+    struct nk_rect field_rect;
+    struct nk_rect address_rect;
+    struct nk_rect edit_rect;
+    const char *field;
+    const char *editable;
+    char address[32];
+
+    if (ui == NULL || ui->ctx == NULL || content.w <= 8.0f || content.h <= footer_h) {
+        return;
+    }
+
+    field = ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
+        (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex");
+    editable = debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED ?
+        "editable" : "read-only";
+    snprintf(address, sizeof(address), "Address: %04X", ui->memory.cursor_address);
+
+    canvas = nk_window_get_canvas(ui->ctx);
+    footer = nk_rect(content.x + 4.0f, content.y + content.h - footer_h, content.w - 8.0f, footer_h);
+    field_rect = nk_rect(footer.x, footer.y + 2.0f, footer.w * 0.25f, footer.h - 4.0f);
+    address_rect = nk_rect(footer.x + footer.w * 0.25f, footer.y + 2.0f, footer.w * 0.45f, footer.h - 4.0f);
+    edit_rect = nk_rect(footer.x + footer.w * 0.70f, footer.y + 2.0f, footer.w * 0.30f, footer.h - 4.0f);
+
+    nk_draw_text(
+        canvas,
+        field_rect,
+        field,
+        (int)strlen(field),
+        ui->ctx->style.font,
+        nk_rgb(30, 34, 38),
+        nk_rgb(196, 214, 228));
+    nk_draw_text(
+        canvas,
+        address_rect,
+        address,
+        (int)strlen(address),
+        ui->ctx->style.font,
+        nk_rgb(30, 34, 38),
+        nk_rgb(196, 214, 228));
+    nk_draw_text(
+        canvas,
+        edit_rect,
+        editable,
+        (int)strlen(editable),
+        ui->ctx->style.font,
+        nk_rgb(30, 34, 38),
+        nk_rgb(196, 214, 228));
 }
 
 static void frontend_memory_handle_mouse_row(
@@ -3229,9 +3329,7 @@ static void frontend_memory_handle_mouse_row(
         return;
     }
 
-    ui->c64_input_active = false;
-    ui->memory.active = true;
-    ui->disassembly.active = false;
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
     rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
     if (rel_x < 0.0f) {
         rel_x = 0.0f;
@@ -3456,18 +3554,16 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
         memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
         memory->columns = 16;
-        memory->active = true;
         memory->initialized = true;
     }
 
     row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height : 13.0f;
-    footer_h = row_h + 3.0f;
-
-    if (!frontend_any_dialog_open(ui) && nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT)) {
-        memory->active = nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) ? true : false;
-    }
+    footer_h = 22.0f;
 
     rows = (uint8_t)((bounds.h > footer_h + 28.0f) ? ((bounds.h - footer_h - 28.0f) / row_h) : 1);
+    if (rows > 1) {
+        rows--;
+    }
     if (rows == 0) {
         rows = 1;
     }
@@ -3548,36 +3644,11 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         nk_spacing(ui->ctx, 1);
         nk_layout_row_end(ui->ctx);
 
-        nk_layout_row_begin(ui->ctx, NK_DYNAMIC, 22.0f, 4);
-        nk_layout_row_push(ui->ctx, 0.30f);
-        {
-            const char *mode_label = memory->mode == RUNTIME_MEMORY_MODE_ROM ? "ROM" :
-                (memory->mode == RUNTIME_MEMORY_MODE_RAM ? "RAM" : "Map");
-            if (nk_button_label(ui->ctx, mode_label)) {
-                if (memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
-                    memory->mode = RUNTIME_MEMORY_MODE_ROM;
-                } else if (memory->mode == RUNTIME_MEMORY_MODE_ROM) {
-                    memory->mode = RUNTIME_MEMORY_MODE_RAM;
-                } else {
-                    memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                }
-                memory->request_pending = false;
-            }
-        }
-        nk_layout_row_push(ui->ctx, 0.25f);
-        nk_label(ui->ctx, memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
-            (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex"), NK_TEXT_LEFT);
-        nk_layout_row_push(ui->ctx, 0.25f);
-        {
-            char label[32];
-            snprintf(label, sizeof(label), "Address: %04X", memory->cursor_address);
-            nk_label(ui->ctx, label, NK_TEXT_LEFT);
-        }
-        nk_layout_row_push(ui->ctx, 0.20f);
-        nk_label(ui->ctx,
-            debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED ? "editable" : "read-only",
-            NK_TEXT_LEFT);
-        nk_layout_row_end(ui->ctx);
+        frontend_memory_draw_status_footer(
+            ui,
+            debug_state,
+            nk_window_get_content_region(ui->ctx),
+            footer_h);
 
         if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
             nk_layout_row_dynamic(ui->ctx, 22, 1);
@@ -3602,15 +3673,13 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
             nk_contextual_end(ui->ctx);
         }
 
-        if (memory->mode != RUNTIME_MEMORY_MODE_CPU_MAP) {
-            struct nk_command_buffer *canvas = nk_window_get_canvas(ui->ctx);
-            struct nk_rect content = nk_window_get_content_region(ui->ctx);
-            struct nk_color border_color = memory->mode == RUNTIME_MEMORY_MODE_ROM ?
-                nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
-            nk_stroke_rect(canvas,
-                nk_rect(content.x + 1.0f, content.y + 1.0f, content.w - 2.0f, content.h - 2.0f),
-                0.0f, 2.0f, border_color);
+        if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY) {
+            frontend_draw_active_view_border(ui->ctx);
         }
+        frontend_draw_memory_mode_border(
+            ui->ctx,
+            memory->mode,
+            !frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY);
 
         ui->ctx->style.window = saved_window_style;
     }
@@ -4619,6 +4688,10 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
             }
             nk_group_end(ctx);
         }
+
+        if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MISC) {
+            frontend_draw_active_view_border(ctx);
+        }
     }
     nk_end(ctx);
 }
@@ -4952,14 +5025,15 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         float y = (float)event->button.y;
 
         if (frontend_point_in_rect(x, y, ui->layout.display)) {
-            ui->c64_input_active = true;
-            ui->memory.active = false;
-            ui->disassembly.active = false;
-        } else if (frontend_point_in_rect(x, y, ui->layout.registers) ||
-                   frontend_point_in_rect(x, y, ui->layout.disassembly) ||
-                   frontend_point_in_rect(x, y, ui->layout.memory) ||
-                   frontend_point_in_rect(x, y, ui->layout.misc)) {
-            ui->c64_input_active = false;
+            frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_C64);
+        } else if (frontend_point_in_rect(x, y, ui->layout.disassembly)) {
+            frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
+        } else if (frontend_point_in_rect(x, y, ui->layout.memory)) {
+            frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
+        } else if (frontend_point_in_rect(x, y, ui->layout.misc)) {
+            frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MISC);
+        } else if (frontend_point_in_rect(x, y, ui->layout.registers)) {
+            frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_NONE);
         }
     }
 
@@ -4969,7 +5043,7 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         ui->cancel_register_edit_requested = true;
     }
 
-    if (event->type == SDL_KEYDOWN && !ui->c64_input_active) {
+    if (event->type == SDL_KEYDOWN && !ui->c64_input_active && !frontend_any_dialog_open(ui)) {
         ui->pending_memory_key = event->key;
         ui->has_pending_memory_key = true;
         ui->pending_disassembly_key = event->key;
@@ -4983,8 +5057,26 @@ bool frontend_routes_keyboard_to_c64(const frontend *ui)
 {
     return ui != NULL && ui->c64_input_active
         && !help_view_is_open(&ui->help)
-        && !ui->config_dialog.open
-        && !ui->breakpoint_dialog.open;
+        && !frontend_any_dialog_open(ui);
+}
+
+bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key)
+{
+    bool reverse;
+
+    if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN || key->repeat != 0) {
+        return false;
+    }
+    if (help_view_is_open(&ui->help) || frontend_any_dialog_open(ui)) {
+        return false;
+    }
+    if (key->keysym.sym != SDLK_TAB || (key->keysym.mod & KMOD_ALT) == 0) {
+        return false;
+    }
+
+    reverse = (key->keysym.mod & KMOD_SHIFT) != 0;
+    frontend_set_active_view(ui, frontend_next_active_view(ui->active_view, reverse));
+    return true;
 }
 
 void frontend_end_input(frontend *ui)
@@ -5417,7 +5509,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     }
 
     if (!ui->input_focus_initialized) {
-        ui->c64_input_active = true;
+        frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_C64);
         ui->input_focus_initialized = true;
     }
 
@@ -5502,7 +5594,7 @@ void frontend_open_help(frontend *ui, bool paused_by_help)
         return;
     }
     help_view_open(&ui->help, paused_by_help);
-    ui->c64_input_active = false;
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_NONE);
 }
 
 bool frontend_close_help(frontend *ui)

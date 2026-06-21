@@ -1113,6 +1113,8 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                         runtime_client_paste_text_buffer(client, text, strlen(text));
                     }
                     SDL_free(text);
+                } else if (ui_visible && frontend_handle_view_cycle_key(ui, &event.key)) {
+                    send_event_to_frontend = false;
                 } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {
                     handle_keyboard_input(&input_mapper, client, &event.key);
                     send_event_to_frontend = false;

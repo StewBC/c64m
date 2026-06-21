@@ -189,6 +189,7 @@ void frontend_begin_input(frontend *ui);
 void frontend_handle_event(frontend *ui, SDL_Event *event);
 void frontend_end_input(frontend *ui);
 bool frontend_routes_keyboard_to_c64(const frontend *ui);
+bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
 void frontend_open_help(frontend *ui, bool paused_by_help);
