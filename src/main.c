@@ -1089,6 +1089,9 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
 
             if (event.type == SDL_QUIT) {
                 running = false;
+            } else if (event.type == SDL_KEYDOWN && event.key.repeat != 0 &&
+                       frontend_handle_help_key(ui, &event.key, options->scroll_wheel_lines)) {
+                send_event_to_frontend = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
                 if (frontend_input_is_host_quit_shortcut(&event.key)) {
                     running = false;
@@ -1103,7 +1106,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_ESCAPE && frontend_help_is_open(ui)) {
                     close_help(ui, client, &debug_state);
                     send_event_to_frontend = false;
-                } else if (frontend_handle_help_key(ui, &event.key)) {
+                } else if (frontend_handle_help_key(ui, &event.key, options->scroll_wheel_lines)) {
                     send_event_to_frontend = false;
                 } else if (frontend_help_is_open(ui)) {
                     send_event_to_frontend = true;

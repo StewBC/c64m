@@ -6075,16 +6075,30 @@ bool frontend_help_paused_by_help(const frontend *ui)
     return ui != NULL && help_view_paused_by_help(&ui->help);
 }
 
-bool frontend_handle_help_key(frontend *ui, const SDL_KeyboardEvent *key)
+bool frontend_handle_help_key(frontend *ui, const SDL_KeyboardEvent *key, int scroll_wheel_lines)
 {
     nk_uint page;
+    int line_scroll;
+    float row_h;
 
     if (ui == NULL || ui->ctx == NULL || key == NULL || !help_view_is_open(&ui->help)) {
         return false;
     }
 
+    if (scroll_wheel_lines < 1) {
+        scroll_wheel_lines = 1;
+    }
+    row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height + 2.0f : 12.0f;
+    line_scroll = (int)(row_h * (float)scroll_wheel_lines);
+    if (line_scroll < 1) {
+        line_scroll = scroll_wheel_lines;
+    }
     page = ui->help.content_page_y > 0 ? ui->help.content_page_y : 400u;
     switch (key->keysym.sym) {
+        case SDLK_UP:
+            return help_view_scroll_content(ui->ctx, &ui->help, -line_scroll);
+        case SDLK_DOWN:
+            return help_view_scroll_content(ui->ctx, &ui->help, line_scroll);
         case SDLK_PAGEUP:
             return help_view_scroll_content(ui->ctx, &ui->help, -(int)page);
         case SDLK_PAGEDOWN:
