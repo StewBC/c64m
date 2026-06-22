@@ -6103,17 +6103,23 @@ bool frontend_handle_help_key(frontend *ui, const SDL_KeyboardEvent *key, int sc
     page = ui->help.content_page_y > 0 ? ui->help.content_page_y : 400u;
     switch (key->keysym.sym) {
         case SDLK_UP:
-            return help_view_scroll_content(ui->ctx, &ui->help, -line_scroll);
+            (void)help_view_scroll_content(ui->ctx, &ui->help, -line_scroll);
+            return true;
         case SDLK_DOWN:
-            return help_view_scroll_content(ui->ctx, &ui->help, line_scroll);
+            (void)help_view_scroll_content(ui->ctx, &ui->help, line_scroll);
+            return true;
         case SDLK_PAGEUP:
-            return help_view_scroll_content(ui->ctx, &ui->help, -(int)page);
+            (void)help_view_scroll_content(ui->ctx, &ui->help, -(int)page);
+            return true;
         case SDLK_PAGEDOWN:
-            return help_view_scroll_content(ui->ctx, &ui->help, (int)page);
+            (void)help_view_scroll_content(ui->ctx, &ui->help, (int)page);
+            return true;
         case SDLK_HOME:
-            return help_view_scroll_content_to(ui->ctx, &ui->help, 0);
+            (void)help_view_scroll_content_to(ui->ctx, &ui->help, 0);
+            return true;
         case SDLK_END:
-            return help_view_scroll_content_to(ui->ctx, &ui->help, 0x3fffffffu);
+            (void)help_view_scroll_content_to(ui->ctx, &ui->help, 0x3fffffffu);
+            return true;
         case SDLK_LEFT:
             return help_view_select_section(ui->ctx, &ui->help, ui->help.section_index - 1);
         case SDLK_RIGHT:

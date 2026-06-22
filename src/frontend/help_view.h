@@ -13,6 +13,7 @@ typedef struct frontend_help_state {
     nk_uint section_scroll_y[FRONTEND_HELP_MAX_SECTIONS];
     nk_uint pending_scroll_y;
     nk_uint content_page_y;
+    nk_uint content_max_y;
     bool pending_scroll_restore;
 } frontend_help_state;
 
