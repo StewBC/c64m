@@ -2262,7 +2262,11 @@ static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
     view->cursor_address = (uint16_t)((view->cursor_address & (uint16_t)~mask) |
         (uint16_t)((uint16_t)digit << shift));
     view->top_address = frontend_disassembly_center_top(view->cursor_address, view->rows);
+    view->has_user_cursor = true;
+    view->cursor_row = view->rows / 2u;
+    view->cursor_length = 1;
     view->request_pending = false;
+    view->follow_pc = false;
     view->pc_lock_active = false;
 
     if (view->active_address_digit >= 3) {
@@ -2311,6 +2315,8 @@ static void frontend_disassembly_handle_key(
         frontend_disassembly_ensure_user_cursor(ui, debug_state);
         view->address_entry = !view->address_entry;
         view->active_address_digit = 0;
+        view->follow_pc = false;
+        view->pc_lock_active = false;
         return;
     }
 
