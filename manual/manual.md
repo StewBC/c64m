@@ -255,23 +255,54 @@ The bottom of the Memory view shows the active edit field (`Hex`, `ASCII`, or
 `Address`), the current cursor address as `Address: XXXX`, and whether memory editing
 is currently `editable` or `read-only`.
 
+### Virtual Views
+
+The memory panel can be split into up to 16 independent virtual views stacked vertically.
+Each virtual view maintains its own cursor, scroll position, source mode (Map/ROM/RAM),
+and edit state. A thin separator line marks the boundary between adjacent views.
+
+**Splitting** inserts a new view directly below the active view. The new view inherits the
+active view's source mode and starts with its cursor at the split address. Row height is
+distributed proportionally among all views; each view has a minimum of one row.
+
+**Dissolving** removes the active view and returns its rows proportionally to the remaining
+views. If only one view exists, dissolving is a no-op. After dissolving, focus moves to
+the view below, or to the view above if the dissolved view was the bottommost.
+
+Each virtual view has a unique background color drawn from a 16-slot palette. Slots are
+assigned in order and freed when a view is dissolved; a freed slot is reused by the next
+split.
+
+Click anywhere in a view to make it active. The mouse wheel scrolls the view under the
+pointer regardless of which view is currently active.
+
+ROM/RAM source-mode borders are drawn inside each view's own region. The neutral
+active-panel selection border still wraps the entire memory panel regardless of how many
+views are present.
+
+The scrollbar on the right represents the active view's position in the 64 K space.
+Switching the active view moves the thumb without scrolling the memory itself.
+
 ### Keyboard Controls
 
-| Key             | Action                                                     |
-|-----------------|------------------------------------------------------------|
-| `Opt+A`         | Toggle address-entry mode; type four hex digits to jump    |
-| `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                   |
-| `Opt+X`         | Toggle between hex and ASCII edit modes                    |
-| `Up` / `Down`   | Move cursor one row (16 bytes)                             |
-| `Left` / `Right`| Move cursor one byte (or nibble in hex mode)               |
-| `PgUp` / `PgDn` | Scroll one page                                            |
-| `Home`          | Move cursor to start of the current row                    |
-| `Opt+Home`      | Move cursor to the start of the visible window             |
-| `End`           | Move cursor to end of the current row                      |
-| `Opt+End`       | Move cursor to the end of the visible window               |
-| `0-9`, `A-F`   | Edit hex nibble at cursor (paused only, hex mode)          |
-
-The scrollbar on the right spans the full 64 K space and can be dragged to any position.
+| Key               | Action                                                       |
+|-------------------|--------------------------------------------------------------|
+| `Opt+A`           | Toggle address-entry mode; type four hex digits to jump      |
+| `Opt+M`           | Cycle source mode: Map -> ROM -> RAM -> Map                  |
+| `Opt+X`           | Toggle between hex and ASCII edit modes                      |
+| `Opt+V`           | Split active view at cursor                                  |
+| `Shift+Opt+V`     | Split active view at the start of the cursor row             |
+| `Opt+J`           | Dissolve active view (no-op when only one view exists)       |
+| `Opt+Up`          | Switch focus to the view above                               |
+| `Opt+Down`        | Switch focus to the view below                               |
+| `Up` / `Down`     | Move cursor one row (16 bytes)                               |
+| `Left` / `Right`  | Move cursor one byte (or nibble in hex mode)                 |
+| `PgUp` / `PgDn`   | Scroll one page                                              |
+| `Home`            | Move cursor to start of the current row                      |
+| `Opt+Home`        | Move cursor to the start of the visible window               |
+| `End`             | Move cursor to end of the current row                        |
+| `Opt+End`         | Move cursor to the end of the visible window                 |
+| `0-9`, `A-F`     | Edit hex nibble at cursor (paused only, hex mode)            |
 
 Memory editing is only possible while the CPU is paused. In hex mode, typing hex digits
 overwrites the nibble at the cursor. In ASCII mode, printable characters overwrite the
