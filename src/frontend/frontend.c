@@ -238,6 +238,7 @@ struct frontend {
     frontend_memory_view_state memory_views[MEMORY_VIEW_MAX];
     int memory_view_count;
     int memory_active_view_index;
+    int memory_context_menu_view_index;
     bool memory_color_slot_used[MEMORY_VIEW_MAX];
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
@@ -4061,26 +4062,44 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
             nk_window_get_content_region(ui->ctx),
             footer_h);
 
-        /* Context menu applies to active virtual view */
+        /* On right-click, record which virtual view was under the cursor */
+        if (nk_input_is_mouse_click_in_rect(&ui->ctx->input, NK_BUTTON_RIGHT, bounds)) {
+            float click_y = ui->ctx->input.mouse.buttons[NK_BUTTON_RIGHT].clicked_pos.y;
+            ui->memory_context_menu_view_index = ui->memory_active_view_index;
+            for (v = 0; v < ui->memory_view_count; v++) {
+                if (ui->memory_views[v].rows > 0 &&
+                    click_y >= ui->memory_views[v].cached_y_top &&
+                    click_y < ui->memory_views[v].cached_y_bottom) {
+                    ui->memory_context_menu_view_index = v;
+                    break;
+                }
+            }
+        }
+
+        /* Context menu applies to the virtual view that was right-clicked */
         if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
+            int ctx_idx = (ui->memory_context_menu_view_index >= 0 &&
+                           ui->memory_context_menu_view_index < ui->memory_view_count)
+                          ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
+            frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
             nk_layout_row_dynamic(ui->ctx, 22, 1);
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    active_mem->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "Map", NK_TEXT_LEFT)) {
-                active_mem->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                active_mem->request_pending = false;
+                ctx_view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                ctx_view->request_pending = false;
             }
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    active_mem->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "ROM", NK_TEXT_LEFT)) {
-                active_mem->mode = RUNTIME_MEMORY_MODE_ROM;
-                active_mem->request_pending = false;
+                ctx_view->mode = RUNTIME_MEMORY_MODE_ROM;
+                ctx_view->request_pending = false;
             }
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    active_mem->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "RAM", NK_TEXT_LEFT)) {
-                active_mem->mode = RUNTIME_MEMORY_MODE_RAM;
-                active_mem->request_pending = false;
+                ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
+                ctx_view->request_pending = false;
             }
             nk_contextual_end(ui->ctx);
         }
