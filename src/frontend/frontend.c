@@ -3431,9 +3431,10 @@ static int frontend_memory_total_rows(const frontend *ui)
 
 static void frontend_memory_redistribute_rows(frontend *ui, int new_total)
 {
-    int i, old_total, delta, idx, best;
+    int i, old_total, delta, best;
     int shares[MEMORY_VIEW_MAX];
     int assigned;
+    bool was_visible[MEMORY_VIEW_MAX];
 
     if (ui->memory_view_count <= 0 || new_total < 0) {
         return;
@@ -3442,6 +3443,10 @@ static void frontend_memory_redistribute_rows(frontend *ui, int new_total)
     old_total = frontend_memory_total_rows(ui);
     if (old_total == new_total) {
         return;
+    }
+
+    for (i = 0; i < ui->memory_view_count; i++) {
+        was_visible[i] = frontend_memory_cursor_visible(&ui->memory_views[i]);
     }
 
     /* Compute proportional share for each view (floor division) */
@@ -3484,9 +3489,11 @@ static void frontend_memory_redistribute_rows(frontend *ui, int new_total)
         ui->memory_views[i].rows = (uint8_t)(shares[i] > 255 ? 255 : shares[i]);
     }
 
-    /* Ensure active view's cursor is still visible after resize */
-    idx = ui->memory_active_view_index;
-    frontend_memory_recenter_cursor(&ui->memory_views[idx]);
+    for (i = 0; i < ui->memory_view_count; i++) {
+        if (was_visible[i]) {
+            frontend_memory_recenter_cursor(&ui->memory_views[i]);
+        }
+    }
 }
 
 static void frontend_memory_split(frontend *ui, bool aligned)
@@ -3515,6 +3522,10 @@ static void frontend_memory_split(frontend *ui, bool aligned)
     /* Take new_view_rows from existing views proportionally */
     {
         int taken = 0, shares[MEMORY_VIEW_MAX], best, remaining;
+        bool was_visible[MEMORY_VIEW_MAX];
+        for (i = 0; i < ui->memory_view_count; i++) {
+            was_visible[i] = frontend_memory_cursor_visible(&ui->memory_views[i]);
+        }
         for (i = 0; i < ui->memory_view_count; i++) {
             shares[i] = (total > 0) ? (int)((long)ui->memory_views[i].rows * new_view_rows / total) : 0;
             taken += shares[i];
@@ -3535,6 +3546,11 @@ static void frontend_memory_split(frontend *ui, bool aligned)
         for (i = 0; i < ui->memory_view_count; i++) {
             int nr = ui->memory_views[i].rows - shares[i];
             ui->memory_views[i].rows = (uint8_t)(nr < 1 ? 1 : nr);
+        }
+        for (i = 0; i < ui->memory_view_count; i++) {
+            if (was_visible[i]) {
+                frontend_memory_recenter_cursor(&ui->memory_views[i]);
+            }
         }
     }
 
@@ -3677,7 +3693,7 @@ static void frontend_memory_handle_key(
 
     /* Split / dissolve */
     if (alt && sym == SDLK_v) {
-        frontend_memory_split(ui, shift);
+        frontend_memory_split(ui, !shift);
         return;
     }
 
