@@ -22,6 +22,17 @@ enum {
     PASTE_HOLD_CYCLES        =  39400,  /* ~40ms  at PAL 985248 Hz */
     PASTE_GAP_CYCLES         =   9852,  /* ~10ms  at PAL 985248 Hz */
     PASTE_RETURN_GAP_CYCLES  = 246312,  /* ~250ms at PAL 985248 Hz */
+    /* Step Out fast-loop instruction budget before falling back to free-
+       running mode.  Covers typical KERNAL/BASIC subroutine depths while
+       ensuring the UI does not appear frozen when the outer routine never
+       returns (e.g. a JSR/JMP spin loop). */
+    STEP_OUT_FAST_LIMIT      = 10000,
+
+    /* Step Over fast-loop budget: must cover complex KERNAL subroutines while
+       still providing a safety fallback if the callee never returns to stop_pc.
+       Logged periodically so the terminal shows progress. */
+    STEP_OVER_FAST_LIMIT     = 500000,
+    STEP_OVER_LOG_INTERVAL   = 10000,
 };
 
 static void runtime_reset_pacer(runtime *rt) {
@@ -1702,11 +1713,23 @@ static bool runtime_flow_abort_requested(runtime *rt, bool *alive) {
 
 static bool runtime_step_out(runtime *rt, bool *alive) {
     char error[256];
-    int jsr_counter = 1;
     int interrupt_depth = 0;
     uint64_t irq_before, nmi_before;
     uint8_t opcode;
     bool interrupt_taken;
+
+    /* Step Out means "exit the routine I am currently in."  jsr_counter=1
+       means we are 1 level deep and need 1 net RTS to get out.  JSRs
+       encountered along the way push the counter up; their RTSs bring it
+       back.  Only when jsr_counter reaches 0 have we actually returned from
+       the current frame.
+       If the outer routine never returns (e.g. a tight JSR/JMP loop) we
+       would loop here forever with no UI feedback.  After STEP_OUT_FAST_LIMIT
+       instructions without finding the exit, transition to free-running mode
+       so the user can see the emulator is executing and can pause it. */
+    int jsr_counter = 1;
+    int fast_limit = 0;
+    rt->suppress_execute_bp = true;
 
     for (;;) {
         if (runtime_flow_abort_requested(rt, alive)) {
@@ -1754,6 +1777,12 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
         if (runtime_pause_if_breakpoint_pending(rt)) {
             return true;
         }
+
+        if (++fast_limit >= STEP_OUT_FAST_LIMIT) {
+            rt->exec_state = RUNTIME_EXEC_RUNNING;
+            runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+            return true;
+        }
     }
 }
 
@@ -1784,54 +1813,91 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
     stop_pc = (uint16_t)(rt->machine.cpu.cpu.pc + 3u);
     jsr_counter = 0;
     interrupt_depth = 0;
+    rt->suppress_execute_bp = true;
 
-    for (;;) {
-        if (runtime_flow_abort_requested(rt, alive)) {
-            return *alive;
-        }
+    fprintf(stderr, "STEP OVER: start PC=%04X stop_pc=%04X\n",
+            (unsigned)rt->machine.cpu.cpu.pc, (unsigned)stop_pc);
 
-        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
-            runtime_pause_for_breakpoint(rt);
-            return true;
-        }
-
-        opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
-        irq_before = rt->machine.cpu.cpu.irq_entries;
-        nmi_before = rt->machine.cpu.cpu.nmi_entries;
-
-        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
-            runtime_publish_error(rt, error);
-            return false;
-        }
-
-        rt->suppress_execute_bp = false;
-
-        interrupt_taken =
-            rt->machine.cpu.cpu.irq_entries != irq_before ||
-            rt->machine.cpu.cpu.nmi_entries != nmi_before;
-
-        if (interrupt_taken) {
-            interrupt_depth++;
-        } else if (opcode == 0x40u /* RTI */ && interrupt_depth > 0) {
-            interrupt_depth--;
-        } else if (interrupt_depth == 0) {
-            if (opcode == 0x20u /* JSR */) {
-                jsr_counter++;
-            } else if (opcode == 0x60u /* RTS */) {
-                jsr_counter--;
+    {
+        int fast_limit = 0;
+        for (;;) {
+            if (runtime_flow_abort_requested(rt, alive)) {
+                return *alive;
             }
-        }
 
-        if (runtime_pause_if_breakpoint_pending(rt)) {
-            return true;
-        }
+            if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+                fprintf(stderr, "STEP OVER: breakpoint hit at PC=%04X jsr=%d idepth=%d\n",
+                        (unsigned)rt->machine.cpu.cpu.pc, jsr_counter, interrupt_depth);
+                runtime_pause_for_breakpoint(rt);
+                return true;
+            }
 
-        if (interrupt_depth == 0 && jsr_counter <= 0 &&
-            rt->machine.cpu.cpu.pc == stop_pc) {
-            rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-            runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-            runtime_publish_cpu_state(rt);
-            return true;
+            opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
+            irq_before = rt->machine.cpu.cpu.irq_entries;
+            nmi_before = rt->machine.cpu.cpu.nmi_entries;
+
+            if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
+                runtime_publish_error(rt, error);
+                return false;
+            }
+
+            rt->suppress_execute_bp = false;
+
+            interrupt_taken =
+                rt->machine.cpu.cpu.irq_entries != irq_before ||
+                rt->machine.cpu.cpu.nmi_entries != nmi_before;
+
+            if (interrupt_taken) {
+                interrupt_depth++;
+                fprintf(stderr, "STEP OVER: IRQ/NMI taken at opc=%02X new_PC=%04X idepth=%d jsr=%d\n",
+                        (unsigned)opcode, (unsigned)rt->machine.cpu.cpu.pc,
+                        interrupt_depth, jsr_counter);
+            } else if (opcode == 0x40u /* RTI */ && interrupt_depth > 0) {
+                interrupt_depth--;
+                fprintf(stderr, "STEP OVER: RTI at opc-PC, new_PC=%04X idepth=%d jsr=%d\n",
+                        (unsigned)rt->machine.cpu.cpu.pc, interrupt_depth, jsr_counter);
+            } else if (interrupt_depth == 0) {
+                if (opcode == 0x20u /* JSR */) {
+                    jsr_counter++;
+                    fprintf(stderr, "STEP OVER: JSR -> new_PC=%04X jsr=%d\n",
+                            (unsigned)rt->machine.cpu.cpu.pc, jsr_counter);
+                } else if (opcode == 0x60u /* RTS */) {
+                    jsr_counter--;
+                    fprintf(stderr, "STEP OVER: RTS -> new_PC=%04X jsr=%d (stop_pc=%04X)\n",
+                            (unsigned)rt->machine.cpu.cpu.pc, jsr_counter,
+                            (unsigned)stop_pc);
+                }
+            }
+
+            if (runtime_pause_if_breakpoint_pending(rt)) {
+                return true;
+            }
+
+            if (interrupt_depth == 0 && jsr_counter <= 0 &&
+                rt->machine.cpu.cpu.pc == stop_pc) {
+                fprintf(stderr, "STEP OVER: done at PC=%04X after %d instructions\n",
+                        (unsigned)stop_pc, fast_limit);
+                rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+                runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+                runtime_publish_cpu_state(rt);
+                return true;
+            }
+
+            if (++fast_limit % STEP_OVER_LOG_INTERVAL == 0) {
+                fprintf(stderr, "STEP OVER: still running iter=%d PC=%04X stop=%04X jsr=%d idepth=%d\n",
+                        fast_limit, (unsigned)rt->machine.cpu.cpu.pc,
+                        (unsigned)stop_pc, jsr_counter, interrupt_depth);
+            }
+
+            if (fast_limit >= STEP_OVER_FAST_LIMIT) {
+                fprintf(stderr, "STEP OVER: fallback to RUNNING after %d instructions"
+                        " PC=%04X stop_pc=%04X jsr=%d idepth=%d\n",
+                        fast_limit, (unsigned)rt->machine.cpu.cpu.pc,
+                        (unsigned)stop_pc, jsr_counter, interrupt_depth);
+                rt->exec_state = RUNTIME_EXEC_RUNNING;
+                runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+                return true;
+            }
         }
     }
 }

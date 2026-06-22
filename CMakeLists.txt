@@ -412,3 +412,15 @@ target_link_libraries(test_runtime_fileio PRIVATE
 )
 
 add_test(NAME runtime_fileio COMMAND test_runtime_fileio)
+
+add_executable(test_runtime_stepping
+    tests/runtime/test_runtime_stepping.c
+)
+
+target_compile_features(test_runtime_stepping PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_stepping PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_stepping COMMAND test_runtime_stepping)
