@@ -2939,17 +2939,24 @@ static void frontend_memory_recenter_cursor(frontend_memory_view_state *memory)
 {
     uint16_t visible = frontend_memory_visible_count(memory);
     uint16_t offset;
+    uint16_t col_in_view;
 
     if (visible == 0 || memory->columns == 0 || frontend_memory_cursor_visible(memory)) {
         return;
     }
 
+    /* offset = cursor_address - view_address in uint16; wraps when cursor is above view.
+       col_in_view uses that same wrapping modulo to preserve the view's column alignment
+       regardless of whether view_address is row-aligned. */
     offset = (uint16_t)(memory->cursor_address - memory->view_address);
+    col_in_view = (uint16_t)(offset % memory->columns);
+
     if (offset >= 0x8000u) {
-        memory->view_address = (uint16_t)(memory->cursor_address - (memory->cursor_address % memory->columns));
+        /* cursor above view: scroll up so cursor lands on row 0, same column */
+        memory->view_address = (uint16_t)(memory->cursor_address - col_in_view);
     } else {
-        uint16_t cursor_col = (uint16_t)(memory->cursor_address % memory->columns);
-        memory->view_address = (uint16_t)(memory->cursor_address - cursor_col -
+        /* cursor below view: scroll down so cursor lands on last row, same column */
+        memory->view_address = (uint16_t)(memory->cursor_address - col_in_view -
             (uint16_t)((memory->rows - 1u) * memory->columns));
     }
 }
