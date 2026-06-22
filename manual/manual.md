@@ -29,7 +29,6 @@ Useful flags:
 | `--disk <drive>=<image>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64` |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
-| `--leds on\|off`       | Show or hide disk activity LEDs                     |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file records
@@ -729,7 +728,6 @@ The Configure dialog (opened from **[Configure...]** in the Machine tab) has two
 | Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
 | Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
 | Symbol Files         | Comma-separated paths to symbol files loaded at startup |
-| Disk LEDs            | Show or hide the disk activity LED indicator    |
 | Auto-save INI on Quit| Save `c64m.ini` automatically when quitting     |
 
 ### INI File
@@ -756,12 +754,6 @@ emulator removes comments.
 | `scroll_wheel_lines` | Integer; lines scrolled per wheel click             |
 | `symbol_files`    | Comma-separated list of symbol file paths              |
 | `turbo_speeds`    | Comma-separated turbo multipliers, e.g. `2,4,8,16`    |
-
-### [ui]
-
-| Key    | Value                           |
-|--------|---------------------------------|
-| `leds` | `on` or `1` -- show disk LEDs   |
 
 ### [Video]
 

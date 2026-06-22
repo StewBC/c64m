@@ -143,8 +143,6 @@ static void write_phase14_ini(const char *path) {
     fputs("integer_scale=false\n", file);
     fputs("aspect_correct=false\n", file);
     fputs("filter=linear\n", file);
-    fputs("\n[ui]\n", file);
-    fputs("leds=false\n", file);
     fputs("\n[config]\n", file);
     fputs("Save=yes\n", file);
     fputs("scroll_wheel_lines=7\n", file);
@@ -444,7 +442,6 @@ static void test_phase14_config_from_ini(void) {
     expect_bool("integer scale", 0, options.integer_scale);
     expect_bool("aspect correct", 0, options.aspect_correct);
     expect_string("filter", "linear", options.video_filter);
-    expect_bool("leds", 0, options.show_leds);
     expect_bool("remember", 1, options.remember);
     expect_int("scroll wheel lines", 7, options.scroll_wheel_lines);
     expect_string("turbo speeds", "3,6,12", options.turbo_multipliers);
@@ -502,7 +499,6 @@ static void test_phase14_config_saved_to_ini(void) {
     options.integer_scale = false;
     options.aspect_correct = false;
     app_options_set_string(&options.video_filter, "linear");
-    options.show_leds = false;
     options.remember = true;
     options.scroll_wheel_lines = 9;
     app_options_set_string(&options.turbo_multipliers, "5,10");
@@ -530,7 +526,6 @@ static void test_phase14_config_saved_to_ini(void) {
     expect_bool("saved integer scale", 0, options.integer_scale);
     expect_bool("saved aspect correct", 0, options.aspect_correct);
     expect_string("saved filter", "linear", options.video_filter);
-    expect_bool("saved leds", 0, options.show_leds);
     expect_bool("saved remember", 1, options.remember);
     expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
     expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);

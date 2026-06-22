@@ -12,7 +12,6 @@ typedef struct app_options {
     bool save_ini;
     bool remember;
     bool defaults;
-    bool show_leds;
     bool no_save_ini;
     int scroll_wheel_lines;
     char *ini_path;

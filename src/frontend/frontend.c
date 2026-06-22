@@ -1176,11 +1176,11 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         nk_filter_default);
     nk_layout_row_end(ctx);
 
-    nk_layout_row_dynamic(ctx, 20.0f, 2);
-    frontend_checkbox_bool(ctx, "Show Disk LEDs", &dialog->edited.show_leds);
     if (dialog->edited.no_save_ini) {
+        nk_layout_row_dynamic(ctx, 20.0f, 1);
         nk_label(ctx, "Saving disabled", NK_TEXT_LEFT);
     } else {
+        nk_layout_row_dynamic(ctx, 20.0f, 1);
         frontend_checkbox_bool(ctx, "Auto-save INI on Quit", &dialog->edited.remember);
     }
 

@@ -178,27 +178,6 @@ No reboot required.
 
 ---
 
-### Disk LEDs
-
-INI:
-
-```ini
-[ui]
-leds=true
-```
-
-UI:
-
-```text
-[ ] Show Disk LEDs
-```
-
-Apply immediately after OK.
-
-No reboot required.
-
----
-
 ### Symbol Files
 
 CSV list.
@@ -490,7 +469,6 @@ result.needs_reboot = true;
 ```text
 Scroll Wheel Speed
 Turbo Speeds
-Disk LEDs
 Symbol Files
 ```
 
@@ -577,7 +555,6 @@ This opens the INI configuration dialog.
 - PAL/NTSC changes request reboot.
 - Scroll wheel speed applies immediately after OK.
 - Turbo list applies immediately after OK.
-- Disk LEDs apply immediately after OK.
 - Symbol files reload on OK.
 - Auto-save INI on Quit maps to Save=yes.
 - Save INI on Quit is runtime-only.

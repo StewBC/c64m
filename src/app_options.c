@@ -615,23 +615,6 @@ static void config_set_float(config *cfg, const char *section, const char *key, 
     config_set(cfg, section, key, buffer);
 }
 
-static int parse_bool_value(const char *value, bool *out)
-{
-    if (strcmp(value, "on") == 0 || strcmp(value, "yes") == 0 ||
-        strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-        *out = true;
-        return 1;
-    }
-
-    if (strcmp(value, "off") == 0 || strcmp(value, "no") == 0 ||
-        strcmp(value, "false") == 0 || strcmp(value, "0") == 0) {
-        *out = false;
-        return 1;
-    }
-
-    return 0;
-}
-
 static bool apply_disk_spec(app_options *options, const char *spec)
 {
     char *end;
@@ -663,7 +646,6 @@ static void apply_config(app_options *options, config *cfg)
         return;
     }
 
-    options->show_leds = config_get_bool(cfg, "ui", "leds", options->show_leds);
     options->remember = config_get_bool(cfg, "config", "Save", options->remember);
     options->scroll_wheel_lines = config_get_int(
         cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
@@ -833,7 +815,6 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *breakpoint = NULL;
     const char *disk = NULL;
     const char *ini_path = NULL;
-    const char *leds = NULL;
     const char *prg_path = NULL;
     const char *turbo = NULL;
     struct argparse argparse;
@@ -848,7 +829,6 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
-        OPT_STRING('l', "leds", &leds, "show disk activity LEDs in window based ui", NULL, 0, 0),
         OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
         OPT_STRING('p', "prg", &prg_path, "load file as PRG at startup", NULL, 0, 0),
@@ -885,10 +865,6 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     if (basic_path != NULL) {
         replace_string(&options->basic_path, basic_path);
     }
-    if (leds != NULL && !parse_bool_value(leds, &options->show_leds)) {
-        fprintf(stderr, "invalid leds value `%s`; expected on or off\n", leds);
-        return false;
-    }
     if (turbo != NULL) {
         replace_string(&options->turbo_multipliers, turbo);
     }
@@ -916,7 +892,6 @@ void app_options_init(app_options *options)
     memset(options, 0, sizeof(*options));
     options->use_ini = true;
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
-    options->show_leds = true;
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
     options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
@@ -964,7 +939,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->save_ini = src->save_ini;
     dest->remember = src->remember;
     dest->defaults = src->defaults;
-    dest->show_leds = src->show_leds;
     dest->no_save_ini = src->no_save_ini;
     dest->scroll_wheel_lines = src->scroll_wheel_lines;
     dest->display_width = src->display_width;
@@ -1069,7 +1043,6 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "Video", "filter", options->video_filter);
     }
 
-    config_set_bool(cfg, "ui", "leds", options->show_leds);
     config_remove_prefix(cfg, "runtime", "turbo");
     if (options->turbo_multipliers != NULL) {
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
