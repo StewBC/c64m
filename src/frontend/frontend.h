@@ -24,7 +24,8 @@ typedef struct frontend_debug_state {
     frontend_runtime_state runtime_state;
     runtime_cpu_snapshot cpu;
     runtime_memory_snapshot memory;
-    runtime_memory_snapshot memory_view;
+    runtime_memory_snapshot memory_view_snapshots[16];
+    int memory_view_snapshot_count;
     runtime_breakpoint_snapshot breakpoints;
     runtime_memory_banking_snapshot memory_banking;
     c64_vicii_hardware_snapshot vicii_hardware;
@@ -59,7 +60,6 @@ typedef struct frontend_debug_state {
     bool has_frame;
     bool has_cpu;
     bool has_memory;
-    bool has_memory_view;
     bool has_breakpoints;
     bool has_memory_banking;
     bool has_hardware;

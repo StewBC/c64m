@@ -274,10 +274,25 @@ static void update_debug_state_from_event(
             debug_state->has_memory = true;
             break;
 
-        case RUNTIME_EVENT_MEMORY_VIEW_RESPONSE:
-            debug_state->memory_view = event->data.memory;
-            debug_state->has_memory_view = true;
+        case RUNTIME_EVENT_MEMORY_VIEW_RESPONSE: {
+            int mv_i;
+            bool mv_found = false;
+            for (mv_i = 0; mv_i < debug_state->memory_view_snapshot_count; mv_i++) {
+                runtime_memory_snapshot *slot = &debug_state->memory_view_snapshots[mv_i];
+                if (slot->address == event->data.memory.address &&
+                    slot->length == event->data.memory.length &&
+                    slot->mode == event->data.memory.mode) {
+                    *slot = event->data.memory;
+                    mv_found = true;
+                    break;
+                }
+            }
+            if (!mv_found && debug_state->memory_view_snapshot_count < 16) {
+                debug_state->memory_view_snapshots[debug_state->memory_view_snapshot_count++] =
+                    event->data.memory;
+            }
             break;
+        }
 
         case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
             debug_state->breakpoints = event->data.breakpoints;

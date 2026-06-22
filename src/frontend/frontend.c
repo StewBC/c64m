@@ -74,12 +74,40 @@ typedef struct frontend_memory_view_state {
     runtime_memory_mode requested_mode;
     uint8_t columns;
     uint8_t rows;
+    uint8_t color_slot;
+    float cached_y_top;
+    float cached_y_bottom;
     bool initialized;
     bool request_pending;
-    bool active;
     bool scrollbar_dragging;
     float scrollbar_grab_offset;
 } frontend_memory_view_state;
+
+enum {
+    MEMORY_VIEW_MAX = 16
+};
+
+static const struct {
+    struct nk_color text;
+    struct nk_color bg;
+} memory_view_colors[MEMORY_VIEW_MAX] = {
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x00, 0x00, 0x00, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x2F, 0x4F, 0x4F, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x00, 0x1F, 0x3F, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xA9, 0xCC, 0xE3, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x2E, 0x8B, 0x57, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xFF, 0xFF, 0xE0, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xFF, 0xD1, 0xDC, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0xFF, 0x8C, 0x00, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xE0, 0xFF, 0xFF, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x5D, 0x3F, 0xD3, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0x90, 0xEE, 0x90, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x80, 0x00, 0x00, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xAD, 0xD8, 0xE6, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xF0, 0x80, 0x80, 0xFF } },
+    { { 0xFF, 0xFF, 0xFF, 0xFF }, { 0x8B, 0x00, 0x00, 0xFF } },
+    { { 0x00, 0x00, 0x00, 0xFF }, { 0xFF, 0xFF, 0xFF, 0xFF } }
+};
 
 enum {
     FRONTEND_DISASM_MAX_ROWS = 128,
@@ -207,7 +235,10 @@ struct frontend {
     bool c64_input_active;
     bool input_focus_initialized;
     frontend_register_view_state registers;
-    frontend_memory_view_state memory;
+    frontend_memory_view_state memory_views[MEMORY_VIEW_MAX];
+    int memory_view_count;
+    int memory_active_view_index;
+    bool memory_color_slot_used[MEMORY_VIEW_MAX];
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
     frontend_config_dialog_state config_dialog;
@@ -253,7 +284,6 @@ static void frontend_set_active_view(frontend *ui, frontend_active_view view)
     ui->c64_input_active = view == FRONTEND_ACTIVE_VIEW_C64;
     ui->disassembly.active = view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY;
     ui->misc.active = view == FRONTEND_ACTIVE_VIEW_MISC;
-    ui->memory.active = view == FRONTEND_ACTIVE_VIEW_MEMORY;
 }
 
 static frontend_active_view frontend_next_active_view(frontend_active_view view, bool reverse)
@@ -2936,22 +2966,27 @@ static int frontend_memory_snapshot_index(
     return (int)offset;
 }
 
-static uint8_t frontend_memory_byte_at(
+static uint8_t frontend_memory_view_byte_at(
     const frontend_debug_state *debug_state,
+    const frontend_memory_view_state *view,
     uint16_t address)
 {
-    int index;
+    int i, index;
 
-    if (debug_state == NULL || !debug_state->has_memory_view) {
+    if (debug_state == NULL || view == NULL) {
         return 0;
     }
 
-    index = frontend_memory_snapshot_index(&debug_state->memory_view, address);
-    if (index < 0) {
-        return 0;
+    for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
+        const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
+        if (snap->address == view->requested_address &&
+            snap->length == view->requested_length &&
+            snap->mode == view->requested_mode) {
+            index = frontend_memory_snapshot_index(snap, address);
+            return index >= 0 ? snap->bytes[index] : 0;
+        }
     }
-
-    return debug_state->memory_view.bytes[index];
+    return 0;
 }
 
 static char frontend_memory_ascii(uint8_t value)
@@ -2965,37 +3000,44 @@ static char frontend_memory_ascii(uint8_t value)
 
 static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
 {
-    frontend_memory_view_state *memory = &ui->memory;
-    uint16_t length = frontend_memory_visible_count(memory);
+    int v, i;
 
-    if (length == 0) {
-        return;
-    }
+    for (v = 0; v < ui->memory_view_count; v++) {
+        frontend_memory_view_state *memory = &ui->memory_views[v];
+        uint16_t length = frontend_memory_visible_count(memory);
 
-    if (memory->request_pending &&
-        debug_state != NULL &&
-        debug_state->has_memory_view &&
-        debug_state->memory_view.address == memory->requested_address &&
-        debug_state->memory_view.length == memory->requested_length &&
-        debug_state->memory_view.mode == (runtime_memory_mode)memory->requested_mode) {
-        memory->request_pending = false;
-    }
+        if (length == 0) {
+            continue;
+        }
 
-    if (!memory->request_pending ||
-        memory->requested_address != memory->view_address ||
-        memory->requested_length != length ||
-        memory->requested_mode != memory->mode) {
-        frontend_push_memory_view_request(ui, memory->view_address, length, memory->mode);
-        memory->requested_address = memory->view_address;
-        memory->requested_length = length;
-        memory->requested_mode = memory->mode;
-        memory->request_pending = true;
+        if (memory->request_pending && debug_state != NULL) {
+            for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
+                const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
+                if (snap->address == memory->requested_address &&
+                    snap->length == memory->requested_length &&
+                    snap->mode == memory->requested_mode) {
+                    memory->request_pending = false;
+                    break;
+                }
+            }
+        }
+
+        if (!memory->request_pending ||
+            memory->requested_address != memory->view_address ||
+            memory->requested_length != length ||
+            memory->requested_mode != memory->mode) {
+            frontend_push_memory_view_request(ui, memory->view_address, length, memory->mode);
+            memory->requested_address = memory->view_address;
+            memory->requested_length = length;
+            memory->requested_mode = memory->mode;
+            memory->request_pending = true;
+        }
     }
 }
 
 static void frontend_memory_move_cursor(frontend *ui, int32_t delta)
 {
-    frontend_memory_view_state *memory = &ui->memory;
+    frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
 
     memory->cursor_address = (uint16_t)(memory->cursor_address + delta);
     frontend_memory_recenter_cursor(memory);
@@ -3008,12 +3050,14 @@ static void frontend_memory_write_byte(
     uint16_t address,
     uint8_t value)
 {
+    frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
+
     if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
         return;
     }
 
-    frontend_push_memory_write_byte(ui, address, value, ui->memory.mode);
-    ui->memory.request_pending = false;
+    frontend_push_memory_write_byte(ui, address, value, memory->mode);
+    memory->request_pending = false;
 }
 
 static void frontend_memory_apply_hex_digit(
@@ -3021,6 +3065,7 @@ static void frontend_memory_apply_hex_digit(
     const frontend_debug_state *debug_state,
     int digit)
 {
+    frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
     uint8_t old_value;
     uint8_t new_value;
 
@@ -3028,21 +3073,22 @@ static void frontend_memory_apply_hex_digit(
         return;
     }
 
-    old_value = frontend_memory_byte_at(debug_state, ui->memory.cursor_address);
-    if (ui->memory.active_nibble == 0) {
+    old_value = frontend_memory_view_byte_at(debug_state, memory, memory->cursor_address);
+    if (memory->active_nibble == 0) {
         new_value = (uint8_t)((old_value & 0x0fu) | (uint8_t)(digit << 4));
-        frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, new_value);
-        ui->memory.active_nibble = 1;
+        frontend_memory_write_byte(ui, debug_state, memory->cursor_address, new_value);
+        memory->active_nibble = 1;
     } else {
         new_value = (uint8_t)((old_value & 0xf0u) | (uint8_t)digit);
-        frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, new_value);
-        ui->memory.active_nibble = 0;
+        frontend_memory_write_byte(ui, debug_state, memory->cursor_address, new_value);
+        memory->active_nibble = 0;
         frontend_memory_move_cursor(ui, 1);
     }
 }
 
 static void frontend_memory_apply_address_digit(frontend *ui, int digit)
 {
+    frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
     int shift;
     uint16_t mask;
 
@@ -3050,19 +3096,19 @@ static void frontend_memory_apply_address_digit(frontend *ui, int digit)
         return;
     }
 
-    shift = (3 - ui->memory.active_address_digit) * 4;
+    shift = (3 - memory->active_address_digit) * 4;
     mask = (uint16_t)(0x0fu << shift);
-    ui->memory.view_address = (uint16_t)((ui->memory.view_address & (uint16_t)~mask) |
+    memory->view_address = (uint16_t)((memory->view_address & (uint16_t)~mask) |
         (uint16_t)((uint16_t)digit << shift));
-    ui->memory.cursor_address = ui->memory.view_address;
+    memory->cursor_address = memory->view_address;
 
-    if (ui->memory.active_address_digit >= 3) {
-        ui->memory.edit_field = FRONTEND_MEMORY_EDIT_HEX;
-        ui->memory.active_address_digit = 0;
+    if (memory->active_address_digit >= 3) {
+        memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
+        memory->active_address_digit = 0;
     } else {
-        ui->memory.active_address_digit++;
+        memory->active_address_digit++;
     }
-    ui->memory.request_pending = false;
+    memory->request_pending = false;
 }
 
 static float frontend_memory_char_width(frontend *ui)
@@ -3122,11 +3168,11 @@ static char frontend_memory_line_char_at(const char *line, int index)
 static void frontend_memory_draw_cursor(
     frontend *ui,
     const frontend_debug_state *debug_state,
+    frontend_memory_view_state *memory,
     struct nk_rect row_bounds,
     const char *line,
     uint16_t row_addr)
 {
-    frontend_memory_view_state *memory;
     struct nk_command_buffer *canvas;
     uint16_t row_offset;
     int text_col;
@@ -3136,13 +3182,11 @@ static void frontend_memory_draw_cursor(
 
     if (ui == NULL ||
         line == NULL ||
-        !ui->memory.active ||
+        ui->active_view != FRONTEND_ACTIVE_VIEW_MEMORY ||
         debug_state == NULL ||
         debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
         return;
     }
-
-    memory = &ui->memory;
     row_offset = (uint16_t)(memory->cursor_address - row_addr);
     if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS &&
         (row_offset >= memory->columns || memory->cursor_address != row_addr)) {
@@ -3197,7 +3241,7 @@ static void frontend_memory_draw_scrollbar(
     ui->memory_scrollbar_bounds = bounds;
     ui->has_memory_scrollbar_bounds = true;
 
-    memory = &ui->memory;
+    memory = &ui->memory_views[ui->memory_active_view_index];
     canvas = nk_window_get_canvas(ui->ctx);
     mouse = &ui->ctx->input.mouse;
     track = nk_rect(bounds.x + 2.0f, bounds.y + 2.0f, bounds.w - 4.0f, bounds.h - 4.0f);
@@ -3278,15 +3322,17 @@ static void frontend_memory_draw_status_footer(
     const char *editable;
     char address[32];
 
+    const frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
+
     if (ui == NULL || ui->ctx == NULL || content.w <= 8.0f || content.h <= footer_h) {
         return;
     }
 
-    field = ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
-        (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex");
+    field = memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
+        (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex");
     editable = debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED ?
         "editable" : "read-only";
-    snprintf(address, sizeof(address), "Address: %04X", ui->memory.cursor_address);
+    snprintf(address, sizeof(address), "Address: %04X", memory->cursor_address);
 
     canvas = nk_window_get_canvas(ui->ctx);
     footer = nk_rect(content.x + 4.0f, content.y + content.h - footer_h, content.w - 8.0f, footer_h);
@@ -3322,15 +3368,17 @@ static void frontend_memory_draw_status_footer(
 
 static void frontend_memory_handle_mouse_row(
     frontend *ui,
+    int view_index,
     struct nk_rect row_bounds,
     uint16_t row_addr)
 {
+    frontend_memory_view_state *memory = &ui->memory_views[view_index];
     float char_w = frontend_memory_char_width(ui);
     float rel_x;
     int text_col;
     int hex_start = 5;
-    int ascii_start = hex_start + ui->memory.columns * 3;
-    int hex_end = hex_start + ui->memory.columns * 3;
+    int ascii_start = hex_start + memory->columns * 3;
+    int hex_end = hex_start + memory->columns * 3;
 
     if (!nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) ||
         !nk_input_is_mouse_hovering_rect(&ui->ctx->input, row_bounds)) {
@@ -3338,6 +3386,7 @@ static void frontend_memory_handle_mouse_row(
     }
 
     frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
+    ui->memory_active_view_index = view_index;
     rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
     if (rel_x < 0.0f) {
         rel_x = 0.0f;
@@ -3345,9 +3394,9 @@ static void frontend_memory_handle_mouse_row(
     text_col = (int)(rel_x / char_w);
 
     if (text_col < 4) {
-        ui->memory.edit_field = FRONTEND_MEMORY_EDIT_ADDRESS;
-        ui->memory.active_address_digit = (uint8_t)text_col;
-        ui->memory.cursor_address = row_addr;
+        memory->edit_field = FRONTEND_MEMORY_EDIT_ADDRESS;
+        memory->active_address_digit = (uint8_t)text_col;
+        memory->cursor_address = row_addr;
         return;
     }
 
@@ -3355,19 +3404,233 @@ static void frontend_memory_handle_mouse_row(
         int cell = (text_col - hex_start) / 3;
         int cell_col = (text_col - hex_start) % 3;
 
-        if (cell >= 0 && cell < ui->memory.columns) {
-            ui->memory.edit_field = FRONTEND_MEMORY_EDIT_HEX;
-            ui->memory.cursor_address = (uint16_t)(row_addr + cell);
-            ui->memory.active_nibble = (uint8_t)(cell_col == 1 ? 1 : 0);
+        if (cell >= 0 && cell < memory->columns) {
+            memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
+            memory->cursor_address = (uint16_t)(row_addr + cell);
+            memory->active_nibble = (uint8_t)(cell_col == 1 ? 1 : 0);
         }
         return;
     }
 
-    if (text_col >= ascii_start && text_col < ascii_start + ui->memory.columns) {
+    if (text_col >= ascii_start && text_col < ascii_start + memory->columns) {
         int cell = text_col - ascii_start;
 
-        ui->memory.edit_field = FRONTEND_MEMORY_EDIT_ASCII;
-        ui->memory.cursor_address = (uint16_t)(row_addr + cell);
+        memory->edit_field = FRONTEND_MEMORY_EDIT_ASCII;
+        memory->cursor_address = (uint16_t)(row_addr + cell);
+    }
+}
+
+static int frontend_memory_total_rows(const frontend *ui)
+{
+    int i, total = 0;
+    for (i = 0; i < ui->memory_view_count; i++) {
+        total += ui->memory_views[i].rows;
+    }
+    return total;
+}
+
+static void frontend_memory_redistribute_rows(frontend *ui, int new_total)
+{
+    int i, old_total, delta, idx, best;
+    int shares[MEMORY_VIEW_MAX];
+    int assigned;
+
+    if (ui->memory_view_count <= 0 || new_total < 0) {
+        return;
+    }
+
+    old_total = frontend_memory_total_rows(ui);
+    if (old_total == new_total) {
+        return;
+    }
+
+    /* Compute proportional share for each view (floor division) */
+    assigned = 0;
+    for (i = 0; i < ui->memory_view_count; i++) {
+        shares[i] = (old_total > 0) ? (int)((long)ui->memory_views[i].rows * new_total / old_total) : (new_total / ui->memory_view_count);
+        if (shares[i] < 1) {
+            shares[i] = 1;
+        }
+        assigned += shares[i];
+    }
+
+    delta = new_total - assigned;
+
+    /* Distribute remainder: add to smallest, remove from largest */
+    while (delta > 0) {
+        best = -1;
+        for (i = 0; i < ui->memory_view_count; i++) {
+            if (best == -1 || shares[i] < shares[best]) {
+                best = i;
+            }
+        }
+        if (best < 0) break;
+        shares[best]++;
+        delta--;
+    }
+    while (delta < 0) {
+        best = -1;
+        for (i = 0; i < ui->memory_view_count; i++) {
+            if (shares[i] > 1 && (best == -1 || shares[i] > shares[best])) {
+                best = i;
+            }
+        }
+        if (best < 0) break;
+        shares[best]--;
+        delta++;
+    }
+
+    for (i = 0; i < ui->memory_view_count; i++) {
+        ui->memory_views[i].rows = (uint8_t)(shares[i] > 255 ? 255 : shares[i]);
+    }
+
+    /* Ensure active view's cursor is still visible after resize */
+    idx = ui->memory_active_view_index;
+    frontend_memory_recenter_cursor(&ui->memory_views[idx]);
+}
+
+static void frontend_memory_split(frontend *ui, bool aligned)
+{
+    frontend_memory_view_state *av;
+    frontend_memory_view_state *nv;
+    uint16_t split_addr;
+    int new_count, new_view_rows, total, slot, i;
+
+    if (ui->memory_view_count >= MEMORY_VIEW_MAX) {
+        return;
+    }
+
+    av = &ui->memory_views[ui->memory_active_view_index];
+    split_addr = aligned
+        ? (uint16_t)(av->cursor_address & ~(uint16_t)0x0f)
+        : av->cursor_address;
+
+    new_count = ui->memory_view_count + 1;
+    total = frontend_memory_total_rows(ui);
+    new_view_rows = total / new_count;
+    if (new_view_rows < 1) {
+        new_view_rows = 1;
+    }
+
+    /* Take new_view_rows from existing views proportionally */
+    {
+        int taken = 0, shares[MEMORY_VIEW_MAX], best, remaining;
+        for (i = 0; i < ui->memory_view_count; i++) {
+            shares[i] = (total > 0) ? (int)((long)ui->memory_views[i].rows * new_view_rows / total) : 0;
+            taken += shares[i];
+        }
+        remaining = new_view_rows - taken;
+        while (remaining > 0) {
+            best = -1;
+            for (i = 0; i < ui->memory_view_count; i++) {
+                if (ui->memory_views[i].rows - shares[i] > 1 &&
+                    (best == -1 || ui->memory_views[i].rows - shares[i] > ui->memory_views[best].rows - shares[best])) {
+                    best = i;
+                }
+            }
+            if (best < 0) break;
+            shares[best]++;
+            remaining--;
+        }
+        for (i = 0; i < ui->memory_view_count; i++) {
+            int nr = ui->memory_views[i].rows - shares[i];
+            ui->memory_views[i].rows = (uint8_t)(nr < 1 ? 1 : nr);
+        }
+    }
+
+    /* Find lowest free color slot */
+    slot = 0;
+    for (i = 0; i < MEMORY_VIEW_MAX; i++) {
+        if (!ui->memory_color_slot_used[i]) {
+            slot = i;
+            break;
+        }
+    }
+    ui->memory_color_slot_used[slot] = true;
+
+    /* Shift views after active_index down to make room */
+    for (i = ui->memory_view_count; i > ui->memory_active_view_index + 1; i--) {
+        ui->memory_views[i] = ui->memory_views[i - 1];
+    }
+
+    /* Initialize new view */
+    nv = &ui->memory_views[ui->memory_active_view_index + 1];
+    memset(nv, 0, sizeof(*nv));
+    nv->view_address = split_addr;
+    nv->cursor_address = split_addr;
+    nv->mode = av->mode;
+    nv->columns = 16;
+    nv->rows = (uint8_t)(new_view_rows > 255 ? 255 : new_view_rows);
+    nv->color_slot = (uint8_t)slot;
+    nv->edit_field = FRONTEND_MEMORY_EDIT_HEX;
+    nv->initialized = true;
+
+    ui->memory_view_count = new_count;
+    ui->memory_active_view_index++;
+}
+
+static void frontend_memory_dissolve(frontend *ui)
+{
+    int active, i, give_rows, rem_count, best, total_remain;
+    int shares[MEMORY_VIEW_MAX];
+
+    if (ui->memory_view_count <= 1) {
+        return;
+    }
+
+    active = ui->memory_active_view_index;
+    give_rows = ui->memory_views[active].rows;
+    ui->memory_color_slot_used[ui->memory_views[active].color_slot] = false;
+
+    rem_count = ui->memory_view_count - 1;
+    total_remain = 0;
+    for (i = 0; i < ui->memory_view_count; i++) {
+        if (i != active) {
+            total_remain += ui->memory_views[i].rows;
+        }
+    }
+
+    /* Distribute give_rows proportionally to remaining views (smallest first for extras) */
+    {
+        int given = 0, ri = 0;
+        for (i = 0; i < ui->memory_view_count; i++) {
+            if (i == active) continue;
+            shares[ri] = (total_remain > 0)
+                ? (int)((long)ui->memory_views[i].rows * give_rows / total_remain)
+                : (give_rows / rem_count);
+            given += shares[ri++];
+        }
+        {
+            int remaining = give_rows - given;
+            while (remaining > 0) {
+                best = -1;
+                for (i = 0; i < rem_count; i++) {
+                    if (best == -1 || shares[i] < shares[best]) best = i;
+                }
+                if (best < 0) break;
+                shares[best]++;
+                remaining--;
+            }
+        }
+        ri = 0;
+        for (i = 0; i < ui->memory_view_count; i++) {
+            if (i == active) continue;
+            int nr = ui->memory_views[i].rows + shares[ri++];
+            ui->memory_views[i].rows = (uint8_t)(nr > 255 ? 255 : nr);
+        }
+    }
+
+    /* Remove view from array */
+    for (i = active; i < ui->memory_view_count - 1; i++) {
+        ui->memory_views[i] = ui->memory_views[i + 1];
+    }
+    ui->memory_view_count--;
+
+    /* Activate next view below if exists, else previous */
+    if (active < ui->memory_view_count) {
+        ui->memory_active_view_index = active;
+    } else {
+        ui->memory_active_view_index = ui->memory_view_count - 1;
     }
 }
 
@@ -3376,9 +3639,10 @@ static void frontend_memory_handle_key(
     const frontend_debug_state *debug_state,
     const SDL_KeyboardEvent *key)
 {
+    frontend_memory_view_state *memory;
     SDL_Keycode sym;
     SDL_Keymod mod;
-    bool alt;
+    bool alt, shift;
 
     if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN) {
         return;
@@ -3387,156 +3651,185 @@ static void frontend_memory_handle_key(
     sym = key->keysym.sym;
     mod = key->keysym.mod;
     alt = (mod & KMOD_ALT) != 0;
+    shift = (mod & KMOD_SHIFT) != 0;
+    memory = &ui->memory_views[ui->memory_active_view_index];
 
     if (sym == SDLK_F9 || sym == SDLK_F10 || sym == SDLK_F11 || sym == SDLK_F12) {
         return;
     }
 
-    if (alt && sym == SDLK_a) {
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
-            ui->memory.edit_field = FRONTEND_MEMORY_EDIT_HEX;
-        } else {
-            uint16_t offset = (uint16_t)(ui->memory.cursor_address - ui->memory.view_address);
-            uint16_t row = (uint16_t)(offset / ui->memory.columns);
-
-            ui->memory.edit_field = FRONTEND_MEMORY_EDIT_ADDRESS;
-            ui->memory.cursor_address = (uint16_t)(ui->memory.view_address + row * ui->memory.columns);
+    /* Virtual view navigation */
+    if (alt && sym == SDLK_UP && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        if (ui->memory_active_view_index > 0) {
+            ui->memory_active_view_index--;
         }
-        ui->memory.active_address_digit = 0;
+        return;
+    }
+
+    if (alt && sym == SDLK_DOWN && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        if (ui->memory_active_view_index < ui->memory_view_count - 1) {
+            ui->memory_active_view_index++;
+        }
+        /* Refresh pointer after index change */
+        memory = &ui->memory_views[ui->memory_active_view_index];
+        return;
+    }
+
+    /* Split / dissolve */
+    if (alt && sym == SDLK_v) {
+        frontend_memory_split(ui, shift);
+        return;
+    }
+
+    if (alt && sym == SDLK_j) {
+        frontend_memory_dissolve(ui);
+        return;
+    }
+
+    if (alt && sym == SDLK_a) {
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+            memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
+        } else {
+            uint16_t offset = (uint16_t)(memory->cursor_address - memory->view_address);
+            uint16_t row = (uint16_t)(offset / memory->columns);
+
+            memory->edit_field = FRONTEND_MEMORY_EDIT_ADDRESS;
+            memory->cursor_address = (uint16_t)(memory->view_address + row * memory->columns);
+        }
+        memory->active_address_digit = 0;
         return;
     }
 
     if (alt && sym == SDLK_x) {
-        ui->memory.edit_field = ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII ?
+        memory->edit_field = memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII ?
             FRONTEND_MEMORY_EDIT_HEX :
             FRONTEND_MEMORY_EDIT_ASCII;
         return;
     }
 
     if (alt && sym == SDLK_m) {
-        if (ui->memory.mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
-            ui->memory.mode = RUNTIME_MEMORY_MODE_ROM;
-        } else if (ui->memory.mode == RUNTIME_MEMORY_MODE_ROM) {
-            ui->memory.mode = RUNTIME_MEMORY_MODE_RAM;
+        if (memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+            memory->mode = RUNTIME_MEMORY_MODE_ROM;
+        } else if (memory->mode == RUNTIME_MEMORY_MODE_ROM) {
+            memory->mode = RUNTIME_MEMORY_MODE_RAM;
         } else {
-            ui->memory.mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+            memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
         }
-        ui->memory.request_pending = false;
+        memory->request_pending = false;
         return;
     }
 
-    if (sym == SDLK_PAGEUP && ui->memory.edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
-        ui->memory.view_address = (uint16_t)(ui->memory.view_address - frontend_memory_visible_count(&ui->memory));
-        ui->memory.request_pending = false;
+    if (sym == SDLK_PAGEUP && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        memory->view_address = (uint16_t)(memory->view_address - frontend_memory_visible_count(memory));
+        memory->request_pending = false;
         return;
     }
 
-    if (sym == SDLK_PAGEDOWN && ui->memory.edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
-        ui->memory.view_address = (uint16_t)(ui->memory.view_address + frontend_memory_visible_count(&ui->memory));
-        ui->memory.request_pending = false;
+    if (sym == SDLK_PAGEDOWN && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        memory->view_address = (uint16_t)(memory->view_address + frontend_memory_visible_count(memory));
+        memory->request_pending = false;
         return;
     }
 
     if (sym == SDLK_HOME) {
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
-            ui->memory.active_address_digit = 0;
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+            memory->active_address_digit = 0;
         } else if (alt) {
-            ui->memory.cursor_address = ui->memory.view_address;
+            memory->cursor_address = memory->view_address;
         } else {
-            uint16_t offset = (uint16_t)(ui->memory.cursor_address - ui->memory.view_address);
-            uint16_t row = (uint16_t)(offset / ui->memory.columns);
-            ui->memory.cursor_address = (uint16_t)(ui->memory.view_address + row * ui->memory.columns);
+            uint16_t offset = (uint16_t)(memory->cursor_address - memory->view_address);
+            uint16_t row = (uint16_t)(offset / memory->columns);
+            memory->cursor_address = (uint16_t)(memory->view_address + row * memory->columns);
         }
         return;
     }
 
     if (sym == SDLK_END) {
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
-            ui->memory.active_address_digit = 3;
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+            memory->active_address_digit = 3;
         } else if (alt) {
-            ui->memory.cursor_address = (uint16_t)(ui->memory.view_address +
-                frontend_memory_visible_count(&ui->memory) - 1u);
+            memory->cursor_address = (uint16_t)(memory->view_address +
+                frontend_memory_visible_count(memory) - 1u);
         } else {
-            uint16_t offset = (uint16_t)(ui->memory.cursor_address - ui->memory.view_address);
-            uint16_t row = (uint16_t)(offset / ui->memory.columns);
-            ui->memory.cursor_address = (uint16_t)(ui->memory.view_address + row * ui->memory.columns +
-                ui->memory.columns - 1u);
+            uint16_t offset = (uint16_t)(memory->cursor_address - memory->view_address);
+            uint16_t row = (uint16_t)(offset / memory->columns);
+            memory->cursor_address = (uint16_t)(memory->view_address + row * memory->columns +
+                memory->columns - 1u);
         }
         return;
     }
 
-    if (sym == SDLK_UP && ui->memory.edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
-        frontend_memory_move_cursor(ui, -(int32_t)ui->memory.columns);
+    if (sym == SDLK_UP && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        frontend_memory_move_cursor(ui, -(int32_t)memory->columns);
         return;
     }
 
-    if (sym == SDLK_DOWN && ui->memory.edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
-        frontend_memory_move_cursor(ui, ui->memory.columns);
+    if (sym == SDLK_DOWN && memory->edit_field != FRONTEND_MEMORY_EDIT_ADDRESS) {
+        frontend_memory_move_cursor(ui, memory->columns);
         return;
     }
 
     if (sym == SDLK_LEFT) {
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
-            if (ui->memory.active_address_digit > 0) {
-                ui->memory.active_address_digit--;
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+            if (memory->active_address_digit > 0) {
+                memory->active_address_digit--;
             }
-        } else if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
+        } else if (memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
             frontend_memory_move_cursor(ui, -1);
-        } else if (ui->memory.active_nibble == 0) {
+        } else if (memory->active_nibble == 0) {
             frontend_memory_move_cursor(ui, -1);
-            ui->memory.active_nibble = 1;
+            memory->active_nibble = 1;
         } else {
-            ui->memory.active_nibble = 0;
+            memory->active_nibble = 0;
         }
         return;
     }
 
     if (sym == SDLK_RIGHT) {
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
-            if (ui->memory.active_address_digit >= 3) {
-                ui->memory.edit_field = FRONTEND_MEMORY_EDIT_HEX;
-                ui->memory.active_address_digit = 0;
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+            if (memory->active_address_digit >= 3) {
+                memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
+                memory->active_address_digit = 0;
             } else {
-                ui->memory.active_address_digit++;
+                memory->active_address_digit++;
             }
-        } else if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
+        } else if (memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
             frontend_memory_move_cursor(ui, 1);
-        } else if (ui->memory.active_nibble == 0) {
-            ui->memory.active_nibble = 1;
+        } else if (memory->active_nibble == 0) {
+            memory->active_nibble = 1;
         } else {
-            ui->memory.active_nibble = 0;
+            memory->active_nibble = 0;
             frontend_memory_move_cursor(ui, 1);
         }
         return;
     }
 
-    if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
+    if (memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
         if (sym == SDLK_RETURN) {
-            frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, 0x0d);
+            frontend_memory_write_byte(ui, debug_state, memory->cursor_address, 0x0d);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
         if (sym == SDLK_BACKSPACE) {
-            frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, 0x08);
+            frontend_memory_write_byte(ui, debug_state, memory->cursor_address, 0x08);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
         if (sym >= 32 && sym <= 126) {
             uint8_t byte = (uint8_t)sym;
             if (sym >= 'a' && sym <= 'z') {
-                bool shift = (mod & KMOD_SHIFT) != 0;
                 bool caps = (mod & KMOD_CAPS) != 0;
                 if (shift ^ caps) {
                     byte = (uint8_t)(sym - ('a' - 'A'));
                 }
             }
-            frontend_memory_write_byte(ui, debug_state, ui->memory.cursor_address, byte);
+            frontend_memory_write_byte(ui, debug_state, memory->cursor_address, byte);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
     } else {
         int digit = frontend_hex_digit_value((char)sym);
-        if (ui->memory.edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+        if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
             frontend_memory_apply_address_digit(ui, digit);
         } else {
             frontend_memory_apply_hex_digit(ui, debug_state, digit);
@@ -3546,51 +3839,67 @@ static void frontend_memory_handle_key(
 
 static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const frontend_debug_state *debug_state)
 {
-    frontend_memory_view_state *memory = &ui->memory;
-    uint8_t row;
-    uint8_t rows;
     float row_h;
     float footer_h;
     float scrollbar_w = 24.0f;
     float scrollbar_margin = 8.0f;
-    uint16_t visible_count;
+    int total_rows, max_rows_per_view;
     struct nk_style_window saved_window_style;
+    frontend_memory_view_state *active_mem;
+    const struct nk_user_font *font;
+    int v;
 
-    if (!memory->initialized) {
-        memory->view_address = 0x0000;
-        memory->cursor_address = 0x0000;
-        memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-        memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
-        memory->columns = 16;
-        memory->initialized = true;
+    /* One-time initialization of the first virtual view */
+    if (ui->memory_view_count == 0) {
+        ui->memory_views[0].view_address = 0x0000;
+        ui->memory_views[0].cursor_address = 0x0000;
+        ui->memory_views[0].mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+        ui->memory_views[0].edit_field = FRONTEND_MEMORY_EDIT_HEX;
+        ui->memory_views[0].columns = 16;
+        ui->memory_views[0].color_slot = 0;
+        ui->memory_views[0].initialized = true;
+        ui->memory_view_count = 1;
+        ui->memory_active_view_index = 0;
+        ui->memory_color_slot_used[0] = true;
     }
 
-    row_h = ui->ctx->style.font != NULL ? ui->ctx->style.font->height : 13.0f;
+    active_mem = &ui->memory_views[ui->memory_active_view_index];
+    font = ui->ctx->style.font;
+    row_h = (font != NULL) ? font->height : 13.0f;
     footer_h = 22.0f;
 
-    rows = (uint8_t)((bounds.h > footer_h + 28.0f) ? ((bounds.h - footer_h - 28.0f) / row_h) : 1);
-    if (rows > 1) {
-        rows--;
+    /* Compute total available rows */
+    max_rows_per_view = RUNTIME_MEMORY_SNAPSHOT_MAX / 16;
+    total_rows = (bounds.h > footer_h + 28.0f)
+        ? (int)((bounds.h - footer_h - 28.0f) / row_h)
+        : 1;
+    if (total_rows > 1) {
+        total_rows--;
     }
-    if (rows == 0) {
-        rows = 1;
+    if (total_rows < 1) {
+        total_rows = 1;
     }
-    if (rows > RUNTIME_MEMORY_SNAPSHOT_MAX / memory->columns) {
-        rows = RUNTIME_MEMORY_SNAPSHOT_MAX / memory->columns;
-    }
-    memory->rows = rows;
-    visible_count = frontend_memory_visible_count(memory);
 
-    if (!frontend_any_dialog_open(ui) &&
-        nk_input_is_mouse_hovering_rect(&ui->ctx->input, bounds) &&
-        ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
-        int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
-        memory->view_address = (uint16_t)(memory->view_address + lines * memory->columns);
-        memory->request_pending = false;
+    /* Cap per-view rows and detect resize */
+    {
+        int current_sum = frontend_memory_total_rows(ui);
+        /* Cap each view's rows to the per-view maximum */
+        for (v = 0; v < ui->memory_view_count; v++) {
+            if (ui->memory_views[v].rows > (uint8_t)max_rows_per_view) {
+                ui->memory_views[v].rows = (uint8_t)max_rows_per_view;
+            }
+            if (ui->memory_views[v].rows < 1) {
+                ui->memory_views[v].rows = 1;
+            }
+        }
+        current_sum = frontend_memory_total_rows(ui);
+        if (current_sum != total_rows) {
+            frontend_memory_redistribute_rows(ui, total_rows);
+        }
     }
 
     if (ui->has_pending_memory_key) {
-        if (memory->active) {
+        if (ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY) {
             frontend_memory_handle_key(ui, debug_state, &ui->pending_memory_key);
         }
         ui->has_pending_memory_key = false;
@@ -3599,53 +3908,118 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
     frontend_memory_request_if_needed(ui, debug_state);
 
     if (nk_begin(ui->ctx, "Memory", bounds, pane_flags)) {
+        struct nk_command_buffer *canvas;
+        bool any_dialog = frontend_any_dialog_open(ui);
+        bool mem_active = !any_dialog && ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY;
+        float rows_x = 0.0f, rows_w = 0.0f;
+        bool have_rows_x = false;
+        struct nk_color sep_color = nk_rgb(80, 92, 104);
+
         saved_window_style = ui->ctx->style.window;
         ui->ctx->style.window.padding = nk_vec2(0.0f, 0.0f);
         ui->ctx->style.window.spacing = nk_vec2(0.0f, 0.0f);
         ui->ctx->style.window.group_padding = nk_vec2(0.0f, 0.0f);
 
-        nk_layout_row_begin(ui->ctx, NK_STATIC, row_h * (float)rows, 3);
+        nk_layout_row_begin(ui->ctx, NK_STATIC, row_h * (float)total_rows, 3);
         nk_layout_row_push(ui->ctx, bounds.w - scrollbar_w - scrollbar_margin);
+
         if (nk_group_begin(ui->ctx, "memory-rows", NK_WINDOW_NO_SCROLLBAR)) {
-            for (row = 0; row < rows; ++row) {
-                char line[96];
-                char *cursor = line;
-                size_t remaining = sizeof(line);
-                uint8_t col;
-                uint16_t row_addr = (uint16_t)(memory->view_address + (uint16_t)row * memory->columns);
-                int written = snprintf(cursor, remaining, "%04X:", row_addr);
-                struct nk_rect row_bounds;
+            canvas = nk_window_get_canvas(ui->ctx);
 
-                cursor += written;
-                remaining -= (size_t)written;
-                for (col = 0; col < memory->columns; ++col) {
-                    uint16_t address = (uint16_t)(row_addr + col);
-                    uint8_t value = frontend_memory_byte_at(debug_state, address);
-                    written = snprintf(cursor, remaining, "%02X ", value);
-                    cursor += written;
-                    remaining -= (size_t)written;
-                }
-                for (col = 0; col < memory->columns; ++col) {
-                    uint16_t address = (uint16_t)(row_addr + col);
-                    uint8_t value = frontend_memory_byte_at(debug_state, address);
-                    written = snprintf(cursor, remaining, "%c", frontend_memory_ascii(value));
-                    cursor += written;
-                    remaining -= (size_t)written;
+            for (v = 0; v < ui->memory_view_count; v++) {
+                frontend_memory_view_state *mv = &ui->memory_views[v];
+                struct nk_color text_c = memory_view_colors[mv->color_slot].text;
+                struct nk_color bg_c = memory_view_colors[mv->color_slot].bg;
+                bool is_active_v = (v == ui->memory_active_view_index);
+                uint8_t row;
+                int next_vis;
+
+                if (mv->rows == 0) {
+                    mv->cached_y_top = 0.0f;
+                    mv->cached_y_bottom = 0.0f;
+                    continue;
                 }
 
-                nk_layout_row_dynamic(ui->ctx, row_h, 1);
-                row_bounds = nk_widget_bounds(ui->ctx);
-                frontend_memory_handle_mouse_row(ui, row_bounds, row_addr);
-                nk_label(ui->ctx, line, NK_TEXT_LEFT);
-                frontend_memory_draw_cursor(ui, debug_state, row_bounds, line, row_addr);
+                for (row = 0; row < mv->rows; row++) {
+                    char line[96];
+                    char *lp = line;
+                    size_t remaining = sizeof(line);
+                    uint8_t col;
+                    uint16_t row_addr = (uint16_t)(mv->view_address + (uint16_t)row * mv->columns);
+                    int written = snprintf(lp, remaining, "%04X:", row_addr);
+                    struct nk_rect rb;
+
+                    lp += written; remaining -= (size_t)written;
+                    for (col = 0; col < mv->columns; col++) {
+                        uint8_t val = frontend_memory_view_byte_at(debug_state, mv, (uint16_t)(row_addr + col));
+                        written = snprintf(lp, remaining, "%02X ", val);
+                        lp += written; remaining -= (size_t)written;
+                    }
+                    for (col = 0; col < mv->columns; col++) {
+                        uint8_t val = frontend_memory_view_byte_at(debug_state, mv, (uint16_t)(row_addr + col));
+                        written = snprintf(lp, remaining, "%c", frontend_memory_ascii(val));
+                        lp += written; remaining -= (size_t)written;
+                    }
+
+                    nk_layout_row_dynamic(ui->ctx, row_h, 1);
+                    /* nk_widget advances the layout cursor AND returns bounds */
+                    if (nk_widget(&rb, ui->ctx) != NK_WIDGET_INVALID) {
+                        if (!have_rows_x) {
+                            rows_x = rb.x;
+                            rows_w = rb.w;
+                            have_rows_x = true;
+                        }
+                        if (row == 0) {
+                            mv->cached_y_top = rb.y;
+                        }
+                        mv->cached_y_bottom = rb.y + rb.h;
+
+                        /* Draw colored background then text via canvas */
+                        nk_fill_rect(canvas, rb, 0.0f, bg_c);
+                        nk_draw_text(canvas, rb, line, (int)(lp - line), font, bg_c, text_c);
+
+                        frontend_memory_handle_mouse_row(ui, v, rb, row_addr);
+
+                        if (is_active_v) {
+                            frontend_memory_draw_cursor(ui, debug_state, mv, rb, line, row_addr);
+                        }
+                    }
+                }
+
+                /* Scroll wheel: route to hovered view after rows are known */
+                if (!any_dialog && ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
+                    float my = ui->ctx->input.mouse.pos.y;
+                    if (my >= mv->cached_y_top && my < mv->cached_y_bottom) {
+                        int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
+                        mv->view_address = (uint16_t)(mv->view_address + lines * mv->columns);
+                        mv->request_pending = false;
+                    }
+                }
+
+                /* Draw separator after this view if a next visible view exists */
+                next_vis = -1;
+                {
+                    int nv2;
+                    for (nv2 = v + 1; nv2 < ui->memory_view_count; nv2++) {
+                        if (ui->memory_views[nv2].rows > 0) {
+                            next_vis = nv2;
+                            break;
+                        }
+                    }
+                }
+                if (next_vis >= 0) {
+                    struct nk_rect sep = nk_rect(rows_x, mv->cached_y_bottom - 1.0f, rows_w, 1.0f);
+                    nk_fill_rect(canvas, sep, 0.0f, sep_color);
+                }
             }
+
             nk_group_end(ui->ctx);
         }
 
         nk_layout_row_push(ui->ctx, scrollbar_w);
         if (nk_group_begin(ui->ctx, "memory-scrollbar", NK_WINDOW_NO_SCROLLBAR)) {
             struct nk_rect scrollbar_bounds = nk_window_get_content_region(ui->ctx);
-            frontend_memory_draw_scrollbar(ui, scrollbar_bounds, visible_count);
+            frontend_memory_draw_scrollbar(ui, scrollbar_bounds, frontend_memory_visible_count(active_mem));
             nk_group_end(ui->ctx);
         }
         nk_layout_row_push(ui->ctx, scrollbar_margin);
@@ -3658,36 +4032,67 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
             nk_window_get_content_region(ui->ctx),
             footer_h);
 
+        /* Context menu applies to active virtual view */
         if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
             nk_layout_row_dynamic(ui->ctx, 22, 1);
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    active_mem->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "Map", NK_TEXT_LEFT)) {
-                memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                memory->request_pending = false;
+                active_mem->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                active_mem->request_pending = false;
             }
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    memory->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    active_mem->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "ROM", NK_TEXT_LEFT)) {
-                memory->mode = RUNTIME_MEMORY_MODE_ROM;
-                memory->request_pending = false;
+                active_mem->mode = RUNTIME_MEMORY_MODE_ROM;
+                active_mem->request_pending = false;
             }
             if (nk_contextual_item_symbol_label(ui->ctx,
-                    memory->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
+                    active_mem->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
                     "RAM", NK_TEXT_LEFT)) {
-                memory->mode = RUNTIME_MEMORY_MODE_RAM;
-                memory->request_pending = false;
+                active_mem->mode = RUNTIME_MEMORY_MODE_RAM;
+                active_mem->request_pending = false;
             }
             nk_contextual_end(ui->ctx);
         }
 
-        if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY) {
+        /* Active-panel selection border wraps the whole memory panel */
+        if (mem_active) {
             frontend_draw_active_view_border(ui->ctx);
         }
-        frontend_draw_memory_mode_border(
-            ui->ctx,
-            memory->mode,
-            !frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MEMORY);
+
+        /* Per-virtual-view RAM/ROM borders, inset to avoid overlap at shared edges */
+        if (have_rows_x) {
+            canvas = nk_window_get_canvas(ui->ctx);
+            for (v = 0; v < ui->memory_view_count; v++) {
+                frontend_memory_view_state *mv = &ui->memory_views[v];
+                struct nk_color border_color;
+                float thickness;
+                struct nk_rect br;
+                float inset_top, inset_bot;
+
+                if (mv->rows == 0 || mv->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+                    continue;
+                }
+
+                border_color = (mv->mode == RUNTIME_MEMORY_MODE_ROM)
+                    ? nk_rgb(200, 130, 40)
+                    : nk_rgb(60, 120, 200);
+                thickness = (mem_active && v == ui->memory_active_view_index) ? 4.0f : 1.0f;
+                inset_top = (v > 0) ? 1.0f : 2.0f;
+                inset_bot = (v < ui->memory_view_count - 1) ? 1.0f : 2.0f;
+
+                br = nk_rect(
+                    rows_x + thickness * 0.5f,
+                    mv->cached_y_top + inset_top,
+                    rows_w - thickness,
+                    (mv->cached_y_bottom - inset_bot) - (mv->cached_y_top + inset_top));
+
+                if (br.h > 0.0f) {
+                    nk_stroke_rect(canvas, br, 0.0f, thickness, border_color);
+                }
+            }
+        }
 
         ui->ctx->style.window = saved_window_style;
     }
@@ -5566,7 +5971,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         parent = nk_rect(0.0f, 0.0f, (float)width, (float)height);
         c64_layout_compute(&ui->layout, parent, &ui->limits);
         if (!frontend_any_dialog_open(ui)) {
-            debugger_scrollbar_active = ui->memory.scrollbar_dragging ||
+            debugger_scrollbar_active = ui->memory_views[ui->memory_active_view_index].scrollbar_dragging ||
                 ui->disassembly.scrollbar_dragging ||
                 (ui->has_memory_scrollbar_bounds &&
                  nk_input_is_mouse_down(&ui->ctx->input, NK_BUTTON_LEFT) &&
