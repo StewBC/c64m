@@ -444,6 +444,39 @@ static void send_step_over_command(runtime_client *client) {
     }
 }
 
+static bool handle_step_key_event(
+    runtime_client *client,
+    frontend_debug_state *debug_state,
+    const SDL_KeyboardEvent *key,
+    bool allow_pause)
+{
+    if (client == NULL || debug_state == NULL || key == NULL) {
+        return false;
+    }
+
+    if (key->keysym.sym == SDLK_F10 && !frontend_input_has_shift_modifier(key)) {
+        if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+            if (allow_pause) {
+                send_pause_command(client);
+            }
+        } else {
+            debug_state->step_cycle_start = debug_state->machine_cycle;
+            debug_state->step_cpu_cycle_start = debug_state->cpu.cycles;
+            send_step_instruction_command(client);
+        }
+        return true;
+    }
+
+    if (key->keysym.sym == SDLK_F11) {
+        debug_state->step_cycle_start = debug_state->machine_cycle;
+        debug_state->step_cpu_cycle_start = debug_state->cpu.cycles;
+        send_step_over_command(client);
+        return true;
+    }
+
+    return false;
+}
+
 static void send_run_to_cursor_command(runtime_client *client, frontend *ui) {
     uint16_t addr;
     if (!frontend_get_disassembly_cursor(ui, &addr)) {
@@ -1092,6 +1125,10 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
             } else if (event.type == SDL_KEYDOWN && event.key.repeat != 0 &&
                        frontend_handle_help_key(ui, &event.key, options->scroll_wheel_lines)) {
                 send_event_to_frontend = false;
+            } else if (event.type == SDL_KEYDOWN && event.key.repeat != 0 &&
+                       !frontend_help_is_open(ui) &&
+                       handle_step_key_event(client, &debug_state, &event.key, false)) {
+                send_event_to_frontend = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
                 if (frontend_input_is_host_quit_shortcut(&event.key)) {
                     running = false;
@@ -1113,24 +1150,15 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
-                } else if (event.key.keysym.sym == SDLK_F10 &&
-                           !frontend_input_has_shift_modifier(&event.key)) {
-                    /* F10: pause if running, step if paused */
-                    if (debug_state.runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
-                        send_pause_command(client);
-                    } else {
-                        debug_state.step_cycle_start = debug_state.machine_cycle;
-                        debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                        send_step_instruction_command(client);
-                    }
+                } else if (handle_step_key_event(client, &debug_state, &event.key, true)) {
+                    send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_F10 &&
                            frontend_input_has_shift_modifier(&event.key)) {
                     debug_state.step_cycle_start = debug_state.machine_cycle;
                     debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
                     send_step_out_command(client);
-                } else if (event.key.keysym.sym == SDLK_F11 ||
-                           (event.key.keysym.sym == SDLK_s &&
-                            frontend_input_has_option_modifier(&event.key))) {
+                } else if (event.key.keysym.sym == SDLK_s &&
+                           frontend_input_has_option_modifier(&event.key)) {
                     debug_state.step_cycle_start = debug_state.machine_cycle;
                     debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
                     send_step_over_command(client);
