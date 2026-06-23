@@ -26,6 +26,7 @@ Useful flags:
 | `--saveini` / `-v`     | Save INI on quit (one-time override)                |
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
 | `--turbo <list>` / `-t`| Set turbo multipliers, e.g. `2,4,8,16`             |
+| `--video PAL|NTSC`, `-P`, `-N` | Override the configured video standard for this run |
 | `--disk <drive>=<image>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64` |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
@@ -40,6 +41,8 @@ configuration, window size, debugger layout, and breakpoints.
 PAL and NTSC are selectable in the Configure dialog or via the `[Video]` INI section.
 PAL runs at the 6569 timing (approximately 50 Hz frames), NTSC at the 6567 timing
 (approximately 60 Hz frames). Changing the video standard reboots the emulated machine.
+For a one-run override, use `--video PAL`, `--video NTSC`, `-P`, or `-N`; the command-line
+choice is applied after the INI file is loaded.
 
 ### Disk Images
 
@@ -765,6 +768,9 @@ controlled by the **Auto-save INI on Quit** checkbox.
 
 c64m reads `c64m.ini` from the current directory by default. Use `--inifile <path>` to
 load a different file, or `--noini` to skip loading entirely.
+
+The `[Video] standard` setting can be overridden for a single launch with `--video PAL`,
+`--video NTSC`, `-P`, or `-N`.
 
 All section names are case-insensitive. Comment lines start with `#`. Saving from the
 emulator removes comments.
