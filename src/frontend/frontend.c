@@ -9,6 +9,7 @@
 #include "disasm_6502.h"
 #include "symbol_table.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,10 +111,30 @@ static const struct {
 };
 
 enum {
-    FRONTEND_DISASM_MAX_ROWS = 128,
-    FRONTEND_DISASM_FETCH_BYTES = RUNTIME_MEMORY_SNAPSHOT_MAX,
-    FRONTEND_DISASM_CENTER_LOOKBACK = 32
+    FRONTEND_DISASM_MAX_ROWS       = 128,
+    FRONTEND_DISASM_FETCH_BYTES    = RUNTIME_MEMORY_SNAPSHOT_MAX,
+    FRONTEND_DISASM_CENTER_LOOKBACK = 32,
+    FRONTEND_DISASM_CENTER_SLOP    = 32,
+    FRONTEND_DISASM_DP_MAX_WINDOW  = 255,
+    FRONTEND_DISASM_DP_INF         = 0xFFFF
 };
+
+typedef struct frontend_disassembly_line {
+    disasm_6502_line base;
+    bool is_provisional;
+} frontend_disassembly_line;
+
+typedef struct frontend_disasm_dp_node {
+    uint16_t score;
+    uint8_t  nsteps;
+    uint8_t  step;
+    bool     is_byte_edge;
+} frontend_disasm_dp_node;
+
+typedef struct frontend_disasm_cache {
+    uint8_t bytes[65536];
+    bool    valid[65536];
+} frontend_disasm_cache;
 
 typedef struct frontend_disassembly_view_state {
     uint16_t top_address;
@@ -143,7 +164,8 @@ typedef struct frontend_disassembly_view_state {
     bool scrollbar_dragging;
     float scrollbar_grab_offset;
     runtime_memory_snapshot snapshot;
-    disasm_6502_line lines[FRONTEND_DISASM_MAX_ROWS];
+    frontend_disassembly_line lines[FRONTEND_DISASM_MAX_ROWS];
+    frontend_disasm_cache mem_cache[3];
 } frontend_disassembly_view_state;
 
 typedef enum frontend_misc_tab {
@@ -1918,44 +1940,96 @@ static void frontend_draw_registers(
     nk_end(ui->ctx);
 }
 
-static int frontend_disassembly_snapshot_index(
-    const frontend_disassembly_view_state *view,
-    uint16_t address)
+static frontend_disasm_cache *frontend_disassembly_active_cache(
+    frontend_disassembly_view_state *view)
 {
-    uint16_t offset;
-
-    if (view == NULL ||
-        !view->has_snapshot ||
-        view->snapshot.mode != view->mode) {
-        return -1;
+    int idx = (int)view->mode;
+    if (idx < 0 || idx > 2) {
+        idx = 0;
     }
+    return &view->mem_cache[idx];
+}
 
-    offset = (uint16_t)(address - view->snapshot.address);
-    if (offset >= view->snapshot.length) {
-        return -1;
+static const frontend_disasm_cache *frontend_disassembly_active_cache_ro(
+    const frontend_disassembly_view_state *view)
+{
+    int idx = (int)view->mode;
+    if (idx < 0 || idx > 2) {
+        idx = 0;
     }
+    return &view->mem_cache[idx];
+}
 
-    return (int)offset;
+static const uint8_t *frontend_disasm_cache_ptr(
+    const frontend_disasm_cache *cache,
+    uint16_t address,
+    size_t *out_available)
+{
+    if (!cache->valid[address]) {
+        *out_available = 0;
+        return NULL;
+    }
+    *out_available = 1;
+    if (cache->valid[(uint16_t)(address + 1u)]) {
+        *out_available = 2;
+        if (cache->valid[(uint16_t)(address + 2u)]) {
+            *out_available = 3;
+        }
+    }
+    return &cache->bytes[address];
+}
+
+static void frontend_disasm_cache_invalidate_range(
+    frontend_disasm_cache *cache,
+    uint16_t address,
+    uint16_t length)
+{
+    uint16_t i;
+    for (i = 0; i < length; ++i) {
+        cache->valid[(uint16_t)(address + i)] = false;
+    }
+}
+
+static void frontend_disasm_cache_merge(
+    frontend_disasm_cache *cache,
+    const runtime_memory_snapshot *snap)
+{
+    uint16_t i;
+    for (i = 0; i < snap->length; ++i) {
+        uint16_t addr = (uint16_t)(snap->address + i);
+        cache->bytes[addr] = snap->bytes[i];
+        cache->valid[addr] = true;
+    }
+}
+
+static bool frontend_disasm_cache_range_valid(
+    const frontend_disasm_cache *cache,
+    uint16_t address,
+    uint16_t length)
+{
+    uint16_t i;
+    for (i = 0; i < length; ++i) {
+        if (!cache->valid[(uint16_t)(address + i)]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void frontend_disassembly_decode(frontend *ui)
 {
     frontend_disassembly_view_state *view = &ui->disassembly;
+    const frontend_disasm_cache *cache = frontend_disassembly_active_cache_ro(view);
     uint16_t address = view->top_address;
     uint8_t row;
 
     for (row = 0; row < view->rows && row < FRONTEND_DISASM_MAX_ROWS; ++row) {
-        int index = frontend_disassembly_snapshot_index(view, address);
-        const uint8_t *bytes = NULL;
         size_t available = 0;
+        const uint8_t *bytes = frontend_disasm_cache_ptr(cache, address, &available);
 
-        if (index >= 0) {
-            bytes = &view->snapshot.bytes[index];
-            available = view->snapshot.length - (size_t)index;
-        }
-
-        view->lines[row] = disasm_6502_decode_line(address, bytes, available, &ui->symbols);
-        address = (uint16_t)(address + view->lines[row].length);
+        view->lines[row].base = disasm_6502_decode_line(address, bytes, available, &ui->symbols);
+        view->lines[row].is_provisional = (bytes == NULL);
+        address = (uint16_t)(address + view->lines[row].base.length);
     }
 }
 
@@ -1970,7 +2044,7 @@ static int frontend_disassembly_find_row(
     }
 
     for (row = 0; row < view->rows && row < FRONTEND_DISASM_MAX_ROWS; ++row) {
-        if (view->lines[row].address == address) {
+        if (view->lines[row].base.address == address) {
             return (int)row;
         }
     }
@@ -1994,8 +2068,8 @@ static void frontend_disassembly_set_user_cursor(
     view->cursor_length = length == 0 ? 1 : length;
     if (row > 0 &&
         row < view->rows &&
-        view->lines[row].address == address) {
-        view->cursor_prev_address = view->lines[row - 1u].address;
+        view->lines[row].base.address == address) {
+        view->cursor_prev_address = view->lines[row - 1u].base.address;
     } else {
         view->cursor_prev_address = (uint16_t)(address - 1u);
     }
@@ -2023,6 +2097,7 @@ static bool frontend_disassembly_previous_address(
     uint16_t address,
     uint16_t *out_previous)
 {
+    const frontend_disasm_cache *cache;
     int back;
     uint16_t invalid_candidate = 0;
     bool has_invalid_candidate = false;
@@ -2031,20 +2106,21 @@ static bool frontend_disassembly_previous_address(
         return false;
     }
 
+    cache = frontend_disassembly_active_cache_ro(view);
+
     for (back = 3; back >= 1; --back) {
         uint16_t candidate = (uint16_t)(address - back);
-        int index = frontend_disassembly_snapshot_index(view, candidate);
         uint8_t opcode;
         uint8_t length;
 
-        if (index < 0) {
+        if (!cache->valid[candidate]) {
             continue;
         }
 
-        opcode = view->snapshot.bytes[index];
+        opcode = cache->bytes[candidate];
         length = disasm_6502_instruction_length(opcode);
-        if (length == back &&
-            frontend_disassembly_snapshot_index(view, (uint16_t)(candidate + length - 1u)) >= 0) {
+        if (length == (uint8_t)back &&
+            cache->valid[(uint16_t)(candidate + length - 1u)]) {
             if (disasm_6502_opcode_is_valid(opcode)) {
                 *out_previous = candidate;
                 return true;
@@ -2061,7 +2137,7 @@ static bool frontend_disassembly_previous_address(
         return true;
     }
 
-    if (frontend_disassembly_snapshot_index(view, (uint16_t)(address - 1u)) >= 0) {
+    if (cache->valid[(uint16_t)(address - 1u)]) {
         *out_previous = (uint16_t)(address - 1u);
         return true;
     }
@@ -2097,22 +2173,16 @@ static bool frontend_disassembly_pc_locked_top(
     return true;
 }
 
-static bool frontend_disassembly_snapshot_covers(
+static bool frontend_disassembly_cache_covers(
     const frontend_disassembly_view_state *view,
     uint16_t address,
     uint16_t length)
 {
-    uint16_t end_offset;
-
-    if (view == NULL ||
-        !view->has_snapshot ||
-        view->snapshot.mode != view->mode) {
+    if (view == NULL || length == 0) {
         return false;
     }
-
-    end_offset = (uint16_t)(address - view->snapshot.address + length);
-    return (uint16_t)(address - view->snapshot.address) < view->snapshot.length &&
-        end_offset <= view->snapshot.length;
+    return frontend_disasm_cache_range_valid(
+        frontend_disassembly_active_cache_ro(view), address, length);
 }
 
 static uint16_t frontend_disassembly_visible_decode_length(const frontend_disassembly_view_state *view)
@@ -2134,29 +2204,268 @@ static void frontend_disassembly_request_if_needed(frontend *ui, const frontend_
 {
     frontend_disassembly_view_state *view = &ui->disassembly;
     uint16_t length = FRONTEND_DISASM_FETCH_BYTES;
+    uint16_t pre_pc_rows = view->rows / 2u;
     uint16_t request_address = view->pc_lock_active ?
-        (uint16_t)(view->pc_lock_address - (uint16_t)(view->rows * 3u + 8u)) :
+        (uint16_t)(view->pc_lock_address - (uint16_t)(pre_pc_rows * 3u + FRONTEND_DISASM_CENTER_SLOP)) :
         view->top_address;
 
+    /* Merge any incoming memory response into cache, regardless of address match */
     if (debug_state != NULL &&
         debug_state->has_memory &&
-        debug_state->memory.mode == view->mode &&
-        debug_state->memory.address == request_address) {
+        debug_state->memory.mode == view->mode) {
         view->snapshot = debug_state->memory;
-        view->has_snapshot = true;
+        frontend_disasm_cache_merge(
+            frontend_disassembly_active_cache(view), &debug_state->memory);
+        view->request_pending = false;
     }
 
-    if (!view->request_pending ||
-        view->requested_address != request_address ||
-        view->requested_length != length ||
-        view->requested_mode != view->mode ||
-        !frontend_disassembly_snapshot_covers(view, request_address, length)) {
-        frontend_push_memory_request(ui, request_address, length, view->mode);
-        view->requested_address = request_address;
-        view->requested_length = length;
-        view->requested_mode = view->mode;
-        view->request_pending = true;
+    /* Only issue a new request if the PC window is not fully covered */
+    if (!frontend_disassembly_cache_covers(view, request_address, length)) {
+        if (!view->request_pending ||
+            view->requested_address != request_address ||
+            view->requested_length != length ||
+            view->requested_mode != view->mode) {
+            frontend_push_memory_request(ui, request_address, length, view->mode);
+            view->requested_address = request_address;
+            view->requested_length = length;
+            view->requested_mode = view->mode;
+            view->request_pending = true;
+        }
     }
+}
+
+static bool frontend_disassembly_is_pc_locked(const frontend_disassembly_view_state *view)
+{
+    return view != NULL && view->pc_lock_active;
+}
+
+static void frontend_disassembly_emit_provisional(
+    frontend_disassembly_line *line,
+    uint16_t address)
+{
+    memset(line, 0, sizeof(*line));
+    line->base.address = address;
+    line->base.length = 1;
+    snprintf(line->base.text, sizeof(line->base.text), "???");
+    line->is_provisional = true;
+}
+
+static void frontend_disassembly_force_refresh_pc(frontend_disassembly_view_state *view)
+{
+    uint16_t pre_pc_rows = view->rows / 2u;
+    uint16_t request_address = (uint16_t)(
+        view->pc_lock_address - (uint16_t)(pre_pc_rows * 3u + FRONTEND_DISASM_CENTER_SLOP));
+    frontend_disasm_cache_invalidate_range(
+        frontend_disassembly_active_cache(view), request_address, FRONTEND_DISASM_FETCH_BYTES);
+    view->request_pending = false;
+}
+
+static void frontend_disassembly_build_pc_locked_lines(
+    frontend *ui,
+    uint16_t pc,
+    uint8_t rows)
+{
+    frontend_disassembly_view_state *view = &ui->disassembly;
+    uint8_t pc_row;
+    uint8_t pre_pc_rows;
+    uint8_t row;
+    uint16_t window_size;
+    uint16_t search_start;
+    frontend_disasm_dp_node dp[FRONTEND_DISASM_DP_MAX_WINDOW + 1];
+    uint16_t i;
+
+    if (rows == 0 || rows > FRONTEND_DISASM_MAX_ROWS) {
+        return;
+    }
+
+    pc_row = rows / 2u;
+    pre_pc_rows = pc_row;
+
+    /* --- Forward from PC: fill pc_row and all rows below it --- */
+    {
+        const frontend_disasm_cache *cache = frontend_disassembly_active_cache_ro(view);
+        uint16_t addr = pc;
+        for (row = pc_row; row < rows; ++row) {
+            size_t available = 0;
+            const uint8_t *bytes = frontend_disasm_cache_ptr(cache, addr, &available);
+            view->lines[row].base = disasm_6502_decode_line(addr, bytes, available, &ui->symbols);
+            view->lines[row].is_provisional = (bytes == NULL);
+            addr = (uint16_t)(addr + view->lines[row].base.length);
+        }
+    }
+
+    /* --- DP backward search: find best pre-PC sequence --- */
+    if (pre_pc_rows == 0) {
+        view->top_address = pc;
+        return;
+    }
+
+    window_size = (uint16_t)((uint16_t)pre_pc_rows * 3u + FRONTEND_DISASM_CENTER_SLOP);
+    if (window_size > FRONTEND_DISASM_DP_MAX_WINDOW) {
+        window_size = FRONTEND_DISASM_DP_MAX_WINDOW;
+    }
+    search_start = (uint16_t)(pc - window_size);
+
+    /* Initialize: all unreachable except PC node */
+    for (i = 0; i <= window_size; ++i) {
+        dp[i].score = (uint16_t)FRONTEND_DISASM_DP_INF;
+        dp[i].nsteps = 0;
+        dp[i].step = 0;
+        dp[i].is_byte_edge = false;
+    }
+    dp[window_size].score = 0;
+
+    /* Fill backward from PC-1 to search_start */
+    {
+        const frontend_disasm_cache *cache = frontend_disassembly_active_cache_ro(view);
+        for (i = window_size; i-- > 0; ) {
+            uint16_t addr = (uint16_t)(search_start + i);
+
+            if (!cache->valid[addr]) {
+                continue;
+            }
+
+            /* Instruction edge: requires all bytes in cache */
+            {
+                uint8_t opcode = cache->bytes[addr];
+                uint8_t len = disasm_6502_instruction_length(opcode);
+                uint16_t j = (uint16_t)(i + len);
+                bool end_valid = (len == 1u) ? true :
+                    cache->valid[(uint16_t)(addr + len - 1u)];
+                if (j <= window_size && end_valid &&
+                    dp[j].score != (uint16_t)FRONTEND_DISASM_DP_INF) {
+                    uint16_t edge_cost = disasm_6502_opcode_is_valid(opcode) ? 1u : 10u;
+                    uint16_t cand_score = (uint16_t)(edge_cost + dp[j].score);
+                    uint8_t  cand_steps = dp[j].nsteps < 254u ? (uint8_t)(dp[j].nsteps + 1u) : 255u;
+                    if (cand_score < dp[i].score) {
+                        dp[i].score = cand_score;
+                        dp[i].nsteps = cand_steps;
+                        dp[i].step = len;
+                        dp[i].is_byte_edge = false;
+                    }
+                }
+            }
+
+            /* Byte edge: costs 100, advances by 1 */
+            {
+                uint16_t j1 = (uint16_t)(i + 1u);
+                if (j1 <= window_size && dp[j1].score != (uint16_t)FRONTEND_DISASM_DP_INF) {
+                    uint16_t cand_score = (uint16_t)(100u + dp[j1].score);
+                    uint8_t  cand_steps = dp[j1].nsteps < 254u ? (uint8_t)(dp[j1].nsteps + 1u) : 255u;
+                    if (cand_score < dp[i].score) {
+                        dp[i].score = cand_score;
+                        dp[i].nsteps = cand_steps;
+                        dp[i].step = 1u;
+                        dp[i].is_byte_edge = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Find best start with exactly pre_pc_rows steps (primary) */
+    {
+        const frontend_disasm_cache *cache = frontend_disassembly_active_cache_ro(view);
+        int best_start = -1;
+        uint16_t best_score = (uint16_t)FRONTEND_DISASM_DP_INF;
+        uint8_t best_steps = 0;
+
+        for (i = 0; i < window_size; ++i) {
+            if (dp[i].score != (uint16_t)FRONTEND_DISASM_DP_INF &&
+                dp[i].nsteps == pre_pc_rows &&
+                dp[i].score < best_score) {
+                best_score = dp[i].score;
+                best_start = (int)i;
+                best_steps = pre_pc_rows;
+            }
+        }
+
+        /* Fall back: best path with fewer steps (fill rest with provisional) */
+        if (best_start < 0) {
+            uint8_t max_steps = 0;
+            for (i = 0; i < window_size; ++i) {
+                if (dp[i].score != (uint16_t)FRONTEND_DISASM_DP_INF &&
+                    dp[i].nsteps > 0 && dp[i].nsteps < pre_pc_rows &&
+                    dp[i].nsteps > max_steps) {
+                    max_steps = dp[i].nsteps;
+                }
+            }
+            if (max_steps > 0) {
+                for (i = 0; i < window_size; ++i) {
+                    if (dp[i].score != (uint16_t)FRONTEND_DISASM_DP_INF &&
+                        dp[i].nsteps == max_steps &&
+                        dp[i].score < best_score) {
+                        best_score = dp[i].score;
+                        best_start = (int)i;
+                        best_steps = max_steps;
+                    }
+                }
+            }
+        }
+
+        if (best_start >= 0) {
+            uint8_t provisional_rows = (uint8_t)(pre_pc_rows - best_steps);
+            uint16_t path_start = (uint16_t)(search_start + (uint16_t)best_start);
+
+            /* Provisional rows above the best path */
+            for (row = 0; row < provisional_rows; ++row) {
+                uint16_t prov_addr = (uint16_t)(path_start -
+                    (uint16_t)(provisional_rows - row));
+                frontend_disassembly_emit_provisional(&view->lines[row], prov_addr);
+            }
+
+            /* Decode the best path rows */
+            {
+                uint16_t addr = path_start;
+                uint16_t node = (uint16_t)best_start;
+                for (row = provisional_rows; row < pre_pc_rows; ++row) {
+                    if (dp[node].is_byte_edge && cache->valid[addr]) {
+                        /* Force .byte output for byte-edge positions */
+                        uint8_t b = cache->bytes[addr];
+                        memset(&view->lines[row].base, 0, sizeof(view->lines[row].base));
+                        view->lines[row].base.address = addr;
+                        view->lines[row].base.length = 1;
+                        view->lines[row].base.bytes[0] = b;
+                        view->lines[row].base.forced_byte = true;
+                        snprintf(view->lines[row].base.text,
+                            sizeof(view->lines[row].base.text),
+                            ".BYTE $%02X", b);
+                        view->lines[row].is_provisional = false;
+                    } else {
+                        size_t available = 0;
+                        const uint8_t *bytes = frontend_disasm_cache_ptr(cache, addr, &available);
+                        view->lines[row].base = disasm_6502_decode_line(
+                            addr, bytes, available, &ui->symbols);
+                        view->lines[row].is_provisional = (bytes == NULL);
+                    }
+                    node = (uint16_t)(node + dp[node].step);
+                    addr = (uint16_t)(addr + view->lines[row].base.length);
+                }
+            }
+        } else {
+            /* No path at all: all pre-PC rows are provisional */
+            for (row = 0; row < pre_pc_rows; ++row) {
+                uint16_t prov_addr = (uint16_t)(pc -
+                    (uint16_t)(pre_pc_rows - row));
+                frontend_disassembly_emit_provisional(&view->lines[row], prov_addr);
+            }
+        }
+    }
+
+    /* Sync top_address from the first decoded line */
+    view->top_address = view->lines[0].base.address;
+
+#ifndef NDEBUG
+    /* Invariant: pc_row must hold PC and no pre-PC line may cross PC */
+    assert(view->lines[pc_row].base.address == pc);
+    {
+        uint8_t k;
+        for (k = 0; k < pc_row; ++k) {
+            assert((uint16_t)(view->lines[k].base.address +
+                view->lines[k].base.length) <= pc);
+        }
+    }
+#endif
 }
 
 static void frontend_disassembly_follow_pc(frontend *ui, const frontend_debug_state *debug_state)
@@ -2225,7 +2534,7 @@ static void frontend_disassembly_ensure_user_cursor(
                 view,
                 debug_state->cpu.pc,
                 (uint8_t)pc_row,
-                view->lines[pc_row].length);
+                view->lines[pc_row].base.length);
         } else {
             frontend_disassembly_set_user_cursor(
                 view,
@@ -2385,13 +2694,13 @@ static void frontend_disassembly_handle_key(
     row = frontend_disassembly_find_row(view, view->cursor_address);
 
     if (sym == SDLK_PAGEUP) {
-        uint16_t old_top = view->lines[0].address;
+        uint16_t old_top = view->lines[0].base.address;
         view->top_address = (uint16_t)(old_top - (uint16_t)(view->rows > 0 ? view->rows - 1u : 0u));
         frontend_disassembly_set_user_cursor(
             view,
             old_top,
             view->rows > 0 ? view->rows - 1u : 0,
-            view->lines[0].length);
+            view->lines[0].base.length);
         view->request_pending = false;
         view->follow_pc = false;
         view->pc_lock_active = false;
@@ -2400,8 +2709,8 @@ static void frontend_disassembly_handle_key(
 
     if (sym == SDLK_PAGEDOWN) {
         uint8_t last = view->rows > 0 ? view->rows - 1u : 0;
-        view->top_address = view->lines[last].address;
-        frontend_disassembly_set_user_cursor(view, view->top_address, 0, view->lines[last].length);
+        view->top_address = view->lines[last].base.address;
+        frontend_disassembly_set_user_cursor(view, view->top_address, 0, view->lines[last].base.length);
         view->request_pending = false;
         view->follow_pc = false;
         view->pc_lock_active = false;
@@ -2412,7 +2721,8 @@ static void frontend_disassembly_handle_key(
         if (alt) {
             frontend_disassembly_scroll_to_top(ui, 0x0000);
         } else if (view->rows > 0) {
-            frontend_disassembly_set_user_cursor(view, view->lines[0].address, 0, view->lines[0].length);
+            frontend_disassembly_set_user_cursor(
+                view, view->lines[0].base.address, 0, view->lines[0].base.length);
         }
         return;
     }
@@ -2432,9 +2742,9 @@ static void frontend_disassembly_handle_key(
             uint8_t last = view->rows - 1u;
             frontend_disassembly_set_user_cursor(
                 view,
-                view->lines[last].address,
+                view->lines[last].base.address,
                 last,
-                view->lines[last].length);
+                view->lines[last].base.length);
         }
         return;
     }
@@ -2443,9 +2753,9 @@ static void frontend_disassembly_handle_key(
         if (row > 0) {
             frontend_disassembly_set_user_cursor(
                 view,
-                view->lines[row - 1].address,
+                view->lines[row - 1].base.address,
                 (uint8_t)(row - 1),
-                view->lines[row - 1].length);
+                view->lines[row - 1].base.length);
         } else if (row < 0) {
             frontend_disassembly_set_user_cursor(view, view->cursor_prev_address, view->rows / 2, 1);
             frontend_disassembly_center_cursor(ui);
@@ -2464,21 +2774,21 @@ static void frontend_disassembly_handle_key(
         if (row >= 0 && row + 1 < view->rows) {
             frontend_disassembly_set_user_cursor(
                 view,
-                view->lines[row + 1].address,
+                view->lines[row + 1].base.address,
                 (uint8_t)(row + 1),
-                view->lines[row + 1].length);
+                view->lines[row + 1].base.length);
         } else if (row < 0) {
             uint16_t next = (uint16_t)(view->cursor_address + view->cursor_length);
             frontend_disassembly_set_user_cursor(view, next, view->rows / 2, 1);
             frontend_disassembly_center_cursor(ui);
         } else if (view->rows > 0) {
-            view->top_address = view->rows > 1 ? view->lines[1].address :
+            view->top_address = view->rows > 1 ? view->lines[1].base.address :
                 (uint16_t)(view->top_address + 1u);
             frontend_disassembly_set_user_cursor(
                 view,
-                view->lines[view->rows - 1u].address,
+                view->lines[view->rows - 1u].base.address,
                 view->rows - 1u,
-                view->lines[view->rows - 1u].length);
+                view->lines[view->rows - 1u].base.length);
             view->request_pending = false;
         }
         view->follow_pc = false;
@@ -2577,9 +2887,9 @@ static void frontend_disassembly_handle_mouse_row(
     frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
     frontend_disassembly_set_user_cursor(
         &ui->disassembly,
-        ui->disassembly.lines[row].address,
+        ui->disassembly.lines[row].base.address,
         row,
-        ui->disassembly.lines[row].length);
+        ui->disassembly.lines[row].base.length);
 
     char_w = frontend_memory_char_width(ui);
     rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
@@ -2771,19 +3081,20 @@ static void frontend_draw_disassembly_view(
         ui->has_pending_disassembly_key = false;
     }
 
-    frontend_disassembly_request_if_needed(ui, debug_state);
-    if (view->pc_lock_active) {
-        uint16_t locked_top;
-        if (frontend_disassembly_pc_locked_top(view, view->pc_lock_address, &locked_top) &&
-            locked_top != view->top_address) {
-            view->top_address = locked_top;
-            view->request_pending = false;
+    /* Force cache refresh on RUNNING→PAUSED transition or PC change while paused */
+    if (debug_state != NULL && view->pc_lock_active) {
+        bool was_running = view->last_runtime_state == FRONTEND_RUNTIME_STATE_RUNNING;
+        bool now_paused = debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
+        bool pc_changed = !view->has_last_pc || view->last_pc != view->pc_lock_address;
+        if ((was_running && now_paused) || (now_paused && pc_changed)) {
+            frontend_disassembly_force_refresh_pc(view);
         }
     }
-    if (frontend_disassembly_snapshot_covers(
-            view,
-            view->top_address,
-            frontend_disassembly_visible_decode_length(view))) {
+
+    frontend_disassembly_request_if_needed(ui, debug_state);
+    if (frontend_disassembly_is_pc_locked(view)) {
+        frontend_disassembly_build_pc_locked_lines(ui, view->pc_lock_address, view->rows);
+    } else {
         frontend_disassembly_decode(ui);
     }
 
@@ -2797,36 +3108,38 @@ static void frontend_draw_disassembly_view(
         nk_layout_row_push(ui->ctx, bounds.w - scrollbar_w - scrollbar_margin);
         if (nk_group_begin(ui->ctx, "disassembly-rows", NK_WINDOW_NO_SCROLLBAR)) {
             for (row = 0; row < rows; ++row) {
-                disasm_6502_line *line = &view->lines[row];
+                frontend_disassembly_line *line = &view->lines[row];
                 char bytes[16];
                 char address_label[32] = "";
                 char rendered[128];
                 struct nk_rect row_bounds;
                 const runtime_breakpoint_snapshot_entry *breakpoint =
-                    frontend_find_execute_breakpoint(debug_state, line->address);
-                bool is_pc = debug_state != NULL && debug_state->has_cpu && line->address == debug_state->cpu.pc;
-                bool is_cursor = view->has_user_cursor && line->address == view->cursor_address && !is_pc;
+                    frontend_find_execute_breakpoint(debug_state, line->base.address);
+                bool is_pc = debug_state != NULL && debug_state->has_cpu &&
+                    line->base.address == debug_state->cpu.pc;
+                bool is_cursor = view->has_user_cursor &&
+                    line->base.address == view->cursor_address && !is_pc;
                 bool is_breakpoint = breakpoint != NULL;
                 bool is_enabled_breakpoint = is_breakpoint && breakpoint->enabled != 0;
                 struct nk_style_selectable saved_selectable = ui->ctx->style.selectable;
                 nk_bool selected = is_cursor ? nk_true : nk_false;
 
-                snprintf(bytes, sizeof(bytes), "%02X %s%s",
-                    line->bytes[0],
-                    line->length > 1 ? "" : "  ",
-                    line->length > 1 ? "" : "  ");
-                if (line->length == 2) {
-                    snprintf(bytes, sizeof(bytes), "%02X %02X   ", line->bytes[0], line->bytes[1]);
-                } else if (line->length >= 3) {
-                    snprintf(bytes, sizeof(bytes), "%02X %02X %02X", line->bytes[0], line->bytes[1], line->bytes[2]);
+                if (line->is_provisional) {
+                    snprintf(bytes, sizeof(bytes), "??      ");
+                } else if (line->base.length == 2) {
+                    snprintf(bytes, sizeof(bytes), "%02X %02X   ",
+                        line->base.bytes[0], line->base.bytes[1]);
+                } else if (line->base.length >= 3) {
+                    snprintf(bytes, sizeof(bytes), "%02X %02X %02X",
+                        line->base.bytes[0], line->base.bytes[1], line->base.bytes[2]);
                 } else {
-                    snprintf(bytes, sizeof(bytes), "%02X      ", line->bytes[0]);
+                    snprintf(bytes, sizeof(bytes), "%02X      ", line->base.bytes[0]);
                 }
 
                 if (ui->symbols.address_to_label != NULL) {
                     (void)ui->symbols.address_to_label(
                         ui->symbols.userdata,
-                        line->address,
+                        line->base.address,
                         address_label,
                         sizeof(address_label));
                 }
@@ -2835,12 +3148,17 @@ static void frontend_draw_disassembly_view(
                 snprintf(rendered, sizeof(rendered), "%c%c %04X %-15s %-8s %s",
                     is_pc ? '>' : ' ',
                     is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
-                    line->address,
+                    line->base.address,
                     address_label,
                     bytes,
-                    line->text);
+                    line->base.text);
 
-                if (line->forced_byte) {
+                if (line->is_provisional) {
+                    ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(20, 24, 28));
+                    ui->ctx->style.selectable.hover = nk_style_item_color(nk_rgb(25, 29, 33));
+                    ui->ctx->style.selectable.normal_active = nk_style_item_color(nk_rgb(30, 60, 74));
+                    ui->ctx->style.selectable.text_normal = nk_rgb(72, 80, 88);
+                } else if (line->base.forced_byte) {
                     ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(30, 34, 38));
                     ui->ctx->style.selectable.hover = nk_style_item_color(nk_rgb(39, 45, 51));
                     ui->ctx->style.selectable.normal_active = nk_style_item_color(nk_rgb(49, 78, 94));
@@ -2868,7 +3186,8 @@ static void frontend_draw_disassembly_view(
                 if (nk_selectable_label(ui->ctx, rendered, NK_TEXT_LEFT, &selected)) {
                     if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING) {
                         frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
-                        frontend_disassembly_set_user_cursor(view, line->address, row, line->length);
+                        frontend_disassembly_set_user_cursor(
+                            view, line->base.address, row, line->base.length);
                         view->address_entry = false;
                         view->follow_pc = false;
                         view->pc_lock_active = false;
