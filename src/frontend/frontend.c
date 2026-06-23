@@ -84,6 +84,15 @@ typedef struct frontend_memory_view_state {
     float scrollbar_grab_offset;
 } frontend_memory_view_state;
 
+typedef struct frontend_context_popup_state {
+    bool open;
+    bool just_opened;
+    bool scroll;
+    bool group_open;
+    struct nk_rect rect;
+    struct nk_rect screen_rect;
+} frontend_context_popup_state;
+
 enum {
     MEMORY_VIEW_MAX = 16
 };
@@ -178,12 +187,30 @@ static uint64_t frontend_memory_write_history_at(
     uint16_t address);
 static void frontend_context_menu_label(struct nk_context *ctx, const char *label);
 static void frontend_context_menu_separator(struct nk_context *ctx);
+static void frontend_context_menu_heading(struct nk_context *ctx, const char *label);
 static bool frontend_context_menu_item(struct nk_context *ctx, const char *label);
 static bool frontend_context_menu_mode_item(
     struct nk_context *ctx,
     bool active,
     const char *label);
-static void frontend_context_menu_access(struct nk_context *ctx, uint64_t write_history);
+static bool frontend_context_menu_access(
+    struct nk_context *ctx,
+    uint64_t write_history,
+    uint16_t *out_address);
+static void frontend_context_popup_open(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    float width,
+    float desired_height);
+static bool frontend_context_popup_begin(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    const char *title);
+static void frontend_context_popup_end(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    bool close_popup);
+static void frontend_disassembly_navigate_to_address(frontend *ui, uint16_t address);
 static void frontend_memory_split_view(frontend *ui, int view_index, bool aligned);
 static void frontend_memory_split_at_address(frontend *ui, uint16_t address);
 static void frontend_memory_join_view(frontend *ui, int view_index);
@@ -319,6 +346,8 @@ struct frontend {
     int memory_view_count;
     int memory_active_view_index;
     int memory_context_menu_view_index;
+    frontend_context_popup_state memory_context_popup;
+    frontend_context_popup_state disassembly_context_popup;
     bool memory_color_slot_used[MEMORY_VIEW_MAX];
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
@@ -2626,6 +2655,24 @@ static void frontend_disassembly_scroll_to_top(frontend *ui, uint16_t address)
     ui->disassembly.pc_lock_active = false;
 }
 
+static void frontend_disassembly_navigate_to_address(frontend *ui, uint16_t address)
+{
+    frontend_disassembly_view_state *view;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    view = &ui->disassembly;
+    view->top_address = frontend_disassembly_center_top(address, view->rows);
+    frontend_disassembly_set_user_cursor(view, address, view->rows / 2u, 1);
+    view->request_pending = false;
+    view->follow_pc = false;
+    view->pc_lock_active = false;
+    view->address_entry = false;
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_DISASSEMBLY);
+}
+
 static void frontend_disassembly_commit_goto_address(frontend_disassembly_view_state *view)
 {
     view->pc_lock_address = view->cursor_address;
@@ -3284,45 +3331,46 @@ static void frontend_draw_disassembly_view(
         nk_spacing(ui->ctx, 1);
         nk_layout_row_end(ui->ctx);
 
-        {
-            bool stopped = debug_state == NULL ||
-                debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
-            float menu_h = stopped ? 244.0f : 120.0f;
-            if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, menu_h), bounds)) {
-                uint16_t access_address = view->has_user_cursor ?
-                    view->cursor_address :
-                    (debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : view->top_address);
-                uint64_t write_history =
-                    frontend_disassembly_write_history_at(debug_state, view, access_address);
+        if (nk_input_is_mouse_click_in_rect(&ui->ctx->input, NK_BUTTON_RIGHT, bounds)) {
+            frontend_context_popup_open(
+                ui,
+                &ui->disassembly_context_popup,
+                120.0f,
+                100.0f);
+        }
 
-                frontend_context_menu_label(ui->ctx, "MemView");
-                frontend_context_menu_separator(ui->ctx);
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
-                        "Map")) {
-                    view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                    view->request_pending = false;
-                }
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        view->mode == RUNTIME_MEMORY_MODE_ROM,
-                        "ROM")) {
-                    view->mode = RUNTIME_MEMORY_MODE_ROM;
-                    view->request_pending = false;
-                }
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        view->mode == RUNTIME_MEMORY_MODE_RAM,
-                        "RAM")) {
-                    view->mode = RUNTIME_MEMORY_MODE_RAM;
-                    view->request_pending = false;
-                }
-                if (stopped) {
-                    frontend_context_menu_access(ui->ctx, write_history);
-                }
-                nk_contextual_end(ui->ctx);
+        if (frontend_context_popup_begin(
+                ui,
+                &ui->disassembly_context_popup,
+                "dasm-context-menu")) {
+            bool close_popup = false;
+
+            frontend_context_menu_heading(ui->ctx, "Source");
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
+                    "Map")) {
+                view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                view->request_pending = false;
+                close_popup = true;
             }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_ROM,
+                    "ROM")) {
+                view->mode = RUNTIME_MEMORY_MODE_ROM;
+                view->request_pending = false;
+                close_popup = true;
+            }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    view->mode == RUNTIME_MEMORY_MODE_RAM,
+                    "RAM")) {
+                view->mode = RUNTIME_MEMORY_MODE_RAM;
+                view->request_pending = false;
+                close_popup = true;
+            }
+            frontend_context_popup_end(ui, &ui->disassembly_context_popup, close_popup);
         }
 
         if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY) {
@@ -3446,14 +3494,35 @@ static void frontend_context_menu_label(struct nk_context *ctx, const char *labe
 
 static void frontend_context_menu_separator(struct nk_context *ctx)
 {
-    nk_layout_row_dynamic(ctx, 6.0f, 1);
-    nk_rule_horizontal(ctx, nk_rgb(90, 101, 110), nk_false);
+    struct nk_rect bounds;
+
+    nk_layout_row_dynamic(ctx, 5.0f, 1);
+    if (nk_widget(&bounds, ctx) != NK_WIDGET_INVALID) {
+        struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+        float y = bounds.y + bounds.h * 0.5f;
+        nk_stroke_line(
+            canvas,
+            bounds.x,
+            y,
+            bounds.x + bounds.w,
+            y,
+            1.0f,
+            nk_rgb(90, 101, 110));
+    }
+}
+
+static void frontend_context_menu_heading(struct nk_context *ctx, const char *label)
+{
+    frontend_context_menu_label(ctx, label);
+    frontend_context_menu_separator(ctx);
 }
 
 static bool frontend_context_menu_item(struct nk_context *ctx, const char *label)
 {
+    nk_bool selected = nk_false;
+
     nk_layout_row_dynamic(ctx, 22.0f, 1);
-    return nk_contextual_item_label(ctx, label, NK_TEXT_LEFT) != 0;
+    return nk_selectable_label(ctx, label, NK_TEXT_LEFT, &selected) != 0;
 }
 
 static bool frontend_context_menu_mode_item(
@@ -3462,26 +3531,155 @@ static bool frontend_context_menu_mode_item(
     const char *label)
 {
     char item[16];
+    nk_bool selected = nk_false;
 
     snprintf(item, sizeof(item), "%c %s", active ? '*' : ' ', label);
     nk_layout_row_dynamic(ctx, 22.0f, 1);
-    return nk_contextual_item_label(ctx, item, NK_TEXT_LEFT) != 0;
+    return nk_selectable_label(ctx, item, NK_TEXT_LEFT, &selected) != 0;
 }
 
-static void frontend_context_menu_access(
+static bool frontend_context_menu_access(
     struct nk_context *ctx,
-    uint64_t write_history)
+    uint64_t write_history,
+    uint16_t *out_address)
 {
     int lane;
+    bool selected = false;
 
-    frontend_context_menu_separator(ctx);
-    frontend_context_menu_label(ctx, "Access:");
+    frontend_context_menu_heading(ctx, "Access");
     for (lane = 3; lane >= 0; lane--) {
         char item[5];
         unsigned shift = (unsigned)lane * 16u;
-        snprintf(item, sizeof(item), "%04X", (unsigned)((write_history >> shift) & 0xffffu));
-        frontend_context_menu_label(ctx, item);
+        uint16_t address = (uint16_t)((write_history >> shift) & 0xffffu);
+
+        snprintf(item, sizeof(item), "%04X", (unsigned)address);
+        if (frontend_context_menu_item(ctx, item)) {
+            if (out_address != NULL) {
+                *out_address = address;
+            }
+            selected = true;
+        }
     }
+    return selected;
+}
+
+static void frontend_context_popup_open(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    float width,
+    float desired_height)
+{
+    struct nk_rect origin;
+    struct nk_rect viewport;
+    struct nk_vec2 pos;
+    float height;
+    float x;
+    float y;
+    float max_height;
+    int window_w = 0;
+    int window_h = 0;
+
+    if (ui == NULL || ui->ctx == NULL || popup == NULL) {
+        return;
+    }
+
+    origin = nk_window_get_content_region(ui->ctx);
+    platform_window_get_size(ui->window, &window_w, &window_h);
+    if (window_w > 16 && window_h > 16) {
+        viewport = nk_rect(4.0f, 4.0f, (float)window_w - 8.0f, (float)window_h - 8.0f);
+    } else {
+        viewport = origin;
+    }
+
+    pos = ui->ctx->input.mouse.buttons[NK_BUTTON_RIGHT].clicked_pos;
+    max_height = viewport.h;
+    if (max_height < 60.0f) {
+        max_height = viewport.h > 0.0f ? viewport.h : 60.0f;
+    }
+    height = desired_height > max_height ? max_height : desired_height;
+    if (height < 60.0f) {
+        height = 60.0f;
+    }
+
+    x = pos.x;
+    y = pos.y;
+    if (x + width > viewport.x + viewport.w) {
+        x = viewport.x + viewport.w - width;
+    }
+    if (x < viewport.x) {
+        x = viewport.x;
+    }
+    if (y + height > viewport.y + viewport.h) {
+        y = viewport.y + viewport.h - height;
+    }
+    if (y < viewport.y) {
+        y = viewport.y;
+    }
+
+    popup->open = true;
+    popup->just_opened = true;
+    popup->scroll = height < desired_height;
+    popup->group_open = false;
+    popup->rect = nk_rect(x - origin.x, y - origin.y, width, height);
+    popup->screen_rect = nk_rect(x, y, width, height);
+}
+
+static bool frontend_context_popup_begin(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    const char *title)
+{
+    const struct nk_input *input;
+    bool click_outside;
+
+    if (ui == NULL || ui->ctx == NULL || popup == NULL || !popup->open) {
+        return false;
+    }
+
+    input = &ui->ctx->input;
+    click_outside =
+        (nk_input_is_mouse_pressed(input, NK_BUTTON_LEFT) ||
+         nk_input_is_mouse_pressed(input, NK_BUTTON_RIGHT)) &&
+        !nk_input_is_mouse_hovering_rect(input, popup->screen_rect);
+    if (!popup->just_opened && click_outside) {
+        popup->open = false;
+        return false;
+    }
+    popup->just_opened = false;
+
+    if (!nk_popup_begin(ui->ctx, NK_POPUP_STATIC, title, NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR, popup->rect)) {
+        popup->open = false;
+        return false;
+    }
+
+    if (popup->scroll) {
+        nk_layout_row_dynamic(ui->ctx, popup->rect.h - 8.0f, 1);
+        popup->group_open = nk_group_begin(ui->ctx, title, 0) ? true : false;
+        if (!popup->group_open) {
+            return true;
+        }
+    }
+    return true;
+}
+
+static void frontend_context_popup_end(
+    frontend *ui,
+    frontend_context_popup_state *popup,
+    bool close_popup)
+{
+    if (ui == NULL || ui->ctx == NULL || popup == NULL) {
+        return;
+    }
+
+    if (popup->scroll && popup->group_open) {
+        nk_group_end(ui->ctx);
+        popup->group_open = false;
+    }
+    if (close_popup) {
+        popup->open = false;
+        nk_popup_close(ui->ctx);
+    }
+    nk_popup_end(ui->ctx);
 }
 
 static uint8_t frontend_memory_view_byte_at(
@@ -4607,6 +4805,9 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         /* On right-click, record which virtual view was under the cursor */
         if (nk_input_is_mouse_click_in_rect(&ui->ctx->input, NK_BUTTON_RIGHT, bounds)) {
             float click_y = ui->ctx->input.mouse.buttons[NK_BUTTON_RIGHT].clicked_pos.y;
+            bool stopped = debug_state == NULL ||
+                debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
+            bool can_join = ui->memory_view_count > 1;
             ui->memory_context_menu_view_index = ui->memory_active_view_index;
             for (v = 0; v < ui->memory_view_count; v++) {
                 if (ui->memory_views[v].rows > 0 &&
@@ -4616,59 +4817,76 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                     break;
                 }
             }
+            frontend_context_popup_open(
+                ui,
+                &ui->memory_context_popup,
+                120.0f,
+                stopped ?
+                    (can_join ? 297.0f : 275.0f) :
+                    (can_join ? 177.0f : 155.0f));
         }
 
         /* Context menu applies to the virtual view that was right-clicked */
-        {
+        if (frontend_context_popup_begin(
+                ui,
+                &ui->memory_context_popup,
+                "memory-context-menu")) {
+            bool close_popup = false;
             bool stopped = debug_state == NULL ||
                 debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
-            float menu_h = stopped ?
-                (ui->memory_view_count > 1 ? 298.0f : 276.0f) :
-                (ui->memory_view_count > 1 ? 172.0f : 150.0f);
-            if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, menu_h), bounds)) {
-                int ctx_idx = (ui->memory_context_menu_view_index >= 0 &&
-                               ui->memory_context_menu_view_index < ui->memory_view_count)
-                              ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
-                frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
-                uint64_t write_history =
-                    frontend_memory_write_history_at(debug_state, ctx_view, ctx_view->cursor_address);
+            int ctx_idx = (ui->memory_context_menu_view_index >= 0 &&
+                           ui->memory_context_menu_view_index < ui->memory_view_count)
+                          ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
+            frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
+            uint64_t write_history =
+                frontend_memory_write_history_at(debug_state, ctx_view, ctx_view->cursor_address);
 
-                frontend_context_menu_label(ui->ctx, "MemView");
-                frontend_context_menu_separator(ui->ctx);
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        ctx_view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
-                        "Map")) {
-                    ctx_view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                    ctx_view->request_pending = false;
-                }
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        ctx_view->mode == RUNTIME_MEMORY_MODE_ROM,
-                        "ROM")) {
-                    ctx_view->mode = RUNTIME_MEMORY_MODE_ROM;
-                    ctx_view->request_pending = false;
-                }
-                if (frontend_context_menu_mode_item(
-                        ui->ctx,
-                        ctx_view->mode == RUNTIME_MEMORY_MODE_RAM,
-                        "RAM")) {
-                    ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
-                    ctx_view->request_pending = false;
-                }
-                frontend_context_menu_separator(ui->ctx);
-                if (frontend_context_menu_item(ui->ctx, "Split")) {
-                    frontend_memory_split_view(ui, ctx_idx, false);
-                }
-                if (ui->memory_view_count > 1 &&
-                    frontend_context_menu_item(ui->ctx, "Join")) {
-                    frontend_memory_join_view(ui, ctx_idx);
-                }
-                if (stopped) {
-                    frontend_context_menu_access(ui->ctx, write_history);
-                }
-                nk_contextual_end(ui->ctx);
+            frontend_context_menu_heading(ui->ctx, "Source");
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
+                    "Map")) {
+                ctx_view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                ctx_view->request_pending = false;
+                close_popup = true;
             }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_ROM,
+                    "ROM")) {
+                ctx_view->mode = RUNTIME_MEMORY_MODE_ROM;
+                ctx_view->request_pending = false;
+                close_popup = true;
+            }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_RAM,
+                    "RAM")) {
+                ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
+                ctx_view->request_pending = false;
+                close_popup = true;
+            }
+            frontend_context_menu_separator(ui->ctx);
+            frontend_context_menu_heading(ui->ctx, "View");
+            if (frontend_context_menu_item(ui->ctx, "Split")) {
+                frontend_memory_split_view(ui, ctx_idx, false);
+                close_popup = true;
+            }
+            if (ui->memory_view_count > 1 &&
+                frontend_context_menu_item(ui->ctx, "Join")) {
+                frontend_memory_join_view(ui, ctx_idx);
+                close_popup = true;
+            }
+            if (stopped) {
+                uint16_t selected_address;
+
+                frontend_context_menu_separator(ui->ctx);
+                if (frontend_context_menu_access(ui->ctx, write_history, &selected_address)) {
+                    frontend_disassembly_navigate_to_address(ui, selected_address);
+                    close_popup = true;
+                }
+            }
+            frontend_context_popup_end(ui, &ui->memory_context_popup, close_popup);
         }
 
         /* Active-panel selection border wraps the whole memory panel */

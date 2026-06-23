@@ -35,11 +35,14 @@ Modes are independent per view:
 UI behavior:
 
 - Right-click contextual popup selects source mode and shows active-mode dot indicator.
-- The memory/disassembly contextual popup is headed `MemView`; the memory view
-  popup includes `Split` and, when multiple virtual views exist, `Join`.
-  While stopped both popups show four 16-bit write-history lanes for the cursor
-  address. The history comes from runtime-published snapshots; live machine
-  pointers do not cross into frontend.
+- The memory/disassembly contextual popup groups options under `Source`,
+  `View`, and `Access` headings. Memory view popups include `Split` and, when
+  multiple virtual views exist, `Join`. While stopped both popups show four
+  16-bit write-history lanes for the cursor address; selecting a lane navigates
+  the disassembly cursor to that writer PC. The history comes from
+  runtime-published snapshots; live machine pointers do not cross into
+  frontend. The popups are clamped to the app viewport and use an internal
+  scrollable region when the full menu cannot fit.
 - Opt+M cycles source mode in the focused memory/disassembly view.
 - Opt+Tab cycles active view C64 -> Disassembly -> Misc -> Memory.
 - Shift+Opt+Tab reverses that order.

@@ -214,8 +214,15 @@ ROM and RAM draw a colored source-mode border inside the content area. Map has n
 source-mode color; if the view is active, the separate neutral active-view border is
 still shown.
 
-Switch modes with **right-click** anywhere in the view (a popup lists all three with a
-dot next to the active choice), or with **Opt+M** from the keyboard.
+Switch modes with **right-click** anywhere in the view (the **Source** group lists all
+three with an asterisk next to the active choice), or with **Opt+M** from the keyboard.
+
+When the emulator is paused, the same popup also shows an **Access** group for the
+address under the disassembly cursor. The four `XXXX` entries are the recorded program
+counters of the last instructions that wrote to that C64 address, oldest retained entry
+first and newest entry last. `0000` means no writer has been recorded for that slot.
+Selecting one of the entries moves the Disassembly cursor to that address, the same kind
+of jump as entering the writer PC with `Opt+A`.
 
 **Tab** and **Shift+Tab** cycle the symbol display through `auto`, `names`, and `raw`
 modes independently of the source mode.
@@ -308,8 +315,8 @@ ROM and RAM draw a colored source-mode border inside the content area. Map has n
 source-mode color; if the view is active, the separate neutral active-view border is
 still shown.
 
-Switch modes with **right-click** anywhere in the view (a popup lists all three with a
-dot next to the active choice), or with **Opt+M** from the keyboard.
+Switch modes with **right-click** anywhere in the view (the **Source** group lists all
+three with an asterisk next to the active choice), or with **Opt+M** from the keyboard.
 
 The memory and disassembly view modes are independent of each other -- for example, you
 can watch raw RAM in the memory view while the disassembler follows the CPU map
@@ -348,6 +355,23 @@ views are present.
 
 The scrollbar on the right represents the active view's position in the 64 K space.
 Switching the active view moves the thumb without scrolling the memory itself.
+
+Right-clicking a memory view opens a popup for the view under the pointer. The
+**Source** group changes that view's Map/ROM/RAM mode. The **View** group can **Split**
+the clicked view at the clicked address; when more than one virtual view exists it also
+offers **Join** to dissolve the clicked view.
+
+When the emulator is paused, the popup also shows an **Access** group for the clicked
+address. The four `XXXX` entries are the write history for that C64 address:
+
+```
+oldest  older  newer  newest
+```
+
+Each entry is the 16-bit program counter of an instruction that wrote to the address.
+For example, `0000 0000 A000 A123` means two writes have been recorded so far: first
+from `$A000`, then from `$A123`. Selecting an entry moves the Disassembly cursor to that
+writer PC.
 
 ### Keyboard Controls
 
@@ -1027,6 +1051,13 @@ Debugger-safe read functions (`c64_debug_read_cpu_map`, `c64_debug_read_ram`,
 `c64_debug_read_rom`) let the UI inspect memory without triggering CIA ICR
 clear-on-read, TOD latching, or other bus side effects. The memory and disassembly views
 use these safe reads exclusively.
+
+For debugging writes, the machine also keeps a 64 K write-history table, one 64-bit value
+per C64 address. Normal CPU opcode writes update the addressed entry by shifting the old
+value left 16 bits and appending the opcode PC in the low 16 bits. This retains the last
+four instruction PCs that wrote to the address. Loader injection, debugger pokes, reset
+initialization, and other non-opcode writes are not recorded in the first version of the
+feature.
 
 ### VIC-II
 
