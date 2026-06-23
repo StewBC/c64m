@@ -16,10 +16,10 @@ STATUS.md says CIA behavior is complete through Phase G, including timers,
 ICR/IRQ/NMI behavior, keyboard, joystick, RESTORE, CIA #2 VIC bank and IEC port
 pins, and TOD/alarm.
 
-The older CIA planning document contains current-state sections that may describe
-an earlier implementation state. In particular, it says CIA #2 interrupt pending
-state was exposed diagnostically but not wired to the CPU NMI path. That conflicts
-with STATUS.md and must be reconciled before the current milestone is claimed.
+C64MENH Phase 1 reconciled the earlier disagreement between STATUS.md and the
+older CIA planning document: current code wires CIA #2 enabled-pending interrupt
+state to the CPU NMI callback through an edge latch, while RESTORE remains a
+separate machine-level NMI source.
 
 ## Goal
 
@@ -29,8 +29,9 @@ milestone behavior.
 Required for this milestone:
 
 ```text
-- verify CIA #2 NMI behavior against current code and tests;
-- update stale documentation or fix the implementation if needed.
+- keep CIA #2 NMI behavior verified against current code and tests;
+- update stale documentation or fix the implementation if future changes create a new
+  disagreement.
 ```
 
 Important but not blocking:
@@ -61,7 +62,7 @@ CIA #2 timer-triggered NMI will fail.
 
 ### Verification Direction
 
-The detailed verification guide should:
+The detailed verification guide used for C64MENH Phase 1 should:
 
 ```text
 - inspect the CIA #2 interrupt output path;
@@ -83,6 +84,10 @@ The detailed verification guide should:
 - ICR mask/read-clear behavior remains correct.
 - Documentation no longer contradicts implementation.
 ```
+
+Current reconciliation result: complete for the current milestone. Future CIA work should
+preserve the existing edge-latched CIA #2 NMI path and add focused regression tests for
+any new interrupt source that can assert CIA #2.
 
 ## Work Area B - CIA Serial Shift Register
 

@@ -76,11 +76,12 @@ to model before later phase documents are written.
 - ICR read returns flags plus bit 7 when any enabled source is pending.
 - ICR read clears all interrupt flags and both timer underflow states.
 - ICR write uses bit 7 as set-mask vs clear-mask and bits 0-4 as the affected source set.
-- Timer A and Timer B interrupt sources are modeled.
-- TOD alarm, serial complete, and FLAG interrupt sources are not modeled.
+- Timer A, Timer B, and TOD alarm interrupt sources are modeled.
+- Serial complete and FLAG interrupt sources are reserved in ICR mask/flag handling but
+  their event generation is not modeled yet.
 - CIA #1 IRQ is ORed with VIC IRQ in the CPU IRQ poll path.
-- CIA #2 interrupt pending state is exposed diagnostically, but it is not wired to the CPU
-  NMI callback. CPU NMI currently comes from the RESTORE path only.
+- CIA #2 enabled-pending interrupt state is wired to the CPU NMI callback through an
+  edge latch. RESTORE uses a separate pending latch and remains isolated from CIA #2.
 
 ### Port behavior already present
 
@@ -114,8 +115,8 @@ pass include:
 - Sub-cycle or phase-accurate CIA timing.
 - Full timer mode matrix, including CNT input and Timer B cascade from Timer A underflows.
 - PB6/PB7 timer output pulse/toggle behavior.
-- CIA #2 interrupt output wired to CPU NMI.
-- TOD clock, alarm, latching, BCD, AM/PM, and TOD interrupt behavior.
+- TOD clock, alarm, latching, BCD, AM/PM, and TOD interrupt behavior beyond the
+  current functional implementation's documented policy.
 - Serial data register shift behavior on CNT/SP.
 - FLAG interrupt input, PC pulse, and port handshaking.
 - Joystick port integration with the CIA #1 keyboard matrix lines.
@@ -755,8 +756,9 @@ countdown already exist, while manual observation says `$DC06` remains `$FF`. Th
 work item is therefore to reconcile the observed behavior with the actual CPU-visible and
 debug-visible code paths. Phase B then hardens the already-present timer core rather than
 reimplementing it blindly. Phase D remains early because timer underflows are much more
-useful once ICR and IRQ/NMI behavior are trustworthy, and because CIA #2 NMI is explicitly
-not wired yet.
+useful once ICR and IRQ/NMI behavior are trustworthy. CIA #2 NMI has since been wired and
+verified by the C64MENH Phase 1 reconciliation work; keep future Phase D edits focused on
+ICR semantics rather than re-adding a parallel NMI path.
 
 Phases E and F may be split into smaller documents if keyboard/joystick and IEC/VIC bank
 work require different maintainers or test harnesses.
