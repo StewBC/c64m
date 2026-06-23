@@ -35,7 +35,9 @@ That creates spectral images at multiples of roughly 962 Hz, including the
 runtime-side hold, it cannot attenuate images created afterward.
 
 This phase moves host audio sample emission to the correct cycle positions
-inside the batch loop, so each emitted host sample observes a fresh SID state.
+inside the batch loop, so each emitted host sample is based on fresh SID state.
+The implementation may average SID samples across each host-sample interval to
+avoid replacing the old batch hold with point-sampling aliasing.
 
 ## Required Reading Before Coding
 
@@ -57,10 +59,12 @@ completed.
 
 After this phase:
 
-- SID output samples written to `audio_buffer` and to `--audio-record` observe
-  updated SID state at approximately every host sample deadline.
+- SID output samples written to `audio_buffer` and to `--audio-record` are
+  produced from updated SID state at approximately every host sample deadline.
 - The runtime no longer emits dozens of identical SID samples from the last
   cycle of a batch.
+- SID output may be averaged over the C64 cycles that belong to one host sample
+  interval, reducing aliasing without changing SID register behavior.
 - The 16-22 kHz spectral excess drops materially from the Phase 8 value of
   approximately +11.09 dB.
 - No SID register-visible behavior changes.
@@ -72,6 +76,8 @@ After this phase:
   per-cycle or in-batch sample scheduler.
 - Call the scheduler after each successful C64 cycle step while audio is
   enabled.
+- Optionally accumulate/average SID output across the C64 cycles in each host
+  sample interval before emitting the host sample.
 - Preserve existing audio recording behavior and WAV output format.
 - Preserve `--audio-smoke` behavior.
 - Preserve turbo mute behavior.
@@ -87,6 +93,8 @@ Do not implement these in this phase:
 - SID waveform, ADSR, filter, output gain, or output-stage changes.
 - A new resampling library.
 - Multi-tap interpolation, sinc resampling, FIR filtering, or oversampling.
+  A simple per-host-interval average is allowed because it falls out of the
+  per-cycle scheduler and prevents point-sampling aliasing.
 - SDL audio callback changes.
 - Platform audio buffering policy changes.
 - Audio thread model changes.
@@ -169,9 +177,12 @@ static void runtime_audio_advance_cycle(runtime *rt);
 2. Return immediately if `audio_sample_rate <= 0`.
 3. If turbo mode is active, mute by not writing samples and keep accumulator
    state from producing a burst when normal speed resumes.
-4. Add `audio_sample_rate` to `audio_cycle_accum` for one C64 cycle.
-5. While `audio_cycle_accum >= clock_hz`, subtract `clock_hz`, read the current
-   sample, and emit it.
+4. For SID mode, add the current `sid_sample()` value to a per-host-interval
+   sum and increment its count.
+5. Add `audio_sample_rate` to `audio_cycle_accum` for one C64 cycle.
+6. While `audio_cycle_accum >= clock_hz`, subtract `clock_hz`, emit either the
+   next smoke sample or the average SID value for the interval, then clear the
+   SID interval sum/count.
 
 In pseudocode:
 
@@ -188,17 +199,28 @@ static void runtime_audio_advance_cycle(runtime *rt) {
 
     if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
         rt->audio_cycle_accum = 0.0;
+        rt->audio_sample_accum = 0.0;
+        rt->audio_sample_count = 0;
         return;
     }
 
     clock_hz = c64_config_clock_hz(&rt->machine_config);
     sample_rate = (uint32_t)rt->audio_sample_rate;
 
+    if (!rt->audio_smoke) {
+        rt->audio_sample_accum += (double)sid_sample(&rt->machine.sid);
+        rt->audio_sample_count++;
+    }
+
     rt->audio_cycle_accum += (double)sample_rate;
     while (rt->audio_cycle_accum >= (double)clock_hz) {
         rt->audio_cycle_accum -= (double)clock_hz;
         if (rt->audio_smoke) {
             sample = runtime_audio_next_smoke_sample(rt, sample_rate);
+        } else if (rt->audio_sample_count > 0u) {
+            sample = (float)(rt->audio_sample_accum / (double)rt->audio_sample_count);
+            rt->audio_sample_accum = 0.0;
+            rt->audio_sample_count = 0;
         } else {
             sample = sid_sample(&rt->machine.sid);
         }
@@ -217,6 +239,8 @@ sample reads are distributed through the cycle loop after SID has advanced.
 At PAL 48 kHz there is one host sample about every 20.53 C64 cycles, so the
 `while` loop will normally emit zero samples on most cycles and one sample on
 sample-deadline cycles. It should not emit large bursts under normal speed.
+With interval averaging, most emitted SID samples are the mean of 20 or 21
+per-cycle SID values.
 
 ### Call Site
 
@@ -414,4 +438,3 @@ sample scheduling fix.
 
 Also run normal interactive playback briefly and confirm there are no obvious
 new clicks, dropouts, or latency changes.
-

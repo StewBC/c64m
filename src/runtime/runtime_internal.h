@@ -133,7 +133,8 @@ struct runtime {
     bool audio_record_failed;
     bool audio_record_finished;
     double audio_cycle_accum;   /* fractional cycle accumulator for sample timing */
-    uint64_t audio_last_cycle;  /* machine cycle at last audio produce call */
+    double audio_sample_accum;  /* SID sample sum across the current host interval */
+    uint32_t audio_sample_count; /* SID samples accumulated for current host interval */
     float audio_smoke_phase;    /* square-wave phase accumulator for smoke tone */
     int audio_smoke;            /* non-zero: emit smoke tone instead of silence */
     bool paste_active;

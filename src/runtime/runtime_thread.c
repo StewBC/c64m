@@ -240,13 +240,25 @@ static void runtime_audio_record_sample(runtime *rt, float sample) {
     }
 }
 
-/* Emit host-rate audio samples proportional to machine cycles elapsed since
-   the last call. In smoke mode a 440 Hz square wave is produced; otherwise
-   silence is written (future SID samples will replace this path).
-   Turbo mode (RUNTIME_SPEED_MODE_FAST) mutes audio to avoid buffer flooding.
-   Batch point: called once per RUNTIME_RUN_BATCH_CYCLES in the main run loop. */
-static void runtime_audio_produce(runtime *rt) {
-    uint64_t now, elapsed;
+static void runtime_audio_emit_sample(runtime *rt, float sample) {
+    if (rt->audio_out != NULL) {
+        audio_buffer_write(rt->audio_out, &sample, 1);
+    }
+    runtime_audio_record_sample(rt, sample);
+}
+
+static float runtime_audio_next_smoke_sample(runtime *rt, uint32_t sample_rate) {
+    rt->audio_smoke_phase += 440.0f / (float)sample_rate;
+    if (rt->audio_smoke_phase >= 1.0f) {
+        rt->audio_smoke_phase -= 1.0f;
+    }
+    return rt->audio_smoke_phase < 0.5f ? 0.2f : -0.2f;
+}
+
+/* Advance the runtime audio sample scheduler by one completed C64 cycle.
+   Host samples are emitted at their cycle deadlines so each SID sample observes
+   fresh machine state instead of the final state of an entire run batch. */
+static void runtime_audio_advance_cycle(runtime *rt) {
     uint32_t clock_hz, sample_rate;
     float sample;
 
@@ -256,42 +268,37 @@ static void runtime_audio_produce(runtime *rt) {
     }
 
     if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
-        /* Turbo: mute. Don't write stale samples; let callback fill silence. */
-        rt->audio_last_cycle = rt->machine.clock.cycle;
-        return;
-    }
-
-    now = rt->machine.clock.cycle;
-    elapsed = now - rt->audio_last_cycle;
-    rt->audio_last_cycle = now;
-
-    if (elapsed == 0) {
+        /* Turbo: mute and discard pending timing so normal speed resumes cleanly. */
+        rt->audio_cycle_accum = 0.0;
+        rt->audio_sample_accum = 0.0;
+        rt->audio_sample_count = 0;
         return;
     }
 
     clock_hz    = c64_config_clock_hz(&rt->machine_config);
     sample_rate = (uint32_t)rt->audio_sample_rate;
 
-    rt->audio_cycle_accum += (double)elapsed * (double)sample_rate;
+    if (!rt->audio_smoke) {
+        rt->audio_sample_accum += (double)sid_sample(&rt->machine.sid);
+        rt->audio_sample_count++;
+    }
+
+    rt->audio_cycle_accum += (double)sample_rate;
 
     while (rt->audio_cycle_accum >= (double)clock_hz) {
         rt->audio_cycle_accum -= (double)clock_hz;
 
         if (rt->audio_smoke) {
-            /* 440 Hz square wave at 0.2 amplitude. */
-            rt->audio_smoke_phase += 440.0f / (float)sample_rate;
-            if (rt->audio_smoke_phase >= 1.0f) {
-                rt->audio_smoke_phase -= 1.0f;
-            }
-            sample = rt->audio_smoke_phase < 0.5f ? 0.2f : -0.2f;
+            sample = runtime_audio_next_smoke_sample(rt, sample_rate);
+        } else if (rt->audio_sample_count > 0u) {
+            sample = (float)(rt->audio_sample_accum / (double)rt->audio_sample_count);
+            rt->audio_sample_accum = 0.0;
+            rt->audio_sample_count = 0;
         } else {
             sample = sid_sample(&rt->machine.sid);
         }
 
-        if (rt->audio_out != NULL) {
-            audio_buffer_write(rt->audio_out, &sample, 1);
-        }
-        runtime_audio_record_sample(rt, sample);
+        runtime_audio_emit_sample(rt, sample);
     }
 }
 
@@ -300,7 +307,8 @@ static void runtime_audio_reset(runtime *rt) {
         audio_buffer_reset(rt->audio_out);
     }
     rt->audio_cycle_accum = 0.0;
-    rt->audio_last_cycle  = 0;
+    rt->audio_sample_accum = 0.0;
+    rt->audio_sample_count = 0;
     rt->audio_smoke_phase = 0.0f;
     if (rt->audio_record_file != NULL) {
         runtime_audio_record_finish(rt);
@@ -1335,6 +1343,7 @@ static bool runtime_step_cycle(runtime *rt) {
         return false;
     }
 
+    runtime_audio_advance_cycle(rt);
     return true;
 }
 
@@ -2820,7 +2829,8 @@ int runtime_thread_main(void *userdata) {
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
     rt->audio_cycle_accum = 0.0;
-    rt->audio_last_cycle  = 0;
+    rt->audio_sample_accum = 0.0;
+    rt->audio_sample_count = 0;
     rt->audio_smoke_phase = 0.0f;
     runtime_audio_record_init(rt);
     runtime_update_sid_sample_output(rt);
@@ -2915,9 +2925,6 @@ int runtime_thread_main(void *userdata) {
                     }
                 }
             }
-
-            /* Produce audio samples for cycles advanced in this batch. */
-            runtime_audio_produce(rt);
 
             continue;
         }

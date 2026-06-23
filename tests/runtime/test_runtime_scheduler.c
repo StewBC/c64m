@@ -1,3 +1,4 @@
+#include "audio_buffer.h"
 #include "c64.h"
 #include "runtime.h"
 #include "runtime_client.h"
@@ -10,6 +11,7 @@
 
 enum {
     TEST_RESET_VECTOR = 0xe000,
+    TEST_PAL_CLOCK_HZ = 985248,
 };
 
 static void fail(const char *message) {
@@ -221,6 +223,19 @@ static void drain_runtime_events(runtime_client *client) {
     }
 }
 
+static void write_sid_register(runtime_client *client, uint16_t address, uint8_t value) {
+    runtime_event event;
+
+    expect_true("write SID register", runtime_client_write_memory_byte(
+        client,
+        address,
+        value,
+        RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("SID register write response not received");
+    }
+}
+
 static runtime *start_runtime(runtime_client **out_client) {
     runtime_config config = {
         .system_rom_path = "scheduler_64c.bin",
@@ -291,6 +306,58 @@ static runtime *start_runtime_with_turbo(runtime_client **out_client, const char
     }
     drain_runtime_events(client);
 
+    *out_client = client;
+    return rt;
+}
+
+static runtime *start_runtime_with_audio(
+    runtime_client **out_client,
+    audio_buffer *audio,
+    int sample_rate,
+    int audio_smoke) {
+    runtime_config config = {
+        .system_rom_path = "scheduler_64c.bin",
+        .char_rom_path = "scheduler_character.bin",
+        .machine_config = {
+            .video_standard = C64_VIDEO_STANDARD_PAL,
+        },
+        .audio_out = audio,
+        .audio_sample_rate = sample_rate,
+        .audio_smoke = audio_smoke,
+    };
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+
+    expect_true("runtime init", runtime_init());
+    rt = runtime_create(&config);
+    if (!rt) {
+        fail("runtime_create failed");
+    }
+
+    expect_true("runtime start", runtime_start(rt));
+    client = runtime_get_client(rt);
+    if (!poll_event(client, &event, RUNTIME_EVENT_STARTED)) {
+        fail("STARTED event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("startup RESET_COMPLETE event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("startup CPU state not received");
+    }
+    drain_runtime_events(client);
+
+    expect_true("runtime reset", runtime_client_reset(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("RESET_COMPLETE event not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("reset CPU state not received");
+    }
+    drain_runtime_events(client);
+
+    audio_buffer_reset(audio);
     *out_client = client;
     return rt;
 }
@@ -377,6 +444,115 @@ static void test_runtime_run_for_cycles(void) {
     expect_u64("bounded run pauses", 0, event.data.machine_state.running);
 
     stop_runtime(rt, client);
+}
+
+static void test_runtime_audio_sample_count_matches_cycles(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    audio_buffer *audio;
+    float samples[64];
+    size_t read;
+
+    audio = audio_buffer_create(256);
+    if (audio == NULL) {
+        fail("audio sample count: audio_buffer_create failed");
+    }
+
+    rt = start_runtime_with_audio(&client, audio, TEST_PAL_CLOCK_HZ, 1);
+
+    expect_true("run audio sample-count cycles", runtime_client_run_cycles(client, 64));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("audio sample-count RUN_COMPLETE not received");
+    }
+
+    expect_u64("audio sample-count available", 64, audio_buffer_available_read(audio));
+    read = audio_buffer_read(audio, samples, 64);
+    expect_u64("audio sample-count read", 64, read);
+
+    stop_runtime(rt, client);
+    audio_buffer_destroy(audio);
+}
+
+static void test_runtime_audio_sid_samples_are_not_batch_held(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    audio_buffer *audio;
+    float samples[256];
+    size_t read;
+    size_t i;
+    size_t current_run = 1;
+    size_t max_run = 1;
+    size_t nonzero_count = 0;
+
+    audio = audio_buffer_create(1024);
+    if (audio == NULL) {
+        fail("audio no-hold: audio_buffer_create failed");
+    }
+
+    rt = start_runtime_with_audio(&client, audio, 48000, 0);
+
+    write_sid_register(client, 0xd400, 0xff); /* voice 1 frequency low */
+    write_sid_register(client, 0xd401, 0xff); /* voice 1 frequency high */
+    write_sid_register(client, 0xd405, 0x00); /* fastest attack/decay */
+    write_sid_register(client, 0xd406, 0xf0); /* full sustain */
+    write_sid_register(client, 0xd418, 0x0f); /* full volume, no filter mode */
+    write_sid_register(client, 0xd404, 0x21); /* sawtooth + gate */
+    audio_buffer_reset(audio);
+
+    expect_true("run SID warmup cycles", runtime_client_run_cycles(client, 20000));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("audio no-hold warmup RUN_COMPLETE not received");
+    }
+    audio_buffer_reset(audio);
+
+    expect_true("run SID audio cycles", runtime_client_run_cycles(client, 4096));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("audio no-hold RUN_COMPLETE not received");
+    }
+
+    read = audio_buffer_read(audio, samples, sizeof(samples) / sizeof(samples[0]));
+    if (read < 150) {
+        fprintf(stderr, "audio no-hold: expected at least 150 samples, got %llu\n",
+            (unsigned long long)read);
+        exit(1);
+    }
+
+    for (i = 0; i < read; ++i) {
+        if (samples[i] != 0.0f) {
+            nonzero_count++;
+        }
+        if (i == 0) {
+            continue;
+        }
+        if (samples[i] == samples[i - 1]) {
+            current_run++;
+        } else {
+            if (current_run > max_run) {
+                max_run = current_run;
+            }
+            current_run = 1;
+        }
+    }
+    if (current_run > max_run) {
+        max_run = current_run;
+    }
+
+    if (nonzero_count < read / 2u) {
+        fprintf(stderr, "audio no-hold: too many zero samples (%llu of %llu)\n",
+            (unsigned long long)(read - nonzero_count),
+            (unsigned long long)read);
+        exit(1);
+    }
+    if (max_run >= 40u) {
+        fprintf(stderr, "audio no-hold: max identical run too large: %llu\n",
+            (unsigned long long)max_run);
+        exit(1);
+    }
+
+    stop_runtime(rt, client);
+    audio_buffer_destroy(audio);
 }
 
 static void test_runtime_cycle_turbo_speed(void) {
@@ -1344,6 +1520,8 @@ int main(void) {
     write_test_prg();
     test_single_machine_cycle();
     test_runtime_run_for_cycles();
+    test_runtime_audio_sample_count_matches_cycles();
+    test_runtime_audio_sid_samples_are_not_batch_held();
     test_runtime_cycle_turbo_speed();
     test_runtime_keyboard_event_reaches_machine();
     test_runtime_restore_event_reaches_machine();
