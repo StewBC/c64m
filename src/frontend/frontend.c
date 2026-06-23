@@ -2557,6 +2557,14 @@ static void frontend_disassembly_scroll_to_top(frontend *ui, uint16_t address)
     ui->disassembly.pc_lock_active = false;
 }
 
+static void frontend_disassembly_commit_goto_address(frontend_disassembly_view_state *view)
+{
+    view->pc_lock_address = view->cursor_address;
+    view->pc_lock_active = true;
+    view->follow_pc = false;
+    view->request_pending = false;
+}
+
 static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
 {
     frontend_disassembly_view_state *view = &ui->disassembly;
@@ -2575,13 +2583,13 @@ static void frontend_disassembly_apply_address_digit(frontend *ui, int digit)
     view->has_user_cursor = true;
     view->cursor_row = view->rows / 2u;
     view->cursor_length = 1;
-    view->request_pending = false;
     view->follow_pc = false;
     view->pc_lock_active = false;
 
     if (view->active_address_digit >= 3) {
         view->address_entry = false;
         view->active_address_digit = 0;
+        frontend_disassembly_commit_goto_address(view);
     } else {
         view->active_address_digit++;
     }
@@ -2661,6 +2669,7 @@ static void frontend_disassembly_handle_key(
     if (view->address_entry) {
         if (sym == SDLK_RETURN) {
             view->address_entry = false;
+            frontend_disassembly_commit_goto_address(view);
             return;
         }
         if (sym == SDLK_HOME) {
@@ -3081,12 +3090,12 @@ static void frontend_draw_disassembly_view(
         ui->has_pending_disassembly_key = false;
     }
 
-    /* Force cache refresh on RUNNING→PAUSED transition or PC change while paused */
-    if (debug_state != NULL && view->pc_lock_active) {
+    /* Force cache refresh on RUNNING→PAUSED transition or CPU PC change while paused */
+    if (debug_state != NULL && debug_state->has_cpu && view->pc_lock_active && view->follow_pc) {
         bool was_running = view->last_runtime_state == FRONTEND_RUNTIME_STATE_RUNNING;
         bool now_paused = debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
-        bool pc_changed = !view->has_last_pc || view->last_pc != view->pc_lock_address;
-        if ((was_running && now_paused) || (now_paused && pc_changed)) {
+        bool cpu_pc_changed = !view->has_last_pc || view->last_pc != debug_state->cpu.pc;
+        if ((was_running && now_paused) || (now_paused && cpu_pc_changed)) {
             frontend_disassembly_force_refresh_pc(view);
         }
     }
