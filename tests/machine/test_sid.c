@@ -1408,7 +1408,7 @@ static void test_hfroll_state_reset_to_zero(void) {
 
 static void test_hfroll_attenuates_high_frequency(void) {
     /* Noise waveform has wideband spectrum including HF content above the
-     * 16.5 kHz rolloff.  Over many samples the HF rolloff filter produces
+     * output-path rolloff.  Over many samples the HF rolloff filter produces
      * a smoothed (attenuated) signal; its mean-absolute value must be
      * strictly less than the raw DC-blocked input's mean-absolute value. */
     sid s;
@@ -1435,7 +1435,7 @@ static void test_hfroll_attenuates_high_frequency(void) {
 }
 
 static void test_hfroll_passes_low_frequency(void) {
-    /* A sawtooth at ~100 Hz is well below the 16.5 kHz rolloff.  After
+    /* A sawtooth at ~100 Hz is well below the output-path rolloff.  After
      * collecting many samples the hfroll output mean-absolute value must
      * remain at least 80% of the DC-blocked input mean-absolute value. */
     sid s;
