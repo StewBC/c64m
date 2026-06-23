@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #if defined(_WIN32)
 #include <direct.h>
@@ -352,9 +353,12 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
             }
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
             if (ui != NULL) {
-                runtime_symbol_snapshot symbols;
-                if (runtime_client_poll_symbols(client, &symbols)) {
-                    frontend_update_symbols(ui, &symbols);
+                runtime_symbol_snapshot *symbols = malloc(sizeof(*symbols));
+                if (symbols) {
+                    if (runtime_client_poll_symbols(client, symbols)) {
+                        frontend_update_symbols(ui, symbols);
+                    }
+                    free(symbols);
                 }
             }
         } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
@@ -368,9 +372,12 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
     }
 
     if (ui != NULL) {
-        runtime_symbol_snapshot symbols;
-        if (runtime_client_poll_symbols(client, &symbols)) {
-            frontend_update_symbols(ui, &symbols);
+        runtime_symbol_snapshot *symbols = malloc(sizeof(*symbols));
+        if (symbols) {
+            if (runtime_client_poll_symbols(client, symbols)) {
+                frontend_update_symbols(ui, symbols);
+            }
+            free(symbols);
         }
     }
 

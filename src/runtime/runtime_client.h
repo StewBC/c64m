@@ -13,7 +13,7 @@
 
 enum {
     RUNTIME_SYMBOL_NAME_MAX    = 64,
-    RUNTIME_SYMBOL_SNAPSHOT_MAX = 256
+    RUNTIME_SYMBOL_SNAPSHOT_MAX = 4096
 };
 
 typedef struct runtime_symbol_snapshot_entry {
