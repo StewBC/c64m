@@ -243,6 +243,44 @@ typedef struct frontend_breakpoint_dialog_state {
     char error[96];
 } frontend_breakpoint_dialog_state;
 
+/* ---- Symbol lookup dialog ---- */
+
+enum {
+    SYMBOL_LOOKUP_ENTRY_MAX  = 4096,
+    SYMBOL_LOOKUP_SEARCH_MAX = 128,
+    SYMBOL_LOOKUP_COL_MAX    = 15
+};
+
+typedef enum frontend_symbol_lookup_sort_col {
+    SYMBOL_LOOKUP_SORT_ADDR   = 0,
+    SYMBOL_LOOKUP_SORT_SCOPE  = 1,
+    SYMBOL_LOOKUP_SORT_LABEL  = 2,
+    SYMBOL_LOOKUP_SORT_SOURCE = 3
+} frontend_symbol_lookup_sort_col;
+
+typedef struct frontend_symbol_lookup_entry {
+    uint16_t address;
+    char     scope [SYMBOL_LOOKUP_COL_MAX + 1];
+    char     label [SYMBOL_LOOKUP_COL_MAX + 1];
+    char     source[SYMBOL_LOOKUP_COL_MAX + 1];
+} frontend_symbol_lookup_entry;
+
+typedef struct frontend_symbol_lookup_state {
+    bool                            open;
+    bool                            from_memory;
+    char                            search[SYMBOL_LOOKUP_SEARCH_MAX];
+    frontend_symbol_lookup_entry    entries[SYMBOL_LOOKUP_ENTRY_MAX];
+    int                             entry_count;
+    int                             filtered[SYMBOL_LOOKUP_ENTRY_MAX];
+    int                             filtered_count;
+    frontend_symbol_lookup_sort_col sort_col;
+    bool                            sort_asc;
+    int                             selected;
+    bool                            table_has_kb_focus;
+    bool                            scroll_to_selected;
+    bool                            just_opened;
+} frontend_symbol_lookup_state;
+
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
@@ -270,6 +308,7 @@ struct frontend {
     frontend_load_bin_dialog_state load_bin_dialog;
     frontend_save_bin_dialog_state save_bin_dialog;
     frontend_help_state help;
+    frontend_symbol_lookup_state symbol_lookup;
     symbol_resolver symbols;
     symbol_table *symbol_table;
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
@@ -294,7 +333,8 @@ static bool frontend_any_dialog_open(const frontend *ui)
         || ui->breakpoint_dialog.open
         || ui->load_bin_dialog.open
         || ui->save_bin_dialog.open
-        || ui->assembler.error_dialog_open;
+        || ui->assembler.error_dialog_open
+        || ui->symbol_lookup.open;
 }
 
 static void frontend_set_active_view(frontend *ui, frontend_active_view view)
@@ -451,6 +491,12 @@ static bool frontend_click_in_any_dialog(const frontend *ui, float x, float y)
             return true;
         }
     }
+    if (ui->symbol_lookup.open) {
+        win = nk_window_find(ui->ctx, "Symbol Lookup");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -504,6 +550,9 @@ static bool frontend_push_assemble_run_intent(
     bool reset_first);
 
 static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height);
+static void frontend_draw_symbol_lookup(frontend *ui, int width, int height);
+static void frontend_open_symbol_lookup(frontend *ui, bool from_memory);
+static void frontend_symbol_lookup_commit(frontend *ui);
 
 static void frontend_push_breakpoint_id_intent(
     frontend *ui,
@@ -2639,9 +2688,7 @@ static void frontend_disassembly_handle_key(
     }
 
     if (alt && sym == SDLK_s) {
-        if (ui->symbols.enumerate != NULL) {
-            (void)ui->symbols.enumerate(ui->symbols.userdata, NULL, 0);
-        }
+        frontend_open_symbol_lookup(ui, false);
         return;
     }
 
@@ -4074,6 +4121,11 @@ static void frontend_memory_handle_key(
             memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
         }
         memory->request_pending = false;
+        return;
+    }
+
+    if (alt && sym == SDLK_s) {
+        frontend_open_symbol_lookup(ui, true);
         return;
     }
 
@@ -5850,6 +5902,43 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         event->key.repeat == 0 &&
         event->key.keysym.sym == SDLK_ESCAPE) {
         ui->cancel_register_edit_requested = true;
+        if (ui->symbol_lookup.open) {
+            ui->symbol_lookup.open = false;
+        }
+    }
+
+    if (ui->symbol_lookup.open && event->type == SDL_KEYDOWN && event->key.repeat == 0) {
+        SDL_Keycode sk = event->key.keysym.sym;
+        frontend_symbol_lookup_state *dlg = &ui->symbol_lookup;
+        if (sk == SDLK_TAB) {
+            dlg->table_has_kb_focus = !dlg->table_has_kb_focus;
+            /* consume: don't pass to pending key queues */
+            nk_sdl_handle_event(event);
+            return;
+        }
+        if (dlg->table_has_kb_focus) {
+            if (sk == SDLK_UP) {
+                if (dlg->selected > 0) {
+                    dlg->selected--;
+                    dlg->scroll_to_selected = true;
+                }
+                nk_sdl_handle_event(event);
+                return;
+            }
+            if (sk == SDLK_DOWN) {
+                if (dlg->selected < dlg->filtered_count - 1) {
+                    dlg->selected++;
+                    dlg->scroll_to_selected = true;
+                }
+                nk_sdl_handle_event(event);
+                return;
+            }
+            if (sk == SDLK_RETURN) {
+                frontend_symbol_lookup_commit(ui);
+                nk_sdl_handle_event(event);
+                return;
+            }
+        }
     }
 
     if (event->type == SDL_KEYDOWN && !ui->c64_input_active && !frontend_any_dialog_open(ui)) {
@@ -6003,6 +6092,390 @@ static bool frontend_push_save_bin_execute_intent(
     ui->intents[ui->intent_write].save_bin_is_basic = is_basic;
     ui->intent_write = next;
     return true;
+}
+
+/* ---- Symbol lookup implementation ---- */
+
+static void frontend_symbol_lookup_basename(const char *src, char *out, int max)
+{
+    const char *base;
+    const char *ext;
+    int len;
+
+    if (src == NULL || out == NULL || max <= 0) {
+        if (out && max > 0) out[0] = '\0';
+        return;
+    }
+
+    base = src;
+    for (const char *p = src; *p; ++p) {
+        if (*p == '/' || *p == '\\') base = p + 1;
+    }
+
+    ext = NULL;
+    for (const char *p = base; *p; ++p) {
+        if (*p == '.') ext = p;
+    }
+
+    len = ext ? (int)(ext - base) : (int)strlen(base);
+    if (len >= max) len = max - 1;
+    memcpy(out, base, (size_t)len);
+    out[len] = '\0';
+}
+
+static void frontend_symbol_lookup_scope_str(const symbol_info *info, char *out, int max)
+{
+    int len;
+
+    if (out == NULL || max <= 0) return;
+    if (info == NULL || info->scope_path_length == 0) {
+        out[0] = '\0';
+        return;
+    }
+
+    len = (int)info->scope_path_length;
+    if (len >= max) len = max - 1;
+    memcpy(out, info->name, (size_t)len);
+    out[len] = '\0';
+}
+
+static const frontend_symbol_lookup_entry *g_sort_entries_ptr = NULL;
+static frontend_symbol_lookup_sort_col     g_sort_col_val;
+static bool                                g_sort_asc_val;
+
+static int frontend_symbol_lookup_compare(const void *a, const void *b)
+{
+    int ia = *(const int *)a;
+    int ib = *(const int *)b;
+    const frontend_symbol_lookup_entry *ea = &g_sort_entries_ptr[ia];
+    const frontend_symbol_lookup_entry *eb = &g_sort_entries_ptr[ib];
+    int cmp = 0;
+
+    switch (g_sort_col_val) {
+        case SYMBOL_LOOKUP_SORT_ADDR:
+            cmp = (ea->address < eb->address) ? -1 : (ea->address > eb->address) ? 1 : 0;
+            break;
+        case SYMBOL_LOOKUP_SORT_SCOPE:
+            cmp = strcmp(ea->scope, eb->scope);
+            if (cmp == 0) cmp = (ea->address < eb->address) ? -1 : (ea->address > eb->address) ? 1 : 0;
+            break;
+        case SYMBOL_LOOKUP_SORT_LABEL:
+            cmp = strcmp(ea->label, eb->label);
+            if (cmp == 0) cmp = (ea->address < eb->address) ? -1 : (ea->address > eb->address) ? 1 : 0;
+            break;
+        case SYMBOL_LOOKUP_SORT_SOURCE:
+            cmp = strcmp(ea->source, eb->source);
+            if (cmp == 0) cmp = (ea->address < eb->address) ? -1 : (ea->address > eb->address) ? 1 : 0;
+            break;
+    }
+    return g_sort_asc_val ? cmp : -cmp;
+}
+
+static void frontend_symbol_lookup_refilter(frontend_symbol_lookup_state *dlg)
+{
+    int i;
+    char row[64];
+    char addr_hex[5];
+
+    dlg->filtered_count = 0;
+
+    for (i = 0; i < dlg->entry_count; ++i) {
+        const frontend_symbol_lookup_entry *e = &dlg->entries[i];
+        if (dlg->search[0] == '\0') {
+            dlg->filtered[dlg->filtered_count++] = i;
+            continue;
+        }
+        snprintf(addr_hex, sizeof(addr_hex), "%04X", e->address);
+        snprintf(row, sizeof(row), "%s %s %s %s", addr_hex, e->scope, e->label, e->source);
+        if (nk_strfilter(row, dlg->search)) {
+            dlg->filtered[dlg->filtered_count++] = i;
+        }
+    }
+
+    /* Apply current sort to filtered indices */
+    if (dlg->filtered_count > 1) {
+        g_sort_entries_ptr = dlg->entries;
+        g_sort_col_val     = dlg->sort_col;
+        g_sort_asc_val     = dlg->sort_asc;
+        qsort(dlg->filtered, (size_t)dlg->filtered_count, sizeof(int), frontend_symbol_lookup_compare);
+    }
+
+    if (dlg->selected >= dlg->filtered_count) {
+        dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
+    }
+}
+
+static void frontend_symbol_lookup_set_sort(
+    frontend_symbol_lookup_state *dlg,
+    frontend_symbol_lookup_sort_col col)
+{
+    if (dlg->sort_col == col) {
+        dlg->sort_asc = !dlg->sort_asc;
+    } else {
+        dlg->sort_col = col;
+        dlg->sort_asc = true;
+    }
+
+    if (dlg->filtered_count > 1) {
+        g_sort_entries_ptr = dlg->entries;
+        g_sort_col_val     = dlg->sort_col;
+        g_sort_asc_val     = dlg->sort_asc;
+        qsort(dlg->filtered, (size_t)dlg->filtered_count, sizeof(int), frontend_symbol_lookup_compare);
+    }
+    dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
+    dlg->scroll_to_selected = true;
+}
+
+static void frontend_open_symbol_lookup(frontend *ui, bool from_memory)
+{
+    frontend_symbol_lookup_state *dlg;
+    size_t i, count;
+    symbol_info info;
+
+    if (ui == NULL) return;
+
+    dlg = &ui->symbol_lookup;
+    memset(dlg, 0, sizeof(*dlg));
+    dlg->sort_col = SYMBOL_LOOKUP_SORT_ADDR;
+    dlg->sort_asc = true;
+    dlg->selected = -1;
+    dlg->from_memory = from_memory;
+
+    if (ui->symbol_table != NULL) {
+        count = symbol_table_count(ui->symbol_table);
+        if (count > SYMBOL_LOOKUP_ENTRY_MAX) count = SYMBOL_LOOKUP_ENTRY_MAX;
+        for (i = 0; i < count; ++i) {
+            frontend_symbol_lookup_entry *e = &dlg->entries[dlg->entry_count];
+            if (symbol_table_get(ui->symbol_table, i, &info) != SYMBOL_OK) continue;
+            e->address = info.address;
+            frontend_symbol_lookup_scope_str(&info, e->scope, sizeof(e->scope));
+            snprintf(e->label, sizeof(e->label), "%.*s",
+                SYMBOL_LOOKUP_COL_MAX, info.display_name);
+            frontend_symbol_lookup_basename(info.source_name, e->source, sizeof(e->source));
+            dlg->entry_count++;
+        }
+    }
+
+    frontend_symbol_lookup_refilter(dlg);
+    dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
+    dlg->just_opened = true;
+    dlg->open = true;
+}
+
+static void frontend_symbol_lookup_commit(frontend *ui)
+{
+    frontend_symbol_lookup_state *dlg;
+    const frontend_symbol_lookup_entry *e;
+    uint16_t addr;
+
+    if (ui == NULL) return;
+    dlg = &ui->symbol_lookup;
+    if (dlg->selected < 0 || dlg->selected >= dlg->filtered_count) {
+        dlg->open = false;
+        return;
+    }
+
+    e    = &dlg->entries[dlg->filtered[dlg->selected]];
+    addr = e->address;
+    dlg->open = false;
+
+    if (dlg->from_memory) {
+        frontend_memory_view_state *mv = &ui->memory_views[ui->memory_active_view_index];
+        uint16_t cols = mv->columns > 0 ? mv->columns : 16;
+        mv->view_address    = (uint16_t)(addr & ~(uint16_t)(cols - 1u));
+        mv->cursor_address  = addr;
+        mv->edit_field      = FRONTEND_MEMORY_EDIT_HEX;
+        mv->request_pending = false;
+    } else {
+        frontend_disassembly_view_state *dv = &ui->disassembly;
+        dv->cursor_address  = addr;
+        dv->top_address     = frontend_disassembly_center_top(addr, dv->rows);
+        dv->has_user_cursor = true;
+        dv->cursor_row      = dv->rows / 2u;
+        dv->cursor_length   = 1;
+        dv->follow_pc       = false;
+        dv->pc_lock_active  = true;
+        dv->pc_lock_address = addr;
+        dv->address_entry   = false;
+        dv->request_pending = false;
+    }
+}
+
+static void frontend_draw_symbol_lookup(frontend *ui, int width, int height)
+{
+    frontend_symbol_lookup_state *dlg;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+    struct nk_list_view lv;
+    char prev_search[SYMBOL_LOOKUP_SEARCH_MAX];
+    float dw, dh, table_h;
+    int i;
+
+    static const int ROW_H    = 18;
+    static const float ADDR_W = 52.0f;
+
+    if (ui == NULL || !ui->symbol_lookup.open || ui->ctx == NULL) return;
+
+    ctx = ui->ctx;
+    dlg = &ui->symbol_lookup;
+
+    dw = (float)width * 0.72f;
+    if (dw < 520.0f) dw = 520.0f;
+    if (dw > (float)width - 16.0f && width > 0) dw = (float)width - 16.0f;
+    dh = (float)height * 0.70f;
+    if (dh < 340.0f) dh = 340.0f;
+    if (dh > (float)height - 16.0f && height > 0) dh = (float)height - 16.0f;
+
+    bounds = nk_rect(((float)width - dw) * 0.5f, ((float)height - dh) * 0.5f, dw, dh);
+
+    if (nk_begin(ctx, "Symbol Lookup", bounds,
+            NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+
+        if (nk_window_is_closed(ctx, "Symbol Lookup")) {
+            dlg->open = false;
+            nk_end(ctx);
+            return;
+        }
+
+        /* Search box */
+        memcpy(prev_search, dlg->search, sizeof(dlg->search));
+        nk_layout_row_dynamic(ctx, 24.0f, 1);
+        if (dlg->just_opened) {
+            nk_edit_focus(ctx, 0);
+            dlg->just_opened = false;
+        }
+        frontend_edit_replace(
+            ctx,
+            NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+            dlg->search, sizeof(dlg->search), nk_filter_default);
+        if (memcmp(prev_search, dlg->search, sizeof(dlg->search)) != 0) {
+            frontend_symbol_lookup_refilter(dlg);
+            dlg->scroll_to_selected = true;
+        }
+
+        /* Column headers */
+        {
+            char h0[12], h1[12], h2[12], h3[12];
+            snprintf(h0, sizeof(h0), "ADDR%s",
+                dlg->sort_col == SYMBOL_LOOKUP_SORT_ADDR   ? (dlg->sort_asc ? "^" : "v") : "");
+            snprintf(h1, sizeof(h1), "SCOPE%s",
+                dlg->sort_col == SYMBOL_LOOKUP_SORT_SCOPE  ? (dlg->sort_asc ? "^" : "v") : "");
+            snprintf(h2, sizeof(h2), "LABEL%s",
+                dlg->sort_col == SYMBOL_LOOKUP_SORT_LABEL  ? (dlg->sort_asc ? "^" : "v") : "");
+            snprintf(h3, sizeof(h3), "SOURCE%s",
+                dlg->sort_col == SYMBOL_LOOKUP_SORT_SOURCE ? (dlg->sort_asc ? "^" : "v") : "");
+
+            nk_layout_row_template_begin(ctx, 22.0f);
+            nk_layout_row_template_push_static(ctx, ADDR_W);
+            nk_layout_row_template_push_dynamic(ctx);
+            nk_layout_row_template_push_dynamic(ctx);
+            nk_layout_row_template_push_dynamic(ctx);
+            nk_layout_row_template_end(ctx);
+
+            if (nk_button_label(ctx, h0))
+                frontend_symbol_lookup_set_sort(dlg, SYMBOL_LOOKUP_SORT_ADDR);
+            if (nk_button_label(ctx, h1))
+                frontend_symbol_lookup_set_sort(dlg, SYMBOL_LOOKUP_SORT_SCOPE);
+            if (nk_button_label(ctx, h2))
+                frontend_symbol_lookup_set_sort(dlg, SYMBOL_LOOKUP_SORT_LABEL);
+            if (nk_button_label(ctx, h3))
+                frontend_symbol_lookup_set_sort(dlg, SYMBOL_LOOKUP_SORT_SOURCE);
+        }
+
+        /* Scrollable table */
+        table_h = nk_window_get_height(ctx) - 24.0f /* title */ - 24.0f /* search */
+                  - 22.0f /* headers */ - 30.0f /* close btn */ - 24.0f /* padding */;
+        if (table_h < 40.0f) table_h = 40.0f;
+        nk_layout_row_dynamic(ctx, table_h, 1);
+
+        if (nk_list_view_begin(ctx, &lv, "sym_rows", 0, ROW_H, dlg->filtered_count)) {
+            struct nk_style_selectable saved_sel = ctx->style.selectable;
+
+            /* Scroll to selected if needed */
+            if (dlg->scroll_to_selected && lv.scroll_pointer != NULL && dlg->selected >= 0) {
+                nk_uint top    = *lv.scroll_pointer;
+                nk_uint bot    = top + (nk_uint)table_h;
+                nk_uint item_y = (nk_uint)(dlg->selected * ROW_H);
+                if (item_y < top) {
+                    *lv.scroll_pointer = item_y;
+                } else if (item_y + (nk_uint)ROW_H > bot) {
+                    *lv.scroll_pointer = item_y + (nk_uint)ROW_H - (nk_uint)table_h;
+                }
+                dlg->scroll_to_selected = false;
+            }
+
+            for (i = lv.begin; i < lv.end; ++i) {
+                const frontend_symbol_lookup_entry *e;
+                bool sel;
+                char addr_buf[6];
+                bool clicked = false;
+
+                if (i < 0 || i >= dlg->filtered_count) continue;
+                e   = &dlg->entries[dlg->filtered[i]];
+                sel = (i == dlg->selected);
+
+                snprintf(addr_buf, sizeof(addr_buf), "%04X", e->address);
+
+                if (sel) {
+                    ctx->style.selectable.normal  = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.hover   = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.pressed = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.text_normal  = nk_rgb(226, 246, 255);
+                    ctx->style.selectable.text_hover   = nk_rgb(226, 246, 255);
+                    ctx->style.selectable.text_pressed = nk_rgb(226, 246, 255);
+                } else {
+                    ctx->style.selectable = saved_sel;
+                }
+
+                nk_layout_row_template_begin(ctx, (float)ROW_H);
+                nk_layout_row_template_push_static(ctx, ADDR_W);
+                nk_layout_row_template_push_dynamic(ctx);
+                nk_layout_row_template_push_dynamic(ctx);
+                nk_layout_row_template_push_dynamic(ctx);
+                nk_layout_row_template_end(ctx);
+
+                {
+                    bool s = sel;
+                    if (nk_selectable_label(ctx, addr_buf,  NK_TEXT_LEFT, &s)) clicked = true;
+                }
+                {
+                    bool s = sel;
+                    if (nk_selectable_label(ctx, e->scope,  NK_TEXT_LEFT, &s)) clicked = true;
+                }
+                {
+                    bool s = sel;
+                    if (nk_selectable_label(ctx, e->label,  NK_TEXT_LEFT, &s)) clicked = true;
+                }
+                {
+                    bool s = sel;
+                    if (nk_selectable_label(ctx, e->source, NK_TEXT_LEFT, &s)) clicked = true;
+                }
+
+                if (clicked) {
+                    dlg->selected = i;
+                    frontend_symbol_lookup_commit(ui);
+                    ctx->style.selectable = saved_sel;
+                    nk_list_view_end(&lv);
+                    nk_end(ctx);
+                    return;
+                }
+            }
+
+            ctx->style.selectable = saved_sel;
+            nk_list_view_end(&lv);
+        }
+
+        /* Close button */
+        nk_layout_row_dynamic(ctx, 24.0f, 3);
+        nk_spacing(ctx, 2);
+        if (nk_button_label(ctx, "Close")) {
+            dlg->open = false;
+        }
+
+    } else if (nk_window_is_closed(ctx, "Symbol Lookup")) {
+        dlg->open = false;
+    }
+    nk_end(ctx);
 }
 
 static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
@@ -6390,6 +6863,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         frontend_draw_load_bin_dialog(ui, width, height);
         frontend_draw_save_bin_dialog(ui, width, height);
         frontend_draw_assembler_error_dialog(ui, width, height);
+        frontend_draw_symbol_lookup(ui, width, height);
     } else {
         frontend_render_display_only(ui);
     }

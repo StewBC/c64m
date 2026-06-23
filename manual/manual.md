@@ -226,8 +226,8 @@ modes independently of the source mode.
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Enter address-jump mode; type four hex digits then Enter   |
 | `Opt+B`         | Toggle execute breakpoint at cursor (paused only)          |
-| `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                   |
-| `Opt+S`         | Reload and enumerate the symbol table                      |
+| `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                |
+| `Opt+S`         | Open the Symbol Lookup dialog                              |
 | `Opt+Left`      | Set PC to cursor address (paused only)                     |
 | `Tab`           | Cycle symbol display mode forward                          |
 | `Shift+Tab`     | Cycle symbol display mode backward                         |
@@ -236,6 +236,47 @@ modes independently of the source mode.
 | `Home` / `End`  | Jump to first or last line of the current view             |
 | `Opt+Home`      | Jump to address `$0000`                                    |
 | `Opt+End`       | Jump to address `$FFFF`                                    |
+
+### Symbol Lookup
+
+**Opt+S** opens the Symbol Lookup dialog while the Disassembly view is active.
+
+The dialog shows a searchable, sortable table of all symbols known to the debugger,
+including labels exported from the assembler and symbols loaded from external symbol
+files.
+
+**Columns:**
+
+| Column  | Contents                                                          |
+|---------|-------------------------------------------------------------------|
+| `ADDR`  | Symbol address in hex (`XXXX`)                                    |
+| `SCOPE` | Assembler scope path, e.g. `anon_0001` (up to 15 characters)     |
+| `LABEL` | Symbol name (leaf portion, up to 15 characters)                   |
+| `SOURCE`| File basename (no extension), or `assembler` for inline assembly  |
+
+**Search:** the field at the top has focus when the dialog opens. Type to filter the
+list. The pattern is matched against a combined string `"XXXX scope label source"` for
+each row using simple regex syntax: `.` matches any character, `*` matches zero or more
+of the previous character, `^` anchors to the start, `$` anchors to the end.
+
+**Sorting:** clicking any column header sorts by that column ascending (`^`). Clicking
+the same header again reverses to descending (`v`). The default sort is by address
+ascending.
+
+**Navigation:**
+
+| Key / Action            | Effect                                                 |
+|-------------------------|--------------------------------------------------------|
+| Type in search box      | Filter rows to matching symbols                        |
+| `Tab`                   | Switch keyboard focus between search box and table     |
+| `Up` / `Down`           | Move the selection in the table (table focus)          |
+| `Enter`                 | Commit selected row (table focus)                      |
+| Click a row             | Commit that row                                        |
+| Click a column header   | Sort by that column (toggle direction)                 |
+| **[Close]** or `ESC`    | Dismiss without navigating                             |
+
+**On commit:** the Disassembly view cursor jumps to the symbol's address, equivalent to
+entering the address with `Opt+A`.
 
 ## Mem View
 
@@ -314,6 +355,7 @@ Switching the active view moves the thumb without scrolling the memory itself.
 |-------------------|--------------------------------------------------------------|
 | `Opt+A`           | Toggle address-entry mode; type four hex digits to jump      |
 | `Opt+M`           | Cycle source mode: Map -> ROM -> RAM -> Map                  |
+| `Opt+S`           | Open the Symbol Lookup dialog                                |
 | `Opt+X`           | Toggle between hex and ASCII edit modes                      |
 | `Opt+V`           | Split active view at cursor                                  |
 | `Shift+Opt+V`     | Split active view at the start of the cursor row             |
@@ -328,6 +370,11 @@ Switching the active view moves the thumb without scrolling the memory itself.
 | `End`             | Move cursor to end of the current row                        |
 | `Opt+End`         | Move cursor to the end of the visible window                 |
 | `0-9`, `A-F`     | Edit hex nibble at cursor (paused only, hex mode)            |
+
+**Opt+S** also opens the Symbol Lookup dialog from the Memory view. On commit, the
+active virtual view scrolls so that the symbol's address is row-aligned (the row
+containing that address appears at the top of the view) and the cursor is placed on
+the exact byte. See **Symbol Lookup** under **Disasm** for full dialog reference.
 
 Memory editing is only possible while the CPU is paused. In hex mode, typing hex digits
 overwrites the nibble at the cursor. In ASCII mode, printable characters overwrite the
@@ -876,7 +923,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Opt+H**       | Toggle in-emulator help on/off                             |
 | **F10**         | Step instruction (paused) or Pause (running)               |
 | **Shift+F10**   | Step out of current subroutine                             |
-| **F11** / **Opt+S** | Step over JSR                                         |
+| **F11**             | Step over JSR                                         |
 | **F12**         | Run (resume execution)                                     |
 | **Shift+F12**   | Run to the cursor address in the Disassembly view          |
 | **Opt+T**       | Cycle turbo speed                                          |

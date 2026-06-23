@@ -1164,11 +1164,6 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                     debug_state.step_cycle_start = debug_state.machine_cycle;
                     debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
                     send_step_out_command(client);
-                } else if (event.key.keysym.sym == SDLK_s &&
-                           frontend_input_has_option_modifier(&event.key)) {
-                    debug_state.step_cycle_start = debug_state.machine_cycle;
-                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                    send_step_over_command(client);
                 } else if (event.key.keysym.sym == SDLK_F12 &&
                            !frontend_input_has_shift_modifier(&event.key)) {
                     debug_state.step_cycle_start = debug_state.machine_cycle;

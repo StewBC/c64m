@@ -117,6 +117,21 @@ UI behavior:
 - Custom input code is gated by `frontend_any_dialog_open`.
 - Dialog bounds are queried each frame through `nk_window_find` using registered window names.
 
+## Symbol lookup dialog
+
+- Opt+S in the active Disassembly or Memory view opens the Symbol Lookup modal.
+- Dialog shows all symbols from the frontend symbol table with columns: ADDR, SCOPE, LABEL, SOURCE.
+- ADDR is 4 hex digits; SCOPE, LABEL, and SOURCE are truncated to 15 characters each.
+- SCOPE is the assembler scope path (e.g. `anon_0001`); LABEL is the display name (leaf portion); SOURCE is the file basename without extension, or "assembler" for assembler-defined symbols.
+- Search box has default focus on open; pattern is `nk_strfilter`-style regex (`.`, `*`, `^`, `$` supported) matched against a combined `"XXXX scope label source"` string for each row.
+- Column header buttons show the active sort column with `^` (ascending) or `v` (descending); clicking the active column toggles direction; clicking another column sets it as primary sort ascending.
+- Default sort is by address ascending.
+- TAB toggles keyboard focus between search box and table. Arrow Up/Down navigate the table when it has keyboard focus; Enter commits the selection.
+- Clicking any cell in a row commits that row's address and closes the dialog.
+- Close button or ESC dismisses without navigation.
+- On DASM selection: jumps cursor to the address (equivalent to Opt+A goto).
+- On Memory selection: scrolls the active memory view so the address is row-aligned and places the cursor on the exact address.
+
 ## Known limitations / deferred
 
 - Phase 13 deferred breakpoint actions: Type, Swap, and trace output/details.
@@ -128,6 +143,9 @@ UI behavior:
 - Verify modal dialogs prevent base view focus changes from outside clicks.
 - Verify assembler reset-on and reset-off flows.
 - Verify host load/save paths, especially Basic Program TXTTAB/VARTAB behavior.
+- Verify symbol lookup opens from both Disassembly and Memory views (Opt+S).
+- Verify search filters symbols with regex patterns; verify column header sorting.
+- Verify DASM selection jumps cursor; verify Memory selection row-aligns view and places cursor.
 
 ## Files likely involved
 
