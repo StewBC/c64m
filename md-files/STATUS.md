@@ -5,7 +5,7 @@
 The emulator is complete through:
 
 - Core C64 runtime: 6510 CPU, RAM/ROM/banking/address decode, reset/boot path, runtime command/event model, run/pause/reset, cycle/instruction step, frame handoff.
-- VIC-II through Phase J except skipped light pen: live raster timing, timed bus-visible writes, PAL/NTSC frame sizes, text/bitmap/multicolor/ECM/invalid modes, sprites, sprite priority/collisions, open/unused register reads, sprite BA stealing, DEN-off blanking.
+- VIC-II through Phase J except skipped light pen: live raster timing, timed bus-visible writes, PAL/NTSC frame sizes, text/bitmap/multicolor/ECM/invalid modes, sprites, sprite priority/collisions, open/unused register reads, PAL/NTSC sprite BA stealing, DEN-off blanking.
 - CIA through Phase G: CIA #1/#2 routing, timers, ICR/IRQ/NMI behavior, keyboard/joystick/RESTORE, CIA #2 VIC bank and IEC port pins, TOD/alarm.
 - Debugger UI through Phase 13: CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, INI persistence. Call stack view implemented in Misc|Debugger tab.
 - Memory/disassembly view source mode: Map (CPU-visible address space), ROM (physical ROM bytes regardless of mapping), RAM (raw RAM regardless of mapping). Mode is per-view and independent. Right-click contextual popup selects mode; Opt+M keyboard shortcut cycles source mode from the active memory/disassembly view; Opt+Tab cycles active view C64→Disassembly→Misc→Memory and Shift+Opt+Tab reverses it. ROM mode shows an amber border inside the content area; RAM mode shows a blue border; Map has no source-mode color; the active C64, disassembly, misc, or memory view shows a neutral border when no modal dialog is open. The Memory view bottom status row shows active edit field, cursor address, and editable/read-only state.
@@ -35,6 +35,7 @@ The emulator is complete through:
 - SID improvement Phase 9 (C64SID_IMP_9): Runtime audio production now advances from the cycle-stepping path instead of once per 1024-cycle run batch. `runtime_audio_produce()` and `audio_last_cycle` were removed; `runtime_audio_advance_cycle()` emits host samples at fractional PAL/NTSC sample deadlines and, for SID mode, averages the per-cycle `sid_sample()` values accumulated during each host-sample interval (typically 20 or 21 PAL cycles at 48 kHz). `--audio-smoke` still emits at host sample deadlines, turbo mute discards pending audio timing/averages, and recording uses the same emitted samples as playback. 2 runtime scheduler tests verify sample-count accounting and that programmed SID output no longer forms batch-sized identical-sample runs; all 27 tests pass. `el_cartero` Phase 9 metrics against `x64sc-20s.mp3`: score **1.3534** (better than Phase 8 1.4277 and Phase 7A 1.4070), correlation 0.7430, RMS 0.0643 vs VICE aligned 0.0670, spectral-band MAE 1.7828 dB. The 16–22 kHz band improved but remains high: c64m −29.17 dB vs VICE −39.09 dB, +9.92 dB excess (was +11.09 dB in Phase 8). Remaining HF excess is therefore no longer explained solely by the 1024-cycle ZOH; likely contributors include SID waveform harmonic/alias content and the deliberately gentle one-pole output rolloff. Further HF work should be a new measured SID/audio fidelity phase, not another batch-scheduler fix.
 - Memory view virtual views: the memory panel supports up to 16 independent virtual views stacked vertically. Opt+V splits the active view at the cursor (Shift+Opt+V row-aligned); Opt+J dissolves the active view (no-op on the last view); Opt+Up/Down navigate between views. Each view has its own cursor, scroll, source mode (Map/ROM/RAM), and edit state. Row height is distributed proportionally; each view gets at least one row. A 16-slot color palette assigns a unique background per view; slots are freed on dissolve and reused. Click activates a view; mouse wheel scrolls the hovered view. ROM/RAM borders are inset per view; the active-panel selection border spans the whole panel. The scrollbar tracks the active view.
 - C64MENH Phase 1 CIA #2 NMI reconciliation: current code and tests confirm CIA #1 interrupt output routes to CPU IRQ, CIA #2 enabled-pending interrupt output routes to the CPU NMI callback through an edge latch, RESTORE remains a separate one-shot NMI source, CPU NMI sampling occurs at instruction entry before IRQ, normal CIA ICR reads clear reported flags, and debugger-safe CIA peeks do not clear ICR/TOD state. The older `C64MCIA.md` current-state text was updated to remove the stale claim that CIA #2 NMI was not wired.
+- C64MENH Phase 2 NTSC sprite BA timing: VIC-II sprite BA now selects a PAL 6569 or NTSC 6567R8 BA-assert table from the machine video standard. PAL sprite BA tests still cover existing single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior; NTSC tests now cover the 65-cycle late sprite window and sprite 4 cross-line window. AEC remains intentionally unmodeled; CPU stalling still consumes the unified BA predicate.
 
 ## Optimizations
 
@@ -52,7 +53,7 @@ The emulator is complete through:
 
 - Machine owns monotonic master cycle; VIC/CIA/SID hooks advance to timestamped CPU bus events before visible side effects.
 - Live frame publication uses completed live VIC-II frame buffers; snapshot renderer remains only as fallback/debug before a live frame exists.
-- Bad Line BA and sprite-fetch BA both stall CPU reads using CPU event read/write classification; writes continue where allowed.
+- Bad Line BA and sprite-fetch BA both stall CPU reads using CPU event read/write classification; writes continue where allowed. Sprite-fetch BA uses per-standard PAL 6569 and NTSC 6567R8 tables selected through machine video configuration.
 - AEC is intentionally not modeled as emulator state; BA is the stall predicate.
 - Sprite system supports 8 sprites, X/Y position, X/Y expansion, multicolor, bank-aware sprite pointer/data fetch, priority, collisions, and IRQs.
 - VIC memory reads are bank-aware via CIA #2 port A; char ROM is visible only in VIC banks 0 and 2 at the normal ranges.
@@ -140,7 +141,6 @@ The emulator is complete through:
 - Last-byte-on-bus open-bus behavior; unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access fetch behavior from `$3FFF` / `$39FF` in renderer.
 - Exact RDY/AEC sub-cycle CPU pin timing.
-- NTSC sprite BA timing table; current sprite BA table is PAL-only.
 - D64 writes, SAVE to disk, error channel, 1541 CPU/ROM emulation, IEC timing/protocol, fast loaders, devices beyond 8/9, full Commodore DOS pattern/type suffix semantics.
 - Phase 13 deferred breakpoint actions: Type, Swap, and trace output/details.
 

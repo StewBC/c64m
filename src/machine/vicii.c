@@ -50,9 +50,7 @@ enum {
 
     /* Phase H: sprite BA window width (cycles). Formula: ba_start = p_cycle - 3,
        ba_end = p_cycle + 2 (exclusive), so the window is always 5 cycles wide.
-       Applies to both the early group (sprites 3-7) and late group (sprites 0-2).
-       NTSC sprite timing differs; see vicii_pal_sprite_ba_assert below for PAL only.
-       TODO: add NTSC table when NTSC timing is formally supported. */
+       Applies to both the early group (sprites 3-7) and late group (sprites 0-2). */
     VICII_SPRITE_BA_WINDOW     = 5,
 
     /* PAL border compare values (pixel/line units within 384×272 frame) */
@@ -95,6 +93,16 @@ static const uint32_t vicii_palette_argb[16] = {
 static const uint32_t vicii_pal_sprite_ba_assert[8] = {
     54, 56, 58,   /* sprites 0-2: asserted in current line  (fetch at 0-based 57,59,61) */
     60, 62,       /* sprites 3-4: asserted in PREVIOUS line (fetch at 0-based  0, 2)    */
+     1,  3,  5    /* sprites 5-7: asserted in current line  (fetch at 0-based  4, 6, 8) */
+};
+
+/* NTSC 6567R8 sprite BA-assert cycle (0-based). The emulator's NTSC mode uses
+   65 cycles per line, matching the 6567R8 timing diagram. Sprite 2's late
+   window reaches the end of the 65-cycle line; sprites 3-4 still assert during
+   the previous line for next-line fetches. */
+static const uint32_t vicii_ntsc_sprite_ba_assert[8] = {
+    56, 58, 60,   /* sprites 0-2: asserted in current line  (fetch at 0-based 59,61,63) */
+    62, 64,       /* sprites 3-4: asserted in PREVIOUS line (fetch at 0-based  0, 2)    */
      1,  3,  5    /* sprites 5-7: asserted in current line  (fetch at 0-based  4, 6, 8) */
 };
 
@@ -703,6 +711,12 @@ static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
     return false;
 }
 
+static const uint32_t *vicii_sprite_ba_assert_table(const vicii *v) {
+    return v->timing.standard == VICII_VIDEO_STANDARD_PAL ?
+        vicii_pal_sprite_ba_assert :
+        vicii_ntsc_sprite_ba_assert;
+}
+
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     uint32_t cycle;
     uint16_t screen_base;
@@ -759,12 +773,12 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* ------------------------------------------------------------------
-     * Phase H: Sprite BA windows (PAL 6569 only).
+     * Phase H: Sprite BA windows.
      *
      * Each active sprite contributes a 5-cycle BA-low window starting at
-     * vicii_pal_sprite_ba_assert[n].  Sprites 0-2 and 5-7 are asserted
+     * the selected standard's BA assert table. Sprites 0-2 and 5-7 are asserted
      * during the same line as their fetch.  Sprites 3-4 are asserted
-     * during the PREVIOUS line (cycles 60 and 62) for the next line's
+     * during the PREVIOUS line for the next line's
      * fetch, so vicii_sprite_dma_next_line() is used for those two.
      *
      * sprite_ba_low_until_abs is a running high-water mark: each new
@@ -773,12 +787,12 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
      * into the gap between the early group (sprites 3-7) and the late
      * group (sprites 0-2).
      *
-     * TODO: add NTSC sprite timing table when NTSC is formally supported.
      * ------------------------------------------------------------------ */
-    if (v->timing.standard == VICII_VIDEO_STANDARD_PAL) {
+    {
+        const uint32_t *sprite_ba_assert = vicii_sprite_ba_assert_table(v);
         int sn;
         for (sn = 0; sn < 8; sn++) {
-            if (cycle != vicii_pal_sprite_ba_assert[sn]) {
+            if (cycle != sprite_ba_assert[sn]) {
                 continue;
             }
             if (sn == 3 || sn == 4) {
