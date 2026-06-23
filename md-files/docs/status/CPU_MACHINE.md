@@ -49,6 +49,11 @@ This is expected when the CPU interrupt-disable flag remains set.
 - CPU-visible memory map is used for normal bus access and debugger Map source mode.
 - Physical ROM and raw RAM debugger views are available through dedicated debug read paths.
 - VIC bank selection is cached from CIA #2 port state as an accepted optimization.
+- CPU opcode writes maintain a 64K write-history table keyed by CPU-visible
+  16-bit address. Each entry stores the last four opcode PCs in 16-bit lanes,
+  oldest retained in bits 63..48 and newest in bits 15..0. Direct debugger
+  writes, loader injection, reset/init writes, and other non-opcode writes are
+  not recorded in this first version.
 
 ## Startup load behavior
 

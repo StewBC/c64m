@@ -168,6 +168,26 @@ typedef struct frontend_disassembly_view_state {
     frontend_disasm_cache mem_cache[3];
 } frontend_disassembly_view_state;
 
+static uint64_t frontend_disassembly_write_history_at(
+    const frontend_debug_state *debug_state,
+    const frontend_disassembly_view_state *view,
+    uint16_t address);
+static uint64_t frontend_memory_write_history_at(
+    const frontend_debug_state *debug_state,
+    const frontend_memory_view_state *view,
+    uint16_t address);
+static void frontend_context_menu_label(struct nk_context *ctx, const char *label);
+static void frontend_context_menu_separator(struct nk_context *ctx);
+static bool frontend_context_menu_item(struct nk_context *ctx, const char *label);
+static bool frontend_context_menu_mode_item(
+    struct nk_context *ctx,
+    bool active,
+    const char *label);
+static void frontend_context_menu_access(struct nk_context *ctx, uint64_t write_history);
+static void frontend_memory_split_view(frontend *ui, int view_index, bool aligned);
+static void frontend_memory_split_at_address(frontend *ui, uint16_t address);
+static void frontend_memory_join_view(frontend *ui, int view_index);
+
 typedef enum frontend_misc_tab {
     FRONTEND_MISC_TAB_PROGRAMS = 0,
     FRONTEND_MISC_TAB_DEBUGGER,
@@ -3264,27 +3284,45 @@ static void frontend_draw_disassembly_view(
         nk_spacing(ui->ctx, 1);
         nk_layout_row_end(ui->ctx);
 
-        if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
-            nk_layout_row_dynamic(ui->ctx, 22, 1);
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "Map", NK_TEXT_LEFT)) {
-                view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                view->request_pending = false;
+        {
+            bool stopped = debug_state == NULL ||
+                debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
+            float menu_h = stopped ? 244.0f : 120.0f;
+            if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, menu_h), bounds)) {
+                uint16_t access_address = view->has_user_cursor ?
+                    view->cursor_address :
+                    (debug_state != NULL && debug_state->has_cpu ? debug_state->cpu.pc : view->top_address);
+                uint64_t write_history =
+                    frontend_disassembly_write_history_at(debug_state, view, access_address);
+
+                frontend_context_menu_label(ui->ctx, "MemView");
+                frontend_context_menu_separator(ui->ctx);
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
+                        "Map")) {
+                    view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                    view->request_pending = false;
+                }
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        view->mode == RUNTIME_MEMORY_MODE_ROM,
+                        "ROM")) {
+                    view->mode = RUNTIME_MEMORY_MODE_ROM;
+                    view->request_pending = false;
+                }
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        view->mode == RUNTIME_MEMORY_MODE_RAM,
+                        "RAM")) {
+                    view->mode = RUNTIME_MEMORY_MODE_RAM;
+                    view->request_pending = false;
+                }
+                if (stopped) {
+                    frontend_context_menu_access(ui->ctx, write_history);
+                }
+                nk_contextual_end(ui->ctx);
             }
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    view->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "ROM", NK_TEXT_LEFT)) {
-                view->mode = RUNTIME_MEMORY_MODE_ROM;
-                view->request_pending = false;
-            }
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    view->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "RAM", NK_TEXT_LEFT)) {
-                view->mode = RUNTIME_MEMORY_MODE_RAM;
-                view->request_pending = false;
-            }
-            nk_contextual_end(ui->ctx);
         }
 
         if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_DISASSEMBLY) {
@@ -3353,6 +3391,97 @@ static int frontend_memory_snapshot_index(
     }
 
     return (int)offset;
+}
+
+static uint64_t frontend_memory_snapshot_write_history_at(
+    const runtime_memory_snapshot *snapshot,
+    uint16_t address)
+{
+    int index = frontend_memory_snapshot_index(snapshot, address);
+
+    return index >= 0 ? snapshot->write_history[index] : 0;
+}
+
+static uint64_t frontend_disassembly_write_history_at(
+    const frontend_debug_state *debug_state,
+    const frontend_disassembly_view_state *view,
+    uint16_t address)
+{
+    if (debug_state == NULL || view == NULL || !debug_state->has_memory) {
+        return 0;
+    }
+    if (debug_state->memory.mode != view->mode) {
+        return 0;
+    }
+    return frontend_memory_snapshot_write_history_at(&debug_state->memory, address);
+}
+
+static uint64_t frontend_memory_write_history_at(
+    const frontend_debug_state *debug_state,
+    const frontend_memory_view_state *view,
+    uint16_t address)
+{
+    int i;
+
+    if (debug_state == NULL || view == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
+        const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
+        if (snap->address == view->requested_address &&
+            snap->length == view->requested_length &&
+            snap->mode == view->requested_mode) {
+            return frontend_memory_snapshot_write_history_at(snap, address);
+        }
+    }
+    return 0;
+}
+
+static void frontend_context_menu_label(struct nk_context *ctx, const char *label)
+{
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    nk_label(ctx, label, NK_TEXT_LEFT);
+}
+
+static void frontend_context_menu_separator(struct nk_context *ctx)
+{
+    nk_layout_row_dynamic(ctx, 6.0f, 1);
+    nk_rule_horizontal(ctx, nk_rgb(90, 101, 110), nk_false);
+}
+
+static bool frontend_context_menu_item(struct nk_context *ctx, const char *label)
+{
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    return nk_contextual_item_label(ctx, label, NK_TEXT_LEFT) != 0;
+}
+
+static bool frontend_context_menu_mode_item(
+    struct nk_context *ctx,
+    bool active,
+    const char *label)
+{
+    char item[16];
+
+    snprintf(item, sizeof(item), "%c %s", active ? '*' : ' ', label);
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    return nk_contextual_item_label(ctx, item, NK_TEXT_LEFT) != 0;
+}
+
+static void frontend_context_menu_access(
+    struct nk_context *ctx,
+    uint64_t write_history)
+{
+    int lane;
+
+    frontend_context_menu_separator(ctx);
+    frontend_context_menu_label(ctx, "Access:");
+    for (lane = 3; lane >= 0; lane--) {
+        char item[5];
+        unsigned shift = (unsigned)lane * 16u;
+        snprintf(item, sizeof(item), "%04X", (unsigned)((write_history >> shift) & 0xffffu));
+        frontend_context_menu_label(ctx, item);
+    }
 }
 
 static uint8_t frontend_memory_view_byte_at(
@@ -3885,18 +4014,21 @@ static void frontend_memory_redistribute_rows(frontend *ui, int new_total)
     }
 }
 
-static void frontend_memory_split(frontend *ui, bool aligned)
+static void frontend_memory_split_view(frontend *ui, int view_index, bool aligned)
 {
     frontend_memory_view_state *av;
     frontend_memory_view_state *nv;
     uint16_t split_addr;
     int new_count, new_view_rows, total, slot, i;
 
-    if (ui->memory_view_count >= MEMORY_VIEW_MAX) {
+    if (ui->memory_view_count >= MEMORY_VIEW_MAX ||
+        view_index < 0 ||
+        view_index >= ui->memory_view_count) {
         return;
     }
 
-    av = &ui->memory_views[ui->memory_active_view_index];
+    ui->memory_active_view_index = view_index;
+    av = &ui->memory_views[view_index];
     split_addr = aligned
         ? (uint16_t)(av->cursor_address & ~(uint16_t)0x0f)
         : av->cursor_address;
@@ -3953,13 +4085,13 @@ static void frontend_memory_split(frontend *ui, bool aligned)
     }
     ui->memory_color_slot_used[slot] = true;
 
-    /* Shift views after active_index down to make room */
-    for (i = ui->memory_view_count; i > ui->memory_active_view_index + 1; i--) {
+    /* Shift views after the clicked/active index down to make room */
+    for (i = ui->memory_view_count; i > view_index + 1; i--) {
         ui->memory_views[i] = ui->memory_views[i - 1];
     }
 
     /* Initialize new view */
-    nv = &ui->memory_views[ui->memory_active_view_index + 1];
+    nv = &ui->memory_views[view_index + 1];
     memset(nv, 0, sizeof(*nv));
     nv->view_address = split_addr;
     nv->cursor_address = split_addr;
@@ -3971,19 +4103,42 @@ static void frontend_memory_split(frontend *ui, bool aligned)
     nv->initialized = true;
 
     ui->memory_view_count = new_count;
-    ui->memory_active_view_index++;
+    ui->memory_active_view_index = view_index + 1;
 }
 
-static void frontend_memory_dissolve(frontend *ui)
+static void frontend_memory_split(frontend *ui, bool aligned)
+{
+    frontend_memory_split_view(ui, ui->memory_active_view_index, aligned);
+}
+
+static void frontend_memory_split_at_address(frontend *ui, uint16_t address)
+{
+    frontend_memory_view_state *memory;
+
+    if (ui == NULL || ui->memory_view_count <= 0) {
+        return;
+    }
+
+    memory = &ui->memory_views[ui->memory_active_view_index];
+    memory->cursor_address = address;
+    memory->view_address = address;
+    memory->request_pending = false;
+    frontend_memory_split_view(ui, ui->memory_active_view_index, false);
+}
+
+static void frontend_memory_join_view(frontend *ui, int view_index)
 {
     int active, i, give_rows, rem_count, best, total_remain;
     int shares[MEMORY_VIEW_MAX];
 
-    if (ui->memory_view_count <= 1) {
+    if (ui->memory_view_count <= 1 ||
+        view_index < 0 ||
+        view_index >= ui->memory_view_count) {
         return;
     }
 
-    active = ui->memory_active_view_index;
+    active = view_index;
+    ui->memory_active_view_index = view_index;
     give_rows = ui->memory_views[active].rows;
     ui->memory_color_slot_used[ui->memory_views[active].color_slot] = false;
 
@@ -4037,6 +4192,11 @@ static void frontend_memory_dissolve(frontend *ui)
     } else {
         ui->memory_active_view_index = ui->memory_view_count - 1;
     }
+}
+
+static void frontend_memory_dissolve(frontend *ui)
+{
+    frontend_memory_join_view(ui, ui->memory_active_view_index);
 }
 
 static void frontend_memory_handle_key(
@@ -4459,31 +4619,56 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         }
 
         /* Context menu applies to the virtual view that was right-clicked */
-        if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, 90.0f), bounds)) {
-            int ctx_idx = (ui->memory_context_menu_view_index >= 0 &&
-                           ui->memory_context_menu_view_index < ui->memory_view_count)
-                          ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
-            frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
-            nk_layout_row_dynamic(ui->ctx, 22, 1);
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    ctx_view->mode == RUNTIME_MEMORY_MODE_CPU_MAP ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "Map", NK_TEXT_LEFT)) {
-                ctx_view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-                ctx_view->request_pending = false;
+        {
+            bool stopped = debug_state == NULL ||
+                debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
+            float menu_h = stopped ?
+                (ui->memory_view_count > 1 ? 298.0f : 276.0f) :
+                (ui->memory_view_count > 1 ? 172.0f : 150.0f);
+            if (nk_contextual_begin(ui->ctx, 0, nk_vec2(120.0f, menu_h), bounds)) {
+                int ctx_idx = (ui->memory_context_menu_view_index >= 0 &&
+                               ui->memory_context_menu_view_index < ui->memory_view_count)
+                              ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
+                frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
+                uint64_t write_history =
+                    frontend_memory_write_history_at(debug_state, ctx_view, ctx_view->cursor_address);
+
+                frontend_context_menu_label(ui->ctx, "MemView");
+                frontend_context_menu_separator(ui->ctx);
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        ctx_view->mode == RUNTIME_MEMORY_MODE_CPU_MAP,
+                        "Map")) {
+                    ctx_view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+                    ctx_view->request_pending = false;
+                }
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        ctx_view->mode == RUNTIME_MEMORY_MODE_ROM,
+                        "ROM")) {
+                    ctx_view->mode = RUNTIME_MEMORY_MODE_ROM;
+                    ctx_view->request_pending = false;
+                }
+                if (frontend_context_menu_mode_item(
+                        ui->ctx,
+                        ctx_view->mode == RUNTIME_MEMORY_MODE_RAM,
+                        "RAM")) {
+                    ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
+                    ctx_view->request_pending = false;
+                }
+                frontend_context_menu_separator(ui->ctx);
+                if (frontend_context_menu_item(ui->ctx, "Split")) {
+                    frontend_memory_split_view(ui, ctx_idx, false);
+                }
+                if (ui->memory_view_count > 1 &&
+                    frontend_context_menu_item(ui->ctx, "Join")) {
+                    frontend_memory_join_view(ui, ctx_idx);
+                }
+                if (stopped) {
+                    frontend_context_menu_access(ui->ctx, write_history);
+                }
+                nk_contextual_end(ui->ctx);
             }
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    ctx_view->mode == RUNTIME_MEMORY_MODE_ROM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "ROM", NK_TEXT_LEFT)) {
-                ctx_view->mode = RUNTIME_MEMORY_MODE_ROM;
-                ctx_view->request_pending = false;
-            }
-            if (nk_contextual_item_symbol_label(ui->ctx,
-                    ctx_view->mode == RUNTIME_MEMORY_MODE_RAM ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_NONE,
-                    "RAM", NK_TEXT_LEFT)) {
-                ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
-                ctx_view->request_pending = false;
-            }
-            nk_contextual_end(ui->ctx);
         }
 
         /* Active-panel selection border wraps the whole memory panel */

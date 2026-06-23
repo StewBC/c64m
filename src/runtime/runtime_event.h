@@ -158,6 +158,7 @@ typedef struct runtime_memory_snapshot {
     runtime_memory_mode mode;
     uint16_t length;
     uint8_t bytes[RUNTIME_MEMORY_SNAPSHOT_MAX];
+    uint64_t write_history[RUNTIME_MEMORY_SNAPSHOT_MAX];
 } runtime_memory_snapshot;
 
 typedef struct runtime_breakpoint_snapshot_entry {

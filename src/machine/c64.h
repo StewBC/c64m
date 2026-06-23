@@ -42,6 +42,7 @@ typedef struct c64_cpu_bus_event {
     uint16_t address;
     uint8_t value;
     uint8_t is_io;
+    uint8_t record_write_history;
     uint64_t absolute_cycle;
 } c64_cpu_bus_event;
 
@@ -319,6 +320,7 @@ typedef struct c64_t {
     void *memory_access_user;
     c64_cpu_instruction_trace last_cpu_trace;
     c64_cpu_instruction_trace pending_cpu_trace;
+    uint64_t write_history[C64_RAM_SIZE];
     uint64_t cpu_trace_start_cycle;
     uint64_t cpu_trace_start_cpu_cycle;
     size_t pending_cpu_event_index;
@@ -382,6 +384,7 @@ void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address);
+uint64_t c64_debug_read_write_history(const c64_t *machine, uint16_t address);
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);
 c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address);

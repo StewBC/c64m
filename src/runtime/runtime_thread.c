@@ -473,6 +473,7 @@ static void runtime_publish_memory(
         } else {
             event.data.memory.bytes[i] = c64_debug_read_cpu_map(&rt->machine, current);
         }
+        event.data.memory.write_history[i] = c64_debug_read_write_history(&rt->machine, current);
     }
 
     runtime_publish_event(rt, &event);
@@ -2418,6 +2419,8 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                     } else {
                         mem_view_event.data.memory.bytes[i] = c64_debug_read_cpu_map(&rt->machine, cur);
                     }
+                    mem_view_event.data.memory.write_history[i] =
+                        c64_debug_read_write_history(&rt->machine, cur);
                 }
                 runtime_publish_event(rt, &mem_view_event);
             } else {

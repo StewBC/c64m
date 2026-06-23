@@ -632,6 +632,8 @@ static c64_cpu_bus_event *c64_trace_append_event(
     event->address = address;
     event->value = value;
     event->is_io = c64_cpu_address_is_io(machine, address) ? 1u : 0u;
+    event->record_write_history =
+        kind == C64_CPU_BUS_EVENT_WRITE && machine->cpu.cpu.opcode_active ? 1u : 0u;
     event->absolute_cycle = c64_current_cycle(machine);
     return event;
 }
@@ -644,6 +646,13 @@ static void c64_report_memory_access(
     if (machine->memory_access) {
         machine->memory_access(machine->memory_access_user, access, address, value);
     }
+}
+
+static void c64_record_cpu_write(c64_t *machine, uint16_t address, uint16_t opcode_pc) {
+    assert(machine);
+
+    machine->write_history[address] =
+        (machine->write_history[address] << 16) | (uint64_t)opcode_pc;
 }
 
 static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
@@ -660,6 +669,9 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
 
     case C64_CPU_BUS_EVENT_WRITE:
         c64_bus_write(&machine->bus, event->address, event->value);
+        if (event->record_write_history) {
+            c64_record_cpu_write(machine, event->address, machine->pending_cpu_trace.opcode_pc);
+        }
         c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
         break;
 
@@ -827,6 +839,9 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
         uint64_t offset = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
         c64_advance_devices_to(machine, machine->cpu_trace_start_cycle + offset);
         c64_bus_write(&machine->bus, address, value);
+        if (machine->cpu.cpu.opcode_active) {
+            c64_record_cpu_write(machine, address, machine->cpu.cpu.opcode_pc);
+        }
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
         c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
         return;
@@ -838,6 +853,9 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     }
 
     c64_bus_write(&machine->bus, address, value);
+    if (machine->cpu.cpu.opcode_active) {
+        c64_record_cpu_write(machine, address, machine->cpu.cpu.opcode_pc);
+    }
     c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
 }
 
@@ -1026,6 +1044,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
     c64_trace_reset(&machine->last_cpu_trace);
     c64_trace_reset(&machine->pending_cpu_trace);
+    memset(machine->write_history, 0, sizeof(machine->write_history));
     machine->keyboard_events = 0;
     machine->restore_requests = 0;
     machine->restore_pending = false;
@@ -1627,6 +1646,12 @@ uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address) {
         return machine->bus.kernal_rom[address - 0xe000u];
     }
     return machine->bus.ram[address];
+}
+
+uint64_t c64_debug_read_write_history(const c64_t *machine, uint16_t address) {
+    assert(machine);
+
+    return machine->write_history[address];
 }
 
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value) {

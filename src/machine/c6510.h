@@ -45,6 +45,7 @@ typedef struct CPU {
     };
     uint8_t irq_defer;
     uint8_t irq_defer_i;
+    uint8_t opcode_active;
     uint32_t class;
     uint64_t cycles;
     uint64_t irq_entries;

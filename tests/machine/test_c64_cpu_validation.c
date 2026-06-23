@@ -165,6 +165,40 @@ static void test_ram_read_write(void) {
     expect_u8("RAM read into A", 0x55, state.a);
 }
 
+static void test_ram_write_history(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x55,       /* LDA #$55 */
+        0x8d, 0x34, 0x12, /* STA $1234 at $E002 */
+        0x8d, 0x34, 0x12, /* STA $1234 at $E005 */
+        0x8d, 0x34, 0x12, /* STA $1234 at $E008 */
+        0x8d, 0x34, 0x12, /* STA $1234 at $E00B */
+        0x8d, 0x34, 0x12  /* STA $1234 at $E00E */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    expect_u64("initial RAM write history", 0, c64_debug_read_write_history(&machine, 0x1234));
+
+    step_machine(&machine, 2);
+    expect_u64("first RAM write history", 0xe002, c64_debug_read_write_history(&machine, 0x1234));
+
+    step_machine(&machine, 1);
+    expect_u64(
+        "second RAM write history",
+        0xe002e005,
+        c64_debug_read_write_history(&machine, 0x1234));
+
+    step_machine(&machine, 3);
+    expect_u64(
+        "RAM write history drops oldest writer",
+        0xe005e008e00be00eULL,
+        c64_debug_read_write_history(&machine, 0x1234));
+}
+
 static void test_stack(void) {
     static const uint8_t program[] = {
         0xa9, 0x7b, /* LDA #$7b */
@@ -627,6 +661,7 @@ int main(void) {
     test_reset_vector();
     test_instruction_fetch();
     test_ram_read_write();
+    test_ram_write_history();
     test_stack();
     test_branch_taken_and_not_taken();
     test_branch_not_taken_cases();

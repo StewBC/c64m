@@ -41,12 +41,14 @@ void c6510_reset(C6510 *m) {
     m->cpu.E = 1;
     m->cpu.irq_defer = 0;
     m->cpu.irq_defer_i = 0;
+    m->cpu.opcode_active = 0;
     m->cpu.irq_entries = 0;
     m->cpu.nmi_entries = 0;
 }
 
 size_t c6510_step(C6510 *m) {
     size_t start_cycle = m->cpu.cycles;
+    m->cpu.opcode_active = 0;
     if(c6510_take_nmi_if_pending(m)) {
         return m->cpu.cycles - start_cycle;
     }
@@ -54,6 +56,7 @@ size_t c6510_step(C6510 *m) {
         return m->cpu.cycles - start_cycle;
     }
     m->cpu.opcode_pc = m->cpu.pc;
+    m->cpu.opcode_active = 1;
     uint8_t opcode = read_from_memory(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.pc++;
