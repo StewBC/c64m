@@ -1387,6 +1387,120 @@ static void test_output_conditioning_high_volume_bounded(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* HF rolloff tests (Phase 8)                                         */
+/* ------------------------------------------------------------------ */
+
+static void test_hfroll_state_reset_to_zero(void) {
+    sid s;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD404, 0x81); /* gate + noise */
+    sid_write(&s, 0xD418, 0x0F);
+    for (i = 0; i < 50000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    expect_nonzero_float("hfroll_reset: pre-reset hfroll_state", s.hfroll_state);
+
+    sid_reset(&s);
+    expect_zero_float("hfroll_reset: hfroll_state after reset", s.hfroll_state);
+}
+
+static void test_hfroll_attenuates_high_frequency(void) {
+    /* Noise waveform has wideband spectrum including HF content above the
+     * 16.5 kHz rolloff.  Over many samples the HF rolloff filter produces
+     * a smoothed (attenuated) signal; its mean-absolute value must be
+     * strictly less than the raw DC-blocked input's mean-absolute value. */
+    sid s;
+    uint32_t i;
+    float sum_hf = 0.0f, sum_dc = 0.0f;
+    float h, d;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD404, 0x81); /* gate + noise */
+    sid_write(&s, 0xD418, 0x0F);
+    for (i = 0; i < 100000; i++) {
+        sid_advance_cycles(&s, 1);
+        h = s.hfroll_state;         if (h < 0.0f) h = -h;
+        d = s.dc_block_prev_output; if (d < 0.0f) d = -d;
+        sum_hf += h;
+        sum_dc += d;
+    }
+    if (sum_hf >= sum_dc) {
+        fprintf(stderr,
+            "FAIL: hfroll_attenuates: hfroll mean-abs %f >= dc_blocked mean-abs %f\n",
+            (double)sum_hf, (double)sum_dc);
+        exit(1);
+    }
+}
+
+static void test_hfroll_passes_low_frequency(void) {
+    /* A sawtooth at ~100 Hz is well below the 16.5 kHz rolloff.  After
+     * collecting many samples the hfroll output mean-absolute value must
+     * remain at least 80% of the DC-blocked input mean-absolute value. */
+    sid s;
+    uint32_t i;
+    float sum_hf = 0.0f, sum_dc = 0.0f;
+    float h, d;
+
+    sid_reset(&s);
+    /* Fn = round(100 × 16777216 / 985248) = 1703 = 0x06A7 */
+    sid_write(&s, 0xD400, 0xA7); /* freq lo */
+    sid_write(&s, 0xD401, 0x06); /* freq hi */
+    sid_write(&s, 0xD405, 0x00); /* attack=0, decay=0 */
+    sid_write(&s, 0xD406, 0xF0); /* sustain=F, release=0 */
+    sid_write(&s, 0xD404, 0x21); /* gate + sawtooth */
+    sid_write(&s, 0xD418, 0x0F);
+    for (i = 0; i < 5000; i++) { sid_advance_cycles(&s, 1); } /* settle */
+    for (i = 0; i < 100000; i++) {
+        sid_advance_cycles(&s, 1);
+        h = s.hfroll_state;         if (h < 0.0f) h = -h;
+        d = s.dc_block_prev_output; if (d < 0.0f) d = -d;
+        sum_hf += h;
+        sum_dc += d;
+    }
+    if (sum_dc > 0.0f && sum_hf < 0.8f * sum_dc) {
+        fprintf(stderr,
+            "FAIL: hfroll_passes_low_frequency: hfroll mean-abs %f < 0.8 * dc_blocked %f\n",
+            (double)sum_hf, (double)(0.8f * sum_dc));
+        exit(1);
+    }
+}
+
+static void test_hfroll_silence_remains_silence(void) {
+    sid s;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD418, 0x0F); /* volume, no waveforms */
+    for (i = 0; i < 100; i++) {
+        sid_advance_cycles(&s, 1);
+        expect_zero_float("hfroll_silence: sample", sid_sample(&s));
+    }
+    expect_zero_float("hfroll_silence: hfroll_state", s.hfroll_state);
+}
+
+static void test_hfroll_output_bounded(void) {
+    sid s;
+    uint32_t i;
+    float sample;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD404, 0x81); /* gate + noise */
+    sid_write(&s, 0xD418, 0x0F);
+    for (i = 0; i < 50000; i++) {
+        sid_advance_cycles(&s, 1);
+        sample = sid_sample(&s);
+        if (sample < -1.0f || sample > 1.0f) {
+            fprintf(stderr,
+                "FAIL: hfroll_bounded: sample %f outside [-1,+1] at cycle %u\n",
+                (double)sample, i);
+            exit(1);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Filter cutoff LUT tests (Phase 7)                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1594,6 +1708,13 @@ int main(void) {
     test_output_conditioning_silence_stays_silent();
     test_output_conditioning_constant_input_decays();
     test_output_conditioning_high_volume_bounded();
+
+    /* HF rolloff tests (Phase 8) */
+    test_hfroll_state_reset_to_zero();
+    test_hfroll_attenuates_high_frequency();
+    test_hfroll_passes_low_frequency();
+    test_hfroll_silence_remains_silence();
+    test_hfroll_output_bounded();
 
     /* Filter cutoff LUT tests */
     test_filter_lut_min_coefficient();

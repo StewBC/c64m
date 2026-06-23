@@ -42,6 +42,7 @@ typedef struct sid {
 
     float      dc_block_prev_input;  /* final output DC blocker state */
     float      dc_block_prev_output;
+    float      hfroll_state;         /* one-pole output LP filter state */
 
     float      last_sample;         /* last mixed+filtered output */
     bool       sample_output_enabled;

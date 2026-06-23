@@ -24,7 +24,10 @@ enum {
     SID_OUTPUT_GAIN_PERCENT = 19
 };
 
-static const float SID_DC_BLOCK_R = 0.99987f;
+static const float SID_DC_BLOCK_R   = 0.99987f;
+/* One-pole IIR LP: models 6581 output-pin capacitive rolloff (~16.5 kHz).
+ * a = 1 - 2π × 16500 / 985248 ≈ 0.895. Applied after DC blocker, before gain. */
+static const float SID_HFROLL_COEFF = 0.895f;
 
 /* Exponential cutoff LUT: maps 11-bit register [0..2047] to Chamberlin SVF
  * coefficient f = 2*sin(pi*fc/985248), where fc spans 200 Hz to 18000 Hz.
@@ -353,14 +356,15 @@ static void sid_voice_advance_env(sid_voice *v) {
 
 static float sid_condition_output(sid *s, float raw) {
     float blocked;
-    float out;
 
     blocked = raw - s->dc_block_prev_input + SID_DC_BLOCK_R * s->dc_block_prev_output;
-    s->dc_block_prev_input = raw;
+    s->dc_block_prev_input  = raw;
     s->dc_block_prev_output = blocked;
 
-    out = blocked * ((float)SID_OUTPUT_GAIN_PERCENT / 100.0f);
-    return sid_clampf(out);
+    s->hfroll_state = (1.0f - SID_HFROLL_COEFF) * blocked
+                    +          SID_HFROLL_COEFF  * s->hfroll_state;
+
+    return sid_clampf(s->hfroll_state * ((float)SID_OUTPUT_GAIN_PERCENT / 100.0f));
 }
 
 float sid_filter_cutoff_factor(uint16_t cutoff) {
