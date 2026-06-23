@@ -13,14 +13,20 @@ def main():
     parser.add_argument("--emulator", default="./build/c64m")
     parser.add_argument("--prg", default="./samples/el_cartero.prg")
     parser.add_argument("--out", default="./build/sid-el-cartero.wav")
-    parser.add_argument("--warmup", type=float, default=9.5)
-    parser.add_argument("--duration", type=float, default=4.0)
+    parser.add_argument("--warmup", type=float, default=9.31)
+    parser.add_argument("--duration", type=float, default=10.0)
+    parser.add_argument("--pal", action="store_true", default=True, help="use PAL video timing (default)")
+    parser.add_argument("--ntsc", action="store_true", default=False, help="use NTSC video timing instead of PAL")
     parser.add_argument("--guard", type=float, default=1.0)
     parser.add_argument("--no-autorun", action="store_true")
     parser.add_argument("extra_args", nargs="*", help="extra arguments passed to c64m before capture options")
     args = parser.parse_args()
 
     command = [args.emulator]
+    if args.ntsc:
+        command.append("--ntsc")
+    else:
+        command.append("--pal")
     if not args.no_autorun:
         command.append("-a")
     command.extend(["-p", args.prg])
