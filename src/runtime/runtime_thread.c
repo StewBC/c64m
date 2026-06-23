@@ -85,11 +85,159 @@ static void runtime_pace_after_frame(runtime *rt) {
 static void runtime_update_sid_sample_output(runtime *rt) {
     bool enabled;
 
-    enabled = rt->audio_out != NULL &&
+    enabled = (rt->audio_out != NULL || rt->audio_record_path != NULL) &&
         rt->audio_sample_rate > 0 &&
         rt->speed_mode != RUNTIME_SPEED_MODE_FAST &&
         rt->audio_smoke == 0;
     c64_set_audio_output_enabled(&rt->machine, enabled);
+}
+
+static void runtime_audio_record_write_u16(FILE *file, uint16_t value) {
+    fputc((int)(value & 0xffu), file);
+    fputc((int)((value >> 8) & 0xffu), file);
+}
+
+static void runtime_audio_record_write_u32(FILE *file, uint32_t value) {
+    fputc((int)(value & 0xffu), file);
+    fputc((int)((value >> 8) & 0xffu), file);
+    fputc((int)((value >> 16) & 0xffu), file);
+    fputc((int)((value >> 24) & 0xffu), file);
+}
+
+static bool runtime_audio_record_write_header(runtime *rt, uint32_t sample_count) {
+    FILE *file;
+    uint32_t data_bytes;
+    uint32_t riff_size;
+    uint32_t byte_rate;
+    uint16_t block_align;
+
+    if (rt == NULL || rt->audio_record_file == NULL || rt->audio_sample_rate <= 0) {
+        return false;
+    }
+
+    file = rt->audio_record_file;
+    data_bytes = sample_count * 2u;
+    riff_size = 36u + data_bytes;
+    block_align = 2u;
+    byte_rate = (uint32_t)rt->audio_sample_rate * (uint32_t)block_align;
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        return false;
+    }
+
+    fwrite("RIFF", 1, 4, file);
+    runtime_audio_record_write_u32(file, riff_size);
+    fwrite("WAVE", 1, 4, file);
+    fwrite("fmt ", 1, 4, file);
+    runtime_audio_record_write_u32(file, 16u);
+    runtime_audio_record_write_u16(file, 1u); /* PCM */
+    runtime_audio_record_write_u16(file, 1u); /* mono */
+    runtime_audio_record_write_u32(file, (uint32_t)rt->audio_sample_rate);
+    runtime_audio_record_write_u32(file, byte_rate);
+    runtime_audio_record_write_u16(file, block_align);
+    runtime_audio_record_write_u16(file, 16u);
+    fwrite("data", 1, 4, file);
+    runtime_audio_record_write_u32(file, data_bytes);
+
+    return ferror(file) == 0;
+}
+
+static void runtime_audio_record_finish(runtime *rt) {
+    uint32_t sample_count;
+
+    if (rt == NULL || rt->audio_record_file == NULL) {
+        return;
+    }
+
+    sample_count = rt->audio_record_written_samples > 0xffffffffu ?
+        0xffffffffu : (uint32_t)rt->audio_record_written_samples;
+    if (!runtime_audio_record_write_header(rt, sample_count)) {
+        rt->audio_record_failed = true;
+    }
+    fclose(rt->audio_record_file);
+    rt->audio_record_file = NULL;
+    rt->audio_record_finished = true;
+}
+
+static void runtime_audio_record_init(runtime *rt) {
+    double start_seconds;
+    double duration_seconds;
+
+    if (rt == NULL || rt->audio_record_path == NULL || rt->audio_record_path[0] == '\0') {
+        return;
+    }
+    if (rt->audio_sample_rate <= 0) {
+        rt->audio_record_failed = true;
+        return;
+    }
+
+    start_seconds = rt->audio_record_start_seconds > 0.0 ? rt->audio_record_start_seconds : 0.0;
+    duration_seconds = rt->audio_record_duration_seconds > 0.0 ? rt->audio_record_duration_seconds : 0.0;
+    rt->audio_record_seen_samples = 0;
+    rt->audio_record_written_samples = 0;
+    rt->audio_record_target_samples = duration_seconds > 0.0 ?
+        (uint64_t)(duration_seconds * (double)rt->audio_sample_rate + 0.5) : 0;
+    rt->audio_record_failed = false;
+    rt->audio_record_finished = false;
+
+    rt->audio_record_file = fopen(rt->audio_record_path, "wb+");
+    if (rt->audio_record_file == NULL) {
+        rt->audio_record_failed = true;
+        return;
+    }
+
+    if (!runtime_audio_record_write_header(rt, 0u) ||
+        fseek(rt->audio_record_file, 44, SEEK_SET) != 0) {
+        runtime_audio_record_finish(rt);
+        rt->audio_record_failed = true;
+        return;
+    }
+
+    rt->audio_record_seen_samples = (uint64_t)(start_seconds * (double)rt->audio_sample_rate + 0.5);
+}
+
+static void runtime_audio_record_sample(runtime *rt, float sample) {
+    int value;
+
+    if (rt == NULL ||
+        rt->audio_record_file == NULL ||
+        rt->audio_record_failed ||
+        rt->audio_record_finished) {
+        return;
+    }
+
+    if (rt->audio_record_seen_samples > 0) {
+        rt->audio_record_seen_samples--;
+        return;
+    }
+    if (rt->audio_record_target_samples > 0 &&
+        rt->audio_record_written_samples >= rt->audio_record_target_samples) {
+        runtime_audio_record_finish(rt);
+        return;
+    }
+
+    if (sample > 1.0f) {
+        sample = 1.0f;
+    } else if (sample < -1.0f) {
+        sample = -1.0f;
+    }
+    value = sample < 0.0f ?
+        (int)(sample * 32768.0f) :
+        (int)(sample * 32767.0f);
+    if (value < -32768) {
+        value = -32768;
+    } else if (value > 32767) {
+        value = 32767;
+    }
+    runtime_audio_record_write_u16(rt->audio_record_file, (uint16_t)(int16_t)value);
+    rt->audio_record_written_samples++;
+    if (ferror(rt->audio_record_file) != 0) {
+        rt->audio_record_failed = true;
+        runtime_audio_record_finish(rt);
+    } else if (rt->audio_record_target_samples > 0 &&
+        rt->audio_record_written_samples >= rt->audio_record_target_samples) {
+        runtime_audio_record_finish(rt);
+    }
 }
 
 /* Emit host-rate audio samples proportional to machine cycles elapsed since
@@ -102,7 +250,8 @@ static void runtime_audio_produce(runtime *rt) {
     uint32_t clock_hz, sample_rate;
     float sample;
 
-    if (rt->audio_out == NULL || rt->audio_sample_rate <= 0) {
+    if ((rt->audio_out == NULL && rt->audio_record_path == NULL) ||
+        rt->audio_sample_rate <= 0) {
         return;
     }
 
@@ -139,7 +288,10 @@ static void runtime_audio_produce(runtime *rt) {
             sample = sid_sample(&rt->machine.sid);
         }
 
-        audio_buffer_write(rt->audio_out, &sample, 1);
+        if (rt->audio_out != NULL) {
+            audio_buffer_write(rt->audio_out, &sample, 1);
+        }
+        runtime_audio_record_sample(rt, sample);
     }
 }
 
@@ -150,6 +302,10 @@ static void runtime_audio_reset(runtime *rt) {
     rt->audio_cycle_accum = 0.0;
     rt->audio_last_cycle  = 0;
     rt->audio_smoke_phase = 0.0f;
+    if (rt->audio_record_file != NULL) {
+        runtime_audio_record_finish(rt);
+    }
+    runtime_audio_record_init(rt);
     runtime_update_sid_sample_output(rt);
 }
 
@@ -2666,6 +2822,7 @@ int runtime_thread_main(void *userdata) {
     rt->audio_cycle_accum = 0.0;
     rt->audio_last_cycle  = 0;
     rt->audio_smoke_phase = 0.0f;
+    runtime_audio_record_init(rt);
     runtime_update_sid_sample_output(rt);
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     runtime_load_symbol_files(rt);
@@ -2784,6 +2941,7 @@ int runtime_thread_main(void *userdata) {
         fclose(rt->trace_file);
         rt->trace_file = NULL;
     }
+    runtime_audio_record_finish(rt);
     symbol_table_destroy(rt->symbols);
     rt->symbols = NULL;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STOPPED);

@@ -812,11 +812,14 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int save_ini = 0;
     int audio_smoke = 0;
     int autorun = 0;
+    float audio_record_start = 0.0f;
+    float audio_record_duration = 0.0f;
     const char *basic_path = NULL;
     const char *breakpoint = NULL;
     const char *disk = NULL;
     const char *ini_path = NULL;
     const char *prg_path = NULL;
+    const char *audio_record_path = NULL;
     const char *turbo = NULL;
     struct argparse argparse;
     const char *const usages[] = {
@@ -825,6 +828,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
     struct argparse_option parse_options[] = {
         OPT_BOOLEAN('A', "audio-smoke", &audio_smoke, "emit 440 Hz tone to verify audio path", NULL, 0, OPT_NONEG),
+        OPT_STRING('\0', "audio-record", &audio_record_path, "record runtime mono audio to WAV", NULL, 0, 0),
+        OPT_FLOAT('\0', "audio-record-start", &audio_record_start, "recording start time in seconds", NULL, 0, 0),
+        OPT_FLOAT('\0', "audio-record-duration", &audio_record_duration, "recording duration in seconds", NULL, 0, 0),
         OPT_BOOLEAN('a', "autorun", &autorun, "run automatically after load", NULL, 0, OPT_NONEG),
         OPT_STRING('B', "basic", &basic_path, "load file as BASIC program at startup", NULL, 0, 0),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
@@ -884,6 +890,15 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (audio_smoke) {
         options->audio_smoke = true;
+    }
+    if (audio_record_path != NULL) {
+        replace_string(&options->audio_record_path, audio_record_path);
+    }
+    if (audio_record_start > 0.0f) {
+        options->audio_record_start_seconds = audio_record_start;
+    }
+    if (audio_record_duration > 0.0f) {
+        options->audio_record_duration_seconds = audio_record_duration;
     }
     if (autorun) {
         options->autorun = true;
@@ -946,6 +961,9 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->defaults = src->defaults;
     dest->no_save_ini = src->no_save_ini;
     dest->autorun = src->autorun;
+    dest->audio_smoke = src->audio_smoke;
+    dest->audio_record_start_seconds = src->audio_record_start_seconds;
+    dest->audio_record_duration_seconds = src->audio_record_duration_seconds;
     dest->scroll_wheel_lines = src->scroll_wheel_lines;
     dest->display_width = src->display_width;
     dest->display_height = src->display_height;
@@ -970,7 +988,8 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->kernal_rom_path, src->kernal_rom_path) ||
         !replace_string(&dest->system_rom_path, src->system_rom_path) ||
         !replace_string(&dest->prg_path, src->prg_path) ||
-        !replace_string(&dest->basic_path, src->basic_path)) {
+        !replace_string(&dest->basic_path, src->basic_path) ||
+        !replace_string(&dest->audio_record_path, src->audio_record_path)) {
         app_options_destroy(dest);
         return false;
     }
@@ -1120,6 +1139,7 @@ void app_options_destroy(app_options *options)
     free(options->system_rom_path);
     free(options->prg_path);
     free(options->basic_path);
+    free(options->audio_record_path);
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
         free(options->disk_images[i]);
     }

@@ -593,6 +593,31 @@ static void test_symbol_files_are_relative_to_ini(void) {
     c64m_rmdir("test_symbol_ini");
 }
 
+static void test_audio_record_options(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--noini",
+        "--audio-record",
+        "build/sid.wav",
+        "--audio-record-start",
+        "9.5",
+        "--audio-record-duration",
+        "4.0",
+    };
+
+    if (!app_options_load_startup(&options, 8, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string("audio record path", "build/sid.wav", options.audio_record_path);
+    expect_float_near("audio record start", 9.5f, options.audio_record_start_seconds);
+    expect_float_near("audio record duration", 4.0f, options.audio_record_duration_seconds);
+
+    app_options_destroy(&options);
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
@@ -604,5 +629,6 @@ int main(void) {
     test_config_turbo_speeds_ignores_runtime_turbo();
     test_phase14_config_saved_to_ini();
     test_symbol_files_are_relative_to_ini();
+    test_audio_record_options();
     return 0;
 }

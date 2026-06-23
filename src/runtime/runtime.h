@@ -26,6 +26,9 @@ typedef struct runtime_config {
        Null and zero are valid — runtime runs silently if audio is unavailable. */
     audio_buffer *audio_out;
     int audio_sample_rate;
+    const char *audio_record_path;
+    double audio_record_start_seconds;
+    double audio_record_duration_seconds;
     /* When non-zero, runtime emits a 440 Hz square-wave smoke tone instead of
        silence, proving the audio path without needing SID. */
     int audio_smoke;

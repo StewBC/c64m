@@ -1294,6 +1294,12 @@ int main(int argc, char **argv) {
     runtime_cfg.machine_config = machine_config_from_options(&options);
     runtime_cfg.audio_out         = abuf;
     runtime_cfg.audio_sample_rate = platform_audio_actual_rate(paudio);
+    if (runtime_cfg.audio_sample_rate <= 0 && options.audio_record_path != NULL) {
+        runtime_cfg.audio_sample_rate = 48000;
+    }
+    runtime_cfg.audio_record_path = options.audio_record_path;
+    runtime_cfg.audio_record_start_seconds = options.audio_record_start_seconds;
+    runtime_cfg.audio_record_duration_seconds = options.audio_record_duration_seconds;
     runtime_cfg.audio_smoke       = options.audio_smoke ? 1 : 0;
     runtime_cfg.autorun           = options.autorun;
     {

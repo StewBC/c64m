@@ -153,6 +153,9 @@ runtime *runtime_create(const runtime_config *config) {
 
         rt->audio_out         = config->audio_out;
         rt->audio_sample_rate = config->audio_sample_rate;
+        rt->audio_record_path = runtime_copy_string(config->audio_record_path);
+        rt->audio_record_start_seconds = config->audio_record_start_seconds;
+        rt->audio_record_duration_seconds = config->audio_record_duration_seconds;
         rt->audio_smoke       = config->audio_smoke;
         rt->autorun           = config->autorun;
 
@@ -161,7 +164,8 @@ runtime *runtime_create(const runtime_config *config) {
             (config->kernal_rom_path && !rt->kernal_rom_path) ||
             (config->system_rom_path && !rt->system_rom_path) ||
             (config->ini_path && !rt->ini_path) ||
-            (config->symbol_files && !rt->symbol_files)) {
+            (config->symbol_files && !rt->symbol_files) ||
+            (config->audio_record_path && !rt->audio_record_path)) {
             runtime_destroy(rt);
             return NULL;
         }
@@ -183,6 +187,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->system_rom_path);
     free(rt->ini_path);
     free(rt->symbol_files);
+    free(rt->audio_record_path);
     mutex_destroy(rt->frame_slot.mutex);
     mutex_destroy(rt->symbol_slot.mutex);
     message_queue_destroy(rt->event_queue);

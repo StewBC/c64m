@@ -123,6 +123,15 @@ struct runtime {
     /* Audio: shared buffer pointer (not owned). Null when audio is disabled. */
     audio_buffer *audio_out;
     int audio_sample_rate;
+    char *audio_record_path;
+    FILE *audio_record_file;
+    double audio_record_start_seconds;
+    double audio_record_duration_seconds;
+    uint64_t audio_record_seen_samples;
+    uint64_t audio_record_written_samples;
+    uint64_t audio_record_target_samples;
+    bool audio_record_failed;
+    bool audio_record_finished;
     double audio_cycle_accum;   /* fractional cycle accumulator for sample timing */
     uint64_t audio_last_cycle;  /* machine cycle at last audio produce call */
     float audio_smoke_phase;    /* square-wave phase accumulator for smoke tone */
