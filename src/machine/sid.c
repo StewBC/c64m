@@ -20,6 +20,13 @@ static const uint32_t s_decay_cycles[16] = {
    1159, 2897, 5794, 9271, 11592, 34775, 57959, 92734
 };
 
+enum {
+    SID_OUTPUT_GAIN_PERCENT = 22
+};
+
+static const float SID_DC_BLOCK_R = 0.99987f;
+static const float SID_FILTER_CUTOFF_DENOM = 4608.0f;
+
 static float sid_clampf(float v) {
     if (v < -1.0f) return -1.0f;
     if (v >  1.0f) return  1.0f;
@@ -153,71 +160,109 @@ uint8_t sid_read(sid *s, uint16_t addr) {
 /* Oscillator waveform                                                 */
 /* ------------------------------------------------------------------ */
 
+static uint8_t sid_triangle_byte(const sid_voice *v, uint32_t source_phase) {
+    uint32_t t;
+
+    t = v->phase;
+    if ((v->control & 0x04u) != 0u && (source_phase & 0x800000u) != 0u) {
+        t ^= 0x800000u;
+    }
+    if (t & 0x800000u) {
+        t = (~t) & 0x7FFFFFu;
+    } else {
+        t &= 0x7FFFFFu;
+    }
+    return (uint8_t)(t >> 15);
+}
+
+static uint8_t sid_saw_byte(const sid_voice *v) {
+    return (uint8_t)(v->phase >> 16);
+}
+
+static uint8_t sid_pulse_byte(const sid_voice *v) {
+    uint32_t thresh;
+
+    if (v->pulse_width == 0u) {
+        return 0u;
+    }
+    if (v->pulse_width >= 0xFFFu) {
+        return 255u;
+    }
+    thresh = (uint32_t)v->pulse_width << 12;
+    return (v->phase < thresh) ? 255u : 0u;
+}
+
+static uint8_t sid_noise_byte(sid_voice *v, uint32_t prev_phase) {
+    uint8_t noise_byte;
+
+    if ((prev_phase & 0x080000u) == 0u && (v->phase & 0x080000u) != 0u) {
+        uint32_t lfsr = v->noise_lfsr;
+        uint32_t fb   = ((lfsr >> 22) ^ (lfsr >> 17)) & 1u;
+        lfsr = ((lfsr << 1) | fb) & 0x7FFFFFu;
+        if (!lfsr) lfsr = 1u;   /* keep nonzero */
+        v->noise_lfsr = lfsr;
+    }
+
+    {
+        uint32_t lfsr = v->noise_lfsr;
+        noise_byte = (uint8_t)(
+            ((lfsr >> 13) & 0x80u) |   /* bit 20 -> out bit 7 */
+            ((lfsr >> 12) & 0x40u) |   /* bit 18 -> out bit 6 */
+            ((lfsr >>  9) & 0x20u) |   /* bit 14 -> out bit 5 */
+            ((lfsr >>  7) & 0x10u) |   /* bit 11 -> out bit 4 */
+            ((lfsr >>  6) & 0x08u) |   /* bit  9 -> out bit 3 */
+            ((lfsr >>  3) & 0x04u) |   /* bit  5 -> out bit 2 */
+            ((lfsr >>  1) & 0x02u) |   /* bit  2 -> out bit 1 */
+            ( lfsr        & 0x01u));   /* bit  0 -> out bit 0 */
+    }
+    return noise_byte;
+}
+
 /*
- * Compute one waveform sample for a voice.  Updates noise LFSR on
- * oscillator bit-19 low->high transition.  Returns a value in
- * approximately [-1.0, +1.0].
+ * Compute one waveform sample for a voice.  Updates noise LFSR on oscillator
+ * bit-19 low->high transition.  Returns approximately [-1.0, +1.0].
  *
- * Combined waveform policy: noise > pulse > saw > triangle.
- * Exact combined-waveform analog behaviour is deferred.
+ * Ring modulation affects triangle generation using the previous voice's phase
+ * high bit.  Combined waveforms use a deterministic bitwise/AND-style blend in
+ * an unsigned 8-bit waveform domain.  This is a functional approximation, not
+ * exact analog 6581 combined-waveform behavior.
  */
-static float sid_voice_waveform(sid_voice *v, uint32_t prev_phase) {
+static float sid_voice_waveform(sid_voice *v, uint32_t prev_phase, uint32_t source_phase) {
     uint8_t  ctrl  = v->control;
-    uint32_t phase = v->phase;
-    uint32_t t, thresh;
-    uint8_t  noise_byte;
+    uint8_t  wave_mask;
+    uint8_t  combined = 0xFFu;
 
     if (ctrl & 0x08u) {           /* TEST bit: silence */
         return 0.0f;
     }
-    if ((ctrl & 0xF0u) == 0u) {  /* no waveform selected */
+    wave_mask = ctrl & 0xF0u;
+    if (wave_mask == 0u) {  /* no waveform selected */
         return 0.0f;
     }
 
-    if (ctrl & 0x80u) {           /* NOISE */
-        /* Clock 23-bit LFSR (taps 22, 17) on oscillator bit-19 0->1 edge */
-        if ((prev_phase & 0x080000u) == 0u && (phase & 0x080000u) != 0u) {
-            uint32_t lfsr = v->noise_lfsr;
-            uint32_t fb   = ((lfsr >> 22) ^ (lfsr >> 17)) & 1u;
-            lfsr = ((lfsr << 1) | fb) & 0x7FFFFFu;
-            if (!lfsr) lfsr = 1u;   /* keep nonzero */
-            v->noise_lfsr = lfsr;
-        }
-        /* Output byte from documented LFSR bit positions */
-        {
-            uint32_t lfsr = v->noise_lfsr;
-            noise_byte = (uint8_t)(
-                ((lfsr >> 13) & 0x80u) |   /* bit 20 -> out bit 7 */
-                ((lfsr >> 12) & 0x40u) |   /* bit 18 -> out bit 6 */
-                ((lfsr >>  9) & 0x20u) |   /* bit 14 -> out bit 5 */
-                ((lfsr >>  7) & 0x10u) |   /* bit 11 -> out bit 4 */
-                ((lfsr >>  6) & 0x08u) |   /* bit  9 -> out bit 3 */
-                ((lfsr >>  3) & 0x04u) |   /* bit  5 -> out bit 2 */
-                ((lfsr >>  1) & 0x02u) |   /* bit  2 -> out bit 1 */
-                ( lfsr        & 0x01u));   /* bit  0 -> out bit 0 */
-        }
-        return (float)noise_byte / 127.5f - 1.0f;
+    if (wave_mask & 0x10u) combined &= sid_triangle_byte(v, source_phase);
+    if (wave_mask & 0x20u) combined &= sid_saw_byte(v);
+    if (wave_mask & 0x40u) combined &= sid_pulse_byte(v);
+    if (wave_mask & 0x80u) combined &= sid_noise_byte(v, prev_phase);
 
-    } else if (ctrl & 0x40u) {    /* PULSE */
-        if (v->pulse_width == 0u) return -1.0f;
-        if (v->pulse_width >= 0xFFFu) return 1.0f;
-        thresh = (uint32_t)v->pulse_width << 12;
-        return (phase < thresh) ? 1.0f : -1.0f;
-
-    } else if (ctrl & 0x20u) {    /* SAW */
-        return 2.0f * ((float)(phase & 0x00FFFFFFu) / (float)0x01000000u) - 1.0f;
-
-    } else {                       /* TRIANGLE (ctrl & 0x10) */
-        t = phase;
-        if (t & 0x800000u) t = (~t) & 0x7FFFFFu;
-        else                t =   t  & 0x7FFFFFu;
-        return 2.0f * (float)t / (float)0x00800000u - 1.0f;
-    }
+    return (float)combined / 127.5f - 1.0f;
 }
 
 /* ------------------------------------------------------------------ */
 /* ADSR envelope                                                       */
 /* ------------------------------------------------------------------ */
+
+/* Exponential period multiplier for decay/release: the real 6581 slows the
+ * step rate as the envelope value drops, producing a natural decay curve.
+ * Attack is linear and does not use this multiplier. */
+static uint32_t sid_exp_period(uint8_t env) {
+    if (env >= 93u) return  1u;
+    if (env >= 54u) return  2u;
+    if (env >= 26u) return  4u;
+    if (env >= 14u) return  8u;
+    if (env >=  6u) return 16u;
+    return 30u;
+}
 
 static void sid_voice_advance_env(sid_voice *v) {
     uint8_t attack_rate  = (v->attack_decay  >> 4) & 0x0Fu;
@@ -241,7 +286,8 @@ static void sid_voice_advance_env(sid_voice *v) {
             break;
 
         case SID_ENV_DECAY:
-            v->env_counter += 1.0 / (double)s_decay_cycles[decay_rate];
+            v->env_counter += 1.0 / ((double)s_decay_cycles[decay_rate] *
+                                     (double)sid_exp_period(v->envelope));
             if (v->env_counter >= 1.0) {
                 v->env_counter -= 1.0;
                 if (v->envelope > sustain_val) v->envelope--;
@@ -257,7 +303,8 @@ static void sid_voice_advance_env(sid_voice *v) {
             break;
 
         case SID_ENV_RELEASE:
-            v->env_counter += 1.0 / (double)s_decay_cycles[release_rate];
+            v->env_counter += 1.0 / ((double)s_decay_cycles[release_rate] *
+                                     (double)sid_exp_period(v->envelope));
             if (v->env_counter >= 1.0) {
                 v->env_counter -= 1.0;
                 if (v->envelope > 0u) v->envelope--;
@@ -266,15 +313,35 @@ static void sid_voice_advance_env(sid_voice *v) {
     }
 }
 
+static float sid_condition_output(sid *s, float raw) {
+    float blocked;
+    float out;
+
+    blocked = raw - s->dc_block_prev_input + SID_DC_BLOCK_R * s->dc_block_prev_output;
+    s->dc_block_prev_input = raw;
+    s->dc_block_prev_output = blocked;
+
+    out = blocked * ((float)SID_OUTPUT_GAIN_PERCENT / 100.0f);
+    return sid_clampf(out);
+}
+
+static float sid_filter_cutoff_factor(uint16_t cutoff) {
+    return ((float)cutoff + 1.0f) / SID_FILTER_CUTOFF_DENOM;
+}
+
 /* ------------------------------------------------------------------ */
 /* Cycle advance: oscillators + ADSR + mix + filter                   */
 /* ------------------------------------------------------------------ */
 
 void sid_advance_cycles(sid *s, uint32_t cycles) {
     uint32_t c, i;
-    float    v1, v2, v3, mixed, vol_gain;
+    float    v1, v2, v3, voice_sum, filtered_in, bypass_out, vol_gain;
     float    f, q;
-    uint8_t  res_nibble, mode;
+    float    raw_output;
+    uint8_t  res_nibble, route, mode;
+    uint32_t prev_phase[3];
+    bool     wrapped[3];
+    static const uint8_t source_voice[3] = { 2u, 0u, 1u };
 
     if (!s || cycles == 0u) return;
 
@@ -282,13 +349,31 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
         /* --- Advance each voice --- */
         for (i = 0u; i < 3u; i++) {
             sid_voice *v    = &s->voices[i];
-            uint32_t   prev = v->phase;
+            prev_phase[i] = v->phase;
+            wrapped[i] = false;
 
             if (!(v->control & 0x08u)) {   /* advance phase unless TEST bit */
                 v->phase = (v->phase + (uint32_t)v->freq) & 0x00FFFFFFu;
+                wrapped[i] = v->phase < prev_phase[i];
             }
+        }
+
+        /* Hard sync: a voice resets when its previous/source voice wraps.
+         * Voice 1<-3, voice 2<-1, voice 3<-2. */
+        for (i = 0u; i < 3u; i++) {
+            sid_voice *v = &s->voices[i];
+            if ((v->control & 0x02u) != 0u && wrapped[source_voice[i]]) {
+                v->phase = 0;
+            }
+        }
+
+        for (i = 0u; i < 3u; i++) {
+            sid_voice *v = &s->voices[i];
             if (s->sample_output_enabled) {
-                v->last_wave = sid_voice_waveform(v, prev);
+                v->last_wave = sid_voice_waveform(
+                    v,
+                    prev_phase[i],
+                    s->voices[source_voice[i]].phase);
             }
             sid_voice_advance_env(v);
         }
@@ -302,8 +387,8 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
         }
 
         /* --- Mixer ---
-         * Per-voice filter routing ($D417 bits 3..0) is deferred;
-         * the full mixed signal is routed through the filter.
+         * $D417 bits 0..2 route voices 1..3 through the filter. Unrouted
+         * voices bypass the filter and are mixed back after mode selection.
          * Voice 3 output is disconnected when $D418 bit 7 is set. */
         v1 = s->voices[0].last_wave * ((float)s->voices[0].envelope / 255.0f);
         v2 = s->voices[1].last_wave * ((float)s->voices[1].envelope / 255.0f);
@@ -311,19 +396,30 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
              s->voices[2].last_wave * ((float)s->voices[2].envelope / 255.0f);
 
         vol_gain = (float)(s->mode_volume & 0x0Fu) / 15.0f;
-        mixed    = sid_clampf((v1 + v2 + v3) / 3.0f * vol_gain);
+        route = s->filter_res_route & 0x07u;
+        voice_sum = v1 + v2 + v3;
+        filtered_in = 0.0f;
+        bypass_out = 0.0f;
+
+        if (route & 0x01u) filtered_in += v1; else bypass_out += v1;
+        if (route & 0x02u) filtered_in += v2; else bypass_out += v2;
+        if (route & 0x04u) filtered_in += v3; else bypass_out += v3;
+
+        filtered_in = sid_clampf(filtered_in / 3.0f * vol_gain);
+        bypass_out  = sid_clampf(bypass_out  / 3.0f * vol_gain);
 
         /* --- State-variable filter ---
-         * f: cutoff factor 0..0.5 (always stable).
+         * f: cutoff factor, capped below 0.5 for stability and to avoid the
+         * overly bright top-end produced by the earlier linear 0..0.5 mapping.
          * q: resonance damping 0.1..1.0. */
-        f = (float)(s->filter_cutoff + 1u) / 4096.0f;
+        f = sid_filter_cutoff_factor(s->filter_cutoff);
 
         res_nibble = (s->filter_res_route >> 4) & 0x0Fu;
         q = 1.0f - (float)res_nibble / 20.0f;
         if (q < 0.1f) q = 0.1f;
 
         /* Chamberlin SVF (hp computed first for stability) */
-        s->filter_hp  = mixed - s->filter_lp - q * s->filter_bp;
+        s->filter_hp  = filtered_in - s->filter_lp - q * s->filter_bp;
         s->filter_bp += f * s->filter_hp;
         s->filter_lp += f * s->filter_bp;
 
@@ -337,14 +433,15 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
          * When no mode bits are set, bypass the filter entirely. */
         mode = (s->mode_volume >> 4) & 0x07u;
         if (mode == 0u) {
-            s->last_sample = mixed;
+            raw_output = sid_clampf(voice_sum / 3.0f * vol_gain);
         } else {
             float out = 0.0f;
             if (mode & 0x01u) out += s->filter_lp;   /* LP */
             if (mode & 0x02u) out += s->filter_bp;   /* BP */
             if (mode & 0x04u) out += s->filter_hp;   /* HP */
-            s->last_sample = sid_clampf(out);
+            raw_output = sid_clampf(out + bypass_out);
         }
+        s->last_sample = sid_condition_output(s, raw_output);
     }
 }
 

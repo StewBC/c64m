@@ -223,7 +223,12 @@ def main():
     parser.add_argument("--out")
     parser.add_argument("--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE)
     parser.add_argument("--max-score", type=float)
+    parser.add_argument("--baseline-metrics", help="prior metrics JSON used with --max-score-regression")
+    parser.add_argument("--max-score-regression", type=float, help="fail if score exceeds baseline score by more than this")
     args = parser.parse_args()
+
+    if args.max_score_regression is not None and not args.baseline_metrics:
+        parser.error("--max-score-regression requires --baseline-metrics")
 
     reference = decode_mono_f32(args.reference, args.sample_rate)
     candidate = decode_mono_f32(args.candidate, args.sample_rate)
@@ -268,6 +273,15 @@ def main():
         "score_note": "Lower is better; weighted envelope, RMS, DC, and spectral-band error.",
     }
 
+    baseline_score = None
+    if args.baseline_metrics:
+        with open(args.baseline_metrics, "r", encoding="utf-8") as handle:
+            baseline = json.load(handle)
+        baseline_score = float(baseline["score"])
+        result["baseline_metrics"] = args.baseline_metrics
+        result["baseline_score"] = baseline_score
+        result["score_delta_from_baseline"] = score - baseline_score
+
     text = json.dumps(result, indent=2, sort_keys=True)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
@@ -277,6 +291,9 @@ def main():
 
     if args.max_score is not None and score > args.max_score:
         return 1
+    if args.max_score_regression is not None and baseline_score is not None:
+        if score > baseline_score + args.max_score_regression:
+            return 1
     return 0
 
 

@@ -377,7 +377,7 @@ static void test_frequency_affects_output(void) {
     sid s;
     uint32_t i;
     int wraps_lo = 0, wraps_hi = 0;
-    float prev, curr;
+    uint32_t prev, curr;
 
     /* Count sawtooth wrap-arounds (large downward jumps) as the frequency
        indicator.  Low freq 0x0400 (period=16384 cy) yields ~2 wraps in 32768
@@ -389,11 +389,11 @@ static void test_frequency_affects_output(void) {
     sid_write(&s, 0xD404, 0x21); /* gate+saw */
     sid_write(&s, 0xD418, 0x0F);
     for (i = 0; i < 2048; i++) sid_advance_cycles(&s, 1); /* let attack finish */
-    prev = sid_sample(&s);
+    prev = s.voices[0].phase;
     for (i = 0; i < 32768; i++) {
         sid_advance_cycles(&s, 1);
-        curr = sid_sample(&s);
-        if (curr < prev - 0.3f) wraps_lo++;
+        curr = s.voices[0].phase;
+        if (curr < prev) wraps_lo++;
         prev = curr;
     }
 
@@ -403,11 +403,11 @@ static void test_frequency_affects_output(void) {
     sid_write(&s, 0xD404, 0x21);
     sid_write(&s, 0xD418, 0x0F);
     for (i = 0; i < 2048; i++) sid_advance_cycles(&s, 1);
-    prev = sid_sample(&s);
+    prev = s.voices[0].phase;
     for (i = 0; i < 32768; i++) {
         sid_advance_cycles(&s, 1);
-        curr = sid_sample(&s);
-        if (curr < prev - 0.3f) wraps_hi++;
+        curr = s.voices[0].phase;
+        if (curr < prev) wraps_hi++;
         prev = curr;
     }
 
@@ -601,6 +601,133 @@ static void test_reset_clears_envelope(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Exponential ADSR tests                                             */
+/* ------------------------------------------------------------------ */
+
+static void test_exp_decay_takes_longer_total(void) {
+    /* Full decay from envelope=255 to 0 with fastest rate (23 cy/step).
+     * Linear minimum = 255*23 = 5865 cycles.
+     * Exponential total is ~17400 cycles due to slower steps at low levels.
+     * We require at least 10000 cycles to confirm exponential behaviour. */
+    sid s;
+    uint32_t cycles;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD405, 0x00); /* fastest attack=0, decay=0 */
+    sid_write(&s, 0xD406, 0x00); /* sustain=0, fastest release=0 */
+    sid_write(&s, 0xD404, 0x21); /* gate+saw (triggers ATTACK; overridden below) */
+    sid_write(&s, 0xD418, 0x0F);
+    s.voices[0].envelope    = 255u;
+    s.voices[0].env_state   = SID_ENV_DECAY;
+    s.voices[0].env_counter = 0.0;
+
+    for (cycles = 0u; cycles < 40000u; cycles++) {
+        if (s.voices[0].envelope == 0u) break;
+        sid_advance_cycles(&s, 1);
+    }
+
+    if (s.voices[0].envelope != 0u) {
+        fail("exp_decay_takes_longer: envelope never reached 0 in 40000 cycles");
+    }
+    if (cycles < 10000u) {
+        fprintf(stderr,
+            "FAIL: exp_decay_takes_longer: only %u cycles; expected >= 10000\n",
+            cycles);
+        exit(1);
+    }
+}
+
+static void test_exp_decay_step_ratio_by_level(void) {
+    /* At fastest decay rate (23 cy/step base):
+     *   env=200: multiplier=1  -> ~23 cycles per step
+     *   env=5:   multiplier=30 -> ~690 cycles per step
+     * Expect the low-level step to take at least 20x longer. */
+    sid s;
+    uint32_t i;
+    uint32_t cycles_high = 0u, cycles_low = 0u;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD405, 0x00);
+    sid_write(&s, 0xD406, 0x00);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+    s.voices[0].envelope    = 200u;
+    s.voices[0].env_state   = SID_ENV_DECAY;
+    s.voices[0].env_counter = 0.0;
+    for (i = 1u; i <= 1000u; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[0].envelope < 200u) { cycles_high = i; break; }
+    }
+    if (!cycles_high) {
+        fail("exp_decay_ratio: env=200 did not decrement in 1000 cycles");
+    }
+
+    sid_reset(&s);
+    sid_write(&s, 0xD405, 0x00);
+    sid_write(&s, 0xD406, 0x00);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+    s.voices[0].envelope    = 5u;
+    s.voices[0].env_state   = SID_ENV_DECAY;
+    s.voices[0].env_counter = 0.0;
+    for (i = 1u; i <= 30000u; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[0].envelope < 5u) { cycles_low = i; break; }
+    }
+    if (!cycles_low) {
+        fail("exp_decay_ratio: env=5 did not decrement in 30000 cycles");
+    }
+
+    if (cycles_low < cycles_high * 20u) {
+        fprintf(stderr,
+            "FAIL: exp_decay_ratio: cycles_high=%u cycles_low=%u; expected ratio>=20\n",
+            cycles_high, cycles_low);
+        exit(1);
+    }
+}
+
+static void test_exp_release_slows_at_low_envelope(void) {
+    /* Release uses the same exponential multiplier as decay.
+     * env=200 (multiplier=1) should step much faster than env=5 (multiplier=30). */
+    sid s;
+    uint32_t i;
+    uint32_t cycles_high = 0u, cycles_low = 0u;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD406, 0x00); /* fastest release nibble=0 */
+    s.voices[0].envelope    = 200u;
+    s.voices[0].env_state   = SID_ENV_RELEASE;
+    s.voices[0].env_counter = 0.0;
+    for (i = 1u; i <= 1000u; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[0].envelope < 200u) { cycles_high = i; break; }
+    }
+    if (!cycles_high) {
+        fail("exp_release_slows: env=200 did not decrement in 1000 cycles");
+    }
+
+    sid_reset(&s);
+    sid_write(&s, 0xD406, 0x00);
+    s.voices[0].envelope    = 5u;
+    s.voices[0].env_state   = SID_ENV_RELEASE;
+    s.voices[0].env_counter = 0.0;
+    for (i = 1u; i <= 30000u; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[0].envelope < 5u) { cycles_low = i; break; }
+    }
+    if (!cycles_low) {
+        fail("exp_release_slows: env=5 did not decrement in 30000 cycles");
+    }
+
+    if (cycles_low < cycles_high * 20u) {
+        fprintf(stderr,
+            "FAIL: exp_release_slows: cycles_high=%u cycles_low=%u; expected ratio>=20\n",
+            cycles_high, cycles_low);
+        exit(1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Mixer and filter tests                                              */
 /* ------------------------------------------------------------------ */
 
@@ -693,7 +820,7 @@ static void test_filter_lp_bounded(void) {
     sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
     sid_write(&s, 0xD404, 0x11);
     sid_write(&s, 0xD415, 0x00); sid_write(&s, 0xD416, 0x40); /* cutoff mid */
-    sid_write(&s, 0xD417, 0x00); /* resonance 0 */
+    sid_write(&s, 0xD417, 0x01); /* resonance 0, route voice 1 */
     sid_write(&s, 0xD418, 0x1F); /* LP mode, volume 15 */
 
     for (i = 0; i < 50000; i++) {
@@ -723,7 +850,7 @@ static void test_filter_cutoff_affects_output(void) {
     sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
     sid_write(&s, 0xD404, 0x11);
     sid_write(&s, 0xD415, 0x00); sid_write(&s, 0xD416, 0x00); /* minimum cutoff */
-    sid_write(&s, 0xD417, 0x00);
+    sid_write(&s, 0xD417, 0x01);
     sid_write(&s, 0xD418, 0x1F); /* LP mode, vol max */
     for (i = 0; i < 20000; i++) {
         sid_advance_cycles(&s, 1);
@@ -739,7 +866,7 @@ static void test_filter_cutoff_affects_output(void) {
     sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
     sid_write(&s, 0xD404, 0x11);
     sid_write(&s, 0xD415, 0xFF); sid_write(&s, 0xD416, 0xFF); /* maximum cutoff */
-    sid_write(&s, 0xD417, 0x00);
+    sid_write(&s, 0xD417, 0x01);
     sid_write(&s, 0xD418, 0x1F);
     for (i = 0; i < 20000; i++) {
         sid_advance_cycles(&s, 1);
@@ -769,7 +896,7 @@ static void test_filter_modes_bounded(void) {
         sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
         sid_write(&s, 0xD404, 0x11);
         sid_write(&s, 0xD415, 0x00); sid_write(&s, 0xD416, 0x40);
-        sid_write(&s, 0xD417, 0x70); /* resonance 7 */
+        sid_write(&s, 0xD417, 0x71); /* resonance 7, route voice 1 */
         sid_write(&s, 0xD418, (uint8_t)(((uint8_t)(mode << 4)) | 0x0Fu));
 
         for (i = 0; i < 20000; i++) {
@@ -781,6 +908,480 @@ static void test_filter_modes_bounded(void) {
                     mode, (double)sample);
                 exit(1);
             }
+        }
+    }
+}
+
+static float sid_abs_average_after_warmup(sid *s, uint32_t warmup, uint32_t samples);
+
+static void test_filter_extreme_cutoff_resonance_bounded(void) {
+    sid s;
+    uint32_t i;
+    uint16_t cutoff;
+    uint8_t mode;
+
+    for (cutoff = 0; cutoff <= 0x7FFu; cutoff += 0x7FFu) {
+        for (mode = 1; mode <= 7; mode++) {
+            sid_reset(&s);
+            sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0x80);
+            sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+            sid_write(&s, 0xD404, 0x21);
+            sid_write(&s, 0xD415, (uint8_t)(cutoff & 0x07u));
+            sid_write(&s, 0xD416, (uint8_t)(cutoff >> 3));
+            sid_write(&s, 0xD417, 0xF1); /* max resonance, route voice 1 */
+            sid_write(&s, 0xD418, (uint8_t)((mode << 4) | 0x0Fu));
+
+            for (i = 0; i < 50000; i++) {
+                float sample;
+                sid_advance_cycles(&s, 1);
+                sample = sid_sample(&s);
+                if (sample < -1.0f || sample > 1.0f) {
+                    fprintf(stderr,
+                        "FAIL: filter_extreme_bounded: cutoff=0x%03X mode=0x%X sample=%f\n",
+                        (unsigned)cutoff, (unsigned)mode, (double)sample);
+                    exit(1);
+                }
+            }
+        }
+    }
+}
+
+static void test_filter_reset_clears_state(void) {
+    sid s;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0x80);
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD415, 0xFF); sid_write(&s, 0xD416, 0xFF);
+    sid_write(&s, 0xD417, 0xF1);
+    sid_write(&s, 0xD418, 0x7F);
+    for (i = 0; i < 20000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    if (s.filter_lp == 0.0f && s.filter_bp == 0.0f && s.filter_hp == 0.0f) {
+        fail("filter_reset_clears_state: filter never moved before reset");
+    }
+
+    sid_reset(&s);
+    expect_zero_float("filter_reset_clears_state: lp", s.filter_lp);
+    expect_zero_float("filter_reset_clears_state: bp", s.filter_bp);
+    expect_zero_float("filter_reset_clears_state: hp", s.filter_hp);
+}
+
+static void test_filter_mode_zero_audible_bypasses_filter(void) {
+    sid s;
+    float mode_zero;
+    float lowpass;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0x80);
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD415, 0x00); sid_write(&s, 0xD416, 0x00);
+    sid_write(&s, 0xD417, 0x01);
+    sid_write(&s, 0xD418, 0x0F); /* mode 0 */
+    mode_zero = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0x80);
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD415, 0x00); sid_write(&s, 0xD416, 0x00);
+    sid_write(&s, 0xD417, 0x01);
+    sid_write(&s, 0xD418, 0x1F); /* LP */
+    lowpass = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (mode_zero <= lowpass * 1.25f) {
+        fprintf(stderr,
+            "FAIL: filter_mode_zero_bypass: mode_zero=%f lowpass=%f\n",
+            (double)mode_zero, (double)lowpass);
+        exit(1);
+    }
+}
+
+static float sid_abs_average_after_warmup(sid *s, uint32_t warmup, uint32_t samples) {
+    uint32_t i;
+    float sum = 0.0f;
+
+    for (i = 0; i < warmup; i++) {
+        sid_advance_cycles(s, 1);
+    }
+    for (i = 0; i < samples; i++) {
+        float v;
+        sid_advance_cycles(s, 1);
+        v = sid_sample(s);
+        sum += v >= 0.0f ? v : -v;
+    }
+    return sum / (float)samples;
+}
+
+static void sid_configure_voice1_filter_probe(sid *s, uint8_t route) {
+    sid_reset(s);
+    sid_write(s, 0xD400, 0x00);
+    sid_write(s, 0xD401, 0x80); /* high saw frequency for visible LP effect */
+    sid_write(s, 0xD405, 0x00);
+    sid_write(s, 0xD406, 0xF0);
+    sid_write(s, 0xD404, 0x21); /* gate+saw */
+    sid_write(s, 0xD415, 0x00);
+    sid_write(s, 0xD416, 0x00); /* minimum cutoff */
+    sid_write(s, 0xD417, route);
+    sid_write(s, 0xD418, 0x1F); /* LP mode, volume 15 */
+}
+
+static void test_filter_routing_voice1_lp_affects_output(void) {
+    sid s;
+    float routed;
+    float bypassed;
+
+    sid_configure_voice1_filter_probe(&s, 0x01);
+    routed = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    sid_configure_voice1_filter_probe(&s, 0x00);
+    bypassed = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (routed >= bypassed * 0.75f) {
+        fprintf(stderr,
+            "FAIL: filter_routing_voice1_lp_affects: routed=%f bypassed=%f\n",
+            (double)routed, (double)bypassed);
+        exit(1);
+    }
+}
+
+static void test_filter_routing_unrouted_voice_bypasses_filter(void) {
+    sid s;
+    float bypassed;
+
+    sid_configure_voice1_filter_probe(&s, 0x00);
+    bypassed = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (bypassed <= 0.001f) {
+        fprintf(stderr,
+            "FAIL: filter_routing_unrouted_voice_bypasses: bypassed=%f\n",
+            (double)bypassed);
+        exit(1);
+    }
+}
+
+static void test_filter_routing_resonance_nibble_preserved(void) {
+    sid s;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD417, 0xA5);
+    expect_eq_u8("filter_routing_resonance_nibble: reg", 0xA5, s.filter_res_route);
+    if ((s.filter_res_route & 0xF0u) != 0xA0u) {
+        fail("filter_routing_resonance_nibble: high nibble not preserved");
+    }
+    if ((s.filter_res_route & 0x07u) != 0x05u) {
+        fail("filter_routing_resonance_nibble: route bits not preserved");
+    }
+}
+
+static void sid_configure_voice3_only(sid *s, uint8_t route, uint8_t mode_volume) {
+    sid_reset(s);
+    sid_write(s, 0xD40E, 0x00);
+    sid_write(s, 0xD40F, 0x40);
+    sid_write(s, 0xD413, 0x00);
+    sid_write(s, 0xD414, 0xF0);
+    sid_write(s, 0xD412, 0x21); /* gate+saw */
+    sid_write(s, 0xD415, 0xFF);
+    sid_write(s, 0xD416, 0xFF);
+    sid_write(s, 0xD417, route);
+    sid_write(s, 0xD418, mode_volume);
+}
+
+static void test_filter_routing_voice3_disconnect_applies_to_routed_voice(void) {
+    sid s;
+    float connected;
+    float disconnected;
+
+    sid_configure_voice3_only(&s, 0x04, 0x1F);
+    connected = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    sid_configure_voice3_only(&s, 0x04, 0x9F); /* disconnect voice 3 */
+    disconnected = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (connected <= 0.001f || disconnected >= connected * 0.10f) {
+        fprintf(stderr,
+            "FAIL: voice3_disconnect_routed: connected=%f disconnected=%f\n",
+            (double)connected, (double)disconnected);
+        exit(1);
+    }
+}
+
+static void test_filter_routing_voice3_disconnect_applies_to_bypass_voice(void) {
+    sid s;
+    float connected;
+    float disconnected;
+
+    sid_configure_voice3_only(&s, 0x00, 0x1F);
+    connected = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    sid_configure_voice3_only(&s, 0x00, 0x9F); /* disconnect voice 3 */
+    disconnected = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (connected <= 0.001f || disconnected >= connected * 0.10f) {
+        fprintf(stderr,
+            "FAIL: voice3_disconnect_bypass: connected=%f disconnected=%f\n",
+            (double)connected, (double)disconnected);
+        exit(1);
+    }
+}
+
+static void test_sync_resets_destination_on_source_wrap(void) {
+    sid s;
+    uint32_t i;
+    uint32_t prev_source;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x01);
+    sid_write(&s, 0xD401, 0x00);
+    sid_write(&s, 0xD404, 0x23); /* voice 1: gate+saw+sync to voice 3 */
+    sid_write(&s, 0xD40E, 0x00);
+    sid_write(&s, 0xD40F, 0x80); /* voice 3 wraps quickly */
+    sid_write(&s, 0xD412, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+
+    prev_source = s.voices[2].phase;
+    for (i = 0; i < 1024; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[2].phase < prev_source) {
+            if (s.voices[0].phase != 0u) {
+                fprintf(stderr,
+                    "FAIL: sync_resets_destination: phase=%u\n",
+                    (unsigned)s.voices[0].phase);
+                exit(1);
+            }
+            return;
+        }
+        prev_source = s.voices[2].phase;
+    }
+    fail("sync_resets_destination: source did not wrap");
+}
+
+static void test_sync_disabled_preserves_destination_phase(void) {
+    sid s;
+    uint32_t i;
+    uint32_t prev_source;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x01);
+    sid_write(&s, 0xD401, 0x00);
+    sid_write(&s, 0xD404, 0x21); /* voice 1: gate+saw, sync disabled */
+    sid_write(&s, 0xD40E, 0x00);
+    sid_write(&s, 0xD40F, 0x80);
+    sid_write(&s, 0xD412, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+
+    prev_source = s.voices[2].phase;
+    for (i = 0; i < 1024; i++) {
+        sid_advance_cycles(&s, 1);
+        if (s.voices[2].phase < prev_source) {
+            if (s.voices[0].phase == 0u) {
+                fail("sync_disabled_preserves_phase: destination was reset");
+            }
+            return;
+        }
+        prev_source = s.voices[2].phase;
+    }
+    fail("sync_disabled_preserves_phase: source did not wrap");
+}
+
+static float sid_last_wave_for_ring_probe(uint8_t control, uint32_t source_phase) {
+    sid s;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD404, control);
+    sid_write(&s, 0xD418, 0x0F);
+    s.voices[0].phase = 0x200000u;
+    s.voices[2].phase = source_phase;
+    sid_advance_cycles(&s, 1);
+    return s.voices[0].last_wave;
+}
+
+static void test_ring_modulation_changes_triangle_output(void) {
+    float low_source;
+    float high_source;
+
+    low_source = sid_last_wave_for_ring_probe(0x15, 0x000000u);  /* gate+ring+triangle */
+    high_source = sid_last_wave_for_ring_probe(0x15, 0x800000u);
+
+    if (low_source == high_source) {
+        fail("ring_triangle_changes_output: samples matched");
+    }
+}
+
+static void test_ring_modulation_ignored_without_triangle(void) {
+    float low_source;
+    float high_source;
+
+    low_source = sid_last_wave_for_ring_probe(0x25, 0x000000u);  /* gate+ring+saw */
+    high_source = sid_last_wave_for_ring_probe(0x25, 0x800000u);
+
+    if (low_source != high_source) {
+        fail("ring_without_triangle: samples differed");
+    }
+}
+
+static float sid_last_wave_for_combined_probe(uint8_t control) {
+    sid s;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD404, control);
+    sid_write(&s, 0xD418, 0x0F);
+    s.voices[0].phase = 0x600000u;
+    sid_advance_cycles(&s, 1);
+    return s.voices[0].last_wave;
+}
+
+static void test_combined_waveform_differs_from_source_waveforms(void) {
+    float triangle;
+    float saw;
+    float combined;
+
+    triangle = sid_last_wave_for_combined_probe(0x11);
+    saw = sid_last_wave_for_combined_probe(0x21);
+    combined = sid_last_wave_for_combined_probe(0x31);
+
+    if (combined == triangle || combined == saw) {
+        fprintf(stderr,
+            "FAIL: combined_waveform_differs: tri=%f saw=%f combined=%f\n",
+            (double)triangle, (double)saw, (double)combined);
+        exit(1);
+    }
+}
+
+static void test_combined_waveform_bounded(void) {
+    sid s;
+    uint32_t i;
+    float sample;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00);
+    sid_write(&s, 0xD401, 0x40);
+    sid_write(&s, 0xD402, 0x00);
+    sid_write(&s, 0xD403, 0x08);
+    sid_write(&s, 0xD405, 0x00);
+    sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x71); /* gate+triangle+saw+pulse */
+    sid_write(&s, 0xD418, 0x0F);
+
+    for (i = 0; i < 50000; i++) {
+        sid_advance_cycles(&s, 1);
+        sample = sid_sample(&s);
+        if (sample < -1.0f || sample > 1.0f) {
+            fprintf(stderr,
+                "FAIL: combined_waveform_bounded: sample=%f\n",
+                (double)sample);
+            exit(1);
+        }
+    }
+}
+
+static void test_output_conditioning_reset_clears_state(void) {
+    sid s;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00);
+    sid_write(&s, 0xD401, 0x10);
+    sid_write(&s, 0xD405, 0x00);
+    sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21); /* gate+saw */
+    sid_write(&s, 0xD418, 0x0F);
+    for (i = 0; i < 20000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    expect_nonzero_float("conditioning_reset: pre-reset output", sid_sample(&s));
+
+    sid_reset(&s);
+    expect_zero_float("conditioning_reset: sample", sid_sample(&s));
+    expect_zero_float("conditioning_reset: prev_input", s.dc_block_prev_input);
+    expect_zero_float("conditioning_reset: prev_output", s.dc_block_prev_output);
+}
+
+static void test_output_conditioning_silence_stays_silent(void) {
+    sid s;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD418, 0x0F); /* volume with no waveforms */
+    for (i = 0; i < 20000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    expect_zero_float("conditioning_silence: sample", sid_sample(&s));
+    expect_zero_float("conditioning_silence: prev_input", s.dc_block_prev_input);
+    expect_zero_float("conditioning_silence: prev_output", s.dc_block_prev_output);
+}
+
+static void test_output_conditioning_constant_input_decays(void) {
+    sid s;
+    float early;
+    float late;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00);
+    sid_write(&s, 0xD401, 0x10);
+    sid_write(&s, 0xD402, 0xFF);
+    sid_write(&s, 0xD403, 0x0F); /* PW = 0xFFF => constant positive pulse */
+    sid_write(&s, 0xD405, 0x00);
+    sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x41); /* gate+pulse */
+    sid_write(&s, 0xD418, 0x0F);
+
+    for (i = 0; i < 3000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    early = sid_sample(&s);
+    if (early < 0.0f) {
+        early = -early;
+    }
+
+    for (i = 0; i < 80000; i++) {
+        sid_advance_cycles(&s, 1);
+    }
+    late = sid_sample(&s);
+    if (late < 0.0f) {
+        late = -late;
+    }
+
+    if (late >= early * 0.25f) {
+        fprintf(stderr,
+            "FAIL: conditioning_constant_decays: early=%f late=%f\n",
+            (double)early, (double)late);
+        exit(1);
+    }
+}
+
+static void test_output_conditioning_high_volume_bounded(void) {
+    sid s;
+    float sample;
+    uint32_t i;
+
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0x20);
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+
+    sid_write(&s, 0xD407, 0x00); sid_write(&s, 0xD408, 0x30);
+    sid_write(&s, 0xD40C, 0x00); sid_write(&s, 0xD40D, 0xF0);
+    sid_write(&s, 0xD40B, 0x21);
+
+    sid_write(&s, 0xD40E, 0x00); sid_write(&s, 0xD40F, 0x40);
+    sid_write(&s, 0xD413, 0x00); sid_write(&s, 0xD414, 0xF0);
+    sid_write(&s, 0xD412, 0x21);
+    sid_write(&s, 0xD418, 0x0F);
+
+    for (i = 0; i < 50000; i++) {
+        sid_advance_cycles(&s, 1);
+        sample = sid_sample(&s);
+        if (sample < -1.0f || sample > 1.0f) {
+            fprintf(stderr,
+                "FAIL: conditioning_high_volume_bounded: sample=%f\n",
+                (double)sample);
+            exit(1);
         }
     }
 }
@@ -868,6 +1469,11 @@ int main(void) {
     test_gate_off_release();
     test_reset_clears_envelope();
 
+    /* Exponential ADSR tests */
+    test_exp_decay_takes_longer_total();
+    test_exp_decay_step_ratio_by_level();
+    test_exp_release_slows_at_low_envelope();
+
     /* Mixer and filter tests */
     test_volume_zero_mutes();
     test_volume_nonzero_scales();
@@ -875,6 +1481,24 @@ int main(void) {
     test_filter_lp_bounded();
     test_filter_cutoff_affects_output();
     test_filter_modes_bounded();
+    test_filter_extreme_cutoff_resonance_bounded();
+    test_filter_reset_clears_state();
+    test_filter_mode_zero_audible_bypasses_filter();
+    test_filter_routing_voice1_lp_affects_output();
+    test_filter_routing_unrouted_voice_bypasses_filter();
+    test_filter_routing_resonance_nibble_preserved();
+    test_filter_routing_voice3_disconnect_applies_to_routed_voice();
+    test_filter_routing_voice3_disconnect_applies_to_bypass_voice();
+    test_sync_resets_destination_on_source_wrap();
+    test_sync_disabled_preserves_destination_phase();
+    test_ring_modulation_changes_triangle_output();
+    test_ring_modulation_ignored_without_triangle();
+    test_combined_waveform_differs_from_source_waveforms();
+    test_combined_waveform_bounded();
+    test_output_conditioning_reset_clears_state();
+    test_output_conditioning_silence_stays_silent();
+    test_output_conditioning_constant_input_decays();
+    test_output_conditioning_high_volume_bounded();
 
     /* Audio flow smoke */
     test_audio_flow_smoke();
