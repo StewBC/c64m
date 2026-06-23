@@ -22,6 +22,62 @@ src/
     util/
 ```
 
+## Documentation Layout
+
+The architecture source of truth is this file.
+
+Agent/process rules live in:
+
+```text
+AGENTS.md
+```
+
+The current handoff entry point is:
+
+```text
+STATUS.md
+```
+
+`STATUS.md` is intentionally short. It routes agents to focused component handoff
+files rather than duplicating every implementation fact.
+
+Detailed current implementation status lives in:
+
+```text
+docs/status/README.md
+docs/status/VICII.md
+docs/status/CIA.md
+docs/status/SID.md
+docs/status/AUDIO.md
+docs/status/CPU_MACHINE.md
+docs/status/FRONTEND_DEBUGGER.md
+docs/status/DISK_IO.md
+docs/status/TESTING.md
+docs/status/DEFERRED.md
+docs/status/OPTIMIZATIONS.md
+```
+
+Historical monolithic status may be preserved as:
+
+```text
+docs/status/ORIGINAL_STATUS.md
+```
+
+Documentation ownership rule:
+
+```text
+MASTER.md                 architecture and responsibility boundaries
+AGENTS.md                 agent workflow and process rules
+STATUS.md                 short current handoff and routing notes
+docs/status/<COMPONENT>   detailed current component facts
+docs/status/DEFERRED.md   known gaps and future work
+docs/status/TESTING.md    test and smoke-check expectations
+```
+
+Do not let `STATUS.md` grow back into a monolithic implementation log. When a
+detailed fact belongs to a component, update that component file and keep only a
+short top-level routing note in `STATUS.md`.
+
 ## Components
 
 ### machine/

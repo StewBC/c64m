@@ -68,14 +68,38 @@ Cartridge support is a possible future follow-on, not part of this milestone.
 
 ## Required Reading Order
 
+The root for .md files, unless specifically otherwise noted, is the folder `./md-files/`.
+
 For all work:
 
 ```text
 1. AGENTS.md
 2. MASTER.md
 3. STATUS.md
-4. The relevant C64M<COMPONENT>.md planning document
-5. The current phase or implementation guide, if one exists
+4. docs/status/README.md
+5. The relevant docs/status/<COMPONENT>.md handoff file
+6. The relevant C64M<COMPONENT>.md planning document, if one exists
+7. The current phase or implementation guide, if one exists
+```
+
+`STATUS.md` is now a short routing and current-handoff document. It is not the
+full project encyclopedia. Detailed current facts live in the focused component
+handoff files under `docs/status/`.
+
+
+Use this component map when choosing what to read:
+
+```text
+docs/status/VICII.md              VIC-II video, raster, display modes, sprites, BA
+docs/status/CIA.md                CIA timers, ICR, IRQ/NMI, keyboard, joystick, TOD
+docs/status/SID.md                SID register behavior, voices, ADSR, filter, tests
+docs/status/AUDIO.md              Runtime/platform audio output, buffering, recording
+docs/status/CPU_MACHINE.md        6510, memory, banking, reset/boot, IRQ/NMI, loaders
+docs/status/FRONTEND_DEBUGGER.md  UI, debugger, dialogs, memory views, help, assembler
+docs/status/DISK_IO.md            D64 parser, mount/unmount, KERNAL LOAD traps
+docs/status/TESTING.md            Tests and human smoke checks
+docs/status/DEFERRED.md           Known limitations and future work
+docs/status/OPTIMIZATIONS.md      Accepted and rejected performance changes
 ```
 
 For current milestone planning, the expected high-level documents are:
@@ -187,11 +211,15 @@ For each phase:
 
 ```text
 1. Read STATUS.md.
-2. Read the relevant high-level C64M<COMPONENT>.md document.
-3. Read the current phase or implementation guide.
-4. Implement only the documented phase.
-5. Run tests.
-6. Update STATUS.md.
+2. Read docs/status/README.md.
+3. Read the relevant docs/status/<COMPONENT>.md handoff file.
+4. Read the relevant high-level C64M<COMPONENT>.md document, if one exists.
+5. Read the current phase or implementation guide, if one exists.
+6. Implement only the documented phase.
+7. Run tests.
+8. Update STATUS.md and the relevant docs/status/<COMPONENT>.md file.
+9. If deferred behavior changed, update docs/status/DEFERRED.md.
+10. If tests or smoke checks changed, update docs/status/TESTING.md.
 ```
 
 **Running the binary directly opens an SDL window and blocks until the user quits
@@ -202,13 +230,15 @@ binaries). If the running emulator must be observed, time-limit the launch, for
 example `timeout 5 ./build/c64m`, and accept that it will be killed rather than
 exiting cleanly.
 
-If a document disagrees with STATUS.md, do not guess. Treat it as a reconciliation task:
+If documents disagree, do not guess. Treat it as a reconciliation task:
 
 ```text
 - inspect the code and tests;
 - identify which document is stale;
 - fix behavior if needed;
-- update STATUS.md only when the implementation and tests support the claim.
+- update STATUS.md only for top-level current handoff facts;
+- update the relevant docs/status/<COMPONENT>.md file for detailed component facts;
+- update docs/status/DEFERRED.md if the deferred list changed.
 ```
 
 ## Definition Of Done
@@ -221,7 +251,9 @@ A phase is complete when:
 - Architecture rules remain intact.
 - Thread ownership rules remain intact.
 - Runtime/frontend snapshot rules remain intact.
-- STATUS.md reflects reality.
+- STATUS.md reflects the top-level current handoff.
+- The relevant docs/status/<COMPONENT>.md file reflects detailed component reality.
+- docs/status/DEFERRED.md reflects any changed deferred behavior.
 - Deferred behavior remains explicitly deferred.
 ```
 
@@ -237,8 +269,8 @@ The current PAL/NTSC fidelity milestone may be claimed only when:
   selected milestone tests.
 - Practical 6510 undocumented opcode coverage has been audited and either
   confirmed or implemented.
-- CIA #2 NMI behavior has been reconciled between code, tests, STATUS.md, and
-  planning documents.
+- CIA #2 NMI behavior has been reconciled between code, tests, STATUS.md,
+  docs/status/CIA.md, and planning documents.
 - Existing boot, keyboard, joystick, debugger, PRG, D64, PAL, and NTSC smoke
   tests still pass.
 ```
