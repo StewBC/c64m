@@ -1028,19 +1028,23 @@ static uint64_t advance_vicii(vicii *v, uint64_t abs_cycle, uint32_t n) {
     return abs_cycle;
 }
 
-/* Set up a fresh PAL vicii with DEN=0 (no bad lines) at a given raster line.
+/* Set up a fresh vicii with DEN=0 (no bad lines) at a given raster line.
    sprite_enable_mask: bits set → sprite enabled and pre-marked active.
    For sprite n: Y register = raster_line - 1 so display_y = raster_line.
    sprite_active[n] is set directly because these tests pass bus=NULL to
    vicii_step_cycle, causing vicii_fetch_sprites to return early without
    updating sprite_active. */
-static void setup_sprite_ba_test(
-    vicii *v, char *error, uint32_t raster_line, uint8_t sprite_enable_mask)
+static void setup_sprite_ba_test_for_standard(
+    vicii *v,
+    char *error,
+    vicii_video_standard standard,
+    uint32_t raster_line,
+    uint8_t sprite_enable_mask)
 {
     int n;
 
     expect_true("vicii init", vicii_init(v, error, 256));
-    vicii_set_video_standard(v, VICII_VIDEO_STANDARD_PAL);
+    vicii_set_video_standard(v, standard);
     vicii_write_register(v, 0xd011, 0x03u); /* DEN=0, YSCROLL=3 */
     v->timing.raster_line = raster_line;
     vicii_write_register(v, 0xd015, sprite_enable_mask);
@@ -1052,6 +1056,17 @@ static void setup_sprite_ba_test(
             v->sprite_active[n] = true;
         }
     }
+}
+
+static void setup_sprite_ba_test(
+    vicii *v, char *error, uint32_t raster_line, uint8_t sprite_enable_mask)
+{
+    setup_sprite_ba_test_for_standard(
+        v,
+        error,
+        VICII_VIDEO_STANDARD_PAL,
+        raster_line,
+        sprite_enable_mask);
 }
 
 /* Phase H test 1 (Bad Line baseline): no active sprites; existing bad-line
@@ -1163,6 +1178,69 @@ static void test_6sprite_ba_early_and_late_windows(void) {
     }
     /* abs=63: sprite_ba_low_until_abs=63 (set by sprite 2: 58+5=63). */
     expect_true("6spr late ba closed at abs 63", !vicii_ba_active(&v, abs));
+}
+
+/* Phase 2: NTSC 6567R8 late sprite group. NTSC mode is 65 cycles/line, so
+   sprites 0-2 assert BA at cycles 56, 58, and 60, producing union [56, 65).
+   This must not reuse the PAL late group [54, 63). */
+static void test_ntsc_sprites012_late_ba_window(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs;
+    uint32_t i;
+
+    setup_sprite_ba_test_for_standard(&v, error, VICII_VIDEO_STANDARD_NTSC, 120u, 0x07u);
+    abs = 0;
+    abs = step_vicii(&v, abs); /* cycle 0 */
+
+    abs = advance_vicii(&v, abs, 54u - 1u);
+    expect_true("ntsc no pal-style ba at abs 54", !vicii_ba_active(&v, abs));
+    abs = step_vicii(&v, abs); /* cycle 54 */
+    expect_true("ntsc no pal-style ba at abs 55", !vicii_ba_active(&v, abs));
+
+    abs = step_vicii(&v, abs); /* cycle 55 */
+    expect_true("ntsc late ba not yet before cycle 56", !vicii_ba_active(&v, abs));
+
+    abs = step_vicii(&v, abs); /* cycle 56: sprite 0 asserts */
+    expect_true("ntsc late ba opens at abs 57", vicii_ba_active(&v, abs));
+
+    for (i = 57u; i < 65u; i++) {
+        expect_true("ntsc late ba union", vicii_ba_active(&v, abs));
+        abs = step_vicii(&v, abs);
+    }
+    expect_true("ntsc late ba closed at abs 65", !vicii_ba_active(&v, abs));
+    expect_u32("ntsc line wraps after 65 cycles", 0, v.timing.cycle_in_line);
+}
+
+/* NTSC sprite 4 asserts at cycle 64 of line N-1 and remains low across the
+   65-cycle line boundary for the fetch on line N. */
+static void test_ntsc_sprite4_cross_line_ba(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs;
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_NTSC);
+    vicii_write_register(&v, 0xd011, 0x03u);
+    v.timing.raster_line = 70u;
+    vicii_write_register(&v, 0xd015, 0x10u); /* sprite 4 enabled */
+    vicii_write_register(&v, 0xd009, 70u);   /* sprite 4 Y=70 -> display_y=71 */
+
+    abs = 0;
+    abs = step_vicii(&v, abs); /* cycle 0: sprite 4 not active on line 70 */
+    abs = advance_vicii(&v, abs, 63u); /* advance to cycle 64 */
+
+    expect_true("ntsc sprite4 ba not yet at abs 64", !vicii_ba_active(&v, abs));
+    abs = step_vicii(&v, abs); /* cycle 64: sprite 4 asserts */
+    expect_true("ntsc sprite4 ba asserted at abs 65", vicii_ba_active(&v, abs));
+    expect_u32("ntsc cross-line wrapped to next line", 0, v.timing.cycle_in_line);
+
+    for (i = 65u; i < 69u; i++) {
+        expect_true("ntsc sprite4 cross-line ba open", vicii_ba_active(&v, abs));
+        abs = step_vicii(&v, abs);
+    }
+    expect_true("ntsc sprite4 ba closed at abs 69", !vicii_ba_active(&v, abs));
 }
 
 /* Phase H test 5: inactive sprites contribute no BA window. */
@@ -1425,6 +1503,8 @@ int main(void) {
     test_sprite5_ba_window_within_line();
     test_sprites567_adjacent_ba_union();
     test_6sprite_ba_early_and_late_windows();
+    test_ntsc_sprites012_late_ba_window();
+    test_ntsc_sprite4_cross_line_ba();
     test_inactive_sprites_no_ba();
     test_sprite3_cross_line_ba();
     test_sprite4_cross_line_ba();
