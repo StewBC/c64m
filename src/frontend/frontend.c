@@ -4334,6 +4334,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
         nk_layout_row_push(ui->ctx, bounds.w - scrollbar_w - scrollbar_margin);
 
         if (nk_group_begin(ui->ctx, "memory-rows", NK_WINDOW_NO_SCROLLBAR)) {
+            float text_x_offset = frontend_memory_char_width(ui) * 0.5f;
             canvas = nk_window_get_canvas(ui->ctx);
 
             for (v = 0; v < ui->memory_view_count; v++) {
@@ -4374,6 +4375,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                     nk_layout_row_dynamic(ui->ctx, row_h, 1);
                     /* nk_widget advances the layout cursor AND returns bounds */
                     if (nk_widget(&rb, ui->ctx) != NK_WIDGET_INVALID) {
+                        struct nk_rect text_rb = nk_rect(rb.x + text_x_offset, rb.y, rb.w - text_x_offset, rb.h);
                         if (!have_rows_x) {
                             rows_x = rb.x;
                             rows_w = rb.w;
@@ -4386,12 +4388,12 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
 
                         /* Draw colored background then text via canvas */
                         nk_fill_rect(canvas, rb, 0.0f, bg_c);
-                        nk_draw_text(canvas, rb, line, (int)(lp - line), font, bg_c, text_c);
+                        nk_draw_text(canvas, text_rb, line, (int)(lp - line), font, bg_c, text_c);
 
-                        frontend_memory_handle_mouse_row(ui, v, rb, row_addr);
+                        frontend_memory_handle_mouse_row(ui, v, text_rb, row_addr);
 
                         if (is_active_v) {
-                            frontend_memory_draw_cursor(ui, debug_state, mv, rb, line, row_addr);
+                            frontend_memory_draw_cursor(ui, debug_state, mv, text_rb, line, row_addr);
                         }
                     }
                 }
