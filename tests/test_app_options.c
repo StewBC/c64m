@@ -451,6 +451,53 @@ static void test_phase14_config_from_ini(void) {
     remove("test_phase14.ini");
 }
 
+static void test_video_standard_command_line_overrides(void) {
+    app_options options;
+    char *long_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_video_override.ini",
+        "--video",
+        "NTSC",
+    };
+    char *pal_argv[] = {
+        "test_app_options",
+        "--defaults",
+        "-P",
+    };
+    char *ntsc_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_video_override.ini",
+        "-N",
+    };
+
+    write_phase14_ini("test_video_override.ini");
+
+    if (!app_options_load_startup(&options, 5, long_argv)) {
+        fprintf(stderr, "app_options_load_startup with --video failed\n");
+        exit(1);
+    }
+    expect_string("long video override", "NTSC", options.video_standard);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, pal_argv)) {
+        fprintf(stderr, "app_options_load_startup with -P failed\n");
+        exit(1);
+    }
+    expect_string("short PAL override", "PAL", options.video_standard);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 4, ntsc_argv)) {
+        fprintf(stderr, "app_options_load_startup with -N failed\n");
+        exit(1);
+    }
+    expect_string("short NTSC override", "NTSC", options.video_standard);
+    app_options_destroy(&options);
+
+    remove("test_video_override.ini");
+}
+
 static void test_config_turbo_speeds_ignores_runtime_turbo(void) {
     app_options options;
     char *argv[] = {
@@ -626,6 +673,7 @@ int main(void) {
     test_window_layout_from_ini();
     test_window_layout_saved_to_ini();
     test_phase14_config_from_ini();
+    test_video_standard_command_line_overrides();
     test_config_turbo_speeds_ignores_runtime_turbo();
     test_phase14_config_saved_to_ini();
     test_symbol_files_are_relative_to_ini();

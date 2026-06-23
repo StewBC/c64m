@@ -769,6 +769,19 @@ static bool apply_disk_args(app_options *options, int argc, char **argv)
     return true;
 }
 
+static bool apply_video_standard_arg(app_options *options, const char *value)
+{
+    if (value == NULL) {
+        return true;
+    }
+    if (strcmp(value, "PAL") == 0 || strcmp(value, "NTSC") == 0) {
+        return replace_string(&options->video_standard, value);
+    }
+
+    fprintf(stderr, "invalid video standard `%s`; expected PAL or NTSC\n", value);
+    return false;
+}
+
 static bool preparse_ini_options(app_options *options, int argc, char **argv)
 {
     int i;
@@ -812,6 +825,8 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int save_ini = 0;
     int audio_smoke = 0;
     int autorun = 0;
+    int video_pal = 0;
+    int video_ntsc = 0;
     float audio_record_start = 0.0f;
     float audio_record_duration = 0.0f;
     const char *basic_path = NULL;
@@ -821,6 +836,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *prg_path = NULL;
     const char *audio_record_path = NULL;
     const char *turbo = NULL;
+    const char *video_standard = NULL;
     struct argparse argparse;
     const char *const usages[] = {
         "c64m [options]",
@@ -840,6 +856,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
         OPT_STRING('p', "prg", &prg_path, "load file as PRG at startup", NULL, 0, 0),
+        OPT_BOOLEAN('P', "pal", &video_pal, "use PAL video timing", NULL, 0, OPT_NONEG),
+        OPT_BOOLEAN('N', "ntsc", &video_ntsc, "use NTSC video timing", NULL, 0, OPT_NONEG),
+        OPT_STRING('\0', "video", &video_standard, "video standard: PAL or NTSC", NULL, 0, 0),
         OPT_BOOLEAN('r', "remember", &remember, "add save at quit to ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('v', "saveini", &save_ini, "save to ini file at quit", NULL, 0, OPT_NONEG),
         OPT_STRING('t', "turbo", &turbo, "comma separated set of turbo multipliers", NULL, 0, 0),
@@ -875,6 +894,15 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (turbo != NULL) {
         replace_string(&options->turbo_multipliers, turbo);
+    }
+    if (!apply_video_standard_arg(options, video_standard)) {
+        return false;
+    }
+    if (video_pal && !apply_video_standard_arg(options, "PAL")) {
+        return false;
+    }
+    if (video_ntsc && !apply_video_standard_arg(options, "NTSC")) {
+        return false;
     }
 
     if (remember) {
