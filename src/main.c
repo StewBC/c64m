@@ -1295,6 +1295,7 @@ int main(int argc, char **argv) {
     runtime_cfg.audio_out         = abuf;
     runtime_cfg.audio_sample_rate = platform_audio_actual_rate(paudio);
     runtime_cfg.audio_smoke       = options.audio_smoke ? 1 : 0;
+    runtime_cfg.autorun           = options.autorun;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));

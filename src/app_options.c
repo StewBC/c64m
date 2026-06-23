@@ -811,6 +811,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int remember = 0;
     int save_ini = 0;
     int audio_smoke = 0;
+    int autorun = 0;
     const char *basic_path = NULL;
     const char *breakpoint = NULL;
     const char *disk = NULL;
@@ -824,6 +825,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
     struct argparse_option parse_options[] = {
         OPT_BOOLEAN('A', "audio-smoke", &audio_smoke, "emit 440 Hz tone to verify audio path", NULL, 0, OPT_NONEG),
+        OPT_BOOLEAN('a', "autorun", &autorun, "run automatically after load", NULL, 0, OPT_NONEG),
         OPT_STRING('B', "basic", &basic_path, "load file as BASIC program at startup", NULL, 0, 0),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
@@ -883,6 +885,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     if (audio_smoke) {
         options->audio_smoke = true;
     }
+    if (autorun) {
+        options->autorun = true;
+    }
 
     return true;
 }
@@ -940,6 +945,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->remember = src->remember;
     dest->defaults = src->defaults;
     dest->no_save_ini = src->no_save_ini;
+    dest->autorun = src->autorun;
     dest->scroll_wheel_lines = src->scroll_wheel_lines;
     dest->display_width = src->display_width;
     dest->display_height = src->display_height;

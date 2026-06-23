@@ -154,6 +154,7 @@ runtime *runtime_create(const runtime_config *config) {
         rt->audio_out         = config->audio_out;
         rt->audio_sample_rate = config->audio_sample_rate;
         rt->audio_smoke       = config->audio_smoke;
+        rt->autorun           = config->autorun;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||

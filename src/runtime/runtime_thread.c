@@ -540,6 +540,10 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
     free(entries);
     free(bytes);
     runtime_publish_drive_status(rt, command->data.mount_d64.device);
+
+    if (rt->autorun && command->data.mount_d64.device == C64_DRIVE_MIN_DEVICE) {
+        rt->autorun_d64_phase = 1;
+    }
 }
 
 static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
@@ -1521,6 +1525,22 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
     runtime_reset_pacer(rt);
 }
 
+static void runtime_autorun_paste(runtime *rt, const char *text) {
+    paste_state *p = &rt->paste;
+    size_t len = strlen(text);
+    if (len > RUNTIME_PASTE_TEXT_MAX) {
+        len = RUNTIME_PASTE_TEXT_MAX;
+    }
+    memcpy(p->text, text, len);
+    p->length = len;
+    p->position = 0;
+    p->shift_needed = false;
+    p->in_gap = false;
+    p->use_buffer = true;
+    p->phase_end_cycle = rt->machine.clock.cycle;
+    rt->paste_active = true;
+}
+
 static void runtime_complete_pending_prg_load(runtime *rt, char *path) {
     bool resume_running = rt->pending_prg_resume_running;
     bool loaded = runtime_load_prg_bytes(rt, path);
@@ -1532,6 +1552,17 @@ static void runtime_complete_pending_prg_load(runtime *rt, char *path) {
         rt->exec_state = RUNTIME_EXEC_PAUSED;
         rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
         runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+        runtime_publish_machine_state(rt);
+        return;
+    }
+
+    if (rt->autorun) {
+        rt->autorun_d64_phase = 0;
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_autorun_paste(rt, "RUN\r");
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
         runtime_publish_machine_state(rt);
         return;
     }
@@ -2015,10 +2046,11 @@ static bool runtime_load_bin_bytes(
 }
 
 static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
+    bool is_basic = rt->pending_bin_is_basic != 0;
     bool loaded = runtime_load_bin_bytes(
         rt, path, rt->pending_bin_address,
         rt->pending_bin_use_file_address != 0,
-        rt->pending_bin_is_basic != 0);
+        is_basic);
 
     free(path);
 
@@ -2033,6 +2065,10 @@ static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
     rt->exec_state = RUNTIME_EXEC_RUNNING;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     runtime_reset_pacer(rt);
+    if (rt->autorun && is_basic) {
+        rt->autorun_d64_phase = 0;
+        runtime_autorun_paste(rt, "RUN\r");
+    }
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
     runtime_publish_machine_state(rt);
 }
@@ -2684,6 +2720,16 @@ int runtime_thread_main(void *userdata) {
                     char *path = rt->pending_bin_path;
                     rt->pending_bin_path = NULL;
                     runtime_complete_pending_bin_load(rt, path);
+                }
+                if (rt->autorun_d64_phase > 0 &&
+                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                    if (rt->autorun_d64_phase == 1) {
+                        rt->autorun_d64_phase = 2;
+                        runtime_autorun_paste(rt, "LOAD\"*\",8\r");
+                    } else if (rt->autorun_d64_phase == 2) {
+                        rt->autorun_d64_phase = 0;
+                        runtime_autorun_paste(rt, "RUN\r");
+                    }
                 }
                 if (!runtime_step_cycle(rt)) {
                     break;

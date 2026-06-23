@@ -29,6 +29,7 @@ Useful flags:
 | `--disk <drive>=<image>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64` |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
+| `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file records
@@ -59,6 +60,28 @@ and updates the BASIC start and end pointers (`$2B–$2E`).
 
 For both options the file extension is irrelevant; the flag determines how the file is
 treated, not the filename.
+
+### Auto Run
+
+`--autorun` (or `-a`) can be combined with `--prg`, `--basic`, or `--disk` to start
+execution without any manual key press.
+
+**With `--prg` or `--basic`:** after the file bytes are placed in memory at the BASIC
+warm-start point (`$E38B`), `RUN` followed by Return is injected directly into the
+KERNAL keyboard buffer. The machine begins executing the program immediately.
+
+**With `--disk 8=<image>`:** c64m uses a two-phase relay on the BASIC main-loop address:
+
+1. On the first BASIC `READY` prompt after boot, `LOAD"*",8` and Return are injected
+   into the keyboard buffer. The KERNAL loads the first PRG file from the disk image.
+2. On the next `READY` prompt (after the load finishes), `RUN` and Return are injected.
+   The loaded program starts.
+
+Both paths write PETSCII characters directly into the KERNAL keyboard buffer
+(`$0277-$0280`), so they work with any BASIC or KERNAL-based program. Games or demos
+that bypass the KERNAL keyboard handler entirely will not receive the injected text.
+
+`--autorun` alone, without a loader flag, has no effect.
 
 ### Drag and Drop
 

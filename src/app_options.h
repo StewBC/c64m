@@ -41,6 +41,8 @@ typedef struct app_options {
     /* When true, runtime emits a 440 Hz square wave via the audio path to
        verify that samples reach the host audio device without needing SID. */
     bool audio_smoke;
+    /* When true, automatically run after a PRG/BASIC/D64 load. */
+    bool autorun;
 } app_options;
 
 void app_options_init(app_options *options);

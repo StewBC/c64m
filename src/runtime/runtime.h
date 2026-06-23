@@ -29,6 +29,9 @@ typedef struct runtime_config {
     /* When non-zero, runtime emits a 440 Hz square-wave smoke tone instead of
        silence, proving the audio path without needing SID. */
     int audio_smoke;
+    /* When true, automatically inject RUN after a PRG/BASIC load, or
+       LOAD"*",8 + RUN after a D64 mount on device 8. */
+    bool autorun;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);
