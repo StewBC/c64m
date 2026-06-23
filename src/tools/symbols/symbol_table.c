@@ -195,13 +195,13 @@ static bool symbol_entry_matches_identity(
         strcmp(entry->name, name) == 0;
 }
 
-static void symbol_remove_conflicts(symbol_table *table, uint16_t address, const char *name)
+static void symbol_remove_address_conflicts(symbol_table *table, uint16_t address)
 {
     int i;
 
     for (i = 0; i < arrlen(table->entries);) {
         symbol_record *entry = &table->entries[i];
-        if (entry->address == address || strcmp(entry->name, name) == 0) {
+        if (entry->address == address) {
             symbol_free_entry(entry);
             arrdel(table->entries, i);
             continue;
@@ -265,7 +265,6 @@ symbol_result symbol_table_add(
     bool overwrite)
 {
     int existing_source_id;
-    int name_index;
     uint32_t address_index;
     uint32_t source_id;
     symbol_record entry;
@@ -291,10 +290,8 @@ symbol_result symbol_table_add(
     }
 
     address_index = table->primary_by_address[address];
-    name_index = shgeti(table->name_map, name);
 
-    if (!overwrite &&
-        (address_index != SYMBOL_INDEX_INVALID || name_index >= 0)) {
+    if (!overwrite && address_index != SYMBOL_INDEX_INVALID) {
         return SYMBOL_CONFLICT;
     }
 
@@ -312,13 +309,13 @@ symbol_result symbol_table_add(
     entry.source_id = source_id;
 
     if (overwrite) {
-        symbol_remove_conflicts(table, address, name);
+        symbol_remove_address_conflicts(table, address);
     }
 
     arrput(table->entries, entry);
     symbol_rebuild_indexes(table);
 
-    return overwrite && (address_index != SYMBOL_INDEX_INVALID || name_index >= 0) ?
+    return overwrite && address_index != SYMBOL_INDEX_INVALID ?
         SYMBOL_REPLACED :
         SYMBOL_OK;
 }

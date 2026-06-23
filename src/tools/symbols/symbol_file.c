@@ -136,7 +136,8 @@ symbol_result symbol_table_load_file(
                 label,
                 SYMBOL_SOURCE_FILE,
                 source_name != NULL && source_name[0] != '\0' ? source_name : path,
-                true) == SYMBOL_OUT_OF_MEMORY) {
+                false) ==
+            SYMBOL_OUT_OF_MEMORY) {
             fclose(file);
             return SYMBOL_OUT_OF_MEMORY;
         }

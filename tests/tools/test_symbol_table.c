@@ -219,8 +219,13 @@ static int test_conflicts_and_overwrite(void)
         "address conflict");
     failures += expect_result(
         symbol_table_add(table, 0x1200, "START", SYMBOL_SOURCE_USER, "manual", false),
-        SYMBOL_CONFLICT,
-        "name conflict");
+        SYMBOL_OK,
+        "duplicate name different address");
+    failures += expect_result(
+        symbol_table_find_by_address(table, 0x1200, &info),
+        SYMBOL_OK,
+        "find duplicate name address");
+    failures += expect_symbol(&info, 0x1200, "START", SYMBOL_SOURCE_USER, "manual", "duplicate name info");
 
     failures += expect_result(
         symbol_table_add(table, 0x1000, "ENTRY", SYMBOL_SOURCE_FILE, "other.lbl", true),
@@ -233,22 +238,24 @@ static int test_conflicts_and_overwrite(void)
     failures += expect_symbol(&info, 0x1000, "ENTRY", SYMBOL_SOURCE_FILE, "other.lbl", "overwritten address info");
     failures += expect_result(
         symbol_table_find_by_name(table, "START", &info),
-        SYMBOL_NOT_FOUND,
-        "old name removed");
+        SYMBOL_OK,
+        "duplicate name kept");
+    failures += expect_symbol(&info, 0x1200, "START", SYMBOL_SOURCE_USER, "manual", "duplicate name kept info");
 
     failures += expect_result(
         symbol_table_add(table, 0x2000, "ENTRY", SYMBOL_SOURCE_USER, "manual", true),
-        SYMBOL_REPLACED,
-        "overwrite name conflict");
+        SYMBOL_OK,
+        "duplicate entry name different address");
     failures += expect_result(
         symbol_table_find_by_name(table, "ENTRY", &info),
         SYMBOL_OK,
-        "find rebound name");
+        "find duplicate entry name");
     failures += expect_symbol(&info, 0x2000, "ENTRY", SYMBOL_SOURCE_USER, "manual", "rebound name info");
     failures += expect_result(
         symbol_table_find_by_address(table, 0x1000, &info),
-        SYMBOL_NOT_FOUND,
-        "old address removed");
+        SYMBOL_OK,
+        "old entry address kept");
+    failures += expect_symbol(&info, 0x1000, "ENTRY", SYMBOL_SOURCE_FILE, "other.lbl", "old entry address info");
 
     symbol_table_destroy(table);
     return failures;
@@ -405,6 +412,55 @@ static int test_symbol_file_best_effort_load(void)
     return failures;
 }
 
+static int test_symbol_file_allows_duplicate_names(void)
+{
+    char path[128];
+    symbol_table *table;
+    symbol_info info;
+    size_t loaded = 0;
+    int failures = 0;
+    const char *source =
+        "E505 SCREEN\n"
+        "FFED SCREEN\n";
+
+    if (write_symbol_file(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    table = symbol_table_create();
+    if (table == NULL) {
+        c64m_test_remove_file(path);
+        return 1;
+    }
+
+    failures += expect_result(
+        symbol_table_load_file(table, path, path, &loaded),
+        SYMBOL_OK,
+        "load duplicate-name symbol file");
+    if (loaded != 2) {
+        fprintf(stderr, "expected 2 loaded duplicate-name symbols, got %zu\n", loaded);
+        failures++;
+    }
+    if (symbol_table_count(table) != 2) {
+        fprintf(stderr, "expected 2 symbols after duplicate-name load, got %zu\n", symbol_table_count(table));
+        failures++;
+    }
+    if (symbol_table_find_by_address(table, 0xe505, &info) != SYMBOL_OK ||
+        strcmp(info.name, "SCREEN") != 0) {
+        fprintf(stderr, "implementation SCREEN symbol was not preserved\n");
+        failures++;
+    }
+    if (symbol_table_find_by_address(table, 0xffed, &info) != SYMBOL_OK ||
+        strcmp(info.name, "SCREEN") != 0) {
+        fprintf(stderr, "vector SCREEN symbol was not preserved\n");
+        failures++;
+    }
+
+    symbol_table_destroy(table);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -414,6 +470,7 @@ int main(void)
     failures += test_conflicts_and_overwrite();
     failures += test_source_removal_clear_and_nearest();
     failures += test_symbol_file_best_effort_load();
+    failures += test_symbol_file_allows_duplicate_names();
 
     return failures == 0 ? 0 : 1;
 }
