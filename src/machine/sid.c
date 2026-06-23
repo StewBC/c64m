@@ -21,13 +21,13 @@ static const uint32_t s_decay_cycles[16] = {
 };
 
 enum {
-    SID_OUTPUT_GAIN_PERCENT = 19
+    SID_OUTPUT_GAIN_PERCENT = 20
 };
 
 static const float SID_DC_BLOCK_R   = 0.99987f;
-/* One-pole IIR LP: models 6581 output-pin capacitive rolloff (~16.5 kHz).
- * a = 1 - 2π × 16500 / 985248 ≈ 0.895. Applied after DC blocker, before gain. */
-static const float SID_HFROLL_COEFF = 0.895f;
+/* One-pole IIR LP: models 6581 output-path rolloff (~9.4 kHz combined chip+board).
+ * a = 1 - 2π × 9400 / 985248 ≈ 0.940. Applied after DC blocker, before gain. */
+static const float SID_HFROLL_COEFF = 0.940f;
 
 /* Exponential cutoff LUT: maps 11-bit register [0..2047] to Chamberlin SVF
  * coefficient f = 2*sin(pi*fc/985248), where fc spans 200 Hz to 18000 Hz.
