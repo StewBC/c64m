@@ -21,11 +21,49 @@ static const uint32_t s_decay_cycles[16] = {
 };
 
 enum {
-    SID_OUTPUT_GAIN_PERCENT = 22
+    SID_OUTPUT_GAIN_PERCENT = 19
 };
 
 static const float SID_DC_BLOCK_R = 0.99987f;
-static const float SID_FILTER_CUTOFF_DENOM = 4608.0f;
+
+/* Exponential cutoff LUT: maps 11-bit register [0..2047] to Chamberlin SVF
+ * coefficient f = 2*sin(pi*fc/985248), where fc spans 200 Hz to 18000 Hz.
+ * 32 anchor points with linear interpolation gives ~66-register resolution.
+ * fc[i] = 200 * (90)^(i/31); real 6581 range is approximately 200-18000 Hz. */
+static const float s_cutoff_lut[32] = {
+    /* i= 0  fc=   200.0 Hz */  0.00127545f,
+    /* i= 1  fc=   231.2 Hz */  0.00147470f,
+    /* i= 2  fc=   267.4 Hz */  0.00170508f,
+    /* i= 3  fc=   309.1 Hz */  0.00197144f,
+    /* i= 4  fc=   357.4 Hz */  0.00227942f,
+    /* i= 5  fc=   413.3 Hz */  0.00263551f,
+    /* i= 6  fc=   477.8 Hz */  0.00304723f,
+    /* i= 7  fc=   552.5 Hz */  0.00352326f,
+    /* i= 8  fc=   638.8 Hz */  0.00407366f,
+    /* i= 9  fc=   738.6 Hz */  0.00471004f,
+    /* i=10  fc=   853.9 Hz */  0.00544584f,
+    /* i=11  fc=   987.3 Hz */  0.00629658f,
+    /* i=12  fc=  1141.6 Hz */  0.00728022f,
+    /* i=13  fc=  1319.9 Hz */  0.00841752f,
+    /* i=14  fc=  1526.1 Hz */  0.00973248f,
+    /* i=15  fc=  1764.5 Hz */  0.01125287f,
+    /* i=16  fc=  2040.2 Hz */  0.01301076f,
+    /* i=17  fc=  2358.9 Hz */  0.01504325f,
+    /* i=18  fc=  2727.4 Hz */  0.01739323f,
+    /* i=19  fc=  3153.5 Hz */  0.02011030f,
+    /* i=20  fc=  3646.1 Hz */  0.02325178f,
+    /* i=21  fc=  4215.7 Hz */  0.02688394f,
+    /* i=22  fc=  4874.3 Hz */  0.03108341f,
+    /* i=23  fc=  5635.8 Hz */  0.03593874f,
+    /* i=24  fc=  6516.2 Hz */  0.04155229f,
+    /* i=25  fc=  7534.1 Hz */  0.04804238f,
+    /* i=26  fc=  8711.1 Hz */  0.05554571f,
+    /* i=27  fc= 10071.9 Hz */  0.06422023f,
+    /* i=28  fc= 11645.3 Hz */  0.07424834f,
+    /* i=29  fc= 13464.6 Hz */  0.08584069f,
+    /* i=30  fc= 15568.0 Hz */  0.09924036f,
+    /* i=31  fc= 18000.0 Hz */  0.11472771f
+};
 
 static float sid_clampf(float v) {
     if (v < -1.0f) return -1.0f;
@@ -325,8 +363,13 @@ static float sid_condition_output(sid *s, float raw) {
     return sid_clampf(out);
 }
 
-static float sid_filter_cutoff_factor(uint16_t cutoff) {
-    return ((float)cutoff + 1.0f) / SID_FILTER_CUTOFF_DENOM;
+float sid_filter_cutoff_factor(uint16_t cutoff) {
+    float pos  = (float)cutoff * (31.0f / 2047.0f);
+    int   idx  = (int)pos;
+    float frac;
+    if (idx >= 31) return s_cutoff_lut[31];
+    frac = pos - (float)idx;
+    return s_cutoff_lut[idx] + frac * (s_cutoff_lut[idx + 1] - s_cutoff_lut[idx]);
 }
 
 /* ------------------------------------------------------------------ */

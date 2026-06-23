@@ -73,3 +73,7 @@ void    sid_advance_cycles(sid *s, uint32_t cycles);
 /* Return the last mixed and filtered float sample [-1.0, +1.0].
    Non-blocking; safe to call at host audio rate. */
 float   sid_sample(const sid *s);
+
+/* Map the 11-bit cutoff register value [0..2047] to the Chamberlin SVF
+   coefficient.  Exposed for unit testing; not part of the emulator API. */
+float   sid_filter_cutoff_factor(uint16_t cutoff);

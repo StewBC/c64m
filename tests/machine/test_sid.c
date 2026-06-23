@@ -1387,6 +1387,101 @@ static void test_output_conditioning_high_volume_bounded(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Filter cutoff LUT tests (Phase 7)                                  */
+/* ------------------------------------------------------------------ */
+
+static void test_filter_lut_min_coefficient(void) {
+    /* FC=0 must map to approximately 200 Hz: f ≈ 0.001276.
+     * Accept within 10% either side. */
+    float f = sid_filter_cutoff_factor(0);
+    float target = 0.001276f;
+    if (f < target * 0.90f || f > target * 1.10f) {
+        fprintf(stderr,
+            "FAIL: lut_min_coefficient: f=%f, expected ~%f (±10%%)\n",
+            (double)f, (double)target);
+        exit(1);
+    }
+}
+
+static void test_filter_lut_max_coefficient(void) {
+    /* FC=2047 must map to approximately 18000 Hz: f ≈ 0.11475.
+     * Accept within 10% either side. */
+    float f = sid_filter_cutoff_factor(2047);
+    float target = 0.11475f;
+    if (f < target * 0.90f || f > target * 1.10f) {
+        fprintf(stderr,
+            "FAIL: lut_max_coefficient: f=%f, expected ~%f (±10%%)\n",
+            (double)f, (double)target);
+        exit(1);
+    }
+}
+
+static void test_filter_lut_mid_between_bounds(void) {
+    /* FC=1023 (mid-register) must be between min and max, and above min. */
+    float f_min = sid_filter_cutoff_factor(0);
+    float f_mid = sid_filter_cutoff_factor(1023);
+    float f_max = sid_filter_cutoff_factor(2047);
+    if (f_mid <= f_min || f_mid >= f_max) {
+        fprintf(stderr,
+            "FAIL: lut_mid_between_bounds: f_min=%f f_mid=%f f_max=%f\n",
+            (double)f_min, (double)f_mid, (double)f_max);
+        exit(1);
+    }
+}
+
+static void test_filter_lut_all_below_half(void) {
+    /* All cutoff values must produce a coefficient below 0.5 for stability. */
+    uint16_t cutoff;
+    for (cutoff = 0; cutoff <= 2047u; cutoff++) {
+        float f = sid_filter_cutoff_factor(cutoff);
+        if (f >= 0.5f) {
+            fprintf(stderr,
+                "FAIL: lut_all_below_half: cutoff=%u f=%f >= 0.5\n",
+                (unsigned)cutoff, (double)f);
+            exit(1);
+        }
+    }
+}
+
+static void test_filter_lut_max_cutoff_passes_more_than_mid(void) {
+    /* At mid-register (FC=1023, ~1900 Hz LP), a 2886 Hz saw is above cutoff
+     * and is attenuated.  At max register (FC=2047, ~18000 Hz LP) the same
+     * signal passes freely.  Max output must be at least 1.5× mid output. */
+    sid s;
+    float level_mid, level_max;
+    uint8_t fc_lo, fc_hi;
+
+    /* Mid cutoff: FC = 1023 → lo bits = 1023 & 0x07 = 7, hi = 1023 >> 3 = 127 */
+    fc_lo = (uint8_t)(1023u & 0x07u);
+    fc_hi = (uint8_t)(1023u >> 3);
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0xC0); /* freq=0xC000 ~2886 Hz */
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD415, fc_lo); sid_write(&s, 0xD416, fc_hi);
+    sid_write(&s, 0xD417, 0x01);
+    sid_write(&s, 0xD418, 0x1F); /* LP mode, vol=15 */
+    level_mid = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    /* Max cutoff: FC = 2047 */
+    sid_reset(&s);
+    sid_write(&s, 0xD400, 0x00); sid_write(&s, 0xD401, 0xC0);
+    sid_write(&s, 0xD405, 0x00); sid_write(&s, 0xD406, 0xF0);
+    sid_write(&s, 0xD404, 0x21);
+    sid_write(&s, 0xD415, 0xFF); sid_write(&s, 0xD416, 0xFF); /* FC=2047 */
+    sid_write(&s, 0xD417, 0x01);
+    sid_write(&s, 0xD418, 0x1F);
+    level_max = sid_abs_average_after_warmup(&s, 30000, 4096);
+
+    if (level_max <= level_mid * 1.5f) {
+        fprintf(stderr,
+            "FAIL: lut_max_passes_more_than_mid: level_mid=%f level_max=%f\n",
+            (double)level_mid, (double)level_max);
+        exit(1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Audio flow smoke test (no SDL needed)                               */
 /* ------------------------------------------------------------------ */
 
@@ -1499,6 +1594,13 @@ int main(void) {
     test_output_conditioning_silence_stays_silent();
     test_output_conditioning_constant_input_decays();
     test_output_conditioning_high_volume_bounded();
+
+    /* Filter cutoff LUT tests */
+    test_filter_lut_min_coefficient();
+    test_filter_lut_max_coefficient();
+    test_filter_lut_mid_between_bounds();
+    test_filter_lut_all_below_half();
+    test_filter_lut_max_cutoff_passes_more_than_mid();
 
     /* Audio flow smoke */
     test_audio_flow_smoke();
