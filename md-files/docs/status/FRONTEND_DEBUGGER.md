@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-- Debugger UI is complete through Phase 13.
+- Debugger UI is complete through Phase 13, with subsequent breakpoint action enhancements.
 - Configuration UI is complete through Phase 14.
 - CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, and INI persistence are implemented.
 - Call stack view is implemented in the Misc|Debugger tab.
@@ -13,6 +13,7 @@
 - Host file load/save UI is implemented.
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
+- Breakpoint action parameters: Tron accepts an optional custom trace file path (empty = `trace.log`), Swap accepts a disk queue parameter (`+N` relative forward, `-N` relative backward, `N` absolute 1-based with wrap), Type accepts raw text (no-op pending translator). Tron and Troff are mutually exclusive in the editor. INI and UI both persist and restore these parameters.
 
 ## Runtime/frontend ownership
 
@@ -142,7 +143,9 @@ UI behavior:
 
 ## Known limitations / deferred
 
-- Phase 13 deferred breakpoint actions: Type, Swap, and trace output/details.
+- Breakpoint Type action: text storage and INI round-trip are implemented; the translator that converts stored text into timed C64 keystrokes is deferred.
+- Breakpoint Swap action always targets device 8; per-device selection is deferred.
+- Tron trace output always appends to the named file; rotation, size limits, and per-breakpoint handle management are deferred.
 
 ## Tests / smoke checks
 

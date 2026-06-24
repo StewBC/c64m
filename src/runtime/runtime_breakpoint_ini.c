@@ -9,7 +9,7 @@
 
 enum {
     RUNTIME_BREAKPOINT_KEY_MAX = 64,
-    RUNTIME_BREAKPOINT_VALUE_MAX = 256,
+    RUNTIME_BREAKPOINT_VALUE_MAX = 1024,
 };
 
 static bool runtime_ini_streq(const char *lhs, const char *rhs) {
@@ -74,6 +74,43 @@ static bool runtime_ini_parse_u32(const char *text, uint32_t *out) {
     }
 
     *out = (uint32_t)value;
+    return true;
+}
+
+/* Parses [+|-]N into swap_param and swap_relative.
+   Returns false if the text is empty or non-numeric. 0 is always a no-op. */
+static bool runtime_ini_parse_swap_param(const char *text, int32_t *out_param, uint8_t *out_relative) {
+    bool relative = false;
+    bool negative = false;
+    unsigned long value;
+    char *end;
+
+    if (text == NULL || *text == '\0') {
+        *out_param = 0;
+        *out_relative = 0;
+        return true;
+    }
+
+    if (*text == '+') {
+        relative = true;
+        text++;
+    } else if (*text == '-') {
+        relative = true;
+        negative = true;
+        text++;
+    }
+
+    if (*text == '\0') {
+        return false;
+    }
+
+    value = strtoul(text, &end, 10);
+    if (end == text || *end != '\0' || value > 0x7ffffffful) {
+        return false;
+    }
+
+    *out_param = negative ? -(int32_t)value : (int32_t)value;
+    *out_relative = relative ? 1u : 0u;
     return true;
 }
 
@@ -191,15 +228,38 @@ static bool runtime_ini_parse_breakpoint(
             saw_action = true;
         } else if (runtime_ini_streq(item, "tron")) {
             definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+            definition->tron_path[0] = '\0';
+            saw_action = true;
+        } else if (strncmp(item, "tron=", 5) == 0) {
+            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+            snprintf(definition->tron_path, sizeof(definition->tron_path), "%s", item + 5);
             saw_action = true;
         } else if (runtime_ini_streq(item, "troff")) {
             definition->actions |= RUNTIME_BREAKPOINT_ACTION_TROFF;
             saw_action = true;
         } else if (runtime_ini_streq(item, "type")) {
             definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+            definition->type_text[0] = '\0';
+            saw_action = true;
+        } else if (strncmp(item, "type=", 5) == 0) {
+            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+            snprintf(definition->type_text, sizeof(definition->type_text), "%s", item + 5);
             saw_action = true;
         } else if (runtime_ini_streq(item, "swap")) {
             definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+            definition->swap_param = 0;
+            definition->swap_relative = 0;
+            saw_action = true;
+        } else if (strncmp(item, "swap=", 5) == 0) {
+            int32_t param = 0;
+            uint8_t relative = 0;
+            if (!runtime_ini_parse_swap_param(item + 5, &param, &relative)) {
+                runtime_ini_warn(key, "invalid swap parameter");
+                return false;
+            }
+            definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+            definition->swap_param = param;
+            definition->swap_relative = relative;
             saw_action = true;
         } else if (runtime_ini_streq(item, "enabled")) {
             definition->enabled = 1;
@@ -264,6 +324,10 @@ static bool runtime_add_loaded_breakpoint(runtime *rt, const runtime_breakpoint_
     breakpoint->reset_count = definition->reset_count;
     breakpoint->counter = definition->initial_count;
     breakpoint->current_hits = 0;
+    breakpoint->swap_param = definition->swap_param;
+    breakpoint->swap_relative = definition->swap_relative;
+    snprintf(breakpoint->tron_path, sizeof(breakpoint->tron_path), "%s", definition->tron_path);
+    snprintf(breakpoint->type_text, sizeof(breakpoint->type_text), "%s", definition->type_text);
     rt->breakpoint_count++;
     return true;
 }
@@ -397,16 +461,38 @@ static void runtime_format_breakpoint_value(
         runtime_append_token(out, out_size, "slow");
     }
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TRON) != 0) {
-        runtime_append_token(out, out_size, "tron");
+        if (breakpoint->tron_path[0] != '\0') {
+            char tron_tok[RUNTIME_BREAKPOINT_TRON_PATH_MAX + 8];
+            snprintf(tron_tok, sizeof(tron_tok), "tron=%s", breakpoint->tron_path);
+            runtime_append_token(out, out_size, tron_tok);
+        } else {
+            runtime_append_token(out, out_size, "tron");
+        }
     }
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TROFF) != 0) {
         runtime_append_token(out, out_size, "troff");
     }
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_SWAP) != 0) {
-        runtime_append_token(out, out_size, "swap");
+        if (breakpoint->swap_param != 0) {
+            char swap_tok[32];
+            if (breakpoint->swap_relative) {
+                snprintf(swap_tok, sizeof(swap_tok), "swap=%+d", breakpoint->swap_param);
+            } else {
+                snprintf(swap_tok, sizeof(swap_tok), "swap=%d", breakpoint->swap_param);
+            }
+            runtime_append_token(out, out_size, swap_tok);
+        } else {
+            runtime_append_token(out, out_size, "swap");
+        }
     }
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TYPE) != 0) {
-        runtime_append_token(out, out_size, "type");
+        if (breakpoint->type_text[0] != '\0') {
+            char type_tok[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX + 8];
+            snprintf(type_tok, sizeof(type_tok), "type=%s", breakpoint->type_text);
+            runtime_append_token(out, out_size, type_tok);
+        } else {
+            runtime_append_token(out, out_size, "type");
+        }
     }
 
     if (breakpoint->use_counter) {

@@ -338,7 +338,11 @@ static void update_debug_state_from_event(
     }
 }
 
-static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_debug_state *debug_state) {
+static void poll_runtime_events(
+    runtime_client *client,
+    frontend *ui,
+    frontend_debug_state *debug_state,
+    app_options *options) {
     runtime_event event;
     c64_frame frame;
     bool consumed_frame = false;
@@ -368,6 +372,29 @@ static void poll_runtime_events(runtime_client *client, frontend *ui, frontend_d
                 "STEP instruction PC=%04X CYCLES=%llu",
                 debug_state->cpu.pc,
                 (unsigned long long)debug_state->cpu.cycles);
+        } else if (event.type == RUNTIME_EVENT_DISK_SWAP && options != NULL) {
+            uint8_t device = event.data.disk_swap.device;
+            int32_t param = event.data.disk_swap.swap_param;
+            uint8_t relative = event.data.disk_swap.swap_relative;
+            app_disk_slot *slot = &options->disk_slots[device];
+            const char *path = NULL;
+
+            if (param != 0 && slot->count > 0) {
+                int new_index;
+                if (relative) {
+                    new_index = (slot->current + param % slot->count + slot->count) % slot->count;
+                } else {
+                    /* absolute 1-based, wrap */
+                    new_index = ((param - 1) % slot->count + slot->count) % slot->count;
+                }
+                path = app_disk_slot_select(slot, new_index);
+            }
+            if (path != NULL) {
+                runtime_client_mount_d64(client, device, path);
+                if (ui != NULL) {
+                    frontend_set_disk_queue(ui, device, slot);
+                }
+            }
         }
     }
 
@@ -1281,7 +1308,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         }
         frontend_end_input(ui);
 
-        poll_runtime_events(client, ui, &debug_state);
+        poll_runtime_events(client, ui, &debug_state, options);
 
         if (!platform_window_clear(window)) {
             return false;
@@ -1463,7 +1490,7 @@ int main(int argc, char **argv) {
 
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client, NULL, NULL);
+    poll_runtime_events(client, NULL, NULL, NULL);
     if (!runtime_save_debug_ini(rt)) {
         SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
     }

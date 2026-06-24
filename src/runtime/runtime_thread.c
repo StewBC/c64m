@@ -502,6 +502,18 @@ static void runtime_publish_breakpoints(runtime *rt) {
         event.data.breakpoints.entries[i].counter = rt->breakpoints[i].counter;
         event.data.breakpoints.entries[i].address = rt->breakpoints[i].start_address;
         event.data.breakpoints.entries[i].target_hits = rt->breakpoints[i].initial_count;
+        event.data.breakpoints.entries[i].swap_param = rt->breakpoints[i].swap_param;
+        event.data.breakpoints.entries[i].swap_relative = rt->breakpoints[i].swap_relative;
+        snprintf(
+            event.data.breakpoints.entries[i].tron_path,
+            sizeof(event.data.breakpoints.entries[i].tron_path),
+            "%s",
+            rt->breakpoints[i].tron_path);
+        snprintf(
+            event.data.breakpoints.entries[i].type_text,
+            sizeof(event.data.breakpoints.entries[i].type_text),
+            "%s",
+            rt->breakpoints[i].type_text);
     }
 
     runtime_publish_event(rt, &event);
@@ -1057,6 +1069,10 @@ static void runtime_breakpoint_apply_definition(
     if (reset_hits) {
         breakpoint->current_hits = 0;
     }
+    breakpoint->swap_param = definition->swap_param;
+    breakpoint->swap_relative = definition->swap_relative;
+    snprintf(breakpoint->tron_path, sizeof(breakpoint->tron_path), "%s", definition->tron_path);
+    snprintf(breakpoint->type_text, sizeof(breakpoint->type_text), "%s", definition->type_text);
 }
 
 static bool runtime_add_breakpoint(
@@ -1237,7 +1253,9 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
         rt->trace_enabled = true;
         c64_set_cpu_trace_enabled(&rt->machine, true);
         if (rt->trace_file == NULL) {
-            rt->trace_file = fopen("trace.log", "a");
+            const char *path = (breakpoint->tron_path[0] != '\0') ?
+                breakpoint->tron_path : "trace.log";
+            rt->trace_file = fopen(path, "a");
             if (rt->trace_file != NULL) {
                 fprintf(rt->trace_file, "--- TRON  CYC=%08llX ---\n",
                     (unsigned long long)rt->machine.clock.cycle);
@@ -1256,10 +1274,18 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
         }
     }
 
-    /*
-     * Type and Swap are intentional Phase 13 no-ops. They are ordered and kept
-     * in the runtime-owned action set for later implementation.
-     */
+    if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_SWAP) != 0 &&
+        breakpoint->swap_param != 0) {
+        runtime_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = RUNTIME_EVENT_DISK_SWAP;
+        ev.data.disk_swap.swap_param = breakpoint->swap_param;
+        ev.data.disk_swap.swap_relative = breakpoint->swap_relative;
+        ev.data.disk_swap.device = 8;
+        runtime_publish_event(rt, &ev);
+    }
+
+    /* Type is a no-op pending the translator implementation. */
 
     return false;
 }

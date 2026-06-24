@@ -554,12 +554,12 @@ Each entry in the list shows a label and action buttons:
 W[C123-C1FF] (5/10)  [Edit] [Disable] [Clear]
 ```
 
-| Part           | Meaning                                              |
-|----------------|------------------------------------------------------|
-| `R`, `W`, `RW` | Access type (read, write, or either)                 |
-| `[C123]`       | Address; or `[C123-C1FF]` for a range                |
-| `(5/10)`       | Counter: hit count / threshold (shown when non-zero) |
-| Action label   | `Fast`, `Slow`, `Tron`, `Troff`, or nothing (Break)  |
+| Part           | Meaning                                                        |
+|----------------|----------------------------------------------------------------|
+| `R`, `W`, `RW` | Access type (read, write, or either)                           |
+| `[C123]`       | Address; or `[C123-C1FF]` for a range                          |
+| `(5/10)`       | Counter: hit count / threshold (shown when non-zero)           |
+| Action label   | `Fast`, `Slow`, `Tron`, `Troff`, `Swap`, `Type`, or nothing (Break) |
 
 - **[Edit]** opens the Breakpoint Editor.
 - **[Disable]** / **[Enable]** toggles the breakpoint without removing it.
@@ -582,13 +582,27 @@ breakpoint.
 
 **Actions**:
 
-| Action  | Effect                                                       |
-|---------|--------------------------------------------------------------|
-| Break   | Pause execution (default)                                    |
-| Fast    | Switch to maximum turbo speed                                |
-| Slow    | Restore normal paced speed                                   |
-| Tron    | Enable per-instruction execution trace                       |
-| Troff   | Disable per-instruction execution trace                      |
+| Action  | Parameter field | Effect                                                  |
+|---------|-----------------|---------------------------------------------------------|
+| Break   | —               | Pause execution (default)                               |
+| Fast    | —               | Switch to maximum turbo speed                           |
+| Slow    | —               | Restore normal paced speed                              |
+| Troff   | —               | Disable per-instruction execution trace                 |
+| Tron    | Filename        | Enable per-instruction execution trace; writes to the given file, or `trace.log` if the field is empty |
+| Swap    | Queue step      | Navigate the device 8 disk queue (see below)            |
+| Type    | Text            | Inject text as C64 keystrokes (translator pending)      |
+
+Tron and Troff are mutually exclusive: checking one automatically clears the other.
+When Tron, Swap, or Type is unchecked, its parameter field is grayed out.
+
+**Swap parameter format:**
+
+| Form  | Meaning                                                              |
+|-------|----------------------------------------------------------------------|
+| `+N`  | Move forward N steps in the queue (wraps)                            |
+| `-N`  | Move backward N steps in the queue (wraps)                           |
+| `N`   | Mount the Nth disk in the queue, 1-based (wraps if out of range)     |
+| empty | No-op (Swap flag is set but does nothing)                            |
 
 **Counter**: enter a hit count and a reset count. With hit count `N` and reset count
 `M`, the action fires on the Nth hit and then every Mth hit thereafter. Set both to 0
@@ -955,29 +969,46 @@ multiple breakpoints.
 Each entry has the form:
 
 ```
-break.<suffix> = <address[-address]>[,pc|read|write|access][,map|rom|ram][,fast|slow|tron|troff][,count[,reset]]
+break.<suffix> = <address[-address]>[,access][,mapping][,actions][,count=N][,reset=N]
 ```
+
+**Address and access:**
 
 | Part              | Meaning                                           |
 |-------------------|---------------------------------------------------|
-| `address`         | Hex address, e.g. `0xC000`                        |
+| `address`         | Hex address, e.g. `C000` or `$C000`              |
 | `-address`        | Optional range end                                |
-| `pc`              | Execute breakpoint                                |
+| `execute`         | Execute breakpoint                                |
 | `read`            | Read-access breakpoint                            |
 | `write`           | Write-access breakpoint                           |
 | `access`          | Read or write                                     |
 | `map` / `rom` / `ram` | Mapping filter                              |
-| `fast`            | Fast action                                       |
-| `slow`            | Slow action                                       |
-| `tron` / `troff`  | Trace on/off actions                              |
-| `count`           | Hit count before action fires                     |
-| `reset`           | Counter reset value after firing                  |
+
+**Actions:**
+
+| Token              | Meaning                                                              |
+|--------------------|----------------------------------------------------------------------|
+| `break`            | Pause execution                                                      |
+| `fast`             | Switch to maximum turbo speed                                        |
+| `slow`             | Restore normal paced speed                                           |
+| `troff`            | Disable execution trace                                              |
+| `tron`             | Enable execution trace; writes to `trace.log`                        |
+| `tron=path`        | Enable execution trace; writes to `path`                             |
+| `swap=+N`          | Advance device 8 disk queue forward N steps (wraps)                  |
+| `swap=-N`          | Advance device 8 disk queue backward N steps (wraps)                 |
+| `swap=N`           | Mount the Nth disk in the device 8 queue, 1-based (wraps)            |
+| `swap` or `swap=0` | Swap action present but no-op                                        |
+| `type=text`        | Inject text as C64 keystrokes (pending translator)                   |
+| `count=N`          | Fire on the Nth hit                                                  |
+| `reset=N`          | Reset counter to N after firing                                      |
 
 Examples:
 ```
-break.1 = 0xE000,pc
-break.2 = 0xD000-0xD3FF,write,fast
-break.3 = 0xC000,pc,10,2
+break.C000 = execute,map,break
+break.D000-D3FF = write,map,fast
+break.C100 = execute,map,break,count=10,reset=2
+break.E000 = execute,map,tron=my_trace.log
+break.C000.1 = execute,map,swap=+1
 ```
 
 ## Keyboard

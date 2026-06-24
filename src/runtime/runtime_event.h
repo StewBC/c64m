@@ -24,7 +24,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_ASSEMBLE_COMPLETE,
     RUNTIME_EVENT_ASSEMBLE_ERROR,
     RUNTIME_EVENT_FRAME_READY,
-    RUNTIME_EVENT_CALL_STACK_RESPONSE
+    RUNTIME_EVENT_CALL_STACK_RESPONSE,
+    RUNTIME_EVENT_DISK_SWAP
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -46,7 +47,9 @@ typedef enum runtime_stop_reason {
 enum {
     RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
     RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64,
-    RUNTIME_CALL_STACK_MAX = 16
+    RUNTIME_CALL_STACK_MAX = 16,
+    RUNTIME_BREAKPOINT_TRON_PATH_MAX = 256,
+    RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256
 };
 
 typedef enum runtime_breakpoint_access {
@@ -82,6 +85,10 @@ typedef struct runtime_breakpoint_definition {
     uint8_t use_counter;
     uint32_t initial_count;
     uint32_t reset_count;
+    int32_t swap_param;    /* disk queue target: negative=backward, positive+swap_relative=forward, positive+!swap_relative=absolute 1-based */
+    uint8_t swap_relative; /* 1 if +/- was explicit (relative movement), 0 if bare number (absolute index) */
+    char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX]; /* trace file path; empty = default "trace.log" */
+    char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX]; /* text to inject via Type action */
 } runtime_breakpoint_definition;
 
 typedef struct runtime_cpu_snapshot {
@@ -175,6 +182,10 @@ typedef struct runtime_breakpoint_snapshot_entry {
     uint32_t initial_count;
     uint32_t reset_count;
     uint32_t counter;
+    int32_t swap_param;
+    uint8_t swap_relative;
+    char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX];
+    char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX];
 
     /* Phase 12 compatibility aliases. Prefer start_address and initial_count. */
     uint16_t address;
@@ -234,5 +245,11 @@ typedef struct runtime_event {
             uint16_t address;
             char path[1024];
         } assemble;
+
+        struct {
+            int32_t swap_param;
+            uint8_t swap_relative;
+            uint8_t device;
+        } disk_swap;
     } data;
 } runtime_event;

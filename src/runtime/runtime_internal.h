@@ -78,6 +78,10 @@ typedef struct runtime_breakpoint {
     uint32_t reset_count;
     uint32_t counter;
     uint32_t current_hits;
+    int32_t swap_param;
+    uint8_t swap_relative;
+    char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX];
+    char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX];
 } runtime_breakpoint;
 
 struct runtime {
