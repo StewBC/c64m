@@ -62,6 +62,18 @@ target_link_libraries(test_audio_buffer PRIVATE
 
 add_test(NAME audio_buffer COMMAND test_audio_buffer)
 
+add_executable(test_paste_parser
+    tests/util/test_paste_parser.c
+)
+
+target_compile_features(test_paste_parser PRIVATE c_std_99)
+
+target_link_libraries(test_paste_parser PRIVATE
+    util
+)
+
+add_test(NAME paste_parser COMMAND test_paste_parser)
+
 add_executable(test_c64_bus
     tests/machine/test_c64_bus.c
 )

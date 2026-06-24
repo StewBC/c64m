@@ -1301,6 +1301,9 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
             p->in_gap          = true;
             p->phase_end_cycle = rt->machine.clock.cycle;
             memset(p->asserted_keys, 0, sizeof(p->asserted_keys));
+            memset(p->oneshot_keys,  0, sizeof(p->oneshot_keys));
+            memset(p->temp_keys,     0, sizeof(p->temp_keys));
+            memset(p->asserted_joy,  0, sizeof(p->asserted_joy));
             rt->paste_active   = true;
         }
     }
@@ -2644,6 +2647,8 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             p->in_gap       = true;
             p->phase_end_cycle = rt->machine.clock.cycle;
             memset(p->asserted_keys, 0, sizeof(p->asserted_keys));
+            memset(p->oneshot_keys,  0, sizeof(p->oneshot_keys));
+            memset(p->temp_keys,     0, sizeof(p->temp_keys));
             memset(p->asserted_joy,  0, sizeof(p->asserted_joy));
             rt->paste_active = true;
             break;
@@ -2807,14 +2812,51 @@ static const uint8_t s_joy_dir_map[9] = {
 };
 
 /* Event-driven paste: consumes paste_event_t[] with full matrix key control.
-   Each KEY_PRESS/PETSCII/MATRIX event goes through a hold phase then a gap
-   phase before advancing.  KEY_ASSERT, KEY_DEASSERT, JOYSTICK, and NMI events
-   are executed immediately with no hold/gap. */
-static void paste_events_cleanup(runtime *rt) {
+   Timed events go through hold/gap phases. Explicit holds, one-shot modifiers,
+   and temporary synthetic keys are tracked separately so cleanup releases only
+   the keys owned by that path. */
+static uint64_t paste_normal_keypress_cycles(void) {
+    return (uint64_t)PASTE_HOLD_CYCLES + (uint64_t)PASTE_GAP_CYCLES;
+}
+
+static void paste_clear_temp_keys(runtime *rt) {
     paste_state *p = &rt->paste;
     int i;
 
     for (i = 0; i < C64_KEY_COUNT; i++) {
+        if (p->temp_keys[i]) {
+            c64_set_key(&rt->machine, (c64_key)i, false);
+            p->temp_keys[i] = false;
+        }
+    }
+}
+
+static void paste_release_oneshot_keys(runtime *rt) {
+    paste_state *p = &rt->paste;
+    int i;
+
+    for (i = 0; i < C64_KEY_COUNT; i++) {
+        if (p->oneshot_keys[i]) {
+            if (!p->asserted_keys[i] && !p->temp_keys[i]) {
+                c64_set_key(&rt->machine, (c64_key)i, false);
+            }
+            p->oneshot_keys[i] = false;
+        }
+    }
+}
+
+static void paste_events_cleanup(runtime *rt) {
+    paste_state *p = &rt->paste;
+    int i;
+
+    paste_clear_temp_keys(rt);
+    for (i = 0; i < C64_KEY_COUNT; i++) {
+        if (p->oneshot_keys[i]) {
+            if (!p->asserted_keys[i]) {
+                c64_set_key(&rt->machine, (c64_key)i, false);
+            }
+            p->oneshot_keys[i] = false;
+        }
         if (p->asserted_keys[i]) {
             c64_set_key(&rt->machine, (c64_key)i, false);
             p->asserted_keys[i] = false;
@@ -2824,6 +2866,81 @@ static void paste_events_cleanup(runtime *rt) {
     c64_set_joystick(&rt->machine, 2, 0);
     p->asserted_joy[0] = 0;
     p->asserted_joy[1] = 0;
+}
+
+static void paste_press_temp_key(runtime *rt, c64_key key) {
+    paste_state *p = &rt->paste;
+
+    if (!p->asserted_keys[key] && !p->oneshot_keys[key] && !p->temp_keys[key]) {
+        c64_set_key(&rt->machine, key, true);
+        p->temp_keys[key] = true;
+    }
+}
+
+static void paste_begin_key_press(runtime *rt, c64_key key, bool needs_shift) {
+    paste_state *p = &rt->paste;
+
+    if (needs_shift) {
+        paste_press_temp_key(rt, C64_KEY_LEFT_SHIFT);
+    }
+    paste_press_temp_key(rt, key);
+    p->in_gap = false;
+    p->phase_end_cycle = rt->machine.clock.cycle + PASTE_HOLD_CYCLES;
+}
+
+static void paste_finish_current_timed_event(runtime *rt, paste_event_t *ev, uint64_t now) {
+    paste_state *p = &rt->paste;
+
+    switch (ev->type) {
+        case PASTE_EV_KEY_PRESS:
+            paste_clear_temp_keys(rt);
+            paste_release_oneshot_keys(rt);
+            p->phase_end_cycle = now + ((c64_key)ev->key.key == C64_KEY_RETURN
+                                        ? PASTE_RETURN_GAP_CYCLES : PASTE_GAP_CYCLES);
+            break;
+        case PASTE_EV_PETSCII: {
+            uint8_t val = ev->petscii.petscii;
+            if (val < 128 && paste_ascii_map[val].valid) {
+                paste_key_entry e = paste_ascii_map[val];
+                paste_clear_temp_keys(rt);
+                paste_release_oneshot_keys(rt);
+                p->phase_end_cycle = now + (e.key == C64_KEY_RETURN
+                                            ? PASTE_RETURN_GAP_CYCLES : PASTE_GAP_CYCLES);
+            } else {
+                p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+            }
+            break;
+        }
+        case PASTE_EV_MATRIX:
+            c64_set_matrix(&rt->machine, ev->matrix.row, ev->matrix.col, false);
+            paste_release_oneshot_keys(rt);
+            p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+            break;
+        case PASTE_EV_JOYSTICK:
+            if (ev->joy.port >= 1 && ev->joy.port <= 2) {
+                c64_set_joystick(&rt->machine, ev->joy.port, 0);
+                p->asserted_joy[ev->joy.port - 1] = 0;
+            }
+            paste_release_oneshot_keys(rt);
+            p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+            break;
+        case PASTE_EV_NMI:
+            paste_release_oneshot_keys(rt);
+            p->phase_end_cycle = now + PASTE_GAP_CYCLES;
+            break;
+        case PASTE_EV_WAIT:
+        default:
+            p->phase_end_cycle = now;
+            break;
+    }
+
+    p->event_cursor++;
+    p->in_gap = true;
+    if (p->event_cursor >= p->event_count) {
+        paste_events_cleanup(rt);
+        rt->paste_active = false;
+        p->event_mode    = false;
+    }
 }
 
 static void runtime_advance_paste_events(runtime *rt) {
@@ -2836,79 +2953,38 @@ static void runtime_advance_paste_events(runtime *rt) {
     }
 
     if (!p->in_gap) {
-        /* hold phase expired — release the current key-type event */
-        ev = &p->events[p->event_cursor];
-        switch (ev->type) {
-            case PASTE_EV_KEY_PRESS:
-                c64_set_key(&rt->machine, (c64_key)ev->key.key, false);
-                if (ev->key.needs_shift && !p->asserted_keys[C64_KEY_LEFT_SHIFT]) {
-                    c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, false);
-                }
-                p->phase_end_cycle = now + ((c64_key)ev->key.key == C64_KEY_RETURN
-                                            ? PASTE_RETURN_GAP_CYCLES : PASTE_GAP_CYCLES);
-                break;
-            case PASTE_EV_PETSCII: {
-                uint8_t val = ev->petscii.petscii;
-                if (val < 128 && paste_ascii_map[val].valid) {
-                    paste_key_entry e = paste_ascii_map[val];
-                    c64_set_key(&rt->machine, e.key, false);
-                    if (e.shift && !p->asserted_keys[C64_KEY_LEFT_SHIFT]) {
-                        c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, false);
-                    }
-                    p->phase_end_cycle = now + (e.key == C64_KEY_RETURN
-                                                ? PASTE_RETURN_GAP_CYCLES : PASTE_GAP_CYCLES);
-                } else {
-                    p->phase_end_cycle = now + PASTE_GAP_CYCLES;
-                }
-                break;
-            }
-            case PASTE_EV_MATRIX:
-                c64_set_matrix(&rt->machine, ev->matrix.row, ev->matrix.col, false);
-                p->phase_end_cycle = now + PASTE_GAP_CYCLES;
-                break;
-            case PASTE_EV_JOYSTICK:
-                if (ev->joy.port >= 1 && ev->joy.port <= 2) {
-                    c64_set_joystick(&rt->machine, ev->joy.port, 0);
-                    p->asserted_joy[ev->joy.port - 1] = 0;
-                }
-                p->phase_end_cycle = now + PASTE_GAP_CYCLES;
-                break;
-            default:
-                p->phase_end_cycle = now;
-                break;
-        }
-        p->event_cursor++;
-        p->in_gap = true;
-        if (p->event_cursor >= p->event_count) {
-            paste_events_cleanup(rt);
-            rt->paste_active = false;
-            p->event_mode    = false;
-        }
+        paste_finish_current_timed_event(rt, &p->events[p->event_cursor], now);
         return;
     }
 
-    /* gap phase expired — execute one event per call */
     if (p->event_cursor < p->event_count) {
         ev = &p->events[p->event_cursor];
         switch (ev->type) {
             case PASTE_EV_KEY_PRESS:
-                if (ev->key.needs_shift && !p->asserted_keys[C64_KEY_LEFT_SHIFT]) {
-                    c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, true);
-                }
-                c64_set_key(&rt->machine, (c64_key)ev->key.key, true);
-                p->in_gap = false;
-                p->phase_end_cycle = now + PASTE_HOLD_CYCLES;
+                paste_begin_key_press(rt, (c64_key)ev->key.key, ev->key.needs_shift != 0);
                 return;
 
             case PASTE_EV_KEY_ASSERT:
                 c64_set_key(&rt->machine, (c64_key)ev->key.key, true);
                 p->asserted_keys[ev->key.key] = true;
+                p->oneshot_keys[ev->key.key] = false;
+                p->temp_keys[ev->key.key] = false;
                 p->event_cursor++;
                 return;
 
             case PASTE_EV_KEY_DEASSERT:
                 c64_set_key(&rt->machine, (c64_key)ev->key.key, false);
                 p->asserted_keys[ev->key.key] = false;
+                p->oneshot_keys[ev->key.key] = false;
+                p->temp_keys[ev->key.key] = false;
+                p->event_cursor++;
+                return;
+
+            case PASTE_EV_KEY_ONESHOT:
+                if (!p->asserted_keys[ev->key.key] && !p->oneshot_keys[ev->key.key]) {
+                    c64_set_key(&rt->machine, (c64_key)ev->key.key, true);
+                    p->oneshot_keys[ev->key.key] = true;
+                }
                 p->event_cursor++;
                 return;
 
@@ -2916,12 +2992,7 @@ static void runtime_advance_paste_events(runtime *rt) {
                 uint8_t val = ev->petscii.petscii;
                 if (val < 128 && paste_ascii_map[val].valid) {
                     paste_key_entry e = paste_ascii_map[val];
-                    if (e.shift && !p->asserted_keys[C64_KEY_LEFT_SHIFT]) {
-                        c64_set_key(&rt->machine, C64_KEY_LEFT_SHIFT, true);
-                    }
-                    c64_set_key(&rt->machine, e.key, true);
-                    p->in_gap = false;
-                    p->phase_end_cycle = now + PASTE_HOLD_CYCLES;
+                    paste_begin_key_press(rt, e.key, e.shift);
                     return;
                 }
                 p->event_cursor++; /* unmapped PETSCII — skip */
@@ -2945,12 +3016,22 @@ static void runtime_advance_paste_events(runtime *rt) {
                 }
                 p->in_gap = false;
                 p->phase_end_cycle = now + PASTE_HOLD_CYCLES;
-                return;  /* hold-release will clear the port and increment cursor */
+                return;
             }
 
             case PASTE_EV_NMI:
                 c64_restore(&rt->machine);
-                p->event_cursor++;
+                p->in_gap = false;
+                p->phase_end_cycle = now + PASTE_HOLD_CYCLES;
+                return;
+
+            case PASTE_EV_WAIT:
+                if (ev->wait.count == 0) {
+                    p->event_cursor++;
+                    return;
+                }
+                p->in_gap = false;
+                p->phase_end_cycle = now + paste_normal_keypress_cycles() * ev->wait.count;
                 return;
 
             default:

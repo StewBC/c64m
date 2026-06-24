@@ -56,6 +56,8 @@ typedef struct paste_state {
     size_t event_count;
     paste_event_t events[PASTE_EVENTS_MAX];
     bool    asserted_keys[C64_KEY_COUNT]; /* tracks keys held via KEY_ASSERT */
+    bool    oneshot_keys[C64_KEY_COUNT];  /* tracks bare modifier tokens */
+    bool    temp_keys[C64_KEY_COUNT];     /* tracks keys asserted for the current timed event */
     uint8_t asserted_joy[2];             /* port 1 = [0], port 2 = [1] */
 } paste_state;
 

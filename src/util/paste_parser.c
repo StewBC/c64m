@@ -99,39 +99,40 @@ typedef struct {
     uint8_t     key;       /* c64_key ordinal; 0 if is_nmi (unused) */
     uint8_t     needs_shift;
     uint8_t     is_nmi;
+    uint8_t     is_oneshot_modifier;
 } key_entry_t;
 
 static const key_entry_t s_key_table[] = {
-    { "RETURN",    "RT",  PK_RETURN,       0, 0 },
-    { "RESTORE",   "RE",  0,               0, 1 },
-    { "RUNSTOP",   "RS",  PK_RUN_STOP,     0, 0 },
-    { "CLRHOME",   "CH",  PK_HOME,         0, 0 },
-    { "INSDEL",    "ID",  PK_DELETE,       0, 0 },
-    { "SHIFT",     "SH",  PK_LSHIFT,       0, 0 },
-    { "CBM",       "CB",  PK_COMMODORE,    0, 0 },
-    { "CTRL",      "CT",  PK_CONTROL,      0, 0 },
-    { "CUU",       NULL,  PK_CURSOR_DOWN,  1, 0 }, /* SHIFT+cursor-down = cursor up */
-    { "CUD",       NULL,  PK_CURSOR_DOWN,  0, 0 },
-    { "CUL",       NULL,  PK_CURSOR_RIGHT, 1, 0 }, /* SHIFT+cursor-right = cursor left */
-    { "CUR",       NULL,  PK_CURSOR_RIGHT, 0, 0 },
-    { "F1",        NULL,  PK_F1,           0, 0 },
-    { "F2",        NULL,  PK_F1,           1, 0 }, /* SHIFT+F1 */
-    { "F3",        NULL,  PK_F3,           0, 0 },
-    { "F4",        NULL,  PK_F3,           1, 0 },
-    { "F5",        NULL,  PK_F5,           0, 0 },
-    { "F6",        NULL,  PK_F5,           1, 0 },
-    { "F7",        NULL,  PK_F7,           0, 0 },
-    { "F8",        NULL,  PK_F7,           1, 0 },
-    { "POUND",     "PO",  PK_POUND,        0, 0 },
-    { "LEFTARROW", "LA",  PK_LEFT_ARROW,   0, 0 },
-    { "UPARROW",   "UA",  PK_UP_ARROW,     0, 0 },
-    { "PI",        NULL,  PK_UP_ARROW,     1, 0 }, /* SHIFT+UP_ARROW */
-    { "PLUS",      NULL,  PK_PLUS,         0, 0 },
-    { "MINUS",     NULL,  PK_MINUS,        0, 0 },
-    { "AT",        NULL,  PK_AT,           0, 0 },
-    { "ASTERISK",  "AS",  PK_ASTERISK,     0, 0 },
-    { "SPACE",     "SP",  PK_SPACE,        0, 0 },
-    { NULL, NULL, 0, 0, 0 }
+    { "RETURN",    "RT",  PK_RETURN,       0, 0, 0 },
+    { "RESTORE",   "RE",  0,               0, 1, 0 },
+    { "RUNSTOP",   "RS",  PK_RUN_STOP,     0, 0, 1 },
+    { "CLRHOME",   "CH",  PK_HOME,         0, 0, 0 },
+    { "INSDEL",    "ID",  PK_DELETE,       0, 0, 0 },
+    { "SHIFT",     "SH",  PK_LSHIFT,       0, 0, 1 },
+    { "CBM",       "CB",  PK_COMMODORE,    0, 0, 1 },
+    { "CTRL",      "CT",  PK_CONTROL,      0, 0, 1 },
+    { "CUU",       NULL,  PK_CURSOR_DOWN,  1, 0, 0 }, /* SHIFT+cursor-down = cursor up */
+    { "CUD",       NULL,  PK_CURSOR_DOWN,  0, 0, 0 },
+    { "CUL",       NULL,  PK_CURSOR_RIGHT, 1, 0, 0 }, /* SHIFT+cursor-right = cursor left */
+    { "CUR",       NULL,  PK_CURSOR_RIGHT, 0, 0, 0 },
+    { "F1",        NULL,  PK_F1,           0, 0, 0 },
+    { "F2",        NULL,  PK_F1,           1, 0, 0 }, /* SHIFT+F1 */
+    { "F3",        NULL,  PK_F3,           0, 0, 0 },
+    { "F4",        NULL,  PK_F3,           1, 0, 0 },
+    { "F5",        NULL,  PK_F5,           0, 0, 0 },
+    { "F6",        NULL,  PK_F5,           1, 0, 0 },
+    { "F7",        NULL,  PK_F7,           0, 0, 0 },
+    { "F8",        NULL,  PK_F7,           1, 0, 0 },
+    { "POUND",     "PO",  PK_POUND,        0, 0, 0 },
+    { "LEFTARROW", "LA",  PK_LEFT_ARROW,   0, 0, 0 },
+    { "UPARROW",   "UA",  PK_UP_ARROW,     0, 0, 0 },
+    { "PI",        NULL,  PK_UP_ARROW,     1, 0, 0 }, /* SHIFT+UP_ARROW */
+    { "PLUS",      NULL,  PK_PLUS,         0, 0, 0 },
+    { "MINUS",     NULL,  PK_MINUS,        0, 0, 0 },
+    { "AT",        NULL,  PK_AT,           0, 0, 0 },
+    { "ASTERISK",  "AS",  PK_ASTERISK,     0, 0, 0 },
+    { "SPACE",     "SP",  PK_SPACE,        0, 0, 0 },
+    { NULL, NULL, 0, 0, 0, 0 }
 };
 
 /* --- helpers ---------------------------------------------------------------- */
@@ -167,6 +168,49 @@ static bool emit(paste_event_t *out, size_t out_max, size_t *n,
     return true;
 }
 
+static bool str_icase_prefix_eq(const char *a, size_t alen, const char *prefix) {
+    size_t i = 0;
+    while (prefix[i] != '\0') {
+        if (i >= alen) return false;
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)prefix[i])) return false;
+        i++;
+    }
+    return true;
+}
+
+static bool parse_wait_named(const char *buf, size_t blen,
+                             paste_event_t *out, size_t out_max, size_t *n,
+                             size_t esc_start, paste_parse_error_t *err) {
+    size_t pos;
+    uint32_t count = 0;
+    paste_event_t ev = { 0 };
+
+    if (blen >= 2 && str_icase_prefix_eq(buf, blen, "W:")) {
+        pos = 2;
+    } else if (blen >= 5 && str_icase_prefix_eq(buf, blen, "WAIT:")) {
+        pos = 5;
+    } else {
+        return false;
+    }
+
+    if (pos >= blen) {
+        ERR(esc_start, "wait token requires an integer value");
+    }
+    for (; pos < blen; pos++) {
+        if (!isdigit((unsigned char)buf[pos])) {
+            ERR(esc_start, "wait token value must be decimal digits");
+        }
+        if (count > (UINT32_MAX - (uint32_t)(buf[pos] - '0')) / 10u) {
+            ERR(esc_start, "wait token value is too large");
+        }
+        count = count * 10u + (uint32_t)(buf[pos] - '0');
+    }
+
+    ev.type = PASTE_EV_WAIT;
+    ev.wait.count = count;
+    return emit(out, out_max, n, ev, esc_start, err);
+}
+
 /* --- named key token -------------------------------------------------------- */
 
 static bool parse_named_key(const char *input, size_t *pos, size_t len,
@@ -188,6 +232,13 @@ static bool parse_named_key(const char *input, size_t *pos, size_t len,
     (*pos)++; /* consume ']' */
 
     if (blen == 0) { ERR(esc_start, "empty key name in '\\[...]'"); }
+
+    if (parse_wait_named(buf, blen, out, out_max, n, esc_start, err)) {
+        return true;
+    }
+    if (err->offset >= 0) {
+        return false;
+    }
 
     /* optional trailing modifier */
     if (buf[blen - 1] == '+' || buf[blen - 1] == '-') {
@@ -216,6 +267,10 @@ static bool parse_named_key(const char *input, size_t *pos, size_t len,
             ev.key.needs_shift = entry->needs_shift;
         } else if (modifier == '-') {
             ev.type = PASTE_EV_KEY_DEASSERT;
+            ev.key.key = entry->key;
+            ev.key.needs_shift = entry->needs_shift;
+        } else if (entry->is_oneshot_modifier) {
+            ev.type = PASTE_EV_KEY_ONESHOT;
             ev.key.key = entry->key;
             ev.key.needs_shift = entry->needs_shift;
         } else {

@@ -10,10 +10,12 @@ typedef enum {
     PASTE_EV_KEY_PRESS,    /* press-and-release; key field valid */
     PASTE_EV_KEY_ASSERT,   /* hold down (\[KEY+]); base key only — SHIFT not auto-asserted */
     PASTE_EV_KEY_DEASSERT, /* release (\[KEY-]); base key only */
+    PASTE_EV_KEY_ONESHOT,  /* bare modifier token; held until next non-modifier event completes */
     PASTE_EV_PETSCII,      /* raw value from \x \d \o; petscii field valid */
     PASTE_EV_MATRIX,       /* direct matrix address \mR,C; row, col fields valid */
     PASTE_EV_JOYSTICK,     /* joystick event \jPD[,B]; port/dir/button fields valid */
-    PASTE_EV_NMI           /* RESTORE key — pulses NMI line, not a matrix key */
+    PASTE_EV_NMI,          /* RESTORE key — pulses NMI line, not a matrix key */
+    PASTE_EV_WAIT          /* \[W:N] / \[WAIT:N]; wait.count normal keypress durations */
 } paste_event_type_t;
 
 /* key.key holds the c64_key ordinal (cast to c64_key when used by the sequencer).
@@ -29,6 +31,7 @@ typedef struct {
         struct { uint8_t row;  uint8_t col; }        matrix;
         struct { uint8_t port; uint8_t dir;
                  uint8_t button; uint8_t has_button; } joy;
+        struct { uint32_t count; }                   wait;
     };
 } paste_event_t;
 

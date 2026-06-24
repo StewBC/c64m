@@ -616,9 +616,11 @@ produce SHIFT+key; lowercase produce the unshifted key. Up to 128 events per seq
 
 | Form              | Meaning                                                          |
 |-------------------|------------------------------------------------------------------|
-| `\[NAME]`         | Press and release named key                                      |
+| `\[NAME]`         | Press and release named key; bare modifiers are one-shot         |
 | `\[NAME+]`        | Assert (hold) named key                                          |
 | `\[NAME-]`        | Deassert (release) named key                                     |
+| `\[W:N]`          | Wait N normal keypress durations (`0` is a no-op)                |
+| `\[WAIT:N]`       | Same as `\[W:N]`                                                 |
 | `\xHH`            | PETSCII byte, two hex digits                                     |
 | `\dDDD`           | PETSCII byte, three decimal digits                               |
 | `\oOOO`           | PETSCII byte, three octal digits                                 |
@@ -639,7 +641,7 @@ Direction codes: 0=centre, 1=up, 2=up-right, 3=right, 4=down-right, 5=down,
 | `INSDEL`   | `ID`  | Ins/Del       | `POUND`     | `PO`  | £            |
 | `CUU`      |       | Cursor up     | `LEFTARROW` | `LA`  | ←            |
 | `CUD`      |       | Cursor down   | `UPARROW`   | `UA`  | ↑            |
-| `CUL`      |       | Cursor left   | `																							`        |       | π            |
+| `CUL`      |       | Cursor left   | `PI`        |       | π            |
 | `CUR`      |       | Cursor right  | `F1`–`F8`   |       | Function keys |
 | `PLUS`     |       | +             | `MINUS`     |       | -            |
 | `AT`       |       | @             | `ASTERISK`  | `AS`  | *            |
@@ -653,16 +655,31 @@ Examples:
 ```
 load\[RT]               Type LOAD and press Return
 \[SH+]\[F1]\[SH-]       Produce F2 (SHIFT+F1) but \[F2] would have also worked
+\[CT]S                  Type Ctrl+S, then release Ctrl
+\[CT]\[SH]S             Type Ctrl+Shift+S, then release both modifiers
+\[CTRL+]\[CTRL]SA\[CTRL-]  Keep Ctrl held for both S and A
 \x22*\x22,8,1\[RT]      "* ",8,1 then Return
 \j11,1                  Joystick port 1 up with fire button
-\[RE+]\[RS]\[RE-]       RUN/STOP + RESTORE soft reset (see note below)
+\[RS]\[RE]              RUN/STOP + RESTORE soft reset (see note below)
+S\[W:2]A                Type S, wait for two normal keypress durations, then A
+S\[WAIT:2]A             Same as above
 ```
+
+Bare `SHIFT`, `CTRL`, `CBM`, and `RUNSTOP` tokens are one-shot modifiers. They are
+asserted immediately and released after the next non-modifier key or RESTORE event
+completes. The short aliases are `SH`, `CT`, `CB`, and `RS`.
+
+Explicit `+` and `-` modifier forms still hold and release keys manually.
+For example, `\[CTRL+]\[CTRL]SA\[CTRL-]` keeps Ctrl held for both `S` and `A`;
+the middle bare `\[CTRL]` is redundant because Ctrl is already explicitly held.
 
 **RESTORE and the `+`/`-` modifier:** `RESTORE` is an NMI key, not a keyboard matrix key.
 The `+` and `-` modifiers are silently ignored — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire
 the same one-shot NMI. There is no way to "hold" RESTORE.
 
-**RUN/STOP + RESTORE soft reset:** Use `\[RE]\[RS]`.
+**RUN/STOP + RESTORE soft reset:** Use `\[RS]\[RE]`.
+
+Alias note: `RE` means RESTORE; `RS` means RUNSTOP.
 
 **[Apply]** applies changes. **[Cancel]** discards them.
 
