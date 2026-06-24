@@ -935,13 +935,66 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     if ((intent.disk_device == 8 || intent.disk_device == 9) &&
                         choose_disk_path(path, sizeof(path))) {
                         sent = runtime_client_mount_d64(client, intent.disk_device, path);
+                        if (sent) {
+                            app_disk_slot_set(&options->disk_slots[intent.disk_device], path);
+                            frontend_set_disk_queue(ui, intent.disk_device,
+                                &options->disk_slots[intent.disk_device]);
+                        }
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    char path[1024];
+                    if (choose_disk_path(path, sizeof(path))) {
+                        app_disk_slot *slot = &options->disk_slots[intent.disk_device];
+                        bool was_empty = slot->count == 0;
+                        if (app_disk_slot_add_after_current(slot, path)) {
+                            if (was_empty) {
+                                sent = runtime_client_mount_d64(
+                                    client, intent.disk_device, slot->paths[0]);
+                            } else {
+                                sent = true;
+                            }
+                            frontend_set_disk_queue(ui, intent.disk_device, slot);
+                        }
                     }
                 }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    app_disk_slot *slot = &options->disk_slots[intent.disk_device];
+                    const char *next_path = app_disk_slot_eject_current(slot);
+                    if (next_path != NULL) {
+                        sent = runtime_client_mount_d64(client, intent.disk_device, next_path);
+                    } else {
+                        sent = runtime_client_unmount_disk(client, intent.disk_device);
+                    }
+                    frontend_set_disk_queue(ui, intent.disk_device, slot);
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
                     sent = runtime_client_unmount_disk(client, intent.disk_device);
+                    if (sent) {
+                        app_disk_slot_clear(&options->disk_slots[intent.disk_device]);
+                        frontend_set_disk_queue(ui, intent.disk_device,
+                            &options->disk_slots[intent.disk_device]);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_SELECT:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    app_disk_slot *slot = &options->disk_slots[intent.disk_device];
+                    const char *path = app_disk_slot_select(slot, intent.disk_queue_index);
+                    if (path != NULL) {
+                        sent = runtime_client_mount_d64(client, intent.disk_device, path);
+                        frontend_set_disk_queue(ui, intent.disk_device, slot);
+                    }
                 }
                 break;
 
@@ -972,9 +1025,14 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
                 {
+                    int d;
                     c64_config machine_config = machine_config_from_options(&intent.config);
                     runtime_config runtime_options = runtime_config_from_options(&intent.config);
                     char absolute_symbol_files[1024];
+                    for (d = 0; d < C64M_DRIVE_COUNT; ++d) {
+                        app_disk_slot_copy(
+                            &intent.config.disk_slots[d], &options->disk_slots[d]);
+                    }
                     app_options_destroy(options);
                     *options = intent.config;
                     memset(&intent.config, 0, sizeof(intent.config));
@@ -991,6 +1049,8 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                         intent.config_result.needs_reboot,
                         options->save_ini && !options->no_save_ini);
                     frontend_set_config_state(ui, options);
+                    frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
+                    frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
                     if (intent.config_result.symbols_changed) {
                         runtime_client_request_memory(client, 0, 1, RUNTIME_MEMORY_MODE_CPU_MAP);
                     }
@@ -1333,8 +1393,8 @@ int main(int argc, char **argv) {
     {
         int i;
         for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
-            if (options.disk_images[i] != NULL) {
-                runtime_client_mount_d64(client, (uint8_t)i, options.disk_images[i]);
+            if (options.disk_slots[i].count > 0) {
+                runtime_client_mount_d64(client, (uint8_t)i, options.disk_slots[i].paths[0]);
             }
         }
     }
@@ -1386,6 +1446,8 @@ int main(int argc, char **argv) {
     layout_state.display_height = options.layout_display_height;
     frontend_set_layout_state(ui, &layout_state);
     frontend_set_config_state(ui, &options);
+    frontend_set_disk_queue(ui, 8, &options.disk_slots[8]);
+    frontend_set_disk_queue(ui, 9, &options.disk_slots[9]);
 
     send_run_command(client);
 

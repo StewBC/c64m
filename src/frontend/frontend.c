@@ -360,6 +360,7 @@ struct frontend {
     frontend_symbol_lookup_state symbol_lookup;
     symbol_resolver symbols;
     symbol_table *symbol_table;
+    app_disk_slot disk_queue[2]; /* mirrors options->disk_slots[8] and [9] */
     frontend_debugger_intent intents[FRONTEND_DEBUGGER_INTENT_CAPACITY];
     size_t intent_read;
     size_t intent_write;
@@ -1009,6 +1010,43 @@ static bool frontend_push_disk_intent(frontend *ui, frontend_debugger_intent_typ
     ui->intents[ui->intent_write].disk_device = device;
     ui->intent_write = next;
     return true;
+}
+
+static bool frontend_push_disk_select_intent(frontend *ui, uint8_t device, int index)
+{
+    size_t next;
+
+    if (ui == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_DISK_SELECT;
+    ui->intents[ui->intent_write].disk_device = device;
+    ui->intents[ui->intent_write].disk_queue_index = index;
+    ui->intent_write = next;
+    return true;
+}
+
+static const char *path_basename(const char *path)
+{
+    const char *base = path;
+    const char *p;
+
+    if (path == NULL) {
+        return "";
+    }
+    for (p = path; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') {
+            base = p + 1;
+        }
+    }
+    return *base != '\0' ? base : path;
 }
 
 static nk_flags frontend_edit_replace(
@@ -4976,32 +5014,68 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
     ctx = ui->ctx;
 
     /* Disks */
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Disks", NK_TEXT_LEFT);
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
-    nk_layout_row_push(ctx, 0.12f);
-    if (nk_button_label(ctx, "8")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 8);
+    {
+        int drv;
+
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "Disks", NK_TEXT_LEFT);
+
+        for (drv = 0; drv < 2; ++drv) {
+            uint8_t device = (uint8_t)(8 + drv);
+            const app_disk_slot *slot = &ui->disk_queue[drv];
+            bool shift_held = nk_input_is_key_down(&ctx->input, NK_KEY_SHIFT) != 0;
+            char dev_label[4];
+            int new_sel;
+
+            snprintf(dev_label, sizeof(dev_label), "%d", (int)device);
+
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 4);
+
+            /* [8]/[9] — replace queue with a freshly chosen disk */
+            nk_layout_row_push(ctx, 0.10f);
+            if (nk_button_label(ctx, dev_label)) {
+                frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, device);
+            }
+
+            /* [Add] — insert a disk after the current one */
+            nk_layout_row_push(ctx, 0.14f);
+            if (nk_button_label(ctx, "Add")) {
+                frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG, device);
+            }
+
+            /* [Eject] / [Eject!] — eject current (Shift = eject all) */
+            nk_layout_row_push(ctx, 0.18f);
+            if (nk_button_label(ctx, shift_held ? "Eject!" : "Eject")) {
+                frontend_push_disk_intent(
+                    ui,
+                    shift_held ? FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL
+                               : FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT,
+                    device);
+            }
+
+            /* Disk name selector: combo when queue has entries, plain label otherwise */
+            nk_layout_row_push(ctx, 0.58f);
+            if (slot->count > 0) {
+                const char *labels[C64M_DRIVE_COUNT];
+                int label_count = slot->count < C64M_DRIVE_COUNT ? slot->count : C64M_DRIVE_COUNT;
+                int i;
+
+                for (i = 0; i < label_count; ++i) {
+                    labels[i] = path_basename(slot->paths[i]);
+                }
+
+                new_sel = nk_combo(
+                    ctx, labels, label_count, slot->current, 18, nk_vec2(200.0f, 200.0f));
+                if (new_sel != slot->current) {
+                    frontend_push_disk_select_intent(ui, device, new_sel);
+                }
+            } else {
+                nk_label(ctx, frontend_disk_label(debug_state, device), NK_TEXT_LEFT);
+            }
+
+            nk_layout_row_end(ctx);
+        }
     }
-    nk_layout_row_push(ctx, 0.20f);
-    if (nk_button_label(ctx, "Eject")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 8);
-    }
-    nk_layout_row_push(ctx, 0.68f);
-    nk_label(ctx, frontend_disk_label(debug_state, 8), NK_TEXT_LEFT);
-    nk_layout_row_end(ctx);
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 3);
-    nk_layout_row_push(ctx, 0.12f);
-    if (nk_button_label(ctx, "9")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, 9);
-    }
-    nk_layout_row_push(ctx, 0.20f);
-    if (nk_button_label(ctx, "Eject")) {
-        frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT, 9);
-    }
-    nk_layout_row_push(ctx, 0.68f);
-    nk_label(ctx, frontend_disk_label(debug_state, 9), NK_TEXT_LEFT);
-    nk_layout_row_end(ctx);
 
     /* Programs */
     nk_layout_row_dynamic(ctx, 18.0f, 1);
@@ -6112,6 +6186,18 @@ void frontend_set_config_state(frontend *ui, const app_options *options)
     ui->config_dialog.initialized = true;
 }
 
+void frontend_set_disk_queue(frontend *ui, uint8_t device, const app_disk_slot *slot)
+{
+    int index;
+
+    if (ui == NULL || slot == NULL || device < 8 || device > 9) {
+        return;
+    }
+
+    index = (int)(device - 8u);
+    app_disk_slot_copy(&ui->disk_queue[index], slot);
+}
+
 bool frontend_apply_selected_ini(frontend *ui, const app_options *options)
 {
     frontend_config_dialog_state *dialog;
@@ -6254,6 +6340,8 @@ void frontend_destroy(frontend *ui)
 
     symbol_table_destroy(ui->symbol_table);
     frontend_config_dialog_reset(&ui->config_dialog);
+    app_disk_slot_clear(&ui->disk_queue[0]);
+    app_disk_slot_clear(&ui->disk_queue[1]);
     free(ui);
 }
 

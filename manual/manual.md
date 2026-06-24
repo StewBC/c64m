@@ -27,7 +27,7 @@ Useful flags:
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
 | `--turbo <list>` / `-t`| Set turbo multipliers, e.g. `2,4,8,16`             |
 | `--video PAL|NTSC`, `-P`, `-N` | Override the configured video standard for this run |
-| `--disk <drive>=<image>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64` |
+| `--disk <drive>=<image[,image…]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
@@ -411,10 +411,36 @@ programs, and emulator management.
 
 ### Disks
 
-Devices 8 and 9 each have a mount button (labeled **[8]** and **[9]**) and an **Eject**
-button. Clicking the mount button opens a file browser; select a D64 image to mount it.
-The disk title or host filename is shown next to the device number after a successful
-mount. Ejecting a device clears it; the other device is unaffected.
+Devices 8 and 9 each show a row of controls followed by a disk selector:
+
+```
+[8] [Add] [Eject]  <disk name ▼>
+[9] [Add] [Eject]  <disk name ▼>
+```
+
+Each device maintains an ordered queue of D64 images. At most one image is mounted at a
+time; the rest are queued for later use.
+
+**[8] / [9]** — Opens a file browser. Selecting an image replaces the entire queue with
+that one disk and mounts it immediately.
+
+**[Add]** — Opens a file browser. The selected image is inserted into the queue
+immediately after the currently mounted disk. If the drive is empty, the image is added
+and mounted.
+
+**[Eject]** — Removes the currently mounted disk from the queue and mounts the next one.
+If the last disk in the queue is ejected, the drive becomes empty. The queue wraps
+round-robin: ejecting the final entry mounts the first remaining entry, not nothing.
+
+**[Eject!]** (hold Shift while clicking **[Eject]**) — Ejects all disks from the queue
+and leaves the drive empty.
+
+The selector to the right of the buttons shows the basename of the currently mounted
+image. Clicking it opens a drop-down listing every image in the queue; selecting one
+mounts it immediately and makes it current.
+
+The queue order and current index are not saved when the emulator quits. On the next
+launch the first image in the saved list is mounted.
 
 ### Programs
 
@@ -895,10 +921,30 @@ If no ROM paths are specified, c64m searches for files named `basic`, `kernal`,
 
 ### [disk]
 
-| Key      | Value                                            |
-|----------|--------------------------------------------------|
-| `disk8`  | Path to the D64 image for device 8               |
-| `disk9`  | Path to the D64 image for device 9               |
+Each key is the device number. The value is a comma-separated list of D64 image paths.
+Paths may be absolute or relative to the directory containing the INI file.
+
+| Key | Value                                                            |
+|-----|------------------------------------------------------------------|
+| `8` | D64 image or comma-separated list of images for device 8        |
+| `9` | D64 image or comma-separated list of images for device 9        |
+
+Example — single disk:
+
+```
+[disk]
+8=./games/galencia.d64
+```
+
+Example — multi-disk queue for a multi-part game:
+
+```
+[disk]
+8=./games/tron_1.d64,./games/tron_2.d64,./games/tron_3.d64
+```
+
+The first image in the list is mounted at startup. The current position within the queue
+is not saved; launching the emulator always starts from the first image.
 
 ### [DEBUG]
 

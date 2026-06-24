@@ -615,11 +615,261 @@ static void config_set_float(config *cfg, const char *section, const char *key, 
     config_set(cfg, section, key, buffer);
 }
 
+/* --- disk slot helpers --------------------------------------------------- */
+
+static void disk_slot_free(app_disk_slot *slot)
+{
+    int i;
+
+    for (i = 0; i < slot->count; ++i) {
+        free(slot->paths[i]);
+    }
+    free(slot->paths);
+    slot->paths = NULL;
+    slot->count = 0;
+}
+
+static bool disk_slot_append(app_disk_slot *slot, const char *path)
+{
+    char **grown;
+    char *copy;
+
+    copy = copy_string(path);
+    if (copy == NULL) {
+        return false;
+    }
+
+    grown = (char **)realloc(slot->paths, (size_t)(slot->count + 1) * sizeof(char *));
+    if (grown == NULL) {
+        free(copy);
+        return false;
+    }
+
+    grown[slot->count] = copy;
+    slot->paths = grown;
+    slot->count++;
+    return true;
+}
+
+/*
+ * Parse a comma-separated list of paths into slot (replacing any prior
+ * contents).  When resolve_options is non-NULL each path is resolved
+ * relative to the INI directory; otherwise paths are kept as-is.
+ */
+static bool disk_slot_parse_list(
+    app_disk_slot *slot,
+    const app_options *resolve_options,
+    const char *spec)
+{
+    const char *cursor = spec;
+
+    disk_slot_free(slot);
+
+    while (*cursor != '\0') {
+        const char *start;
+        const char *end;
+        char path[PATH_MAX];
+        size_t len;
+
+        while (*cursor == ' ') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        end = cursor;
+        while (end > start && end[-1] == ' ') {
+            end--;
+        }
+
+        len = (size_t)(end - start);
+        if (len == 0) {
+            if (*cursor == ',') {
+                cursor++;
+            }
+            continue;
+        }
+        if (len >= sizeof(path)) {
+            return false;
+        }
+        memcpy(path, start, len);
+        path[len] = '\0';
+
+        if (resolve_options != NULL) {
+            char abs_path[PATH_MAX];
+            if (path_absolute_from_ini(resolve_options, path, abs_path, sizeof(abs_path))) {
+                if (!disk_slot_append(slot, abs_path)) {
+                    return false;
+                }
+            } else {
+                if (!disk_slot_append(slot, path)) {
+                    return false;
+                }
+            }
+        } else {
+            if (!disk_slot_append(slot, path)) {
+                return false;
+            }
+        }
+
+        if (*cursor == ',') {
+            cursor++;
+        }
+    }
+
+    return true;
+}
+
+/*
+ * Write slot paths as a comma-separated string into out, converting each
+ * absolute path to be relative to the INI directory.
+ */
+static bool disk_slot_format_list(
+    const app_disk_slot *slot,
+    const app_options *options,
+    char *out,
+    size_t out_size)
+{
+    size_t used = 0;
+    int j;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+
+    for (j = 0; j < slot->count; ++j) {
+        char rel[PATH_MAX];
+        int written;
+
+        if (!app_options_path_relative_to_ini(options, slot->paths[j], rel, sizeof(rel))) {
+            if (!copy_path(rel, sizeof(rel), slot->paths[j])) {
+                return false;
+            }
+        }
+
+        written = snprintf(out + used, out_size - used, "%s%s", used > 0 ? "," : "", rel);
+        if (written < 0 || (size_t)written >= out_size - used) {
+            return false;
+        }
+        used += (size_t)written;
+    }
+
+    return true;
+}
+
+/* Public slot API ---------------------------------------------------------- */
+
+bool app_disk_slot_set(app_disk_slot *slot, const char *path)
+{
+    disk_slot_free(slot);
+    if (path == NULL || path[0] == '\0') {
+        return true;
+    }
+    return disk_slot_append(slot, path);
+}
+
+void app_disk_slot_clear(app_disk_slot *slot)
+{
+    disk_slot_free(slot);
+}
+
+bool app_disk_slot_copy(app_disk_slot *dest, const app_disk_slot *src)
+{
+    int i;
+
+    disk_slot_free(dest);
+    for (i = 0; i < src->count; ++i) {
+        if (!disk_slot_append(dest, src->paths[i])) {
+            disk_slot_free(dest);
+            return false;
+        }
+    }
+    dest->current = src->current;
+    return true;
+}
+
+const char *app_disk_slot_eject_current(app_disk_slot *slot)
+{
+    int i;
+
+    if (slot == NULL || slot->count == 0) {
+        return NULL;
+    }
+
+    free(slot->paths[slot->current]);
+    for (i = slot->current; i < slot->count - 1; ++i) {
+        slot->paths[i] = slot->paths[i + 1];
+    }
+    slot->paths[slot->count - 1] = NULL;
+    slot->count--;
+
+    if (slot->count == 0) {
+        free(slot->paths);
+        slot->paths = NULL;
+        slot->current = 0;
+        return NULL;
+    }
+
+    if (slot->current >= slot->count) {
+        slot->current = 0;
+    }
+    return slot->paths[slot->current];
+}
+
+bool app_disk_slot_add_after_current(app_disk_slot *slot, const char *path)
+{
+    char **grown;
+    char *copy;
+    int insert_at;
+    int i;
+
+    if (slot == NULL || path == NULL || path[0] == '\0') {
+        return false;
+    }
+
+    copy = copy_string(path);
+    if (copy == NULL) {
+        return false;
+    }
+
+    grown = (char **)realloc(slot->paths, (size_t)(slot->count + 1) * sizeof(char *));
+    if (grown == NULL) {
+        free(copy);
+        return false;
+    }
+    slot->paths = grown;
+
+    insert_at = slot->count == 0 ? 0 : slot->current + 1;
+    for (i = slot->count; i > insert_at; --i) {
+        slot->paths[i] = slot->paths[i - 1];
+    }
+    slot->paths[insert_at] = copy;
+    slot->count++;
+    return true;
+}
+
+const char *app_disk_slot_select(app_disk_slot *slot, int index)
+{
+    if (slot == NULL || index < 0 || index >= slot->count) {
+        return NULL;
+    }
+    slot->current = index;
+    return slot->paths[index];
+}
+
+/* --- disk spec parsing for --disk CLI arg --------------------------------- */
+
 static bool apply_disk_spec(app_options *options, const char *spec)
 {
     char *end;
     long drive;
-    const char *image;
+    const char *images;
 
     drive = strtol(spec, &end, 10);
     if (end == spec || *end != '=' || drive < 0 || drive >= C64M_DRIVE_COUNT) {
@@ -627,13 +877,14 @@ static bool apply_disk_spec(app_options *options, const char *spec)
         return false;
     }
 
-    image = end + 1;
-    if (*image == '\0') {
+    images = end + 1;
+    if (*images == '\0') {
         fprintf(stderr, "invalid disk spec `%s`; image path is empty\n", spec);
         return false;
     }
 
-    return replace_string(&options->disk_images[drive], image);
+    /* Command-line paths stay as-is (relative to CWD). */
+    return disk_slot_parse_list(&options->disk_slots[drive], NULL, images);
 }
 
 static void apply_config(app_options *options, config *cfg)
@@ -732,7 +983,7 @@ static void apply_config(app_options *options, config *cfg)
         snprintf(key, sizeof(key), "%d", drive);
         value = config_get(cfg, "disk", key);
         if (value != NULL) {
-            replace_string(&options->disk_images[drive], value);
+            disk_slot_parse_list(&options->disk_slots[drive], options, value);
         }
     }
 }
@@ -1023,7 +1274,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     }
 
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
-        if (!replace_string(&dest->disk_images[i], src->disk_images[i])) {
+        if (!app_disk_slot_copy(&dest->disk_slots[i], &src->disk_slots[i])) {
             app_options_destroy(dest);
             return false;
         }
@@ -1135,10 +1386,15 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "roms", "system", options->system_rom_path);
     }
 
+    config_remove_prefix(cfg, "disk", "");
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
-        if (options->disk_images[drive] != NULL) {
-            snprintf(key, sizeof(key), "%d", drive);
-            config_set(cfg, "disk", key, options->disk_images[drive]);
+        const app_disk_slot *slot = &options->disk_slots[drive];
+        if (slot->count > 0) {
+            char joined[4096];
+            if (disk_slot_format_list(slot, options, joined, sizeof(joined))) {
+                snprintf(key, sizeof(key), "%d", drive);
+                config_set(cfg, "disk", key, joined);
+            }
         }
     }
 
@@ -1169,7 +1425,7 @@ void app_options_destroy(app_options *options)
     free(options->basic_path);
     free(options->audio_record_path);
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
-        free(options->disk_images[i]);
+        disk_slot_free(&options->disk_slots[i]);
     }
 
     memset(options, 0, sizeof(*options));

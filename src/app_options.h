@@ -7,6 +7,13 @@
 #define C64M_DEFAULT_DISPLAY_WIDTH 384
 #define C64M_DEFAULT_DISPLAY_HEIGHT 272
 
+/* Ordered list of disk image paths for one drive slot. */
+typedef struct {
+    char **paths;
+    int    count;
+    int    current; /* index of the disk currently (or last) mounted; 0 by default */
+} app_disk_slot;
+
 typedef struct app_options {
     bool use_ini;
     bool save_ini;
@@ -15,7 +22,7 @@ typedef struct app_options {
     bool no_save_ini;
     int scroll_wheel_lines;
     char *ini_path;
-    char *disk_images[C64M_DRIVE_COUNT];
+    app_disk_slot disk_slots[C64M_DRIVE_COUNT];
     char *breakpoint;
     char *turbo_multipliers;
     char *symbol_files;
@@ -64,3 +71,30 @@ bool app_options_symbol_files_absolute(
     char *out,
     size_t out_size);
 void app_options_destroy(app_options *options);
+
+/* Disk slot helpers used by callers that manage live mount state. */
+bool app_disk_slot_set(app_disk_slot *slot, const char *path);
+void app_disk_slot_clear(app_disk_slot *slot);
+bool app_disk_slot_copy(app_disk_slot *dest, const app_disk_slot *src);
+
+/*
+ * Remove the current disk from the queue and advance to the next one
+ * (round-robin).  Returns the path that should now be mounted, or NULL if the
+ * queue is now empty.  The returned pointer is into slot->paths and is only
+ * valid until the next mutation of slot.
+ */
+const char *app_disk_slot_eject_current(app_disk_slot *slot);
+
+/*
+ * Insert path into the queue immediately after the current disk.  If the queue
+ * was empty the disk becomes the only entry (current=0).  Returns false on
+ * allocation failure.
+ */
+bool app_disk_slot_add_after_current(app_disk_slot *slot, const char *path);
+
+/*
+ * Set current to index without modifying the queue.  Returns the path at that
+ * index, or NULL if index is out of range.  The returned pointer is into
+ * slot->paths.
+ */
+const char *app_disk_slot_select(app_disk_slot *slot, int index);

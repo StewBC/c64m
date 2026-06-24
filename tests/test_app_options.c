@@ -640,6 +640,211 @@ static void test_symbol_files_are_relative_to_ini(void) {
     c64m_rmdir("test_symbol_ini");
 }
 
+static void write_disk_single_ini(const char *path, const char *disk_path) {
+    FILE *file = fopen(path, "w");
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    fprintf(file, "[disk]\n8=%s\n", disk_path);
+    fclose(file);
+}
+
+static void write_disk_multi_ini(const char *path, const char *disk_list) {
+    FILE *file = fopen(path, "w");
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    fprintf(file, "[disk]\n8=%s\n", disk_list);
+    fclose(file);
+}
+
+static void test_disk_single_from_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_disk_single.ini",
+    };
+
+    write_disk_single_ini("test_disk_single.ini", "/abs/path/game.d64");
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_int("disk slot 8 count", 1, options.disk_slots[8].count);
+    expect_string("disk slot 8 path 0", "/abs/path/game.d64", options.disk_slots[8].paths[0]);
+    expect_int("disk slot 9 count", 0, options.disk_slots[9].count);
+
+    app_options_destroy(&options);
+    remove("test_disk_single.ini");
+}
+
+static void test_disk_multi_from_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_disk_multi.ini",
+    };
+
+    write_disk_multi_ini("test_disk_multi.ini",
+        "/games/disk1.d64,/games/disk2.d64,/games/disk3.d64");
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_int("disk slot 8 count", 3, options.disk_slots[8].count);
+    expect_string("disk slot 8 path 0", "/games/disk1.d64", options.disk_slots[8].paths[0]);
+    expect_string("disk slot 8 path 1", "/games/disk2.d64", options.disk_slots[8].paths[1]);
+    expect_string("disk slot 8 path 2", "/games/disk3.d64", options.disk_slots[8].paths[2]);
+
+    app_options_destroy(&options);
+    remove("test_disk_multi.ini");
+}
+
+static void test_disk_relative_path_from_ini(void) {
+    app_options options;
+    char cwd[1024];
+    char ini_path[1024];
+    char expected[1024];
+    char *argv[3];
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_disk_rel_ini", 0777);
+    c64m_mkdir("test_disk_rel_ini/configs", 0777);
+    c64m_mkdir("test_disk_rel_ini/disks", 0777);
+    write_sized_file("test_disk_rel_ini/disks/game.d64", 1);
+    write_sized_file("test_disk_rel_ini/disks/game2.d64", 1);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_disk_rel_ini/configs/c64m.ini", cwd);
+    snprintf(expected, sizeof(expected), "%s/test_disk_rel_ini/disks/game.d64", cwd);
+
+    write_disk_multi_ini(ini_path, "../disks/game.d64,../disks/game2.d64");
+
+    argv[0] = "test_app_options";
+    argv[1] = "--inifile";
+    argv[2] = ini_path;
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_int("disk slot 8 count from rel ini", 2, options.disk_slots[8].count);
+    normalize_path(options.disk_slots[8].paths[0]);
+    expect_string("disk slot 8 path 0 resolved", expected, options.disk_slots[8].paths[0]);
+
+    app_options_destroy(&options);
+
+    remove(ini_path);
+    remove("test_disk_rel_ini/disks/game.d64");
+    remove("test_disk_rel_ini/disks/game2.d64");
+    c64m_rmdir("test_disk_rel_ini/configs");
+    c64m_rmdir("test_disk_rel_ini/disks");
+    c64m_rmdir("test_disk_rel_ini");
+}
+
+static void test_disk_saved_relative_to_ini(void) {
+    app_options options;
+    char cwd[1024];
+    char ini_path[1024];
+    char disk_path[1024];
+    char *argv[3];
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_disk_save_rel", 0777);
+    c64m_mkdir("test_disk_save_rel/configs", 0777);
+    c64m_mkdir("test_disk_save_rel/disks", 0777);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_disk_save_rel/configs/c64m.ini", cwd);
+    snprintf(disk_path, sizeof(disk_path), "%s/test_disk_save_rel/disks/game.d64", cwd);
+
+    argv[0] = "test_app_options";
+    argv[1] = "--inifile";
+    argv[2] = ini_path;
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    app_disk_slot_set(&options.disk_slots[8], disk_path);
+    app_disk_slot_set(&options.disk_slots[9], disk_path);
+
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "app_options_save_shutdown failed\n");
+        exit(1);
+    }
+
+    if (!file_contains(ini_path, "../disks/game.d64")) {
+        fprintf(stderr, "saved disk path was not relative to ini\n");
+        exit(1);
+    }
+
+    app_options_destroy(&options);
+
+    remove(ini_path);
+    c64m_rmdir("test_disk_save_rel/configs");
+    c64m_rmdir("test_disk_save_rel/disks");
+    c64m_rmdir("test_disk_save_rel");
+}
+
+static void test_disk_slot_set_and_clear(void) {
+    app_disk_slot slot = {0};
+
+    if (!app_disk_slot_set(&slot, "/games/a.d64")) {
+        fprintf(stderr, "app_disk_slot_set failed\n");
+        exit(1);
+    }
+    expect_int("slot count after set", 1, slot.count);
+    expect_string("slot path 0", "/games/a.d64", slot.paths[0]);
+
+    app_disk_slot_clear(&slot);
+    expect_int("slot count after clear", 0, slot.count);
+
+    app_disk_slot_clear(&slot);
+}
+
+static void test_disk_slot_copy(void) {
+    app_disk_slot src = {0};
+    app_disk_slot dst = {0};
+
+    app_disk_slot_set(&src, "/a.d64");
+    if (!app_disk_slot_copy(&dst, &src)) {
+        fprintf(stderr, "app_disk_slot_copy failed\n");
+        exit(1);
+    }
+    expect_int("copy count", 1, dst.count);
+    expect_string("copy path 0", "/a.d64", dst.paths[0]);
+
+    app_disk_slot_set(&src, "/b.d64");
+    expect_string("src unchanged path", "/b.d64", src.paths[0]);
+    expect_string("dst still original", "/a.d64", dst.paths[0]);
+
+    app_disk_slot_clear(&src);
+    app_disk_slot_clear(&dst);
+}
+
 static void test_audio_record_options(void) {
     app_options options;
     char *argv[] = {
@@ -678,5 +883,11 @@ int main(void) {
     test_phase14_config_saved_to_ini();
     test_symbol_files_are_relative_to_ini();
     test_audio_record_options();
+    test_disk_single_from_ini();
+    test_disk_multi_from_ini();
+    test_disk_relative_path_from_ini();
+    test_disk_saved_relative_to_ini();
+    test_disk_slot_set_and_clear();
+    test_disk_slot_copy();
     return 0;
 }

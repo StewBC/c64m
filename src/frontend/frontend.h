@@ -101,7 +101,10 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_REQUEST_SNAPSHOT,
     FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
     FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG,
     FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT,
+    FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL,
+    FRONTEND_DEBUGGER_INTENT_DISK_SELECT,
     FRONTEND_DEBUGGER_INTENT_MACHINE_RESET,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
@@ -140,6 +143,7 @@ typedef struct frontend_debugger_intent {
     bool assemble_auto_run;
     bool assemble_reset_first;
     uint8_t disk_device;
+    int disk_queue_index;
     /* Load */
     char load_bin_path[1024];
     uint16_t load_bin_address;
@@ -203,6 +207,7 @@ bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_i
 void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state);
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);
 void frontend_set_config_state(frontend *ui, const app_options *options);
+void frontend_set_disk_queue(frontend *ui, uint8_t device, const app_disk_slot *slot);
 bool frontend_apply_selected_ini(frontend *ui, const app_options *options);
 bool frontend_get_disassembly_cursor(const frontend *ui, uint16_t *out_address);
 void frontend_append_symbol_file(frontend *ui, const char *path);
