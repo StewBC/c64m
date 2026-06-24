@@ -1168,6 +1168,13 @@ void c64_set_key(c64_t *machine, c64_key key, bool pressed) {
     machine->keyboard_events++;
 }
 
+void c64_set_matrix(c64_t *machine, uint8_t row, uint8_t col, bool pressed) {
+    assert(machine);
+
+    c64_keyboard_set_matrix(&machine->keyboard, row, col, pressed);
+    machine->keyboard_events++;
+}
+
 void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs) {
     assert(machine);
 

@@ -39,13 +39,24 @@ struct runtime_client {
 };
 
 typedef struct paste_state {
+    /* text-driven path (use_buffer, or legacy matrix-from-ASCII) */
     char text[RUNTIME_PASTE_TEXT_MAX];
     size_t length;
     size_t position;
-    uint64_t phase_end_cycle;
     bool shift_needed;
-    bool in_gap;
     bool use_buffer;
+
+    /* shared timing state */
+    uint64_t phase_end_cycle;
+    bool in_gap;
+
+    /* event-driven path (RUNTIME_COMMAND_PASTE_EVENTS) */
+    bool event_mode;
+    size_t event_cursor;
+    size_t event_count;
+    paste_event_t events[PASTE_EVENTS_MAX];
+    bool    asserted_keys[C64_KEY_COUNT]; /* tracks keys held via KEY_ASSERT */
+    uint8_t asserted_joy[2];             /* port 1 = [0], port 2 = [1] */
 } paste_state;
 
 typedef struct runtime_frame_slot {

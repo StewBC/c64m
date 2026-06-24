@@ -352,6 +352,7 @@ bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
 bool c64_consume_instruction_complete(c64_t *machine);
 void c64_set_key(c64_t *machine, c64_key key, bool pressed);
+void c64_set_matrix(c64_t *machine, uint8_t row, uint8_t col, bool pressed);
 void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled);

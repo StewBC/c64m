@@ -2,6 +2,7 @@
 #include "audio_buffer.h"
 #include "frontend.h"
 #include "frontend_input.h"
+#include "paste_parser.h"
 #include "platform.h"
 #include "platform_audio.h"
 #include "runtime.h"
@@ -1275,7 +1276,16 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                            frontend_input_has_shift_modifier(&event.key)) {
                     char *text = SDL_GetClipboardText();
                     if (text && text[0] != '\0') {
-                        runtime_client_paste_text(client, text, strlen(text));
+                        paste_event_t       events[PASTE_EVENTS_MAX];
+                        size_t              count = 0;
+                        paste_parse_error_t perr  = { -1, NULL };
+                        if (paste_parse(text, events, PASTE_EVENTS_MAX, &count, &perr)
+                                && count > 0) {
+                            runtime_client_paste_events(client, events, count);
+                        } else if (perr.offset >= 0) {
+                            SDL_Log("paste parse error at offset %d: %s",
+                                    perr.offset, perr.message ? perr.message : "");
+                        }
                     }
                     SDL_free(text);
                 } else if (event.key.keysym.sym == SDLK_INSERT &&

@@ -3,6 +3,7 @@
 #include "runtime_event.h"
 #include "keyboard.h"
 #include "c64.h"
+#include "paste_parser.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -49,7 +50,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_RUN_TO_CURSOR,
     RUNTIME_COMMAND_LOAD_BIN,
     RUNTIME_COMMAND_SAVE_BIN,
-    RUNTIME_COMMAND_REQUEST_CALL_STACK
+    RUNTIME_COMMAND_REQUEST_CALL_STACK,
+    RUNTIME_COMMAND_PASTE_EVENTS
 } runtime_command_type;
 
 enum {
@@ -188,5 +190,10 @@ typedef struct runtime_command {
             uint8_t write_file_address;
             uint8_t is_basic;
         } save_bin;
+
+        struct {
+            paste_event_t events[PASTE_EVENTS_MAX];
+            size_t count;
+        } paste_events;
     } data;
 } runtime_command;

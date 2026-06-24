@@ -603,6 +603,24 @@ bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, 
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_paste_events(runtime_client *client, const paste_event_t *events, size_t count) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_PASTE_EVENTS,
+    };
+
+    if (!client || !events || count == 0) {
+        return false;
+    }
+
+    if (count > PASTE_EVENTS_MAX) {
+        count = PASTE_EVENTS_MAX;
+    }
+
+    memcpy(command.data.paste_events.events, events, count * sizeof(paste_event_t));
+    command.data.paste_events.count = count;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_request_call_stack(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_CALL_STACK);
 }

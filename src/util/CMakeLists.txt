@@ -6,6 +6,7 @@ add_library(util STATIC
     cond.c
     message_queue.c
     mutex.c
+    paste_parser.c
     thread.c
     util.c
 )

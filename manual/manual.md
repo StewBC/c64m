@@ -590,7 +590,7 @@ breakpoint.
 | Troff   | —               | Disable per-instruction execution trace                 |
 | Tron    | Filename        | Enable per-instruction execution trace; writes to the given file, or `trace.log` if the field is empty |
 | Swap    | Queue step      | Navigate the device 8 disk queue (see below)            |
-| Type    | Text            | Inject text as C64 keystrokes (translator pending)      |
+| Type    | Text            | Inject text as C64 keystrokes when the breakpoint fires |
 
 Tron and Troff are mutually exclusive: checking one automatically clears the other.
 When Tron, Swap, or Type is unchecked, its parameter field is grayed out.
@@ -607,6 +607,62 @@ When Tron, Swap, or Type is unchecked, its parameter field is grayed out.
 **Counter**: enter a hit count and a reset count. With hit count `N` and reset count
 `M`, the action fires on the Nth hit and then every Mth hit thereafter. Set both to 0
 to disable counting.
+
+**Type text format:**
+
+The Type field uses an escape-based input encoding. Literal printable characters (space
+through `~`) are typed as-is; `\` introduces an escape sequence. Uppercase letters
+produce SHIFT+key; lowercase produce the unshifted key. Up to 128 events per sequence.
+
+| Form              | Meaning                                                          |
+|-------------------|------------------------------------------------------------------|
+| `\[NAME]`         | Press and release named key                                      |
+| `\[NAME+]`        | Assert (hold) named key                                          |
+| `\[NAME-]`        | Deassert (release) named key                                     |
+| `\xHH`            | PETSCII byte, two hex digits                                     |
+| `\dDDD`           | PETSCII byte, three decimal digits                               |
+| `\oOOO`           | PETSCII byte, three octal digits                                 |
+| `\mR,C`           | Direct matrix key: row R, column C (digits 0–7)                  |
+| `\jPD` / `\jPD,B` | Joystick: port P (1–2), direction D (0–8), optional button B (0–1) |
+
+Direction codes: 0=centre, 1=up, 2=up-right, 3=right, 4=down-right, 5=down,
+6=down-left, 7=left, 8=up-left.
+
+**Named keys (case-insensitive):**
+
+| Name       | Alias | Key           | Name        | Alias | Key          |
+|------------|-------|---------------|-------------|-------|--------------|
+| `RETURN`   | `RT`  | Return        | `SHIFT`     | `SH`  | Shift        |
+| `RESTORE`  | `RE`  | Restore (NMI) | `CBM`       | `CB`  | Commodore    |
+| `RUNSTOP`  | `RS`  | Run/Stop      | `CTRL`      | `CT`  | Control      |
+| `CLRHOME`  | `CH`  | Clr/Home      | `SPACE`     | `SP`  | Space        |
+| `INSDEL`   | `ID`  | Ins/Del       | `POUND`     | `PO`  | £            |
+| `CUU`      |       | Cursor up     | `LEFTARROW` | `LA`  | ←            |
+| `CUD`      |       | Cursor down   | `UPARROW`   | `UA`  | ↑            |
+| `CUL`      |       | Cursor left   | `																							`        |       | π            |
+| `CUR`      |       | Cursor right  | `F1`–`F8`   |       | Function keys |
+| `PLUS`     |       | +             | `MINUS`     |       | -            |
+| `AT`       |       | @             | `ASTERISK`  | `AS`  | *            |
+
+Characters with no C64 equivalent produce a parse error. The editor rejects the commit
+and positions the cursor at the offending character; the INI loader logs the error and
+skips the Type action for that breakpoint.
+
+Examples:
+
+```
+load\[RT]               Type LOAD and press Return
+\[SH+]\[F1]\[SH-]       Produce F2 (SHIFT+F1) but \[F2] would have also worked
+\x22*\x22,8,1\[RT]      "* ",8,1 then Return
+\j11,1                  Joystick port 1 up with fire button
+\[RE+]\[RS]\[RE-]       RUN/STOP + RESTORE soft reset (see note below)
+```
+
+**RESTORE and the `+`/`-` modifier:** `RESTORE` is an NMI key, not a keyboard matrix key.
+The `+` and `-` modifiers are silently ignored — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire
+the same one-shot NMI. There is no way to "hold" RESTORE.
+
+**RUN/STOP + RESTORE soft reset:** Use `\[RE]\[RS]`.
 
 **[Apply]** applies changes. **[Cancel]** discards them.
 
@@ -998,7 +1054,7 @@ break.<suffix> = <address[-address]>[,access][,mapping][,actions][,count=N][,res
 | `swap=-N`          | Advance device 8 disk queue backward N steps (wraps)                 |
 | `swap=N`           | Mount the Nth disk in the device 8 queue, 1-based (wraps)            |
 | `swap` or `swap=0` | Swap action present but no-op                                        |
-| `type=text`        | Inject text as C64 keystrokes (pending translator)                   |
+| `type=text`        | Inject text as C64 keystrokes; text uses the input-encoding format (see **Type text format** under **Breakpoints**) |
 | `count=N`          | Fire on the Nth hit                                                  |
 | `reset=N`          | Reset counter to N after firing                                      |
 
@@ -1009,6 +1065,7 @@ break.D000-D3FF = write,map,fast
 break.C100 = execute,map,break,count=10,reset=2
 break.E000 = execute,map,tron=my_trace.log
 break.C000.1 = execute,map,swap=+1
+break.E38B = execute,map,type=load\x22*\x22\x2c8\x2c1\[RT]
 ```
 
 ## Keyboard
@@ -1039,10 +1096,11 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | Key                | Action                                                  |
 |--------------------|---------------------------------------------------------|
 | **Opt+Ins**        | Paste clipboard as timed C64 keystrokes (~40 ms per key) |
-| **Shift+Opt+Ins**  | Paste clipboard via direct keyboard-matrix injection    |
+| **Shift+Opt+Ins**  | Paste clipboard text via the input-encoding parser (same format as the Type breakpoint action) |
 
-Timed paste scales with the active turbo multiplier. Matrix paste bypasses timing and
-is more reliable for bulk text.
+Timed paste (**Opt+Ins**) scales with the active turbo multiplier. Parser-based paste
+(**Shift+Opt+Ins**) supports named keys, PETSCII escapes, matrix addresses, and joystick
+events in addition to literal text; see **Type text format** under **Breakpoints**.
 
 ### C64 Key Mapping
 

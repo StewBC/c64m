@@ -13,7 +13,8 @@
 - Host file load/save UI is implemented.
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
-- Breakpoint action parameters: Tron accepts an optional custom trace file path (empty = `trace.log`), Swap accepts a disk queue parameter (`+N` relative forward, `-N` relative backward, `N` absolute 1-based with wrap), Type accepts raw text (no-op pending translator). Tron and Troff are mutually exclusive in the editor. INI and UI both persist and restore these parameters.
+- Breakpoint action parameters: Tron accepts an optional custom trace file path (empty = `trace.log`), Swap accepts a disk queue parameter (`+N` relative forward, `-N` relative backward, `N` absolute 1-based with wrap), Type accepts raw text in the input-encoding format parsed by `util/paste_parser`. Tron and Troff are mutually exclusive in the editor. INI and UI both persist and restore these parameters.
+- Breakpoint Type action translator (`util/paste_parser`) is implemented. The parser converts stored text into `paste_event_t[]` events (up to 128) consumed by the runtime via `RUNTIME_COMMAND_PASTE_EVENTS` through `runtime_advance_paste_events()`. Supported syntax: literal printable chars (0x20–0x7E); named keys `\[KEYNAME]`, `\[KEYNAME+]` (assert), `\[KEYNAME-]` (deassert); PETSCII escapes `\xHH` (hex), `\dDDD` (decimal), `\oOOO` (octal); direct matrix address `\mR,C`; joystick events `\jPD[,B]`. Keys without a physical matrix position (F2/F4/F6/F8, cursor-up, cursor-left, PI) are encoded as `needs_shift` variants of their base key. OPT+SHIFT+INS clipboard paste now routes through the same parser. Key aliases: `RT`=RETURN, `RE`=RESTORE (NMI), `RS`=RUNSTOP, `SH`=SHIFT, `CB`=CBM, `CT`=CTRL, `CH`=CLRHOME, `ID`=INSDEL, `SP`=SPACE, `PO`=POUND, `LA`=LEFTARROW, `UA`=UPARROW, `AS`=ASTERISK. RESTORE ignores `+`/`-` modifiers — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire the NMI identically. RUN/STOP+RESTORE soft reset: `\[RE+]\[RS]\[RE-]` (not `\[RS+]\[RE]\[RS-]` — KEY_ASSERT/NMI/KEY_DEASSERT fire in 3 consecutive cycles; the CPU doesn't start the NMI handler until ~10+ cycles later, after KEY_DEASSERT has already released RUN/STOP).
 
 ## Runtime/frontend ownership
 
@@ -143,7 +144,7 @@ UI behavior:
 
 ## Known limitations / deferred
 
-- Breakpoint Type action: text storage and INI round-trip are implemented; the translator that converts stored text into timed C64 keystrokes is deferred.
+- Breakpoint Type action in single-step mode: elapsed-cycle timing per step is not integrated with the paste sequencer; Type fires correctly when the machine is running, not during cycle-accurate stepping.
 - Breakpoint Swap action always targets device 8; per-device selection is deferred.
 - Tron trace output always appends to the named file; rotation, size limits, and per-breakpoint handle management are deferred.
 

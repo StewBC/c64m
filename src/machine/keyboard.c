@@ -81,6 +81,18 @@ void c64_keyboard_reset(c64_keyboard *keyboard) {
     memset(keyboard->rows, 0, sizeof(keyboard->rows));
 }
 
+void c64_keyboard_set_matrix(c64_keyboard *keyboard, uint8_t row, uint8_t col, bool pressed) {
+    uint8_t mask;
+    assert(keyboard);
+    if (row > 7 || col > 7) return;
+    mask = (uint8_t)(1u << col);
+    if (pressed) {
+        keyboard->rows[row] |= mask;
+    } else {
+        keyboard->rows[row] &= (uint8_t)~mask;
+    }
+}
+
 void c64_keyboard_set_key(c64_keyboard *keyboard, c64_key key, bool pressed) {
     c64_key_position position;
     uint8_t mask;
