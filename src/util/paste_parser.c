@@ -393,6 +393,12 @@ bool paste_parse(const char          *input,
                 default:
                     ERR(esc_start, "unknown escape: '\\' must be followed by [ x d o m or j");
             }
+        } else if (ch == '\n' || ch == '\r') {
+            paste_event_t ev = { 0 };
+            ev.type    = PASTE_EV_KEY_PRESS;
+            ev.key.key = PK_RETURN;
+            i++;
+            if (!emit(out, out_max, &n, ev, i - 1, err)) return false;
         } else if (ch < 0x20 || ch > 0x7E) {
             ERR(i, "non-printable character in input (must be 0x20-0x7E)");
         } else {

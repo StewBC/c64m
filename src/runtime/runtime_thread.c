@@ -2831,23 +2831,6 @@ static void runtime_advance_paste_events(runtime *rt) {
     uint64_t       now = rt->machine.clock.cycle;
     paste_event_t *ev;
 
-    {
-        static size_t   s_last_count  = (size_t)-1;
-        static size_t   s_last_cursor = (size_t)-1;
-        static int      s_last_gap    = -1;
-        static uint64_t s_last_phase  = (uint64_t)-1;
-        if (p->event_count != s_last_count || p->event_cursor != s_last_cursor ||
-            (int)p->in_gap != s_last_gap || p->phase_end_cycle != s_last_phase) {
-            fprintf(stderr, "DIAG advance_paste_events: event_count=%zu event_cursor=%zu in_gap=%d now=%llu phase_end_cycle=%llu\n",
-                    p->event_count, p->event_cursor, (int)p->in_gap,
-                    (unsigned long long)now, (unsigned long long)p->phase_end_cycle);
-            s_last_count  = p->event_count;
-            s_last_cursor = p->event_cursor;
-            s_last_gap    = (int)p->in_gap;
-            s_last_phase  = p->phase_end_cycle;
-        }
-    }
-
     if (now < p->phase_end_cycle) {
         return;
     }
@@ -2907,7 +2890,6 @@ static void runtime_advance_paste_events(runtime *rt) {
     /* gap phase expired — execute one event per call */
     if (p->event_cursor < p->event_count) {
         ev = &p->events[p->event_cursor];
-        fprintf(stderr, "DIAG dispatch: cursor=%zu type=%d\n", p->event_cursor, (int)ev->type);
         switch (ev->type) {
             case PASTE_EV_KEY_PRESS:
                 if (ev->key.needs_shift && !p->asserted_keys[C64_KEY_LEFT_SHIFT]) {
@@ -2957,8 +2939,6 @@ static void runtime_advance_paste_events(runtime *rt) {
                 if (ev->joy.has_button && ev->joy.button) {
                     inputs |= C64_JOYSTICK_FIRE;
                 }
-                fprintf(stderr, "DIAG joystick: port=%u dir=%u inputs=0x%02x\n",
-                        (unsigned)ev->joy.port, (unsigned)ev->joy.dir, (unsigned)inputs);
                 c64_set_joystick(&rt->machine, ev->joy.port, inputs);
                 if (ev->joy.port >= 1 && ev->joy.port <= 2) {
                     p->asserted_joy[ev->joy.port - 1] = inputs;
