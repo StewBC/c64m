@@ -47,19 +47,11 @@ Press **F9** to toggle the debugger layout.
 The emulation is a work in progress. Many games from single-load collections run
 correctly, but accuracy gaps remain.
 
-- Step out is broken under some circumstances.
-- Galencia needs a trick to start and has sprite rendering issues, so the emulation
-  isn't quite good enough for it yet.
-- SID support is functional but incomplete: per-voice filter routing, exact
-  combined-waveform behavior, ring modulation, oscillator sync, connected paddle input,
-  and NTSC-specific SID rate tables are deferred.
-- Audio/video timing is not cycle-perfect.
-- VIC-II light pen is stubbed and skipped.
 - D64 support is read-only. Disk writes, SAVE to disk, the error channel, 1541 CPU/ROM
   emulation, full IEC timing/protocol, fast loaders, and devices beyond 8 and 9 are not
   implemented.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
-  last-byte-on-bus open-bus behavior, VIC idle-state fetches, and NTSC sprite BA timing.
+  last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 
 Testing has not been exhaustive — the project is still in active development.
 
