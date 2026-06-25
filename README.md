@@ -23,9 +23,9 @@ Loading and saving host files is done from the Machine tab: you can load a PRG a
 
 SID audio is functional — three voices, ADSR envelopes, waveform generation, a state-variable filter, and voice 3 read-back — though some hardware-specific behaviors (filter routing per voice, ring modulation, oscillator sync, analog waveform blending) remain deferred.
 
-The manual is also online here: [c64m Manual](./manual/manual.md)
-There's a details section with a lot more [technical details.](./manual/manual.md#Details)
-There's a YouTube Video detailing the [emulator](https://youtu.be/LGlVHitZAtw) at the 60 hour mark.
+The manual is also online here: [c64m Manual](./manual/manual.md)  
+There's a details section with a lot more [technical details.](./manual/manual.md#Details)  
+There's a YouTube Video detailing the [emulator](https://youtu.be/LGlVHitZAtw) at the 60 hour mark.  
 
 ## Quick Start
 
