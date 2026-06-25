@@ -25,7 +25,7 @@ SID audio is functional — three voices, ADSR envelopes, waveform generation, a
 
 The manual is also online here: [c64m Manual](./manual/manual.md)  
 There's a details section with a lot more [technical details.](./manual/manual.md#Details)  
-There's a YouTube Video detailing the [emulator](https://youtu.be/LGlVHitZAtw) at the 60 hour mark.  
+There's a [YouTube Video](https://youtu.be/LGlVHitZAtw) detailing the emulator at the 60 hour mark.  
 
 ## Quick Start
 
