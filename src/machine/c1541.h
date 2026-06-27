@@ -15,15 +15,14 @@ typedef struct c64_t c64_t;
 
 typedef struct c1541 {
     C6510    cpu;
-    via6522  via1;          /* parallel port (disk mechanics stub) */
-    via6522  via2;          /* serial IEC port */
+    via6522  via1;          /* serial IEC VIA at $1800 */
+    via6522  via2;          /* disk controller/timer VIA at $1C00 */
     uint8_t  ram[C1541_RAM_SIZE];
     uint8_t  rom[C1541_ROM_SIZE];
     int      rom_loaded;    /* 1 if ROM was successfully loaded */
     c64_t   *c64;           /* back-pointer; used in Phase 3 for IEC bus */
     int      device_number; /* 8 or 9 */
     size_t   cpu_cycles_remaining;
-    int      via1_nmi_line;
     int      via2_t1_pb7_last;
 } c1541;
 

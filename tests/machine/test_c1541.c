@@ -100,7 +100,7 @@ static void test_destroy_zeroes(void) {
 /* ------------------------------------------------------------------ */
 
 /* Advancing one cycle with ROM loaded synchronises serial VIA output → C64 pull.
-   VIA1 PB1 = DATA out; DDRB=0x02 (output), ORB bit 1 low → 1541 pulls DATA.
+   VIA1 PB1 = DATA out; DDRB=0x02 (output), ORB bit 1 high → 1541 pulls DATA.
    After advance, c64.iec_external_pull should have C64_IEC_DATA set. */
 static void test_iec_drive_pulls_data(void) {
     static c64_t c64;
@@ -111,7 +111,7 @@ static void test_iec_drive_pulls_data(void) {
     c1541_reset(&drive);
 
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
-    drive.via1.orb  = 0x00u; /* bit 1 = 0 → pulls DATA low */
+    drive.via1.orb  = 0x02u; /* bit 1 = 1 → pulls DATA low */
 
     c1541_advance_one_cycle(&drive);
 
@@ -125,7 +125,7 @@ static void test_iec_drive_pulls_data(void) {
     printf("PASS: test_iec_drive_pulls_data\n");
 }
 
-/* When 1541 releases DATA (PB1 output = 1), iec_external_pull should clear DATA. */
+/* When 1541 releases DATA (PB1 output = 0), iec_external_pull should clear DATA. */
 static void test_iec_drive_releases_data(void) {
     static c64_t c64;
     static c1541 drive;
@@ -135,7 +135,7 @@ static void test_iec_drive_releases_data(void) {
     c1541_reset(&drive);
 
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
-    drive.via1.orb  = 0x02u; /* bit 1 = 1 → not driving DATA low */
+    drive.via1.orb  = 0x00u; /* bit 1 = 0 → not driving DATA low */
 
     c1541_advance_one_cycle(&drive);
 
@@ -170,7 +170,7 @@ static void test_cpu_instruction_cycles_are_throttled(void) {
     printf("PASS: test_cpu_instruction_cycles_are_throttled\n");
 }
 
-static void test_nmi_is_edge_latched(void) {
+static void test_via1_ca1_routes_to_irq(void) {
     static c64_t c64;
     static c1541 drive;
     int i;
@@ -180,6 +180,7 @@ static void test_nmi_is_edge_latched(void) {
     c1541_reset(&drive);
 
     drive.cpu.cpu.pc = 0xC000u;
+    drive.cpu.cpu.flags &= (uint8_t)~0x04u; /* IRQs enabled */
     drive.via1.ifr |= 0x02u; /* serial VIA CA1 flag */
     drive.via1.ier |= 0x02u; /* serial VIA CA1 enabled */
 
@@ -187,10 +188,12 @@ static void test_nmi_is_edge_latched(void) {
         c1541_advance_one_cycle(&drive);
     }
 
-    if (drive.cpu.cpu.nmi_entries != 1u)
-        fail("held serial VIA CA1 line should trigger exactly one NMI edge");
+    if (drive.cpu.cpu.irq_entries != 1u)
+        fail("serial VIA CA1 should enter the CPU IRQ path");
+    if (drive.cpu.cpu.nmi_entries != 0u)
+        fail("serial VIA CA1 must not enter the CPU NMI path");
 
-    printf("PASS: test_nmi_is_edge_latched\n");
+    printf("PASS: test_via1_ca1_routes_to_irq\n");
 }
 
 static void test_via2_timer_pb7_sets_cpu_overflow(void) {
@@ -231,9 +234,9 @@ static void test_iec_two_drive_pull_aggregation(void) {
     c1541_reset(&d9);
 
     d8.via1.ddrb = 0x02u; /* bit 1 = DATA output */
-    d8.via1.orb  = 0x00u; /* drive 8 pulls DATA low */
+    d8.via1.orb  = 0x02u; /* drive 8 pulls DATA low */
     d9.via1.ddrb = 0x02u; /* bit 1 = DATA output */
-    d9.via1.orb  = 0x02u; /* drive 9 releases DATA */
+    d9.via1.orb  = 0x00u; /* drive 9 releases DATA */
 
     c1541_advance_one_cycle(&d8);
     c1541_advance_one_cycle(&d9);
@@ -241,7 +244,7 @@ static void test_iec_two_drive_pull_aggregation(void) {
     if (!(c64.iec_external_pull & C64_IEC_DATA))
         fail("iec_two_drive_pull_aggregation: drive 9 cleared drive 8 DATA pull");
 
-    d8.via1.orb = 0x02u; /* now both drives release DATA */
+    d8.via1.orb = 0x00u; /* now both drives release DATA */
     c1541_advance_one_cycle(&d8);
     c1541_advance_one_cycle(&d9);
 
@@ -259,8 +262,9 @@ static void test_iec_c64_pull_data(void) {
 
     c64_init(&c64);
 
-    /* CIA2: DDRA bit 5 = output (0x20), ORA bit 5 = 0 → pull DATA. */
-    c64.cia2.registers[0x00] = 0x00u; /* ORA bit 5 = 0 */
+    /* CIA2 IEC outputs feed open-collector inverters:
+       DDRA bit 5 = output (0x20), ORA bit 5 = 1 → pull DATA. */
+    c64.cia2.registers[0x00] = 0x20u; /* ORA bit 5 = 1 */
     c64.cia2.registers[0x02] = 0x20u; /* DDRA bit 5 = output */
 
     pull = c64_get_iec_c64_pull(&c64);
@@ -330,6 +334,68 @@ static void test_sector_read_success(void) {
     printf("PASS: test_sector_read_success\n");
 }
 
+static void test_physical_read_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0xA5);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_physical_read_job_success: c64_mount_d64 failed");
+
+    drive.ram[0x00] = 0x80u; /* read job in buffer 0 */
+    drive.ram[0x3F] = 0;
+    drive.ram[0x06] = 1;
+    drive.ram[0x07] = 0;
+    drive.cpu.cpu.pc = 0xF3B1u; /* physical read/header-search entry */
+
+    c1541_advance_one_cycle(&drive);
+
+    for (i = 0; i < 256; i++) {
+        if (drive.ram[0x0300 + i] != 0xA5) {
+            fail("test_physical_read_job_success: sector buffer mismatch");
+        }
+    }
+    expect_eq_u8("physical read A", 0x01u, drive.cpu.cpu.A);
+
+    printf("PASS: test_physical_read_job_success\n");
+}
+
+static void test_physical_search_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.ram[0x04] = 0xB0u; /* search/header job in buffer 4 */
+    drive.ram[0x3F] = 4;
+    drive.ram[0x0E] = 18;
+    drive.ram[0x0F] = 0;
+    drive.cpu.cpu.pc = 0xF3B1u;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("physical search A", 0x01u, drive.cpu.cpu.A);
+    expect_eq_u8("physical search track cache", 18u, drive.ram[0x12]);
+    expect_eq_u8("physical search sector cache", 0u, drive.ram[0x13]);
+
+    printf("PASS: test_physical_search_job_success\n");
+}
+
 static void test_sector_read_no_disk(void) {
     static c64_t c64;
     static c1541 drive;
@@ -396,11 +462,13 @@ int main(void) {
     test_iec_drive_pulls_data();
     test_iec_drive_releases_data();
     test_cpu_instruction_cycles_are_throttled();
-    test_nmi_is_edge_latched();
+    test_via1_ca1_routes_to_irq();
     test_via2_timer_pb7_sets_cpu_overflow();
     test_iec_two_drive_pull_aggregation();
     test_iec_c64_pull_data();
     test_sector_read_success();
+    test_physical_read_job_success();
+    test_physical_search_job_success();
     test_sector_read_no_disk();
     test_sector_read_jobn_out_of_range();
 

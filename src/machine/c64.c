@@ -920,38 +920,40 @@ static void c64_cia1_port_inputs(
     out->port_a_pull_down |= (uint8_t)(machine->joystick2 & 0x1fu);
 }
 
+static uint8_t c64_cia2_iec_output_pull(const c64_t *machine) {
+    uint8_t ora = machine->cia2.registers[0x00];
+    uint8_t ddra = machine->cia2.registers[0x02];
+    uint8_t pull = 0;
+
+    if ((ddra & 0x08u) && (ora & 0x08u)) pull |= C64_IEC_ATN;
+    if ((ddra & 0x10u) && (ora & 0x10u)) pull |= C64_IEC_CLK;
+    if ((ddra & 0x20u) && (ora & 0x20u)) pull |= C64_IEC_DATA;
+    return pull;
+}
+
 static void c64_cia2_port_inputs(
     void *user,
     uint8_t port_a_pins,
     uint8_t port_b_pins,
     cia_port_inputs *out) {
     c64_t *machine = user;
-    uint8_t pull = 0;
+    uint8_t pull;
+    uint8_t ddra;
 
+    (void)port_a_pins;
     (void)port_b_pins;
     assert(machine);
     assert(out);
 
-    if ((port_a_pins & 0x08u) == 0) {
-        pull |= C64_IEC_ATN;
-    }
-    if ((port_a_pins & 0x10u) == 0) {
-        pull |= C64_IEC_CLK;
-    }
-    if ((port_a_pins & 0x20u) == 0) {
-        pull |= C64_IEC_DATA;
-    }
-
+    pull = c64_cia2_iec_output_pull(machine);
     pull |= (uint8_t)(machine->iec_external_pull & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
+    ddra = machine->cia2.registers[0x02];
 
-    if ((pull & C64_IEC_ATN) != 0) {
-        out->port_a_pull_down |= 0x08u;
+    if ((pull & C64_IEC_CLK) != 0 && (ddra & 0x40u) == 0) {
+        out->port_a_pull_down |= 0x40u;
     }
-    if ((pull & C64_IEC_CLK) != 0) {
-        out->port_a_pull_down |= 0x10u | 0x40u;
-    }
-    if ((pull & C64_IEC_DATA) != 0) {
-        out->port_a_pull_down |= 0x20u | 0x80u;
+    if ((pull & C64_IEC_DATA) != 0 && (ddra & 0x80u) == 0) {
+        out->port_a_pull_down |= 0x80u;
     }
 }
 
@@ -1243,19 +1245,15 @@ uint8_t c64_get_iec_external_pull(c64_t *machine) {
 }
 
 uint8_t c64_get_iec_c64_pull(c64_t *machine) {
-    uint8_t port_a;
-    uint8_t pull = 0;
-
     assert(machine);
     /* CIA #2 Port A IEC assignments (from c64_cia2_port_inputs):
-       bit 3 (0x08) = ATN out: output low → C64 asserts ATN
-       bit 4 (0x10) = CLK out: output low → C64 asserts CLK
-       bit 5 (0x20) = DATA out: output low → C64 asserts DATA */
-    port_a = cia_peek_port_a_output(&machine->cia2);
-    if ((port_a & 0x08u) == 0) pull |= C64_IEC_ATN;
-    if ((port_a & 0x10u) == 0) pull |= C64_IEC_CLK;
-    if ((port_a & 0x20u) == 0) pull |= C64_IEC_DATA;
-    return pull;
+       bit 3 (0x08) = ATN out: output high → C64 asserts ATN
+       bit 4 (0x10) = CLK out: output high → C64 asserts CLK
+       bit 5 (0x20) = DATA out: output high → C64 asserts DATA.
+       These outputs feed open-collector inverters. PA6/PA7 sense the
+       combined CLK/DATA bus level directly: released high reads as 1,
+       pulled low reads as 0. */
+    return c64_cia2_iec_output_pull(machine);
 }
 
 const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number) {

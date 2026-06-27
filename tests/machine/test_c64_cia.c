@@ -353,10 +353,10 @@ static void test_cia2_iec_lines_release_high(void) {
 
     c64_init(&machine);
     cia_write_register(&machine.cia2, CIA_REG_DDRA, 0x38);
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0xff);
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x00);
 
-    expect_u8("cia2 iec released lines read high", 0xff, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
-    expect_u8("cia2 debug iec released lines read high", 0xff, cia_debug_read_register(&machine.cia2, CIA_REG_PORT_A));
+    expect_u8("cia2 iec released lines read high", 0xc7, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    expect_u8("cia2 debug iec released lines read high", 0xc7, cia_debug_read_register(&machine.cia2, CIA_REG_PORT_A));
 }
 
 static void test_cia2_iec_cia_pull_low_lines(void) {
@@ -365,14 +365,14 @@ static void test_cia2_iec_cia_pull_low_lines(void) {
     c64_init(&machine);
     cia_write_register(&machine.cia2, CIA_REG_DDRA, 0x38);
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0xf7);
-    expect_u8("cia2 atn output pulls atn low", 0xf7, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x08);
+    expect_u8("cia2 atn output leaves clk/data high", 0xcf, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0xef);
-    expect_u8("cia2 clk output pulls clk and sense low", 0xaf, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x10);
+    expect_u8("cia2 clk output pulls clk low", 0x97, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
 
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0xdf);
-    expect_u8("cia2 data output pulls data and sense low", 0x5f, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x20);
+    expect_u8("cia2 data output pulls data low", 0x67, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
 }
 
 static void test_cia2_iec_external_pull_survives_cia_release(void) {
@@ -380,13 +380,13 @@ static void test_cia2_iec_external_pull_survives_cia_release(void) {
 
     c64_init(&machine);
     cia_write_register(&machine.cia2, CIA_REG_DDRA, 0x38);
-    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0xff);
+    cia_write_register(&machine.cia2, CIA_REG_PORT_A, 0x00);
     c64_set_iec_external_pull(&machine, C64_IEC_DATA);
 
-    expect_u8("external data pull keeps data low", 0x5f, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    expect_u8("external data pull reads data low", 0x47, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
 
     c64_set_iec_external_pull(&machine, 0);
-    expect_u8("external data release returns high", 0xff, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
+    expect_u8("external data release reads high", 0xc7, cia_read_register(&machine.cia2, CIA_REG_PORT_A));
 }
 
 static void test_cia_timer_b_cascade_mode(void) {

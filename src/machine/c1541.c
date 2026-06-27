@@ -10,22 +10,27 @@
 /* Addresses verified against: github.com/mist64/1541rom (dos1541    */
 /* source, 325302-01 / 901229-06 variant, labels from dos.lbl).      */
 /*                                                                     */
-/* Intercept strategy: job-queue level at reed ($F4CA).               */
+/* Intercept strategy: job-queue level at the physical read path.      */
 /* The ROM issues READ jobs via the job queue (ZP $00–$05), writes    */
-/* track/sector into hdrs[] (ZP $06–$11), and calls reed to do the   */
-/* physical sector read.  We intercept at reed, fill the buffer from  */
-/* the mounted D64 image, and jump to read40 ($F505) — the ROM's     */
-/* success return path that falls through to errr ($F969), which      */
-/* writes the job-completion code into jobs[jobn] and returns.        */
+/* track/sector into hdrs[] (ZP $06–$11), and then enters the GCR     */
+/* physical read/search code.  Since the emulator mounts D64 images   */
+/* rather than modelling a rotating disk, we satisfy supported jobs    */
+/* before the ROM waits for sync bytes from the disk controller.       */
 /* ------------------------------------------------------------------ */
 #define C1541_ZP_JOBS        0x0000u  /* jobs[0..5]: job queue (6 bytes) */
 #define C1541_ZP_HDRS        0x0006u  /* hdrs[0..11]: track/sector pairs */
 #define C1541_ZP_JOBN        0x003Fu  /* jobn: index of the active job   */
 #define C1541_RAM_SECTOR_BUF 0x0300u  /* buff0; buff_N = $0300 + N*$0100 */
 
+#define C1541_ROM_PHYS_READ  0xF3B1u  /* physical header/search entry */
 #define C1541_ROM_REED       0xF4CAu  /* reed: physical sector read entry */
 #define C1541_ROM_READ40     0xF505u  /* read40: success return of reed   */
 #define C1541_ROM_ERRR       0xF969u  /* errr: job completion (ldy jobn / sta jobs,y) */
+
+#define C1541_JOB_CMD_MASK   0x78u
+#define C1541_JOB_CMD_READ   0x00u
+#define C1541_JOB_CMD_VERIFY 0x20u
+#define C1541_JOB_CMD_SEARCH 0x30u
 
 #define C1541_JOB_OK         0x01u    /* job result: success */
 #define C1541_JOB_ERROR      0x02u    /* job result: generic error */
@@ -78,8 +83,14 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
     c1541 *drive = (c1541 *)user;
     if (addr < 0x0800u) { drive->ram[addr] = value; return; }
     if (addr < 0x1000u) { drive->ram[addr & 0x07FFu] = value; return; }
-    if (addr >= 0x1C00u && addr < 0x2000u) { via6522_write(&drive->via2, (uint8_t)(addr & 0x0Fu), value); return; }
-    if (addr >= 0x1800u && addr < 0x2000u) { via6522_write(&drive->via1, (uint8_t)(addr & 0x0Fu), value); return; }
+    if (addr >= 0x1C00u && addr < 0x2000u) {
+        via6522_write(&drive->via2, (uint8_t)(addr & 0x0Fu), value);
+        return;
+    }
+    if (addr >= 0x1800u && addr < 0x2000u) {
+        via6522_write(&drive->via1, (uint8_t)(addr & 0x0Fu), value);
+        return;
+    }
     /* ROM and unmapped: ignore */
 }
 
@@ -92,16 +103,6 @@ static uint8_t c1541_irq_pending(void *user) {
     return (uint8_t)(via6522_irq_pending(&drive->via1) || via6522_irq_pending(&drive->via2));
 }
 
-/* CA1 on VIA #1 ($1800 serial VIA) is the ATN line; IFR bit 1 & IER bit 1
-   together raises the 1541 CPU NMI line. */
-static uint8_t c1541_nmi_pending(void *user) {
-    c1541 *drive = (c1541 *)user;
-    int line = (drive->via1.ifr & drive->via1.ier & 0x02u) ? 1 : 0;
-    int edge = line && !drive->via1_nmi_line;
-    drive->via1_nmi_line = line;
-    return edge ? 1u : 0u;
-}
-
 /* ------------------------------------------------------------------ */
 /* IEC bus synchronisation                                             */
 /* ------------------------------------------------------------------ */
@@ -109,7 +110,7 @@ static uint8_t c1541_nmi_pending(void *user) {
 /* Called once per cycle after VIA steps and before CPU step.
    Reads VIA #1 Port B output lines, updates the C64's iec_external_pull,
    then reads the combined bus state and feeds it back into VIA #1
-   input pins and CA1 (ATN NMI source). */
+   input pins and CA1 (ATN IRQ source). */
 static void c1541_update_iec_bus(c1541 *drive) {
     uint8_t ddrb1 = drive->via1.ddrb;
     uint8_t orb1  = drive->via1.orb;
@@ -120,11 +121,12 @@ static void c1541_update_iec_bus(c1541 *drive) {
 
     /* Standard 1541 serial VIA ($1800) Port B:
        bit 0 = DATA in, bit 1 = DATA out, bit 2 = CLK in, bit 3 = CLK out,
-       bit 4 = ATN acknowledge (pulls DATA low when set), bits 5/6 = address
-       jumpers, bit 7 = ATN in.  IEC DATA/CLK outputs are active low. */
-    if ((ddrb1 & 0x02u) && !(orb1 & 0x02u)) drive_pull |= C64_IEC_DATA;
-    if ((ddrb1 & 0x08u) && !(orb1 & 0x08u)) drive_pull |= C64_IEC_CLK;
-    if ((ddrb1 & 0x10u) &&  (orb1 & 0x10u)) drive_pull |= C64_IEC_DATA;
+       bit 4 = ATN acknowledge control, bits 5/6 = address jumpers, bit 7 = ATN in.
+       The serial VIA is behind inverters:
+       output bit high pulls the IEC line low, and input bit high means the
+       IEC line is currently low. */
+    if ((ddrb1 & 0x02u) &&  (orb1 & 0x02u)) drive_pull |= C64_IEC_DATA;
+    if ((ddrb1 & 0x08u) &&  (orb1 & 0x08u)) drive_pull |= C64_IEC_CLK;
 
     /* Tell the C64 what this 1541 is pulling.  The C64 aggregates drive 8,
        drive 9, and any other external pullers using open-collector OR logic. */
@@ -139,38 +141,33 @@ static void c1541_update_iec_bus(c1541 *drive) {
     atn_low  = (bus_low & C64_IEC_ATN)  != 0;
 
     /* Feed combined bus state into VIA #1 Port B input pins.
-       Bus line low (asserted) → input bit = 0.  */
+       Bus line low (asserted) → input bit = 1 due the 1541 input inverters. */
     port_b_in = drive->via1.port_b_in;
-    if (data_low) port_b_in &= (uint8_t)~0x01u; else port_b_in |= 0x01u;
-    if (clk_low)  port_b_in &= (uint8_t)~0x04u; else port_b_in |= 0x04u;
-    if (atn_low)  port_b_in &= (uint8_t)~0x80u; else port_b_in |= 0x80u;
+    if (data_low) port_b_in |= 0x01u; else port_b_in &= (uint8_t)~0x01u;
+    if (clk_low)  port_b_in |= 0x04u; else port_b_in &= (uint8_t)~0x04u;
+    if (atn_low)  port_b_in |= 0x80u; else port_b_in &= (uint8_t)~0x80u;
     via6522_set_port_b_inputs(&drive->via1, port_b_in);
 
-    /* ATN → CA1.  Active low: atn_low=1 → CA1 level=0 (falling edge fires NMI). */
-    via6522_set_ca1(&drive->via1, atn_low ? 0u : 1u);
+    /* ATN → CA1 through the same input polarity: asserted ATN presents high. */
+    via6522_set_ca1(&drive->via1, atn_low ? 1u : 0u);
 }
 
 /* ------------------------------------------------------------------ */
-/* D64 sector read intercept                                           */
+/* D64 physical job intercept                                          */
 /* ------------------------------------------------------------------ */
 
-/* Called when the 1541 CPU's PC == C1541_ROM_REED.
-   Fills the ROM's sector buffer from the mounted D64 image, then
-   redirects the PC to read40 ($F505) so the ROM completes the job
-   normally via errr ($F969).  On error, jumps directly to errr with
-   A = C1541_JOB_ERROR so the ROM marks the job failed. */
-static void c1541_satisfy_sector_read(c1541 *drive) {
-    uint8_t n, track, sector;
+/* Completes the active ROM job with the given result code. */
+static void c1541_complete_job(c1541 *drive, uint8_t result) {
+    drive->cpu.cpu.A  = result;
+    drive->cpu.cpu.pc = C1541_ROM_ERRR;
+}
+
+/* Fills the active job's buffer from the mounted D64 image. */
+static int c1541_copy_sector_to_job_buffer(c1541 *drive, uint8_t n) {
+    uint8_t track, sector;
     const c64_drive_slot *slot;
     int offset;
     uint16_t buf_addr;
-
-    /* Read the active job index from zero page. */
-    n = drive->ram[C1541_ZP_JOBN];
-    if (n >= C1541_JOB_MAX) {
-        /* Job 5 is the command/error channel — never a READ.  Ignore. */
-        return;
-    }
 
     /* Track and sector from hdrs[n*2] and hdrs[n*2+1] (ZP $06 + n*2). */
     track  = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
@@ -179,23 +176,76 @@ static void c1541_satisfy_sector_read(c1541 *drive) {
     /* Get the mounted D64 image for this device. */
     slot = c64_get_drive_slot(drive->c64, drive->device_number);
     if (!slot || !slot->mounted || !slot->image_bytes || slot->image_size == 0) {
-        drive->cpu.cpu.A  = C1541_JOB_ERROR;
-        drive->cpu.cpu.pc = C1541_ROM_ERRR;
-        return;
+        return 0;
     }
 
     /* Compute byte offset in the D64 image. */
     offset = d64_sector_offset(track, sector);
     if (offset < 0 || (size_t)(offset + 256) > slot->image_size) {
-        drive->cpu.cpu.A  = C1541_JOB_ERROR;
-        drive->cpu.cpu.pc = C1541_ROM_ERRR;
-        return;
+        return 0;
     }
 
     /* Copy sector data into the 1541's buffer for job n.
        Buffer for job N is at $0300 + N*$0100 (pages 3–7, all within 2 KB RAM). */
     buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
     memcpy(&drive->ram[buf_addr], slot->image_bytes + offset, 256);
+    return 1;
+}
+
+/* Called when the 1541 ROM is about to wait for real disk-controller data.
+   READ jobs need sector data copied into the job buffer.  SEARCH and VERIFY
+   jobs only need the same completion status the ROM would set after finding a
+   matching header on the disk. */
+static int c1541_satisfy_physical_job(c1541 *drive) {
+    uint8_t n, command, track, sector;
+
+    n = drive->ram[C1541_ZP_JOBN];
+    if (n >= C1541_JOB_MAX) {
+        return 0;
+    }
+
+    command = (uint8_t)(drive->ram[C1541_ZP_JOBS + n] & C1541_JOB_CMD_MASK);
+    switch (command) {
+        case C1541_JOB_CMD_READ:
+            if (!c1541_copy_sector_to_job_buffer(drive, n)) {
+                c1541_complete_job(drive, C1541_JOB_ERROR);
+            } else {
+                c1541_complete_job(drive, C1541_JOB_OK);
+            }
+            return 1;
+
+        case C1541_JOB_CMD_VERIFY:
+            c1541_complete_job(drive, C1541_JOB_OK);
+            return 1;
+
+        case C1541_JOB_CMD_SEARCH:
+            track  = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+            sector = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
+            drive->ram[0x0012u] = track;
+            drive->ram[0x0013u] = sector;
+            c1541_complete_job(drive, C1541_JOB_OK);
+            return 1;
+
+        default:
+            return 0;
+    }
+}
+
+/* Called when the 1541 CPU's PC == C1541_ROM_REED.  This is kept as a fallback
+   for ROM paths that reach reed directly. */
+static void c1541_satisfy_sector_read(c1541 *drive) {
+    uint8_t n;
+
+    n = drive->ram[C1541_ZP_JOBN];
+    if (n >= C1541_JOB_MAX) {
+        /* Job 5 is the command/error channel — never a READ.  Ignore. */
+        return;
+    }
+
+    if (!c1541_copy_sector_to_job_buffer(drive, n)) {
+        c1541_complete_job(drive, C1541_JOB_ERROR);
+        return;
+    }
 
     /* Jump to read40: ROM loads A = #1 (success), falls into errr, marks job done. */
     drive->cpu.cpu.pc = C1541_ROM_READ40;
@@ -220,7 +270,6 @@ void c1541_init(c1541 *drive, c64_t *c64, int device_number) {
     via6522_init(&drive->via2);
     c6510_init(&drive->cpu, drive, c1541_bus_read, c1541_bus_write);
     c6510_set_irq_pending_callback(&drive->cpu, c1541_irq_pending);
-    c6510_set_nmi_pending_callback(&drive->cpu, c1541_nmi_pending);
 }
 
 void c1541_destroy(c1541 *drive) {
@@ -240,7 +289,6 @@ void c1541_reset(c1541 *drive) {
        With ROM loaded at $C000–$FFFF this correctly fetches the 1541 reset vector. */
     c6510_reset(&drive->cpu);
     drive->cpu_cycles_remaining = 0;
-    drive->via1_nmi_line = 0;
     drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
 }
 
@@ -308,8 +356,10 @@ void c1541_advance_one_cycle(c1541 *drive) {
     c1541_update_iec_bus(drive);
 
     if (drive->cpu_cycles_remaining == 0) {
-        /* 3. Intercept sector reads: when the ROM calls reed ($F4CA), satisfy from D64. */
-        if (drive->cpu.cpu.pc == C1541_ROM_REED) {
+        /* 3. Intercept disk jobs before the ROM waits for unmodelled GCR hardware. */
+        if (drive->cpu.cpu.pc == C1541_ROM_PHYS_READ) {
+            (void)c1541_satisfy_physical_job(drive);
+        } else if (drive->cpu.cpu.pc == C1541_ROM_REED) {
             c1541_satisfy_sector_read(drive);
         }
 
