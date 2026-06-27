@@ -24,6 +24,7 @@ The emulator currently includes:
 
 ## Recent high-value handoff notes
 
+- VIA 6522 module implemented and unit-tested (Phase 1 of 1541 emulation). `src/machine/via6522.{h,c}` provides the MOS 6522 peripheral used by the 1541 disk drive. See `docs/status/IEC1541.md`.
 - Breakpoint actions Tron, Swap, and Type now carry parameters persisted in the INI and editable in the Breakpoint Editor. Tron accepts an optional custom trace file path; Swap accepts `+N`/`-N` (relative) or `N` (absolute 1-based, wraps) for disk queue navigation on device 8; Type stores raw text in the input-encoding format; the translator is implemented in `util/paste_parser` and delivers events via `RUNTIME_COMMAND_PASTE_EVENTS`, including one-shot modifier and wait-token support. Tron and Troff are mutually exclusive. See `docs/status/FRONTEND_DEBUGGER.md` for parser syntax details.
 - Disk images are now persisted in the `[disk]` INI section on quit; paths are stored relative to the INI file and each drive holds an ordered queue (comma-separated). The disk UI shows `[N][Add][Eject] <combo>` per device; Shift+Eject clears the whole queue. See `docs/status/DISK_IO.md` for full semantics.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
@@ -42,6 +43,7 @@ The emulator currently includes:
 - `docs/status/FRONTEND_DEBUGGER.md` - UI, debugger, memory views, config, assembler, help, dialogs.
 - `docs/status/DISK_IO.md` - D64 parser/runtime mounting/KERNAL LOAD/host file load-save.
 - `docs/status/TESTING.md` - tests, smoke checks, known useful manual validation.
+- `docs/status/IEC1541.md` - 1541 emulator and VIA 6522 implementation status.
 - `docs/status/DEFERRED.md` - known gaps and intentionally deferred work.
 - `docs/status/OPTIMIZATIONS.md` - accepted and rejected optimization notes.
 - `docs/status/ORIGINAL_STATUS.md` - unmodified source handoff preserved for traceability.

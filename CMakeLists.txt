@@ -99,6 +99,18 @@ target_link_libraries(test_sid PRIVATE
 
 add_test(NAME sid COMMAND test_sid)
 
+add_executable(test_via6522
+    tests/machine/test_via6522.c
+)
+
+target_compile_features(test_via6522 PRIVATE c_std_99)
+
+target_link_libraries(test_via6522 PRIVATE
+    machine
+)
+
+add_test(NAME via6522 COMMAND test_via6522)
+
 add_executable(test_c64_rom
     tests/machine/test_c64_rom.c
 )

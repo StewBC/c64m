@@ -8,6 +8,7 @@ add_library(machine STATIC
     c6510.c
     keyboard.c
     sid.c
+    via6522.c
     vicii.c
 )
 
