@@ -375,25 +375,105 @@ static void test_physical_read_job_success(void) {
 static void test_physical_search_job_success(void) {
     static c64_t c64;
     static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
 
     c64_init(&c64);
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
 
+    img = make_test_d64(0x00);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_physical_search_job_success: c64_mount_d64 failed");
+
     drive.ram[0x04] = 0xB0u; /* search/header job in buffer 4 */
     drive.ram[0x3F] = 4;
-    drive.ram[0x0E] = 18;
+    drive.ram[0x0E] = 1;
     drive.ram[0x0F] = 0;
     drive.cpu.cpu.pc = 0xF3B1u;
 
     c1541_advance_one_cycle(&drive);
 
     expect_eq_u8("physical search A", 0x01u, drive.cpu.cpu.A);
-    expect_eq_u8("physical search track cache", 18u, drive.ram[0x12]);
+    expect_eq_u8("physical search track cache", 1u, drive.ram[0x12]);
     expect_eq_u8("physical search sector cache", 0u, drive.ram[0x13]);
 
     printf("PASS: test_physical_search_job_success\n");
+}
+
+static void test_queued_read_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0xC3);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_read_job_success: c64_mount_d64 failed");
+
+    drive.ram[0x02] = 0x80u; /* read job in buffer 2 */
+    drive.ram[0x0A] = 1;
+    drive.ram[0x0B] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu; /* controller job loop, before physical GCR path */
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("queued read job result", 0x01u, drive.ram[0x02]);
+    for (i = 0; i < 256; i++) {
+        if (drive.ram[0x0500 + i] != 0xC3) {
+            fail("test_queued_read_job_success: sector buffer mismatch");
+        }
+    }
+
+    printf("PASS: test_queued_read_job_success\n");
+}
+
+static void test_queued_search_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x00);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_search_job_success: c64_mount_d64 failed");
+
+    drive.ram[0x04] = 0xB0u; /* search/header job in buffer 4 */
+    drive.ram[0x0E] = 1;
+    drive.ram[0x0F] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu; /* controller job loop, before physical GCR path */
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("queued search job result", 0x01u, drive.ram[0x04]);
+    expect_eq_u8("queued search track cache", 1u, drive.ram[0x12]);
+    expect_eq_u8("queued search sector cache", 0u, drive.ram[0x13]);
+
+    printf("PASS: test_queued_search_job_success\n");
 }
 
 static void test_sector_read_no_disk(void) {
@@ -469,6 +549,8 @@ int main(void) {
     test_sector_read_success();
     test_physical_read_job_success();
     test_physical_search_job_success();
+    test_queued_read_job_success();
+    test_queued_search_job_success();
     test_sector_read_no_disk();
     test_sector_read_jobn_out_of_range();
 

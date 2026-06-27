@@ -162,12 +162,10 @@ static void c1541_complete_job(c1541 *drive, uint8_t result) {
     drive->cpu.cpu.pc = C1541_ROM_ERRR;
 }
 
-/* Fills the active job's buffer from the mounted D64 image. */
-static int c1541_copy_sector_to_job_buffer(c1541 *drive, uint8_t n) {
+static int c1541_job_sector_offset(c1541 *drive, uint8_t n, int *out_offset) {
     uint8_t track, sector;
     const c64_drive_slot *slot;
     int offset;
-    uint16_t buf_addr;
 
     /* Track and sector from hdrs[n*2] and hdrs[n*2+1] (ZP $06 + n*2). */
     track  = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
@@ -184,12 +182,80 @@ static int c1541_copy_sector_to_job_buffer(c1541 *drive, uint8_t n) {
     if (offset < 0 || (size_t)(offset + 256) > slot->image_size) {
         return 0;
     }
+    *out_offset = offset;
+    return 1;
+}
+
+/* Fills the active job's buffer from the mounted D64 image. */
+static int c1541_copy_sector_to_job_buffer(c1541 *drive, uint8_t n) {
+    const c64_drive_slot *slot;
+    int offset;
+    uint16_t buf_addr;
+
+    if (!c1541_job_sector_offset(drive, n, &offset)) {
+        return 0;
+    }
+    slot = c64_get_drive_slot(drive->c64, drive->device_number);
 
     /* Copy sector data into the 1541's buffer for job n.
        Buffer for job N is at $0300 + N*$0100 (pages 3–7, all within 2 KB RAM). */
     buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
     memcpy(&drive->ram[buf_addr], slot->image_bytes + offset, 256);
     return 1;
+}
+
+static void c1541_complete_queued_job(c1541 *drive, uint8_t n, uint8_t result) {
+    drive->ram[C1541_ZP_JOBS + n] = result;
+}
+
+static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
+    uint8_t raw, command, track, sector;
+    int offset;
+
+    raw = drive->ram[C1541_ZP_JOBS + n];
+    if ((raw & 0x80u) == 0 || raw == 0xD0u || (raw & 0x01u) != 0) {
+        return 0;
+    }
+
+    command = (uint8_t)(raw & C1541_JOB_CMD_MASK);
+    switch (command) {
+        case C1541_JOB_CMD_READ:
+            c1541_complete_queued_job(
+                drive,
+                n,
+                c1541_copy_sector_to_job_buffer(drive, n) ? C1541_JOB_OK : C1541_JOB_ERROR);
+            return 1;
+
+        case C1541_JOB_CMD_VERIFY:
+            c1541_complete_queued_job(
+                drive,
+                n,
+                c1541_job_sector_offset(drive, n, &offset) ? C1541_JOB_OK : C1541_JOB_ERROR);
+            return 1;
+
+        case C1541_JOB_CMD_SEARCH:
+            if (!c1541_job_sector_offset(drive, n, &offset)) {
+                c1541_complete_queued_job(drive, n, C1541_JOB_ERROR);
+            } else {
+                track  = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+                sector = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
+                drive->ram[0x0012u] = track;
+                drive->ram[0x0013u] = sector;
+                c1541_complete_queued_job(drive, n, C1541_JOB_OK);
+            }
+            return 1;
+
+        default:
+            return 0;
+    }
+}
+
+static void c1541_satisfy_queued_jobs(c1541 *drive) {
+    uint8_t n;
+
+    for (n = 0; n < C1541_JOB_MAX; ++n) {
+        (void)c1541_satisfy_queued_job(drive, n);
+    }
 }
 
 /* Called when the 1541 ROM is about to wait for real disk-controller data.
@@ -356,6 +422,10 @@ void c1541_advance_one_cycle(c1541 *drive) {
     c1541_update_iec_bus(drive);
 
     if (drive->cpu_cycles_remaining == 0) {
+        if (drive->cpu.cpu.pc >= 0xF2B0u && drive->cpu.cpu.pc <= 0xF2F6u) {
+            c1541_satisfy_queued_jobs(drive);
+        }
+
         /* 3. Intercept disk jobs before the ROM waits for unmodelled GCR hardware. */
         if (drive->cpu.cpu.pc == C1541_ROM_PHYS_READ) {
             (void)c1541_satisfy_physical_job(drive);
