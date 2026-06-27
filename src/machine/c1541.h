@@ -4,6 +4,7 @@
 #include "c6510.h"
 #include "via6522.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Forward declaration — avoids circular include with c64.h. */
@@ -21,6 +22,9 @@ typedef struct c1541 {
     int      rom_loaded;    /* 1 if ROM was successfully loaded */
     c64_t   *c64;           /* back-pointer; used in Phase 3 for IEC bus */
     int      device_number; /* 8 or 9 */
+    size_t   cpu_cycles_remaining;
+    int      via1_nmi_line;
+    int      via2_t1_pb7_last;
 } c1541;
 
 void c1541_init(c1541 *drive, c64_t *c64, int device_number);

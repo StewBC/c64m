@@ -92,10 +92,14 @@ static uint8_t c1541_irq_pending(void *user) {
     return (uint8_t)(via6522_irq_pending(&drive->via1) || via6522_irq_pending(&drive->via2));
 }
 
-/* CA1 on VIA #2 is the ATN line; IFR bit 1 & IER bit 1 together = NMI pending. */
+/* CA1 on VIA #1 ($1800 serial VIA) is the ATN line; IFR bit 1 & IER bit 1
+   together raises the 1541 CPU NMI line. */
 static uint8_t c1541_nmi_pending(void *user) {
     c1541 *drive = (c1541 *)user;
-    return (drive->via2.ifr & drive->via2.ier & 0x02u) ? 1u : 0u;
+    int line = (drive->via1.ifr & drive->via1.ier & 0x02u) ? 1 : 0;
+    int edge = line && !drive->via1_nmi_line;
+    drive->via1_nmi_line = line;
+    return edge ? 1u : 0u;
 }
 
 /* ------------------------------------------------------------------ */
@@ -103,21 +107,24 @@ static uint8_t c1541_nmi_pending(void *user) {
 /* ------------------------------------------------------------------ */
 
 /* Called once per cycle after VIA steps and before CPU step.
-   Reads VIA #2 output lines, updates the C64's iec_external_pull,
-   then reads the combined bus state and feeds it back into VIA #2
+   Reads VIA #1 Port B output lines, updates the C64's iec_external_pull,
+   then reads the combined bus state and feeds it back into VIA #1
    input pins and CA1 (ATN NMI source). */
 static void c1541_update_iec_bus(c1541 *drive) {
-    uint8_t ddra2 = drive->via2.ddra;
-    uint8_t ora2  = drive->via2.ora;
+    uint8_t ddrb1 = drive->via1.ddrb;
+    uint8_t orb1  = drive->via1.orb;
     uint8_t drive_pull = 0;
     uint8_t c64_pull, bus_low;
     uint8_t data_low, clk_low, atn_low;
-    uint8_t port_a_in;
+    uint8_t port_b_in;
 
-    /* Compute what the 1541 is asserting: output pin driven low = line pulled. */
-    if ((ddra2 & 0x01u) && !(ora2 & 0x01u)) drive_pull |= C64_IEC_DATA;  /* bit 0: DATA out */
-    if ((ddra2 & 0x02u) && !(ora2 & 0x02u)) drive_pull |= C64_IEC_CLK;   /* bit 1: CLK out  */
-    if ((ddra2 & 0x80u) && !(ora2 & 0x80u)) drive_pull |= C64_IEC_ATN;   /* bit 7: ATN ack  */
+    /* Standard 1541 serial VIA ($1800) Port B:
+       bit 0 = DATA in, bit 1 = DATA out, bit 2 = CLK in, bit 3 = CLK out,
+       bit 4 = ATN acknowledge (pulls DATA low when set), bits 5/6 = address
+       jumpers, bit 7 = ATN in.  IEC DATA/CLK outputs are active low. */
+    if ((ddrb1 & 0x02u) && !(orb1 & 0x02u)) drive_pull |= C64_IEC_DATA;
+    if ((ddrb1 & 0x08u) && !(orb1 & 0x08u)) drive_pull |= C64_IEC_CLK;
+    if ((ddrb1 & 0x10u) &&  (orb1 & 0x10u)) drive_pull |= C64_IEC_DATA;
 
     /* Tell the C64 what this 1541 is pulling.  The C64 aggregates drive 8,
        drive 9, and any other external pullers using open-collector OR logic. */
@@ -131,16 +138,16 @@ static void c1541_update_iec_bus(c1541 *drive) {
     clk_low  = (bus_low & C64_IEC_CLK)  != 0;
     atn_low  = (bus_low & C64_IEC_ATN)  != 0;
 
-    /* Feed combined bus state into VIA #2 input pins.
+    /* Feed combined bus state into VIA #1 Port B input pins.
        Bus line low (asserted) → input bit = 0.  */
-    port_a_in = drive->via2.port_a_in;
-    if (data_low) port_a_in &= (uint8_t)~0x04u; else port_a_in |= 0x04u; /* bit 2: DATA in */
-    if (clk_low)  port_a_in &= (uint8_t)~0x08u; else port_a_in |= 0x08u; /* bit 3: CLK in  */
-    if (atn_low)  port_a_in &= (uint8_t)~0x10u; else port_a_in |= 0x10u; /* bit 4: ATN in  */
-    via6522_set_port_a_inputs(&drive->via2, port_a_in);
+    port_b_in = drive->via1.port_b_in;
+    if (data_low) port_b_in &= (uint8_t)~0x01u; else port_b_in |= 0x01u;
+    if (clk_low)  port_b_in &= (uint8_t)~0x04u; else port_b_in |= 0x04u;
+    if (atn_low)  port_b_in &= (uint8_t)~0x80u; else port_b_in |= 0x80u;
+    via6522_set_port_b_inputs(&drive->via1, port_b_in);
 
     /* ATN → CA1.  Active low: atn_low=1 → CA1 level=0 (falling edge fires NMI). */
-    via6522_set_ca1(&drive->via2, atn_low ? 0u : 1u);
+    via6522_set_ca1(&drive->via1, atn_low ? 0u : 1u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -194,6 +201,13 @@ static void c1541_satisfy_sector_read(c1541 *drive) {
     drive->cpu.cpu.pc = C1541_ROM_READ40;
 }
 
+static void c1541_update_so(c1541 *drive) {
+    if (drive->via2.t1_pb7_state != drive->via2_t1_pb7_last) {
+        drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
+        c6510_set_overflow(&drive->cpu);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
@@ -217,15 +231,17 @@ void c1541_reset(c1541 *drive) {
     memset(drive->ram, 0, C1541_RAM_SIZE);
     via6522_reset(&drive->via1);
     via6522_reset(&drive->via2);
-    /* Device address bit (VIA #2 Port A bit 5): pulled high for device 8 by the
-       hardware jumper, low for device 9.  Standard 1541 convention; verify against
-       the ROM init sequence ($EAA0) if a different ROM variant is used. */
-    if (drive->device_number == 8) {
-        drive->via2.port_a_in |= 0x20u;
+    /* Device address jumpers are serial VIA ($1800) Port B bits 5/6.
+       The DOS ROM converts 00→device 8, 20→device 9, 40→device 10, 60→device 11. */
+    if (drive->device_number == 9) {
+        drive->via1.port_b_in |= 0x20u;
     }
     /* c6510_reset() reads $FFFC/$FFFD through the bus callbacks.
        With ROM loaded at $C000–$FFFF this correctly fetches the 1541 reset vector. */
     c6510_reset(&drive->cpu);
+    drive->cpu_cycles_remaining = 0;
+    drive->via1_nmi_line = 0;
+    drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,20 +295,30 @@ int c1541_load_rom_split(c1541 *drive, const char *path_lo, const char *path_hi)
 /* ------------------------------------------------------------------ */
 
 void c1541_advance_one_cycle(c1541 *drive) {
+    size_t cycles;
+
     if (!drive->rom_loaded) return;
 
     /* 1. Step VIAs (may set IFR flags before CPU samples them). */
     via6522_step(&drive->via1);
     via6522_step(&drive->via2);
+    c1541_update_so(drive);
 
-    /* 2. Synchronise IEC bus: VIA #2 outputs → C64 pull; C64 state → VIA #2 inputs + CA1. */
+    /* 2. Synchronise IEC bus: serial VIA outputs → C64 pull; C64 state → serial VIA inputs + CA1. */
     c1541_update_iec_bus(drive);
 
-    /* 3. Intercept sector reads: when the ROM calls reed ($F4CA), satisfy from D64. */
-    if (drive->cpu.cpu.pc == C1541_ROM_REED) {
-        c1541_satisfy_sector_read(drive);
+    if (drive->cpu_cycles_remaining == 0) {
+        /* 3. Intercept sector reads: when the ROM calls reed ($F4CA), satisfy from D64. */
+        if (drive->cpu.cpu.pc == C1541_ROM_REED) {
+            c1541_satisfy_sector_read(drive);
+        }
+
+        /* 4. Execute one 6502 instruction, then spread its elapsed cycles over
+           subsequent c1541_advance_one_cycle() calls.  c6510_step() is an
+           instruction step, not a one-cycle step. */
+        cycles = c6510_step(&drive->cpu);
+        drive->cpu_cycles_remaining = cycles != 0 ? cycles : 1;
     }
 
-    /* 4. Step the 6502 (IRQ/NMI come from callbacks set during c1541_init). */
-    c6510_step(&drive->cpu);
+    drive->cpu_cycles_remaining--;
 }

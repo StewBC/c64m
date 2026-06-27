@@ -99,8 +99,8 @@ static void test_destroy_zeroes(void) {
 /* Phase 3A: IEC bus wiring                                            */
 /* ------------------------------------------------------------------ */
 
-/* Advancing one cycle with ROM loaded synchronises VIA2 output → C64 pull.
-   VIA2 bit 0 = DATA out; DDRA=0x01 (output), ORA=0x00 (low) → 1541 pulls DATA.
+/* Advancing one cycle with ROM loaded synchronises serial VIA output → C64 pull.
+   VIA1 PB1 = DATA out; DDRB=0x02 (output), ORB bit 1 low → 1541 pulls DATA.
    After advance, c64.iec_external_pull should have C64_IEC_DATA set. */
 static void test_iec_drive_pulls_data(void) {
     static c64_t c64;
@@ -110,8 +110,8 @@ static void test_iec_drive_pulls_data(void) {
     load_nop_rom(&drive);
     c1541_reset(&drive);
 
-    drive.via2.ddra = 0x01u; /* bit 0 = output */
-    drive.via2.ora  = 0x00u; /* bit 0 = 0 → pulls DATA low */
+    drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
+    drive.via1.orb  = 0x00u; /* bit 1 = 0 → pulls DATA low */
 
     c1541_advance_one_cycle(&drive);
 
@@ -125,7 +125,7 @@ static void test_iec_drive_pulls_data(void) {
     printf("PASS: test_iec_drive_pulls_data\n");
 }
 
-/* When 1541 releases DATA (bit 0 output = 1), iec_external_pull should clear DATA. */
+/* When 1541 releases DATA (PB1 output = 1), iec_external_pull should clear DATA. */
 static void test_iec_drive_releases_data(void) {
     static c64_t c64;
     static c1541 drive;
@@ -134,8 +134,8 @@ static void test_iec_drive_releases_data(void) {
     load_nop_rom(&drive);
     c1541_reset(&drive);
 
-    drive.via2.ddra = 0x01u; /* bit 0 = output */
-    drive.via2.ora  = 0x01u; /* bit 0 = 1 → not driving DATA low */
+    drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
+    drive.via1.orb  = 0x02u; /* bit 1 = 1 → not driving DATA low */
 
     c1541_advance_one_cycle(&drive);
 
@@ -143,6 +143,78 @@ static void test_iec_drive_releases_data(void) {
         fail("iec_drive_releases_data: DATA should not be pulled");
 
     printf("PASS: test_iec_drive_releases_data\n");
+}
+
+static void test_cpu_instruction_cycles_are_throttled(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint16_t pc_after_first;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.cpu.cpu.pc = 0xC000u;
+
+    c1541_advance_one_cycle(&drive);
+    pc_after_first = drive.cpu.cpu.pc;
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u16("throttled NOP PC", pc_after_first, drive.cpu.cpu.pc);
+    if (drive.cpu_cycles_remaining != 0)
+        fail("throttled NOP should consume its second cycle after two advances");
+
+    c1541_advance_one_cycle(&drive);
+    expect_eq_u16("next NOP PC", (uint16_t)(pc_after_first + 1u), drive.cpu.cpu.pc);
+
+    printf("PASS: test_cpu_instruction_cycles_are_throttled\n");
+}
+
+static void test_nmi_is_edge_latched(void) {
+    static c64_t c64;
+    static c1541 drive;
+    int i;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.cpu.cpu.pc = 0xC000u;
+    drive.via1.ifr |= 0x02u; /* serial VIA CA1 flag */
+    drive.via1.ier |= 0x02u; /* serial VIA CA1 enabled */
+
+    for (i = 0; i < 32; i++) {
+        c1541_advance_one_cycle(&drive);
+    }
+
+    if (drive.cpu.cpu.nmi_entries != 1u)
+        fail("held serial VIA CA1 line should trigger exactly one NMI edge");
+
+    printf("PASS: test_nmi_is_edge_latched\n");
+}
+
+static void test_via2_timer_pb7_sets_cpu_overflow(void) {
+    static c64_t c64;
+    static c1541 drive;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.cpu.cpu.pc = 0xC000u;
+    drive.cpu.cpu.V = 0;
+    drive.via2.acr = 0x80u;       /* T1 PB7 output enable */
+    drive.via2.t1_running = 1;
+    drive.via2.t1_counter = 0;    /* underflows on next VIA step */
+    drive.via2.t1_latch = 0x0010u;
+    drive.via2_t1_pb7_last = drive.via2.t1_pb7_state;
+
+    c1541_advance_one_cycle(&drive);
+
+    if (!drive.cpu.cpu.V)
+        fail("VIA2 T1 PB7 toggle should set CPU overflow flag");
+
+    printf("PASS: test_via2_timer_pb7_sets_cpu_overflow\n");
 }
 
 /* Drive 8 and drive 9 are separate open-collector pullers.  Stepping an idle
@@ -158,10 +230,10 @@ static void test_iec_two_drive_pull_aggregation(void) {
     c1541_reset(&d8);
     c1541_reset(&d9);
 
-    d8.via2.ddra = 0x01u; /* bit 0 = DATA output */
-    d8.via2.ora  = 0x00u; /* drive 8 pulls DATA low */
-    d9.via2.ddra = 0x01u; /* bit 0 = DATA output */
-    d9.via2.ora  = 0x01u; /* drive 9 releases DATA */
+    d8.via1.ddrb = 0x02u; /* bit 1 = DATA output */
+    d8.via1.orb  = 0x00u; /* drive 8 pulls DATA low */
+    d9.via1.ddrb = 0x02u; /* bit 1 = DATA output */
+    d9.via1.orb  = 0x02u; /* drive 9 releases DATA */
 
     c1541_advance_one_cycle(&d8);
     c1541_advance_one_cycle(&d9);
@@ -169,7 +241,7 @@ static void test_iec_two_drive_pull_aggregation(void) {
     if (!(c64.iec_external_pull & C64_IEC_DATA))
         fail("iec_two_drive_pull_aggregation: drive 9 cleared drive 8 DATA pull");
 
-    d8.via2.ora = 0x01u; /* now both drives release DATA */
+    d8.via1.orb = 0x02u; /* now both drives release DATA */
     c1541_advance_one_cycle(&d8);
     c1541_advance_one_cycle(&d9);
 
@@ -323,6 +395,9 @@ int main(void) {
     /* Phase 3 */
     test_iec_drive_pulls_data();
     test_iec_drive_releases_data();
+    test_cpu_instruction_cycles_are_throttled();
+    test_nmi_is_edge_latched();
+    test_via2_timer_pb7_sets_cpu_overflow();
     test_iec_two_drive_pull_aggregation();
     test_iec_c64_pull_data();
     test_sector_read_success();

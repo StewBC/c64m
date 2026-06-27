@@ -120,4 +120,5 @@ void c6510_set_irq_pending_callback(C6510 *m, c6510_irq_pending_fn irq_pending);
 void c6510_set_nmi_pending_callback(C6510 *m, c6510_nmi_pending_fn nmi_pending);
 
 void c6510_reset(C6510 *m);
+void c6510_set_overflow(C6510 *m);
 size_t c6510_step(C6510 *m);

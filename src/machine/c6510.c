@@ -46,6 +46,11 @@ void c6510_reset(C6510 *m) {
     m->cpu.nmi_entries = 0;
 }
 
+void c6510_set_overflow(C6510 *m) {
+    assert(m);
+    m->cpu.V = 1;
+}
+
 size_t c6510_step(C6510 *m) {
     size_t start_cycle = m->cpu.cycles;
     m->cpu.opcode_active = 0;
