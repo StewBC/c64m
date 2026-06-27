@@ -274,6 +274,36 @@ static void test_iec_c64_pull_data(void) {
     printf("PASS: test_iec_c64_pull_data\n");
 }
 
+static void test_iec_atn_ack_pulls_data(void) {
+    static c64_t c64;
+    static c1541 drive;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    /* CIA2 PA3 output high asserts ATN; serial VIA PB4 low acknowledges ATN by
+       pulling DATA even if PB1 is not yet set by the firmware IRQ handler. */
+    c64.cia2.registers[0x00] = 0x08u;
+    c64.cia2.registers[0x02] = 0x08u;
+    drive.via1.ddrb = 0x10u;
+    drive.via1.orb = 0x00u;
+
+    c1541_advance_one_cycle(&drive);
+
+    if (!(c64.iec_external_pull & C64_IEC_DATA))
+        fail("iec_atn_ack_pulls_data: ATN acknowledge should pull DATA");
+
+    drive.via1.orb = 0x10u;
+    c1541_advance_one_cycle(&drive);
+
+    if (c64.iec_external_pull & C64_IEC_DATA)
+        fail("iec_atn_ack_pulls_data: PB4 high should release ATN acknowledge DATA");
+
+    printf("PASS: test_iec_atn_ack_pulls_data\n");
+}
+
 /* ------------------------------------------------------------------ */
 /* Phase 3C: D64 sector read intercept                                 */
 /* ------------------------------------------------------------------ */
@@ -476,6 +506,39 @@ static void test_queued_search_job_success(void) {
     printf("PASS: test_queued_search_job_success\n");
 }
 
+static void test_queued_search_job_low_bit_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x00);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_search_job_low_bit_success: c64_mount_d64 failed");
+
+    drive.ram[0x04] = 0xB1u; /* ROM preserves a low-bit flag on some SEARCH jobs. */
+    drive.ram[0x0E] = 1;
+    drive.ram[0x0F] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("queued search low-bit job result", 0x01u, drive.ram[0x04]);
+    expect_eq_u8("queued search low-bit track cache", 1u, drive.ram[0x12]);
+    expect_eq_u8("queued search low-bit sector cache", 0u, drive.ram[0x13]);
+
+    printf("PASS: test_queued_search_job_low_bit_success\n");
+}
+
 static void test_sector_read_no_disk(void) {
     static c64_t c64;
     static c1541 drive;
@@ -546,11 +609,13 @@ int main(void) {
     test_via2_timer_pb7_sets_cpu_overflow();
     test_iec_two_drive_pull_aggregation();
     test_iec_c64_pull_data();
+    test_iec_atn_ack_pulls_data();
     test_sector_read_success();
     test_physical_read_job_success();
     test_physical_search_job_success();
     test_queued_read_job_success();
     test_queued_search_job_success();
+    test_queued_search_job_low_bit_success();
     test_sector_read_no_disk();
     test_sector_read_jobn_out_of_range();
 

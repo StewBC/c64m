@@ -216,6 +216,22 @@ target_link_libraries(test_c64_disk_load PRIVATE
 
 add_test(NAME c64_disk_load COMMAND test_c64_disk_load)
 
+add_executable(test_c64_real_1541_load
+    tests/machine/test_c64_real_1541_load.c
+)
+
+target_compile_features(test_c64_real_1541_load PRIVATE c_std_99)
+
+target_compile_definitions(test_c64_real_1541_load PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_c64_real_1541_load PRIVATE
+    machine
+)
+
+add_test(NAME c64_real_1541_load COMMAND test_c64_real_1541_load)
+
 add_executable(test_frontend_input
     tests/frontend/test_frontend_input.c
 )
@@ -424,6 +440,22 @@ target_link_libraries(test_runtime_disk PRIVATE
 )
 
 add_test(NAME runtime_disk COMMAND test_runtime_disk)
+
+add_executable(test_runtime_real_1541_autorun
+    tests/runtime/test_runtime_real_1541_autorun.c
+)
+
+target_compile_features(test_runtime_real_1541_autorun PRIVATE c_std_99)
+
+target_compile_definitions(test_runtime_real_1541_autorun PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_runtime_real_1541_autorun PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_real_1541_autorun COMMAND test_runtime_real_1541_autorun)
 
 add_executable(test_runtime_assembler
     tests/runtime/test_runtime_assembler.c

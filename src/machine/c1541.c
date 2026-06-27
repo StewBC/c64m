@@ -124,8 +124,13 @@ static void c1541_update_iec_bus(c1541 *drive) {
        bit 4 = ATN acknowledge control, bits 5/6 = address jumpers, bit 7 = ATN in.
        The serial VIA is behind inverters:
        output bit high pulls the IEC line low, and input bit high means the
-       IEC line is currently low. */
+       IEC line is currently low.  PB4 is special: when ATN is asserted and
+       PB4 is output-low, the drive acknowledges attention by pulling DATA low. */
+    c64_pull = c64_get_iec_c64_pull(drive->c64);
+    atn_low = (c64_pull & C64_IEC_ATN) != 0;
+
     if ((ddrb1 & 0x02u) &&  (orb1 & 0x02u)) drive_pull |= C64_IEC_DATA;
+    if ((ddrb1 & 0x10u) && !(orb1 & 0x10u) && atn_low) drive_pull |= C64_IEC_DATA;
     if ((ddrb1 & 0x08u) &&  (orb1 & 0x08u)) drive_pull |= C64_IEC_CLK;
 
     /* Tell the C64 what this 1541 is pulling.  The C64 aggregates drive 8,
@@ -133,7 +138,6 @@ static void c1541_update_iec_bus(c1541 *drive) {
     c64_set_iec_drive_pull(drive->c64, drive->device_number, drive_pull);
 
     /* Open-collector: either side can pull a line low. */
-    c64_pull = c64_get_iec_c64_pull(drive->c64);
     bus_low  = c64_get_iec_external_pull(drive->c64) | c64_pull;
 
     data_low = (bus_low & C64_IEC_DATA) != 0;
@@ -213,7 +217,7 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
     int offset;
 
     raw = drive->ram[C1541_ZP_JOBS + n];
-    if ((raw & 0x80u) == 0 || raw == 0xD0u || (raw & 0x01u) != 0) {
+    if ((raw & 0x80u) == 0 || raw == 0xD0u) {
         return 0;
     }
 
