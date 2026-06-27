@@ -369,8 +369,34 @@ const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number);
 ## Part D — KERNAL LOAD trap coexistence
 
 The existing KERNAL LOAD trap at `$FFD5` must be disabled for devices whose
-1541 ROM is loaded and running, and retained as fallback for devices without a
-ROM.
+1541 ROM is loaded and running **and** the 1541 ROM path is enabled by the
+user. When the ROM is present but the toggle is off, the KERNAL trap fires as
+normal — the 1541 runs silently in lockstep but does not serve files.
+
+### Config flag
+
+Add a boolean to the machine config struct (follow the existing pattern for
+other `[machine]` or `[disk]` INI booleans):
+
+```c
+int emulate_1541;   // 1 = route disk I/O through genuine 1541 ROM; 0 = KERNAL trap
+```
+
+Expose it in the INI file under `[disk]`:
+
+```ini
+[disk]
+emulate_1541=1
+```
+
+Default: `1` if the 1541 ROM file was loaded successfully, `0` if it was not.
+Follow the exact INI read pattern used for other boolean config keys — do not
+invent a new mechanism.
+
+The flag must also be exposed in the frontend so the user can toggle it at
+runtime without restarting. Add it alongside the existing disk UI controls.
+When the flag changes at runtime, call `c64_apply_config()` (or whatever the
+existing config-apply path is) so the change takes effect immediately.
 
 ### Where the trap is checked
 
@@ -384,17 +410,21 @@ In `c64_try_kernal_load_trap()`, before processing a load for device 8 or 9,
 add:
 
 ```c
-// If the 1541 ROM is loaded for this device, do not intercept —
+// If the 1541 ROM is loaded and enabled for this device, do not intercept —
 // let the real 1541 ROM handle it via IEC.
-if (device == 8 && machine->drive8.rom_loaded) return 0; // 0 = trap not taken
-if (device == 9 && machine->drive9.rom_loaded) return 0;
+if (device == 8 && machine->drive8.rom_loaded && machine->config.emulate_1541)
+    return 0; // 0 = trap not taken
+if (device == 9 && machine->drive9.rom_loaded && machine->config.emulate_1541)
+    return 0;
 ```
 
 Place this check after the device number is read from `$BA` and validated, but
 before any D64 or file access. Do not change any other logic in the trap.
 
-When `rom_loaded = 0` for a device, the trap fires exactly as before. This
-preserves full backward compatibility for users without a 1541 ROM file.
+When `rom_loaded = 0` or `emulate_1541 = 0` for a device, the trap fires
+exactly as before. This preserves full backward compatibility for users without
+a 1541 ROM file, and gives users with a ROM file the option to fall back to the
+KERNAL trap path without removing the ROM.
 
 ---
 

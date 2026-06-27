@@ -1,5 +1,6 @@
 #pragma once
 
+#include "c1541.h"
 #include "c64_bus.h"
 #include "c64_frame.h"
 #include "c64_rom.h"
@@ -338,6 +339,8 @@ typedef struct c64_t {
     bool ready;
     c64_config config;
     c64_drive_slot drives[C64_DRIVE_SLOT_COUNT];
+    c1541 drive8;
+    c1541 drive9;
 } c64_t;
 
 void c64_init(c64_t *machine);

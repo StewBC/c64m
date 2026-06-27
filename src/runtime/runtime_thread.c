@@ -793,6 +793,12 @@ static bool runtime_load_configured_roms(runtime *rt) {
     ok = runtime_load_rom(rt, "character", rt->char_rom_path, c64_rom_load_character) && ok;
     ok = runtime_load_rom(rt, "KERNAL", rt->kernal_rom_path, c64_rom_load_kernal) && ok;
 
+    /* 1541 ROM is optional — missing it falls back to the KERNAL LOAD trap. */
+    if (rt->rom1541_path != NULL) {
+        c1541_load_rom(&rt->machine.drive8, rt->rom1541_path);
+        c1541_load_rom(&rt->machine.drive9, rt->rom1541_path);
+    }
+
     return ok;
 }
 

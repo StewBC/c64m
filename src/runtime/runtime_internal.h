@@ -112,6 +112,7 @@ struct runtime {
     char *char_rom_path;
     char *kernal_rom_path;
     char *system_rom_path;
+    char *rom1541_path;
     char *ini_path;
     char *symbol_files;
     bool use_ini;

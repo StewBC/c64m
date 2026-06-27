@@ -135,6 +135,7 @@ runtime *runtime_create(const runtime_config *config) {
         rt->char_rom_path = runtime_copy_string(config->char_rom_path);
         rt->kernal_rom_path = runtime_copy_string(config->kernal_rom_path);
         rt->system_rom_path = runtime_copy_string(config->system_rom_path);
+        rt->rom1541_path = runtime_copy_string(config->rom1541_path);
         rt->ini_path = runtime_copy_string(config->ini_path);
         rt->symbol_files = runtime_copy_string(config->symbol_files);
         rt->use_ini = config->use_ini;
@@ -185,6 +186,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->char_rom_path);
     free(rt->kernal_rom_path);
     free(rt->system_rom_path);
+    free(rt->rom1541_path);
     free(rt->ini_path);
     free(rt->symbol_files);
     free(rt->audio_record_path);

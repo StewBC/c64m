@@ -111,6 +111,18 @@ target_link_libraries(test_via6522 PRIVATE
 
 add_test(NAME via6522 COMMAND test_via6522)
 
+add_executable(test_c1541
+    tests/machine/test_c1541.c
+)
+
+target_compile_features(test_c1541 PRIVATE c_std_99)
+
+target_link_libraries(test_c1541 PRIVATE
+    machine
+)
+
+add_test(NAME c1541 COMMAND test_c1541)
+
 add_executable(test_c64_rom
     tests/machine/test_c64_rom.c
 )

@@ -1382,6 +1382,7 @@ int main(int argc, char **argv) {
     runtime_cfg.char_rom_path = options.char_rom_path;
     runtime_cfg.kernal_rom_path = options.kernal_rom_path;
     runtime_cfg.system_rom_path = options.system_rom_path;
+    runtime_cfg.rom1541_path = options.rom1541_path;
     runtime_cfg.ini_path = options.ini_path;
     if (app_options_symbol_files_absolute(&options, runtime_symbol_files, sizeof(runtime_symbol_files))) {
         runtime_cfg.symbol_files = runtime_symbol_files;

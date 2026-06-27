@@ -108,6 +108,8 @@ static void c64_advance_one_cycle(c64_t *machine) {
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
+    c1541_advance_one_cycle(&machine->drive8);
+    c1541_advance_one_cycle(&machine->drive9);
     machine->clock.cycle++;
 }
 
@@ -958,6 +960,8 @@ void c64_init(c64_t *machine) {
     c6510_init(&machine->cpu, machine, c64_cpu_read, c64_cpu_write);
     c6510_set_irq_pending_callback(&machine->cpu, c64_cpu_irq_pending);
     c6510_set_nmi_pending_callback(&machine->cpu, c64_cpu_nmi_pending);
+    c1541_init(&machine->drive8, machine, 8);
+    c1541_init(&machine->drive9, machine, 9);
 }
 
 void c64_set_config(c64_t *machine, const c64_config *config) {
@@ -1040,6 +1044,8 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->iec_external_pull = 0;
 
     c6510_reset(&machine->cpu);
+    c1541_reset(&machine->drive8);
+    c1541_reset(&machine->drive9);
     memset(&machine->clock, 0, sizeof(machine->clock));
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
     c64_trace_reset(&machine->last_cpu_trace);

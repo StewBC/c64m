@@ -580,7 +580,12 @@ static bool discover_default_rom_paths(app_options *options)
                 dirs[i],
                 "kernal",
                 C64M_KERNAL_ROM_SIZE,
-                &options->kernal_rom_path)) {
+                &options->kernal_rom_path) ||
+            !discover_rom_path(
+                dirs[i],
+                "1541",
+                C64M_SYSTEM_ROM_SIZE,
+                &options->rom1541_path)) {
             return false;
         }
     }
@@ -978,6 +983,13 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->system_rom_path, value);
     }
+    value = config_get(cfg, "rom", "1541");
+    if (value == NULL) {
+        value = config_get(cfg, "roms", "1541");
+    }
+    if (value != NULL) {
+        replace_string(&options->rom1541_path, value);
+    }
 
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
         snprintf(key, sizeof(key), "%d", drive);
@@ -1266,6 +1278,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->char_rom_path, src->char_rom_path) ||
         !replace_string(&dest->kernal_rom_path, src->kernal_rom_path) ||
         !replace_string(&dest->system_rom_path, src->system_rom_path) ||
+        !replace_string(&dest->rom1541_path, src->rom1541_path) ||
         !replace_string(&dest->prg_path, src->prg_path) ||
         !replace_string(&dest->basic_path, src->basic_path) ||
         !replace_string(&dest->audio_record_path, src->audio_record_path)) {
@@ -1385,6 +1398,9 @@ bool app_options_save_shutdown(const app_options *options)
     if (options->system_rom_path != NULL) {
         config_set(cfg, "roms", "system", options->system_rom_path);
     }
+    if (options->rom1541_path != NULL) {
+        config_set(cfg, "roms", "1541", options->rom1541_path);
+    }
 
     config_remove_prefix(cfg, "disk", "");
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
@@ -1421,6 +1437,7 @@ void app_options_destroy(app_options *options)
     free(options->char_rom_path);
     free(options->kernal_rom_path);
     free(options->system_rom_path);
+    free(options->rom1541_path);
     free(options->prg_path);
     free(options->basic_path);
     free(options->audio_record_path);
