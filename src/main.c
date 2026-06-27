@@ -178,6 +178,9 @@ static c64_config machine_config_from_options(const app_options *options) {
         strcmp(options->video_standard, "PAL") == 0) {
         config.video_standard = C64_VIDEO_STANDARD_PAL;
     }
+    if (options != NULL) {
+        config.emulate_1541 = options->emulate_1541 ? 1 : 0;
+    }
     return config;
 }
 

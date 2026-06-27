@@ -31,6 +31,18 @@ static const uint8_t c64_d64_sectors_per_track[35] = {
     17, 17, 17, 17, 17
 };
 
+static uint8_t c64_iec_line_mask(uint8_t lines) {
+    return (uint8_t)(lines & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
+}
+
+static void c64_refresh_iec_external_pull(c64_t *machine) {
+    machine->iec_external_pull = c64_iec_line_mask(
+        machine->iec_external_pull_other |
+        machine->iec_external_pull_drive8 |
+        machine->iec_external_pull_drive9);
+    c64_bus_refresh_vic_bank_base(&machine->bus);
+}
+
 uint32_t c64_config_clock_hz(const c64_config *config) {
     if (config != NULL && config->video_standard == C64_VIDEO_STANDARD_NTSC) {
         return 1022727u;
@@ -559,6 +571,15 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
         return false;
     }
 
+    /* If the 1541 ROM is loaded and enabled for this device, let the real ROM
+       handle the load via IEC — do not intercept. */
+    if (device == 8 && machine->drive8.rom_loaded && machine->config.emulate_1541) {
+        return false;
+    }
+    if (device == 9 && machine->drive9.rom_loaded && machine->config.emulate_1541) {
+        return false;
+    }
+
     filename_length = machine->bus.ram[C64_ZP_FILENAME_LENGTH];
     filename_pointer = c64_read_zp16(machine, C64_ZP_FILENAME_POINTER);
     secondary_address = machine->bus.ram[C64_ZP_SECONDARY_ADDRESS];
@@ -1042,6 +1063,9 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->joystick1 = 0;
     machine->joystick2 = 0;
     machine->iec_external_pull = 0;
+    machine->iec_external_pull_other = 0;
+    machine->iec_external_pull_drive8 = 0;
+    machine->iec_external_pull_drive9 = 0;
 
     c6510_reset(&machine->cpu);
     c1541_reset(&machine->drive8);
@@ -1194,8 +1218,53 @@ void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs) {
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines) {
     assert(machine);
 
-    machine->iec_external_pull = (uint8_t)(lines & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
-    c64_bus_refresh_vic_bank_base(&machine->bus);
+    machine->iec_external_pull_other = c64_iec_line_mask(lines);
+    c64_refresh_iec_external_pull(machine);
+}
+
+void c64_set_iec_drive_pull(c64_t *machine, int device_number, uint8_t lines) {
+    uint8_t pull;
+
+    assert(machine);
+    pull = c64_iec_line_mask(lines);
+    if (device_number == 8) {
+        machine->iec_external_pull_drive8 = pull;
+    } else if (device_number == 9) {
+        machine->iec_external_pull_drive9 = pull;
+    } else {
+        return;
+    }
+    c64_refresh_iec_external_pull(machine);
+}
+
+uint8_t c64_get_iec_external_pull(c64_t *machine) {
+    assert(machine);
+    return machine->iec_external_pull;
+}
+
+uint8_t c64_get_iec_c64_pull(c64_t *machine) {
+    uint8_t port_a;
+    uint8_t pull = 0;
+
+    assert(machine);
+    /* CIA #2 Port A IEC assignments (from c64_cia2_port_inputs):
+       bit 3 (0x08) = ATN out: output low → C64 asserts ATN
+       bit 4 (0x10) = CLK out: output low → C64 asserts CLK
+       bit 5 (0x20) = DATA out: output low → C64 asserts DATA */
+    port_a = cia_peek_port_a_output(&machine->cia2);
+    if ((port_a & 0x08u) == 0) pull |= C64_IEC_ATN;
+    if ((port_a & 0x10u) == 0) pull |= C64_IEC_CLK;
+    if ((port_a & 0x20u) == 0) pull |= C64_IEC_DATA;
+    return pull;
+}
+
+const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number) {
+    int idx;
+
+    if (!machine) return NULL;
+    idx = c64_drive_slot_index((uint8_t)device_number);
+    if (idx < 0) return NULL;
+    return &machine->drives[idx];
 }
 
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled) {

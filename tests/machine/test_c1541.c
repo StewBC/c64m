@@ -1,4 +1,5 @@
 #include "c1541.h"
+#include "c64.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,54 +17,44 @@ static void expect_eq_u8(const char *name, uint8_t expected, uint8_t actual) {
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Minimal c64_t stub so c1541_init compiles without full c64 library  */
-/* ------------------------------------------------------------------ */
-
-/* c1541.h forward-declares c64_t; provide a minimal definition so the
-   pointer is valid without linking the full c64 module. */
-struct c64_t { int unused; };
-
-/* ------------------------------------------------------------------ */
-/* Helpers                                                             */
-/* ------------------------------------------------------------------ */
-
-static c1541 *make_drive(void) {
-    static c64_t stub;
-    static c1541 drive;
-    c1541_init(&drive, &stub, 8);
-    return &drive;
+static void expect_eq_u16(const char *name, uint16_t expected, uint16_t actual) {
+    if (expected != actual) {
+        fprintf(stderr, "FAIL: %s: expected 0x%04X, got 0x%04X\n", name, expected, actual);
+        exit(1);
+    }
 }
 
-/* Fill ROM with a known pattern and mark it loaded so bus reads work. */
-static void load_test_rom(c1541 *drive) {
-    memset(drive->rom, 0xEA, C1541_ROM_SIZE); /* NOP sled */
+/* Fill ROM with NOPs (0xEA) and mark it loaded so advance_one_cycle proceeds. */
+static void load_nop_rom(c1541 *drive) {
+    memset(drive->rom, 0xEA, C1541_ROM_SIZE);
     drive->rom_loaded = 1;
 }
 
 /* ------------------------------------------------------------------ */
-/* Bus map tests                                                        */
+/* Phase 2: Bus map and lifecycle tests                                */
 /* ------------------------------------------------------------------ */
 
 static void test_ram_read_write(void) {
-    c1541 *drive = make_drive();
-    load_test_rom(drive);
+    static c64_t c64;
+    static c1541 drive;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
 
-    /* Write via bus write callback (indirect, through a helper) */
-    drive->ram[0x0000] = 0xAB;
-    drive->ram[0x07FF] = 0xCD;
+    drive.ram[0x0000] = 0xAB;
+    drive.ram[0x07FF] = 0xCD;
 
-    /* Read back through exposed ram array */
-    expect_eq_u8("ram[0x0000]", 0xAB, drive->ram[0x0000]);
-    expect_eq_u8("ram[0x07FF]", 0xCD, drive->ram[0x07FF]);
+    expect_eq_u8("ram[0x0000]", 0xAB, drive.ram[0x0000]);
+    expect_eq_u8("ram[0x07FF]", 0xCD, drive.ram[0x07FF]);
 
     printf("PASS: test_ram_read_write\n");
 }
 
 static void test_rom_not_loaded_nop(void) {
-    static c64_t stub;
+    static c64_t c64;
     static c1541 drive;
-    c1541_init(&drive, &stub, 8);
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
     /* ROM not loaded — advance_one_cycle must be a no-op (no crash). */
     c1541_advance_one_cycle(&drive);
     c1541_advance_one_cycle(&drive);
@@ -71,27 +62,32 @@ static void test_rom_not_loaded_nop(void) {
 }
 
 static void test_rom_loaded_flag(void) {
-    c1541 *drive = make_drive();
-    if (drive->rom_loaded != 0) fail("rom_loaded should be 0 after init");
-    load_test_rom(drive);
-    if (drive->rom_loaded != 1) fail("rom_loaded should be 1 after load_test_rom");
+    static c64_t c64;
+    static c1541 drive;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    if (drive.rom_loaded != 0) fail("rom_loaded should be 0 after init");
+    load_nop_rom(&drive);
+    if (drive.rom_loaded != 1) fail("rom_loaded should be 1 after load_nop_rom");
     printf("PASS: test_rom_loaded_flag\n");
 }
 
 static void test_device_number(void) {
-    static c64_t stub;
+    static c64_t c64;
     static c1541 d8, d9;
-    c1541_init(&d8, &stub, 8);
-    c1541_init(&d9, &stub, 9);
-    if (d8.device_number != 8) fail("drive8 device_number != 8");
-    if (d9.device_number != 9) fail("drive9 device_number != 9");
+    c64_init(&c64);
+    c1541_init(&d8, &c64, 8);
+    c1541_init(&d9, &c64, 9);
+    if (d8.device_number != 8) fail("d8 device_number != 8");
+    if (d9.device_number != 9) fail("d9 device_number != 9");
     printf("PASS: test_device_number\n");
 }
 
 static void test_destroy_zeroes(void) {
-    static c64_t stub;
+    static c64_t c64;
     static c1541 drive;
-    c1541_init(&drive, &stub, 8);
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
     drive.rom_loaded = 1;
     c1541_destroy(&drive);
     if (drive.rom_loaded != 0) fail("destroy should zero rom_loaded");
@@ -100,15 +96,238 @@ static void test_destroy_zeroes(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Phase 3A: IEC bus wiring                                            */
+/* ------------------------------------------------------------------ */
+
+/* Advancing one cycle with ROM loaded synchronises VIA2 output → C64 pull.
+   VIA2 bit 0 = DATA out; DDRA=0x01 (output), ORA=0x00 (low) → 1541 pulls DATA.
+   After advance, c64.iec_external_pull should have C64_IEC_DATA set. */
+static void test_iec_drive_pulls_data(void) {
+    static c64_t c64;
+    static c1541 drive;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.via2.ddra = 0x01u; /* bit 0 = output */
+    drive.via2.ora  = 0x00u; /* bit 0 = 0 → pulls DATA low */
+
+    c1541_advance_one_cycle(&drive);
+
+    if (!(c64.iec_external_pull & C64_IEC_DATA))
+        fail("iec_drive_pulls_data: DATA should be pulled");
+    if (c64.iec_external_pull & C64_IEC_CLK)
+        fail("iec_drive_pulls_data: CLK should not be pulled");
+    if (c64.iec_external_pull & C64_IEC_ATN)
+        fail("iec_drive_pulls_data: ATN should not be pulled");
+
+    printf("PASS: test_iec_drive_pulls_data\n");
+}
+
+/* When 1541 releases DATA (bit 0 output = 1), iec_external_pull should clear DATA. */
+static void test_iec_drive_releases_data(void) {
+    static c64_t c64;
+    static c1541 drive;
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.via2.ddra = 0x01u; /* bit 0 = output */
+    drive.via2.ora  = 0x01u; /* bit 0 = 1 → not driving DATA low */
+
+    c1541_advance_one_cycle(&drive);
+
+    if (c64.iec_external_pull & C64_IEC_DATA)
+        fail("iec_drive_releases_data: DATA should not be pulled");
+
+    printf("PASS: test_iec_drive_releases_data\n");
+}
+
+/* Drive 8 and drive 9 are separate open-collector pullers.  Stepping an idle
+   drive 9 must not clear a line that drive 8 is still pulling low. */
+static void test_iec_two_drive_pull_aggregation(void) {
+    static c64_t c64;
+    static c1541 d8, d9;
+    c64_init(&c64);
+    c1541_init(&d8, &c64, 8);
+    c1541_init(&d9, &c64, 9);
+    load_nop_rom(&d8);
+    load_nop_rom(&d9);
+    c1541_reset(&d8);
+    c1541_reset(&d9);
+
+    d8.via2.ddra = 0x01u; /* bit 0 = DATA output */
+    d8.via2.ora  = 0x00u; /* drive 8 pulls DATA low */
+    d9.via2.ddra = 0x01u; /* bit 0 = DATA output */
+    d9.via2.ora  = 0x01u; /* drive 9 releases DATA */
+
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d9);
+
+    if (!(c64.iec_external_pull & C64_IEC_DATA))
+        fail("iec_two_drive_pull_aggregation: drive 9 cleared drive 8 DATA pull");
+
+    d8.via2.ora = 0x01u; /* now both drives release DATA */
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d9);
+
+    if (c64.iec_external_pull & C64_IEC_DATA)
+        fail("iec_two_drive_pull_aggregation: DATA should release after both drives release");
+
+    printf("PASS: test_iec_two_drive_pull_aggregation\n");
+}
+
+/* c64_get_iec_c64_pull reflects CIA2 Port A state (CIA2 bit 5 → C64_IEC_DATA).
+   CIA_REG_PORT_A = 0x00, CIA_REG_DDRA = 0x02. */
+static void test_iec_c64_pull_data(void) {
+    static c64_t c64;
+    uint8_t pull;
+
+    c64_init(&c64);
+
+    /* CIA2: DDRA bit 5 = output (0x20), ORA bit 5 = 0 → pull DATA. */
+    c64.cia2.registers[0x00] = 0x00u; /* ORA bit 5 = 0 */
+    c64.cia2.registers[0x02] = 0x20u; /* DDRA bit 5 = output */
+
+    pull = c64_get_iec_c64_pull(&c64);
+    if (!(pull & C64_IEC_DATA))
+        fail("iec_c64_pull_data: CIA2 should pull DATA low");
+
+    printf("PASS: test_iec_c64_pull_data\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 3C: D64 sector read intercept                                 */
+/* ------------------------------------------------------------------ */
+
+/* Returns a freshly allocated 174848-byte D64 image with track 1 sector 0
+   (byte offset 0) filled with `pattern`.  Caller owns the memory. */
+static uint8_t *make_test_d64(uint8_t pattern) {
+    uint8_t *img = (uint8_t *)calloc(1, C64_DRIVE_D64_STANDARD_SIZE);
+    if (img == NULL)
+        fail("make_test_d64: out of memory");
+    /* Track 1, sector 0 is at D64 byte offset 0. */
+    memset(img, pattern, 256);
+    return img;
+}
+
+static void test_sector_read_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x5A);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664);
+    free(img); /* c64_mount_d64 makes an internal copy */
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_sector_read_success: c64_mount_d64 failed");
+
+    /* Job 0: track 1, sector 0 → D64 offset 0 → all 0x5A. */
+    drive.ram[0x3F] = 0;  /* jobn */
+    drive.ram[0x06] = 1;  /* hdrs[0] = track */
+    drive.ram[0x07] = 0;  /* hdrs[1] = sector */
+    drive.cpu.cpu.pc = 0xF4CAu; /* REED intercept address */
+
+    c1541_advance_one_cycle(&drive);
+
+    /* Buffer at $0300 should now contain the sector data (0x5A × 256). */
+    for (i = 0; i < 256; i++) {
+        if (drive.ram[0x0300 + i] != 0x5A) {
+            fprintf(stderr,
+                "FAIL: test_sector_read_success: ram[0x%04X] = 0x%02X, expected 0x5A\n",
+                0x0300 + i, drive.ram[0x0300 + i]);
+            exit(1);
+        }
+    }
+
+    /* After success path + CPU NOP step, A was not set to JOB_ERROR. */
+    if (drive.cpu.cpu.A == 0x02u)
+        fail("test_sector_read_success: A = JOB_ERROR, expected success");
+
+    printf("PASS: test_sector_read_success\n");
+}
+
+static void test_sector_read_no_disk(void) {
+    static c64_t c64;
+    static c1541 drive;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    /* No disk mounted. */
+    drive.ram[0x3F] = 0;
+    drive.ram[0x06] = 1;
+    drive.ram[0x07] = 0;
+    drive.cpu.cpu.pc = 0xF4CAu;
+    drive.cpu.cpu.A  = 0x00u;
+
+    c1541_advance_one_cycle(&drive);
+
+    /* satisfy_sector_read set A = JOB_ERROR (0x02) and jumped to ERRR ($F969).
+       CPU then executed NOP at $F969 → A unchanged, still 0x02. */
+    expect_eq_u8("no_disk A", 0x02u, drive.cpu.cpu.A);
+
+    printf("PASS: test_sector_read_no_disk\n");
+}
+
+/* jobn = 5 is the command/error channel and is never a READ job.
+   satisfy_sector_read must return early without touching A or PC. */
+static void test_sector_read_jobn_out_of_range(void) {
+    static c64_t c64;
+    static c1541 drive;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.ram[0x3F]  = 5;       /* jobn = 5 → ignored by satisfy_sector_read */
+    drive.cpu.cpu.pc = 0xF4CAu;
+    drive.cpu.cpu.A  = 0x00u;
+
+    c1541_advance_one_cycle(&drive);
+
+    /* satisfy_sector_read returned early; CPU executed NOP at $F4CA → PC = $F4CB. */
+    if (drive.cpu.cpu.A == 0x02u)
+        fail("test_sector_read_jobn_out_of_range: A should not be JOB_ERROR");
+    expect_eq_u16("jobn5 PC", 0xF4CBu, drive.cpu.cpu.pc);
+
+    printf("PASS: test_sector_read_jobn_out_of_range\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                 */
 /* ------------------------------------------------------------------ */
 
 int main(void) {
+    /* Phase 2 */
     test_ram_read_write();
     test_rom_not_loaded_nop();
     test_rom_loaded_flag();
     test_device_number();
     test_destroy_zeroes();
+
+    /* Phase 3 */
+    test_iec_drive_pulls_data();
+    test_iec_drive_releases_data();
+    test_iec_two_drive_pull_aggregation();
+    test_iec_c64_pull_data();
+    test_sector_read_success();
+    test_sector_read_no_disk();
+    test_sector_read_jobn_out_of_range();
 
     printf("All c1541 tests passed.\n");
     return 0;

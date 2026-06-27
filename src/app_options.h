@@ -54,6 +54,9 @@ typedef struct app_options {
     float audio_record_duration_seconds;
     /* When true, automatically run after a PRG/BASIC/D64 load. */
     bool autorun;
+    /* When true, disk I/O is routed through the genuine 1541 ROM (requires
+       rom1541_path to be set); when false, KERNAL LOAD traps handle disk I/O. */
+    bool emulate_1541;
 } app_options;
 
 void app_options_init(app_options *options);

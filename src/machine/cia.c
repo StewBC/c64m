@@ -592,3 +592,8 @@ bool cia_irq_pending(const cia *c) {
 
     return (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
 }
+
+uint8_t cia_peek_port_a_output(const cia *c) {
+    assert(c);
+    return cia_read_port(c->registers[CIA_REG_PORT_A], c->registers[CIA_REG_DDRA]);
+}

@@ -79,6 +79,7 @@ typedef enum c64_iec_line {
 
 typedef struct c64_config {
     c64_video_standard video_standard;
+    int emulate_1541;   /* 1 = route disk I/O through genuine 1541 ROM; 0 = KERNAL trap */
 } c64_config;
 
 /* Returns the master clock frequency in Hz for the given config.
@@ -313,6 +314,9 @@ typedef struct c64_t {
     uint8_t joystick1;
     uint8_t joystick2;
     uint8_t iec_external_pull;
+    uint8_t iec_external_pull_other;
+    uint8_t iec_external_pull_drive8;
+    uint8_t iec_external_pull_drive9;
     c64_clock clock;
     c64_frame working_frame;
     uint64_t keyboard_events;
@@ -358,6 +362,13 @@ void c64_set_key(c64_t *machine, c64_key key, bool pressed);
 void c64_set_matrix(c64_t *machine, uint8_t row, uint8_t col, bool pressed);
 void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
+void c64_set_iec_drive_pull(c64_t *machine, int device_number, uint8_t lines);
+uint8_t c64_get_iec_external_pull(c64_t *machine);
+/* Returns a bitmask (C64_IEC_* flags) of IEC lines CIA #2 is actively asserting.
+   Does not include iec_external_pull; no side effects. */
+uint8_t c64_get_iec_c64_pull(c64_t *machine);
+/* Returns a pointer to the drive slot for device_number (8 or 9), or NULL. */
+const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number);
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);

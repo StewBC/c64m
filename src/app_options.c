@@ -991,6 +991,8 @@ static void apply_config(app_options *options, config *cfg)
         replace_string(&options->rom1541_path, value);
     }
 
+    options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
+
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
         snprintf(key, sizeof(key), "%d", drive);
         value = config_get(cfg, "disk", key);
@@ -1252,6 +1254,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->defaults = src->defaults;
     dest->no_save_ini = src->no_save_ini;
     dest->autorun = src->autorun;
+    dest->emulate_1541 = src->emulate_1541;
     dest->audio_smoke = src->audio_smoke;
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
     dest->audio_record_duration_seconds = src->audio_record_duration_seconds;
@@ -1412,6 +1415,9 @@ bool app_options_save_shutdown(const app_options *options)
                 config_set(cfg, "disk", key, joined);
             }
         }
+    }
+    if (options->emulate_1541) {
+        config_set_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
     }
 
     ok = config_save(cfg, options->ini_path);
