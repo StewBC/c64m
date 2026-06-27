@@ -14,6 +14,7 @@
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
 - Breakpoint action parameters: Tron accepts an optional custom trace file path (empty = `trace.log`), Swap accepts a disk queue parameter (`+N` relative forward, `-N` relative backward, `N` absolute 1-based with wrap), Type accepts raw text in the input-encoding format parsed by `util/paste_parser`. Tron and Troff are mutually exclusive in the editor. INI and UI both persist and restore these parameters.
+- Breakpoint counter repeat value: `reset=0` / Repeat `0` auto-disables the breakpoint after it fires once. `reset=1` (the default for new breakpoints) repeats on every subsequent hit. `reset=N` repeats every N hits. The editor label is "Repeat" (previously "Reset").
 - Breakpoint Type action translator (`util/paste_parser`) is implemented. The parser converts stored text into `paste_event_t[]` events (up to 128) consumed by the runtime via `RUNTIME_COMMAND_PASTE_EVENTS` through `runtime_advance_paste_events()`. Supported syntax: literal printable chars (0x20–0x7E); named keys `\[KEYNAME]`, `\[KEYNAME+]` (assert), `\[KEYNAME-]` (deassert); wait tokens `\[W:N]` and `\[WAIT:N]` where `N` is a normal-keypress-duration multiplier and `0` is a no-op; PETSCII escapes `\xHH` (hex), `\dDDD` (decimal), `\oOOO` (octal); direct matrix address `\mR,C`; joystick events `\jPD[,B]`. Bare `SHIFT`, `CTRL`, `CBM`, and `RUNSTOP` tokens are one-shot modifiers released after the next non-modifier key/RESTORE event completes; explicit `+`/`-` holds override one-shot cleanup. Keys without a physical matrix position (F2/F4/F6/F8, cursor-up, cursor-left, PI) are encoded as `needs_shift` variants of their base key, and synthetic SHIFT cleanup preserves already-held one-shot or explicit SHIFT. OPT+SHIFT+INS clipboard paste routes through the same parser. Key aliases: `RT`=RETURN, `RE`=RESTORE (NMI), `RS`=RUNSTOP, `SH`=SHIFT, `CB`=CBM, `CT`=CTRL, `CH`=CLRHOME, `ID`=INSDEL, `SP`=SPACE, `PO`=POUND, `LA`=LEFTARROW, `UA`=UPARROW, `AS`=ASTERISK. RESTORE ignores `+`/`-` modifiers — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire the NMI identically. RUN/STOP+RESTORE soft reset shorthand: `\[RS]\[RE]`.
 
 ## Runtime/frontend ownership
@@ -91,9 +92,10 @@ UI behavior:
 ## Assembler UI
 
 - Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, and symbol snapshot handoff to disassembler are implemented.
-- Reset checkbox is above Assemble and defaults on.
-- When Reset is unchecked, assembly writes directly into live RAM in any execution state.
-- If Auto Run is set with Reset unchecked, the runtime jumps to run address and resumes running.
+- Reset C64 checkbox is above Assemble and defaults on (previously labelled "Reset").
+- When Reset C64 is unchecked, assembly writes directly into live RAM in any execution state.
+- If Auto Run is set with Reset C64 unchecked, the runtime jumps to run address and resumes running.
+- Rearm one-shots checkbox (default off): when checked, any breakpoint with `reset_count == 0` that is currently disabled is re-enabled and its counter reset to `initial_count` before assembly runs. Designed for iterative development sessions where auto-disabled one-shot breakpoints need to fire again on the next run.
 
 ## Host load/save UI
 

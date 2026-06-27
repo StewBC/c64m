@@ -558,7 +558,7 @@ W[C123-C1FF] (5/10)  [Edit] [Disable] [Clear]
 |----------------|----------------------------------------------------------------|
 | `R`, `W`, `RW` | Access type (read, write, or either)                           |
 | `[C123]`       | Address; or `[C123-C1FF]` for a range                          |
-| `(5/10)`       | Counter: hit count / threshold (shown when non-zero)           |
+| `(5/10)`       | Counter: total hits / repeat countdown (shown when counter is active) |
 | Action label   | `Fast`, `Slow`, `Tron`, `Troff`, `Swap`, `Type`, or nothing (Break) |
 
 - **[Edit]** opens the Breakpoint Editor.
@@ -604,9 +604,10 @@ When Tron, Swap, or Type is unchecked, its parameter field is grayed out.
 | `N`   | Mount the Nth disk in the queue, 1-based (wraps if out of range)     |
 | empty | No-op (Swap flag is set but does nothing)                            |
 
-**Counter**: enter a hit count and a reset count. With hit count `N` and reset count
-`M`, the action fires on the Nth hit and then every Mth hit thereafter. Set both to 0
-to disable counting.
+**Counter**: enter a hit count and a repeat count. With hit count `N` and repeat count
+`M`, the action fires on the Nth hit and then every Mth hit thereafter. Set repeat to
+`0` to auto-disable the breakpoint after it fires once. Set both to 0 to disable
+counting (the Use Counter checkbox controls this).
 
 **Type text format:**
 
@@ -715,15 +716,20 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 | File Name    | Path to the root assembly source file; use **Browse...** to pick |
 | Address      | Hex load and assembly origin address (default `$8000`)         |
 | Run Address  | Hex address to jump to after successful assembly               |
-| Auto Run     | If checked, sets PC to Run Address and resumes after assembly  |
-| Reset        | If checked, resets the machine and waits for BASIC (`$E38B`) before assembling |
-| **[Assemble]** | Assembles the source and loads bytes into C64 RAM            |
+| Auto Run        | If checked, sets PC to Run Address and resumes after assembly  |
+| Reset C64       | If checked, resets the machine and waits for BASIC (`$E38B`) before assembling |
+| Rearm one-shots | If checked, re-enables every auto-disabled one-shot breakpoint (`repeat = 0`) and resets its hit counter before assembling |
+| **[Assemble]**  | Assembles the source and loads bytes into C64 RAM            |
 
-When **Reset** is checked (the default), assembly waits for BASIC to initialize before
-writing code. This is the safe path for programs that expect a clean BASIC environment.
-When **Reset** is unchecked, the assembler writes directly into live RAM in whatever
-state the machine is in. If **Auto Run** is also set, the emulator immediately jumps to
-the Run Address and resumes execution.
+When **Reset C64** is checked (the default), assembly waits for BASIC to initialize
+before writing code. This is the safe path for programs that expect a clean BASIC
+environment. When **Reset C64** is unchecked, the assembler writes directly into live
+RAM in whatever state the machine is in. If **Auto Run** is also set, the emulator
+immediately jumps to the Run Address and resumes execution.
+
+**Rearm one-shots** is useful during iterative development: set a breakpoint with
+`repeat = 0` so it fires exactly once, then check this box so each re-assemble brings
+it back to life without manual re-enabling.
 
 Assembler labels are exported to the debugger symbol table immediately after a
 successful assembly, and appear in the Disassembly view.
@@ -1073,7 +1079,7 @@ break.<suffix> = <address[-address]>[,access][,mapping][,actions][,count=N][,res
 | `swap` or `swap=0` | Swap action present but no-op                                        |
 | `type=text`        | Inject text as C64 keystrokes; text uses the input-encoding format (see **Type text format** under **Breakpoints**) |
 | `count=N`          | Fire on the Nth hit                                                  |
-| `reset=N`          | Reset counter to N after firing                                      |
+| `reset=N`          | Repeat interval after firing; `1` = every hit (default), `N>1` = every Nth hit, `0` = auto-disable after firing |
 
 Examples:
 ```

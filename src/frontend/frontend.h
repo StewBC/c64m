@@ -75,6 +75,7 @@ typedef struct frontend_assembler_state {
     bool run_address_user_edited;
     bool auto_run;
     bool reset_first;
+    bool rearm_oneshots;
     bool error_dialog_open;
     char error_text[4096];
     unsigned int error_scroll_x;
@@ -142,6 +143,7 @@ typedef struct frontend_debugger_intent {
     uint16_t assemble_run_address;
     bool assemble_auto_run;
     bool assemble_reset_first;
+    bool assemble_rearm_oneshots;
     uint8_t disk_device;
     int disk_queue_index;
     /* Load */

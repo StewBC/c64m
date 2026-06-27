@@ -1098,6 +1098,9 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN:
+                if (intent.assemble_rearm_oneshots) {
+                    runtime_client_rearm_oneshot_breakpoints(client);
+                }
                 sent = runtime_client_assemble_file_full(
                     client,
                     intent.assemble_path,

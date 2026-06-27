@@ -1168,7 +1168,7 @@ static bool runtime_breakpoint_mapping_matches(
     return false;
 }
 
-static bool runtime_breakpoint_record_match(runtime_breakpoint *breakpoint) {
+static bool runtime_breakpoint_record_match(runtime *rt, runtime_breakpoint *breakpoint) {
     breakpoint->current_hits++;
 
     if (!breakpoint->use_counter) {
@@ -1181,6 +1181,12 @@ static bool runtime_breakpoint_record_match(runtime_breakpoint *breakpoint) {
 
     if (breakpoint->counter > 0) {
         return false;
+    }
+
+    if (breakpoint->reset_count == 0) {
+        breakpoint->enabled = false;
+        runtime_publish_breakpoints(rt);
+        return true;
     }
 
     breakpoint->counter = breakpoint->reset_count;
@@ -1330,7 +1336,7 @@ static bool runtime_breakpoint_matches_access(
             (breakpoint->access_mask & access) != 0 &&
             runtime_breakpoint_address_matches(breakpoint, address) &&
             runtime_breakpoint_mapping_matches(rt, breakpoint, address) &&
-            runtime_breakpoint_record_match(breakpoint)) {
+            runtime_breakpoint_record_match(rt, breakpoint)) {
             return runtime_execute_breakpoint_actions(rt, breakpoint);
         }
     }
@@ -1595,6 +1601,21 @@ static void runtime_set_breakpoint_enabled(runtime *rt, const runtime_command *c
 
     if (index >= 0) {
         rt->breakpoints[index].enabled = command->data.set_breakpoint_enabled.enabled != 0;
+    }
+
+    runtime_publish_breakpoints(rt);
+}
+
+static void runtime_rearm_oneshot_breakpoints(runtime *rt) {
+    size_t i;
+
+    for (i = 0; i < rt->breakpoint_count; ++i) {
+        runtime_breakpoint *bp = &rt->breakpoints[i];
+
+        if (bp->use_counter && bp->reset_count == 0 && !bp->enabled) {
+            bp->enabled = true;
+            bp->counter = bp->initial_count;
+        }
     }
 
     runtime_publish_breakpoints(rt);
@@ -2534,6 +2555,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_DUPLICATE_BREAKPOINT:
             runtime_duplicate_breakpoint(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_REARM_ONESHOT_BREAKPOINTS:
+            runtime_rearm_oneshot_breakpoints(rt);
             break;
 
         case RUNTIME_COMMAND_REQUEST_BREAKPOINTS:

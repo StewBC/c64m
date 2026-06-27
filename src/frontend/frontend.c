@@ -600,7 +600,8 @@ static bool frontend_push_assemble_run_intent(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
-    bool reset_first);
+    bool reset_first,
+    bool rearm_oneshots);
 
 static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int height);
 static void frontend_draw_symbol_lookup(frontend *ui, int width, int height);
@@ -719,7 +720,7 @@ static void frontend_open_breakpoint_dialog_default(frontend *ui)
     snprintf(dialog->start_address, sizeof(dialog->start_address), "%04X", ui->disassembly.cursor_address);
     snprintf(dialog->end_address, sizeof(dialog->end_address), "%04X", ui->disassembly.cursor_address);
     snprintf(dialog->initial_count, sizeof(dialog->initial_count), "0");
-    snprintf(dialog->reset_count, sizeof(dialog->reset_count), "0");
+    snprintf(dialog->reset_count, sizeof(dialog->reset_count), "1");
 }
 
 static void frontend_open_breakpoint_dialog_from_entry(
@@ -977,7 +978,8 @@ static bool frontend_push_assemble_run_intent(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
-    bool reset_first)
+    bool reset_first,
+    bool rearm_oneshots)
 {
     size_t next;
 
@@ -1000,6 +1002,7 @@ static bool frontend_push_assemble_run_intent(
     ui->intents[ui->intent_write].assemble_run_address = run_address;
     ui->intents[ui->intent_write].assemble_auto_run = auto_run;
     ui->intents[ui->intent_write].assemble_reset_first = reset_first;
+    ui->intents[ui->intent_write].assemble_rearm_oneshots = rearm_oneshots;
     ui->intent_write = next;
     return true;
 }
@@ -1183,7 +1186,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
                 sizeof(dialog->initial_count),
                 nk_filter_decimal);
             nk_layout_row_push(ctx, 0.14f);
-            nk_label(ctx, "Reset", NK_TEXT_LEFT);
+            nk_label(ctx, "Repeat", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.20f);
             frontend_edit_replace(
                 ctx,
@@ -5950,6 +5953,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
         asm_state->run_address_user_edited = false;
         asm_state->auto_run = false;
         asm_state->reset_first = true;
+        asm_state->rearm_oneshots = false;
         asm_state->initialized = true;
     }
 
@@ -6000,15 +6004,27 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
     nk_layout_row_end(ctx);
 
-    /* Reset checkbox */
+    /* Reset C64 checkbox */
     nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
     nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Reset", NK_TEXT_LEFT);
+    nk_label(ctx, "Reset C64", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.65f);
     {
         nk_bool reset_nk = asm_state->reset_first ? nk_true : nk_false;
         nk_checkbox_label(ctx, "", &reset_nk);
         asm_state->reset_first = (reset_nk != nk_false);
+    }
+    nk_layout_row_end(ctx);
+
+    /* Rearm one-shots checkbox */
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+    nk_layout_row_push(ctx, 0.35f);
+    nk_label(ctx, "Rearm one-shots", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.65f);
+    {
+        nk_bool rearm_nk = asm_state->rearm_oneshots ? nk_true : nk_false;
+        nk_checkbox_label(ctx, "", &rearm_nk);
+        asm_state->rearm_oneshots = (rearm_nk != nk_false);
     }
     nk_layout_row_end(ctx);
 
@@ -6022,7 +6038,8 @@ static void frontend_draw_misc_assembler(frontend *ui)
                 (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
                 (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
                 asm_state->auto_run,
-                asm_state->reset_first);
+                asm_state->reset_first,
+                asm_state->rearm_oneshots);
         }
     }
 }

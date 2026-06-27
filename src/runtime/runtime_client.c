@@ -308,6 +308,10 @@ bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, 
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_rearm_oneshot_breakpoints(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_REARM_ONESHOT_BREAKPOINTS);
+}
+
 bool runtime_client_request_breakpoints(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_BREAKPOINTS);
 }
