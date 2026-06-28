@@ -6391,6 +6391,59 @@ void frontend_set_save_bin_path(frontend *ui, const char *path)
     snprintf(ui->save_bin_dialog.path, sizeof(ui->save_bin_dialog.path), "%s", path);
 }
 
+void frontend_set_assembler_options(frontend *ui, const frontend_assembler_options *opts)
+{
+    frontend_assembler_state *s;
+
+    if (ui == NULL || opts == NULL) {
+        return;
+    }
+
+    s = &ui->assembler;
+    if (opts->file[0] != '\0') {
+        snprintf(s->file_path, sizeof(s->file_path), "%s", opts->file);
+    }
+    snprintf(s->address_buf, sizeof(s->address_buf), "%s",
+             opts->address[0] != '\0' ? opts->address : "8000");
+    snprintf(s->run_address_buf, sizeof(s->run_address_buf), "%s",
+             opts->run_address[0] != '\0' ? opts->run_address : "8000");
+    s->run_address_user_edited = (opts->run_address[0] != '\0');
+    s->reset_first = opts->reset_first;
+    s->rearm_oneshots = opts->rearm_oneshots;
+    s->initialized = true;
+}
+
+void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *out)
+{
+    const frontend_assembler_state *s;
+
+    if (ui == NULL || out == NULL) {
+        return;
+    }
+
+    s = &ui->assembler;
+    snprintf(out->file, sizeof(out->file), "%s", s->file_path);
+    snprintf(out->address, sizeof(out->address), "%s", s->address_buf);
+    snprintf(out->run_address, sizeof(out->run_address), "%s", s->run_address_buf);
+    out->reset_first = s->reset_first;
+    out->rearm_oneshots = s->rearm_oneshots;
+}
+
+void frontend_invalidate_disassembly_cache(frontend *ui)
+{
+    int i;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    for (i = 0; i < 3; ++i) {
+        memset(ui->disassembly.mem_cache[i].valid, 0,
+               sizeof(ui->disassembly.mem_cache[i].valid));
+    }
+    ui->disassembly.request_pending = false;
+}
+
 void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot)
 {
     size_t i;

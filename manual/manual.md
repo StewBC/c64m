@@ -737,6 +737,20 @@ successful assembly, and appear in the Disassembly view.
 If assembly fails, a scrollable error dialog shows each error with its source file and
 line number.
 
+### Assembler INI persistence
+
+The following assembler settings are saved in the `[assembler]` section of the INI
+file and restored on next launch. All keys are optional.
+
+```
+[assembler]
+file        = path/to/source.asm   ; path to source file (relative to INI or absolute)
+address     = 8000                 ; hex load/assembly origin address
+run_address = 8000                 ; hex run address
+reset       = yes                  ; Reset C64 before assembling (default: yes)
+rearm_oneshots = no                ; Rearm one-shot breakpoints before assembling (default: no)
+```
+
 ### Assembler Language
 
 The assembler supports standard 6502 mnemonics and addressing modes. C64 programs
@@ -1038,6 +1052,19 @@ Example — multi-disk queue for a multi-part game:
 
 The first image in the list is mounted at startup. The current position within the queue
 is not saved; launching the emulator always starts from the first image.
+
+### [assembler]
+
+Persists the Assembler tab state. All keys are optional; absent keys restore to their
+defaults on next launch.
+
+| Key              | Value                                               | Default |
+|------------------|-----------------------------------------------------|---------|
+| `file`           | Path to the root source file (relative or absolute) | —       |
+| `address`        | Hex load/assembly origin, e.g. `8000`               | `8000`  |
+| `run_address`    | Hex run address, e.g. `8000`                        | `8000`  |
+| `reset`          | `yes` / `no` — Reset C64 before assembling          | `yes`   |
+| `rearm_oneshots` | `yes` / `no` — Rearm one-shot breakpoints before assembling | `no` |
 
 ### [DEBUG]
 

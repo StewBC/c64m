@@ -993,6 +993,28 @@ static void apply_config(app_options *options, config *cfg)
 
     options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
 
+    value = config_get(cfg, "assembler", "file");
+    if (value != NULL) {
+        char abs_path[PATH_MAX];
+        if (path_absolute_from_ini(options, value, abs_path, sizeof(abs_path))) {
+            replace_string(&options->assembler_file, abs_path);
+        } else {
+            replace_string(&options->assembler_file, value);
+        }
+    }
+    value = config_get(cfg, "assembler", "address");
+    if (value != NULL) {
+        replace_string(&options->assembler_address, value);
+    }
+    value = config_get(cfg, "assembler", "run_address");
+    if (value != NULL) {
+        replace_string(&options->assembler_run_address, value);
+    }
+    options->assembler_reset_first = config_get_bool(
+        cfg, "assembler", "reset", options->assembler_reset_first);
+    options->assembler_rearm_oneshots = config_get_bool(
+        cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
+
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
         snprintf(key, sizeof(key), "%d", drive);
         value = config_get(cfg, "disk", key);
@@ -1219,6 +1241,8 @@ void app_options_init(app_options *options)
     options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
     options->layout_display_width = C64M_DEFAULT_DISPLAY_WIDTH;
     options->layout_display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
+    options->assembler_reset_first = true;
+    options->assembler_rearm_oneshots = false;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1271,6 +1295,9 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->layout_display_width = src->layout_display_width;
     dest->layout_display_height = src->layout_display_height;
 
+    dest->assembler_reset_first = src->assembler_reset_first;
+    dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
+
     if (!replace_string(&dest->ini_path, src->ini_path) ||
         !replace_string(&dest->breakpoint, src->breakpoint) ||
         !replace_string(&dest->turbo_multipliers, src->turbo_multipliers) ||
@@ -1284,7 +1311,10 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->rom1541_path, src->rom1541_path) ||
         !replace_string(&dest->prg_path, src->prg_path) ||
         !replace_string(&dest->basic_path, src->basic_path) ||
-        !replace_string(&dest->audio_record_path, src->audio_record_path)) {
+        !replace_string(&dest->audio_record_path, src->audio_record_path) ||
+        !replace_string(&dest->assembler_file, src->assembler_file) ||
+        !replace_string(&dest->assembler_address, src->assembler_address) ||
+        !replace_string(&dest->assembler_run_address, src->assembler_run_address)) {
         app_options_destroy(dest);
         return false;
     }
@@ -1420,6 +1450,21 @@ bool app_options_save_shutdown(const app_options *options)
         config_set_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
     }
 
+    if (options->assembler_file != NULL && options->assembler_file[0] != '\0') {
+        char rel_path[PATH_MAX];
+        if (app_options_path_relative_to_ini(options, options->assembler_file, rel_path, sizeof(rel_path))) {
+            config_set(cfg, "assembler", "file", rel_path);
+        }
+    }
+    if (options->assembler_address != NULL && options->assembler_address[0] != '\0') {
+        config_set(cfg, "assembler", "address", options->assembler_address);
+    }
+    if (options->assembler_run_address != NULL && options->assembler_run_address[0] != '\0') {
+        config_set(cfg, "assembler", "run_address", options->assembler_run_address);
+    }
+    config_set_bool(cfg, "assembler", "reset", options->assembler_reset_first);
+    config_set_bool(cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
+
     ok = config_save(cfg, options->ini_path);
     config_destroy(cfg);
     return ok;
@@ -1447,6 +1492,9 @@ void app_options_destroy(app_options *options)
     free(options->prg_path);
     free(options->basic_path);
     free(options->audio_record_path);
+    free(options->assembler_file);
+    free(options->assembler_address);
+    free(options->assembler_run_address);
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
         disk_slot_free(&options->disk_slots[i]);
     }

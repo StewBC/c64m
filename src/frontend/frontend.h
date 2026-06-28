@@ -190,6 +190,14 @@ typedef struct frontend_layout_state {
     int display_height;
 } frontend_layout_state;
 
+typedef struct frontend_assembler_options {
+    char file[1024];
+    char address[8];
+    char run_address[8];
+    bool reset_first;
+    bool rearm_oneshots;
+} frontend_assembler_options;
+
 frontend *frontend_create(platform_window *window);
 void frontend_destroy(frontend *ui);
 
@@ -218,3 +226,6 @@ void frontend_show_assembler_errors(frontend *ui, const char *errors);
 void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot);
 void frontend_set_load_bin_path(frontend *ui, const char *path);
 void frontend_set_save_bin_path(frontend *ui, const char *path);
+void frontend_invalidate_disassembly_cache(frontend *ui);
+void frontend_set_assembler_options(frontend *ui, const frontend_assembler_options *opts);
+void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *out);

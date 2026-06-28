@@ -57,6 +57,12 @@ typedef struct app_options {
     /* When true, disk I/O is routed through the genuine 1541 ROM (requires
        rom1541_path to be set); when false, KERNAL LOAD traps handle disk I/O. */
     bool emulate_1541;
+    /* Assembler tab persistent state */
+    char *assembler_file;
+    char *assembler_address;
+    char *assembler_run_address;
+    bool assembler_reset_first;
+    bool assembler_rearm_oneshots;
 } app_options;
 
 void app_options_init(app_options *options);

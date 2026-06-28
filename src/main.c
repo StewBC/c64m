@@ -368,6 +368,7 @@ static void poll_runtime_events(
                     }
                     free(symbols);
                 }
+                frontend_invalidate_disassembly_cache(ui);
             }
         } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
                    debug_state != NULL &&
@@ -1492,6 +1493,22 @@ int main(int argc, char **argv) {
     frontend_set_config_state(ui, &options);
     frontend_set_disk_queue(ui, 8, &options.disk_slots[8]);
     frontend_set_disk_queue(ui, 9, &options.disk_slots[9]);
+    {
+        frontend_assembler_options asm_opts;
+        memset(&asm_opts, 0, sizeof(asm_opts));
+        if (options.assembler_file != NULL) {
+            snprintf(asm_opts.file, sizeof(asm_opts.file), "%s", options.assembler_file);
+        }
+        if (options.assembler_address != NULL) {
+            snprintf(asm_opts.address, sizeof(asm_opts.address), "%s", options.assembler_address);
+        }
+        if (options.assembler_run_address != NULL) {
+            snprintf(asm_opts.run_address, sizeof(asm_opts.run_address), "%s", options.assembler_run_address);
+        }
+        asm_opts.reset_first = options.assembler_reset_first;
+        asm_opts.rearm_oneshots = options.assembler_rearm_oneshots;
+        frontend_set_assembler_options(ui, &asm_opts);
+    }
 
     send_run_command(client);
 
@@ -1519,6 +1536,18 @@ int main(int argc, char **argv) {
     options.layout_split_memory_misc = layout_state.split_memory_misc;
     options.layout_display_width = layout_state.display_width;
     options.layout_display_height = layout_state.display_height;
+    {
+        frontend_assembler_options asm_opts;
+        frontend_get_assembler_options(ui, &asm_opts);
+        app_options_set_string(&options.assembler_file,
+            asm_opts.file[0] ? asm_opts.file : NULL);
+        app_options_set_string(&options.assembler_address,
+            asm_opts.address[0] ? asm_opts.address : NULL);
+        app_options_set_string(&options.assembler_run_address,
+            asm_opts.run_address[0] ? asm_opts.run_address : NULL);
+        options.assembler_reset_first = asm_opts.reset_first;
+        options.assembler_rearm_oneshots = asm_opts.rearm_oneshots;
+    }
     if ((options.save_ini || options.remember) && !app_options_save_shutdown(&options)) {
         SDL_Log("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
     }
