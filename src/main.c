@@ -1252,6 +1252,14 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
+                    {
+                        int min_w = 0;
+                        int min_h = 0;
+                        if (ui_visible) {
+                            frontend_debug_min_window_size(ui, &min_w, &min_h);
+                        }
+                        platform_window_set_minimum_size(window, min_w, min_h);
+                    }
                 } else if (handle_step_key_event(client, &debug_state, &event.key, true)) {
                     send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_F10 &&

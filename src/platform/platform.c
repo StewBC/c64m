@@ -1,6 +1,6 @@
 #include "platform.h"
 
-#include <SDL2/SDL.h>
+#include <SDL.h>
 
 #define C64M_STARTUP_WINDOW_SCALE 3
 
@@ -123,6 +123,14 @@ void platform_window_present(platform_window *window)
     }
 
     SDL_RenderPresent(window->renderer);
+}
+
+void platform_window_set_minimum_size(platform_window *window, int min_w, int min_h)
+{
+    if (window == NULL || window->window == NULL) {
+        return;
+    }
+    SDL_SetWindowMinimumSize(window->window, min_w, min_h);
 }
 
 void platform_window_get_size(platform_window *window, int *out_width, int *out_height)
