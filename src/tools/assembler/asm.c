@@ -120,6 +120,114 @@ static void parse_line(ASSEMBLER *as) {
     }
 }
 
+static void asm_log_direct(ASSEMBLER *as, const char *fmt, ...) {
+    if(!as || !as->errorlog) {
+        return;
+    }
+    ERROR_ENTRY e;
+    memset(&e, 0, sizeof(e));
+    e.err_str = malloc(ASM_ERR_MAX_STR_LEN);
+    if(!e.err_str) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    e.message_length = (size_t)vsnprintf(e.err_str, ASM_ERR_MAX_STR_LEN, fmt, args);
+    va_end(args);
+    errlog(as->errorlog, &e);
+}
+
+#define OVERLAP_MAX_SEGS 64
+
+static void check_segment_overlaps(ASSEMBLER *as) {
+    for(size_t ti = 0; ti < as->targets.items; ti++) {
+        TARGET *target = *ARRAY_GET(&as->targets, TARGET*, ti);
+        if(!target) {
+            continue;
+        }
+
+        SEGMENT *segs[OVERLAP_MAX_SEGS];
+        int count = 0;
+
+        for(size_t si = 0; si < target->segments.items && count < OVERLAP_MAX_SEGS; si++) {
+            SEGMENT *s = *ARRAY_GET(&target->segments, SEGMENT*, si);
+            if(s->do_not_emit) {
+                continue;
+            }
+            if(s->segment_output_address == s->segment_start_address) {
+                continue;
+            }
+            segs[count++] = s;
+        }
+
+        if(count < 2) {
+            continue;
+        }
+
+        // Stable insertion sort by start address (preserves definition order for ties)
+        for(int i = 1; i < count; i++) {
+            SEGMENT *key = segs[i];
+            int j = i - 1;
+            while(j >= 0 && segs[j]->segment_start_address > key->segment_start_address) {
+                segs[j + 1] = segs[j];
+                j--;
+            }
+            segs[j + 1] = key;
+        }
+
+        int issues = 0;
+
+        // Wrap-around: output_address < start_address in uint16 arithmetic
+        for(int i = 0; i < count; i++) {
+            if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
+                const char *name = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
+                asm_log_direct(as, "Segment \"%.*s\" wraps past $FFFF (start $%04X end $%04X)",
+                    (int)segs[i]->segment_name_length, name,
+                    segs[i]->segment_start_address, segs[i]->segment_output_address);
+                issues++;
+            }
+        }
+
+        // Overlap: for each pair (i,j) with i<j in sorted order, b_start < a_end means overlap
+        for(int i = 0; i < count - 1; i++) {
+            if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
+                continue;
+            }
+            for(int j = i + 1; j < count; j++) {
+                if(segs[j]->segment_output_address < segs[j]->segment_start_address) {
+                    continue;
+                }
+                if(segs[j]->segment_start_address < segs[i]->segment_output_address) {
+                    const char *na = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
+                    const char *nb = segs[j]->segment_name ? segs[j]->segment_name : "<default>";
+                    asm_log_direct(as,
+                        "Segment \"%.*s\" [$%04X..$%04X) overlaps \"%.*s\" [$%04X..$%04X)",
+                        (int)segs[i]->segment_name_length, na,
+                        segs[i]->segment_start_address, segs[i]->segment_output_address,
+                        (int)segs[j]->segment_name_length, nb,
+                        segs[j]->segment_start_address, segs[j]->segment_output_address);
+                    issues++;
+                }
+            }
+        }
+
+        if(issues > 0) {
+            asm_log_direct(as, "Segments overlap -- suggested addresses:");
+            uint16_t next_addr = segs[0]->segment_start_address;
+            for(int i = 0; i < count; i++) {
+                if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
+                    continue;
+                }
+                const char *name = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
+                uint16_t size = segs[i]->segment_output_address - segs[i]->segment_start_address;
+                asm_log_direct(as, "  Suggest \"%.*s\" at $%04X",
+                    (int)segs[i]->segment_name_length, name, next_addr);
+                next_addr += size;
+            }
+        }
+    }
+}
+
 int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
     if(!as || !errorlog || !cb || !cb->output_byte) {
         return ASM_ERR;
@@ -223,6 +331,10 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
         if(as->if_stack.items > 0 || as->if_skip_depth > 0) {
             asm_err(as, ASM_ERR_RESOLVE, "Unclosed conditional assembly block");
         }
+    }
+
+    if(!as->errorlog || as->errorlog->log_array.items == initial_errors) {
+        check_segment_overlaps(as);
     }
 
     return as->errorlog && as->errorlog->log_array.items > initial_errors ? ASM_ERR : ASM_OK;
