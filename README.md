@@ -48,9 +48,10 @@ Press **F9** to toggle the debugger layout.
 The emulation is a work in progress. Many games from single-load collections run
 correctly, but accuracy gaps remain.
 
-- D64 support is read-only. Disk writes, SAVE to disk, the error channel, 1541 CPU/ROM
-  emulation, full IEC timing/protocol, fast loaders, and devices beyond 8 and 9 are not
-  implemented.
+- D64 support is read-only. Standard 1541 ROM/IEC disk loads work when 1541 emulation
+  is enabled, but disk writes, SAVE to disk, the error channel, devices beyond 8 and 9,
+  and fast loaders that depend on unmodeled disk mechanics are not implemented or not
+  broadly validated.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
   last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 
