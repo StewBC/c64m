@@ -6,6 +6,8 @@
 - Read-only tools parser is implemented.
 - Runtime mount/unmount supports devices 8 and 9.
 - KERNAL LOAD traps for PRG loads are implemented.
+- Optional real 1541 ROM/IEC LOAD path is implemented when `[disk] emulate_1541=1`
+  and a standard 1541 DOS 2.6 ROM is loaded.
 - `LOAD "$"` directory loads are implemented.
 - Exact and wildcard filename matching are implemented.
 - Machine-tab disk UI is implemented with per-drive disk queues.
@@ -25,6 +27,10 @@
 - Runtime/frontend exchange copied disk status only.
 - LOAD supports device 8/9 PRG exact names.
 - LOAD supports `*`, prefix wildcards, `?`, and directory synthesis.
+- With 1541 emulation enabled and a ROM present, standard KERNAL LOADs for devices
+  8/9 go through the C64 KERNAL IEC routines and real 1541 DOS ROM serial handlers.
+  Without a 1541 ROM, or when emulation is disabled, the D64-backed KERNAL trap is
+  still used as a compatibility fallback.
 - Failure paths preserve unrelated memory for no disk, missing file, unsupported type/mode, malformed chains, loops, out-of-range sectors, and target overflow.
 
 ## Disk queue model (app_disk_slot)
@@ -92,10 +98,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 - D64 writes are not implemented.
 - SAVE to disk is not implemented.
-- Error channel is not implemented.
-- 1541 CPU/ROM emulation is not implemented.
-- IEC timing/protocol is not implemented.
-- Fast loaders are not implemented.
+- Error channel is not implemented beyond generic 1541 ROM intercept errors.
+- Fast loaders are not broadly validated; loaders that depend on unmodeled
+  disk-controller VIA motor/SYNC/head mechanics may still fail.
 - Devices beyond 8/9 are not implemented.
 - Full Commodore DOS pattern/type suffix semantics are not implemented.
 
@@ -107,6 +112,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   - `--prg foo.prg --autorun` should boot and immediately run.
   - `--basic foo.bas --autorun` should boot and immediately run.
   - `--disk 8=game.d64 --autorun` should type `LOAD"*",8` and `RUN` automatically.
+  - With `[disk] emulate_1541=1` and `[roms] 1541=...`, the same disk autorun path should load through the real 1541 ROM/IEC path, not the KERNAL trap.
 - Host load/save:
   - Load with file-address header.
   - Load with Basic Program and check `$2B-$2E`.

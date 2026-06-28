@@ -19,12 +19,12 @@ The emulator currently includes:
 - SID functional audio plus SID improvement Phase 10 as the current measured baseline.
 - Runtime audio infrastructure with cycle-stepped sample production, SDL output, recording, smoke tone, turbo mute, and overrun/underrun counters.
 - Debugger/config/frontend UI through the documented phases, including hardware view, memory/disassembly source modes, virtual memory views, assembler tab, help UI, host load/save UI, and modal input isolation.
-- D64 read-only disk support for devices 8 and 9, KERNAL LOAD traps, directory loads, wildcard matching, runtime mount/unmount, and startup autorun flows.
+- D64 read-only disk support for devices 8 and 9, KERNAL LOAD traps, directory loads, wildcard matching, runtime mount/unmount, startup autorun flows, and optional real 1541 ROM/IEC LOAD path when `[disk] emulate_1541=1`.
 - Practical undocumented 6510 opcode coverage.
 
 ## Recent high-value handoff notes
 
-- VIA 6522 module implemented and unit-tested (Phase 1 of 1541 emulation). `src/machine/via6522.{h,c}` provides the MOS 6522 peripheral used by the 1541 disk drive. See `docs/status/IEC1541.md`.
+- 1541 ROM/IEC disk loads now work for the standard DOS 2.6 1541 ROM with mounted read-only D64 images. The KERNAL LOAD trap remains as fallback when 1541 emulation is disabled or no 1541 ROM is loaded. See `docs/status/IEC1541.md`.
 - Breakpoint actions Tron, Swap, and Type now carry parameters persisted in the INI and editable in the Breakpoint Editor. Tron accepts an optional custom trace file path; Swap accepts `+N`/`-N` (relative) or `N` (absolute 1-based, wraps) for disk queue navigation on device 8; Type stores raw text in the input-encoding format; the translator is implemented in `util/paste_parser` and delivers events via `RUNTIME_COMMAND_PASTE_EVENTS`, including one-shot modifier and wait-token support. Tron and Troff are mutually exclusive. See `docs/status/FRONTEND_DEBUGGER.md` for parser syntax details.
 - Disk images are now persisted in the `[disk]` INI section on quit; paths are stored relative to the INI file and each drive holds an ordered queue (comma-separated). The disk UI shows `[N][Add][Eject] <combo>` per device; Shift+Eject clears the whole queue. See `docs/status/DISK_IO.md` for full semantics.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.

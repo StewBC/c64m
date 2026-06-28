@@ -34,9 +34,8 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - D64 writes are not implemented.
 - SAVE to disk is not implemented.
 - Error channel is not implemented.
-- 1541 CPU/ROM emulation is not implemented.
-- IEC timing/protocol is not implemented.
-- Fast loaders are not implemented.
+- Fast loaders are not broadly validated; loaders that require unmodeled
+  disk-controller VIA motor/SYNC/head behavior or nonstandard drive ROM behavior may fail.
 - Devices beyond 8/9 are not implemented.
 - Full Commodore DOS pattern/type suffix semantics are not implemented.
 

@@ -46,10 +46,12 @@ choice is applied after the INI file is loaded.
 
 ### Disk Images
 
-c64m supports read-only D64 images on device 8 and device 9. D64 write operations, fast
-loaders, and full 1541 emulation are not implemented. `LOAD "NAME",8` and
-`LOAD "NAME",8,1` work through a KERNAL trap. Wildcards `*` and `?` are supported, and
-`LOAD "$",8` returns a directory listing.
+c64m supports read-only D64 images on device 8 and device 9. `LOAD "NAME",8`,
+`LOAD "NAME",8,1`, wildcard loads, and `LOAD "$",8` work through a compatibility
+KERNAL trap by default. If a 1541 ROM is available and `[disk] emulate_1541=1` is set,
+standard disk LOADs for devices 8/9 run through the real C64 KERNAL IEC routines and
+the emulated 1541 DOS ROM instead. D64 write operations and SAVE to disk are not
+implemented.
 
 ### PRG and BASIC Files
 
@@ -1022,9 +1024,10 @@ emulator removes comments.
 | `kernal`    | Path to KERNAL ROM (8192 bytes)      |
 | `char` or `character` | Path to character ROM (4096 bytes) |
 | `system`    | Path to combined system ROM (16384 bytes) |
+| `1541`      | Path to combined 1541 DOS ROM (16384 bytes) |
 
 If no ROM paths are specified, c64m searches for files named `basic`, `kernal`,
-`character`, and `system` (with any extension) in `.`, `rom/`, and `roms/`.
+`character`, `system`, and `1541` (with any extension) in `.`, `rom/`, and `roms/`.
 
 ### [disk]
 
@@ -1035,6 +1038,7 @@ Paths may be absolute or relative to the directory containing the INI file.
 |-----|------------------------------------------------------------------|
 | `8` | D64 image or comma-separated list of images for device 8        |
 | `9` | D64 image or comma-separated list of images for device 9        |
+| `emulate_1541` | `true`/`false`; when true and a 1541 ROM is loaded, route disk LOADs through real IEC/1541 emulation |
 
 Example — single disk:
 
@@ -1323,14 +1327,25 @@ beyond not-connected policy, NTSC SID rate tables.
 
 ### Disk
 
-Device 8 and device 9 each hold an independent read-only D64 image. The KERNAL LOAD
-trap intercepts $FFD5 for devices 8/9 only; all other devices fall through to ROM.
-`LOAD "NAME",8` loads at the BASIC start pointer and updates end-of-program pointers.
-`LOAD "NAME",8,1` loads at the embedded PRG load address. `LOAD "$",8` synthesises a
-tokenized BASIC directory listing with the disk title, file list, and blocks-free line.
-Filename matching supports exact names, `*` prefix wildcard, `?` single-character
-wildcard, and bare `*` for the first PRG. The parser validates chain links and guards
-against sector loops and out-of-range references.
+Device 8 and device 9 each hold an independent read-only D64 image. In the default
+compatibility mode, the KERNAL LOAD trap intercepts $FFD5 for devices 8/9 only; all
+other devices fall through to ROM. `LOAD "NAME",8` loads at the BASIC start pointer and
+updates end-of-program pointers. `LOAD "NAME",8,1` loads at the embedded PRG load
+address. `LOAD "$",8` synthesises a tokenized BASIC directory listing with the disk
+title, file list, and blocks-free line. Filename matching supports exact names, `*`
+prefix wildcard, `?` single-character wildcard, and bare `*` for the first PRG. The
+parser validates chain links and guards against sector loops and out-of-range
+references.
+
+When `[disk] emulate_1541=1` is set and a combined 16 K 1541 DOS ROM is loaded through
+`[roms] 1541`, the trap is disabled for devices 8/9 and KERNAL LOAD proceeds over the
+emulated IEC bus. The 1541 model runs the drive 6502, two VIA 6522s, the standard DOS
+2.6 ROM serial handlers, ATN/CLK/DATA open-collector signaling, ATN acknowledge, and
+ROM-level D64 sector reads. The disk-controller VIA mechanics are intentionally
+abstracted: ROM READ/SEARCH jobs are satisfied from the mounted D64 image rather than
+from a simulated stepper motor, GCR stream, or SYNC signal. This supports standard
+KERNAL disk loads and disk autorun while keeping D64 writes, SAVE to disk, the error
+channel, and unvalidated fast-loader mechanics out of scope.
 
 ### Joystick
 

@@ -7,6 +7,7 @@
 - CPU: local tests cover documented CPU execution, bus integration, trace timing, IRQ/NMI entry, banking, and BA read/write stalling.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
+- 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path.
 
 ## Known test gaps
 
@@ -23,6 +24,7 @@
   - `--prg foo.prg --autorun` should boot and immediately run.
   - `--basic foo.bas --autorun` should boot and immediately run.
   - `--disk 8=game.d64 --autorun` should type `LOAD"*",8` and `RUN` automatically.
+  - With 1541 emulation enabled, disk autorun should still be validated by loaded BASIC memory or visible program start, not by the host "RUN command received" log alone.
 - Assembler tab:
   - Assemble with Reset on.
   - Assemble with Reset off.
