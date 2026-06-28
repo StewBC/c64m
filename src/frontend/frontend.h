@@ -194,6 +194,7 @@ typedef struct frontend_assembler_options {
     char file[1024];
     char address[8];
     char run_address[8];
+    bool auto_run;
     bool reset_first;
     bool rearm_oneshots;
 } frontend_assembler_options;

@@ -61,6 +61,7 @@ typedef struct app_options {
     char *assembler_file;
     char *assembler_address;
     char *assembler_run_address;
+    bool assembler_auto_run;
     bool assembler_reset_first;
     bool assembler_rearm_oneshots;
 } app_options;

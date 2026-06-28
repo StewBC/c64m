@@ -6425,6 +6425,7 @@ void frontend_set_assembler_options(frontend *ui, const frontend_assembler_optio
     snprintf(s->run_address_buf, sizeof(s->run_address_buf), "%s",
              opts->run_address[0] != '\0' ? opts->run_address : "8000");
     s->run_address_user_edited = (opts->run_address[0] != '\0');
+    s->auto_run = opts->auto_run;
     s->reset_first = opts->reset_first;
     s->rearm_oneshots = opts->rearm_oneshots;
     s->initialized = true;
@@ -6442,6 +6443,7 @@ void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *ou
     snprintf(out->file, sizeof(out->file), "%s", s->file_path);
     snprintf(out->address, sizeof(out->address), "%s", s->address_buf);
     snprintf(out->run_address, sizeof(out->run_address), "%s", s->run_address_buf);
+    out->auto_run = s->auto_run;
     out->reset_first = s->reset_first;
     out->rearm_oneshots = s->rearm_oneshots;
 }

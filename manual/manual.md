@@ -746,11 +746,12 @@ file and restored on next launch. All keys are optional.
 
 ```
 [assembler]
-file        = path/to/source.asm   ; path to source file (relative to INI or absolute)
-address     = 8000                 ; hex load/assembly origin address
-run_address = 8000                 ; hex run address
-reset       = yes                  ; Reset C64 before assembling (default: yes)
-rearm_oneshots = no                ; Rearm one-shot breakpoints before assembling (default: no)
+file           = path/to/source.asm   ; path to source file (relative to INI or absolute)
+address        = 8000                 ; hex load/assembly origin address
+run_address    = 8000                 ; hex run address
+auto_run       = no                   ; jump to run address after assembly (default: no)
+reset          = yes                  ; Reset C64 before assembling (default: yes)
+rearm_oneshots = no                   ; Rearm one-shot breakpoints before assembling (default: no)
 ```
 
 ### Assembler Language
@@ -1067,6 +1068,7 @@ defaults on next launch.
 | `file`           | Path to the root source file (relative or absolute) | —       |
 | `address`        | Hex load/assembly origin, e.g. `8000`               | `8000`  |
 | `run_address`    | Hex run address, e.g. `8000`                        | `8000`  |
+| `auto_run`       | `yes` / `no` — Jump to run address after assembling | `no`    |
 | `reset`          | `yes` / `no` — Reset C64 before assembling          | `yes`   |
 | `rearm_oneshots` | `yes` / `no` — Rearm one-shot breakpoints before assembling | `no` |
 

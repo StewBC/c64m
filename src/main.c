@@ -1513,6 +1513,7 @@ int main(int argc, char **argv) {
         if (options.assembler_run_address != NULL) {
             snprintf(asm_opts.run_address, sizeof(asm_opts.run_address), "%s", options.assembler_run_address);
         }
+        asm_opts.auto_run = options.assembler_auto_run;
         asm_opts.reset_first = options.assembler_reset_first;
         asm_opts.rearm_oneshots = options.assembler_rearm_oneshots;
         frontend_set_assembler_options(ui, &asm_opts);
@@ -1553,6 +1554,7 @@ int main(int argc, char **argv) {
             asm_opts.address[0] ? asm_opts.address : NULL);
         app_options_set_string(&options.assembler_run_address,
             asm_opts.run_address[0] ? asm_opts.run_address : NULL);
+        options.assembler_auto_run = asm_opts.auto_run;
         options.assembler_reset_first = asm_opts.reset_first;
         options.assembler_rearm_oneshots = asm_opts.rearm_oneshots;
     }
