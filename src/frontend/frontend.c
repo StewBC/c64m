@@ -350,6 +350,7 @@ struct frontend {
     int memory_view_count;
     int memory_active_view_index;
     int memory_context_menu_view_index;
+    uint16_t memory_context_menu_address;
     frontend_context_popup_state memory_context_popup;
     frontend_context_popup_state disassembly_context_popup;
     bool memory_color_slot_used[MEMORY_VIEW_MAX];
@@ -4248,38 +4249,42 @@ static void frontend_memory_draw_status_footer(
         nk_rgb(196, 214, 228));
 }
 
-static void frontend_memory_handle_mouse_row(
-    frontend *ui,
-    int view_index,
+static bool frontend_memory_row_address_at(
+    const frontend_memory_view_state *memory,
     struct nk_rect row_bounds,
-    uint16_t row_addr)
+    uint16_t row_addr,
+    float mouse_x,
+    float char_w,
+    uint16_t *out_address,
+    frontend_memory_edit_field *out_field,
+    uint8_t *out_nibble,
+    uint8_t *out_address_digit)
 {
-    frontend_memory_view_state *memory = &ui->memory_views[view_index];
-    float char_w = frontend_memory_char_width(ui);
     float rel_x;
     int text_col;
     int hex_start = 5;
     int ascii_start = hex_start + memory->columns * 3;
     int hex_end = hex_start + memory->columns * 3;
 
-    if (!nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) ||
-        !nk_input_is_mouse_hovering_rect(&ui->ctx->input, row_bounds)) {
-        return;
+    if (memory == NULL || out_address == NULL || char_w <= 0.0f) {
+        return false;
     }
 
-    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
-    ui->memory_active_view_index = view_index;
-    rel_x = ui->ctx->input.mouse.pos.x - row_bounds.x;
+    rel_x = mouse_x - row_bounds.x;
     if (rel_x < 0.0f) {
         rel_x = 0.0f;
     }
     text_col = (int)(rel_x / char_w);
 
     if (text_col < 4) {
-        memory->edit_field = FRONTEND_MEMORY_EDIT_ADDRESS;
-        memory->active_address_digit = (uint8_t)text_col;
-        memory->cursor_address = row_addr;
-        return;
+        *out_address = row_addr;
+        if (out_field != NULL) {
+            *out_field = FRONTEND_MEMORY_EDIT_ADDRESS;
+        }
+        if (out_address_digit != NULL) {
+            *out_address_digit = (uint8_t)text_col;
+        }
+        return true;
     }
 
     if (text_col >= hex_start && text_col < hex_end) {
@@ -4287,18 +4292,82 @@ static void frontend_memory_handle_mouse_row(
         int cell_col = (text_col - hex_start) % 3;
 
         if (cell >= 0 && cell < memory->columns) {
-            memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
-            memory->cursor_address = (uint16_t)(row_addr + cell);
-            memory->active_nibble = (uint8_t)(cell_col == 1 ? 1 : 0);
+            *out_address = (uint16_t)(row_addr + cell);
+            if (out_field != NULL) {
+                *out_field = FRONTEND_MEMORY_EDIT_HEX;
+            }
+            if (out_nibble != NULL) {
+                *out_nibble = (uint8_t)(cell_col == 1 ? 1 : 0);
+            }
+            return true;
         }
-        return;
+        return false;
     }
 
     if (text_col >= ascii_start && text_col < ascii_start + memory->columns) {
         int cell = text_col - ascii_start;
 
-        memory->edit_field = FRONTEND_MEMORY_EDIT_ASCII;
-        memory->cursor_address = (uint16_t)(row_addr + cell);
+        *out_address = (uint16_t)(row_addr + cell);
+        if (out_field != NULL) {
+            *out_field = FRONTEND_MEMORY_EDIT_ASCII;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static void frontend_memory_handle_mouse_row(
+    frontend *ui,
+    int view_index,
+    struct nk_rect row_bounds,
+    uint16_t row_addr)
+{
+    frontend_memory_view_state *memory = &ui->memory_views[view_index];
+    uint16_t address;
+    frontend_memory_edit_field field;
+    uint8_t nibble = 0;
+    uint8_t address_digit = 0;
+    bool left_click;
+    bool right_click;
+
+    if (!nk_input_is_mouse_hovering_rect(&ui->ctx->input, row_bounds)) {
+        return;
+    }
+
+    left_click = nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_LEFT) != 0;
+    right_click = nk_input_is_mouse_pressed(&ui->ctx->input, NK_BUTTON_RIGHT) != 0;
+    if (!left_click && !right_click) {
+        return;
+    }
+
+    if (!frontend_memory_row_address_at(
+            memory,
+            row_bounds,
+            row_addr,
+            left_click ? ui->ctx->input.mouse.pos.x :
+                ui->ctx->input.mouse.buttons[NK_BUTTON_RIGHT].clicked_pos.x,
+            frontend_memory_char_width(ui),
+            &address,
+            &field,
+            &nibble,
+            &address_digit)) {
+        return;
+    }
+
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_MEMORY);
+    ui->memory_active_view_index = view_index;
+    memory->edit_field = field;
+    memory->cursor_address = address;
+    if (field == FRONTEND_MEMORY_EDIT_HEX) {
+        memory->active_nibble = nibble;
+    } else if (field == FRONTEND_MEMORY_EDIT_ADDRESS) {
+        memory->active_address_digit = address_digit;
+    }
+
+    if (right_click) {
+        ui->memory_context_menu_view_index = view_index;
+        ui->memory_context_menu_address = address;
     }
 }
 
@@ -4975,11 +5044,14 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                 debug_state->runtime_state != FRONTEND_RUNTIME_STATE_RUNNING;
             bool can_join = ui->memory_view_count > 1;
             ui->memory_context_menu_view_index = ui->memory_active_view_index;
+            ui->memory_context_menu_address =
+                ui->memory_views[ui->memory_active_view_index].cursor_address;
             for (v = 0; v < ui->memory_view_count; v++) {
                 if (ui->memory_views[v].rows > 0 &&
                     click_y >= ui->memory_views[v].cached_y_top &&
                     click_y < ui->memory_views[v].cached_y_bottom) {
                     ui->memory_context_menu_view_index = v;
+                    ui->memory_context_menu_address = ui->memory_views[v].cursor_address;
                     break;
                 }
             }
@@ -5005,7 +5077,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                           ? ui->memory_context_menu_view_index : ui->memory_active_view_index;
             frontend_memory_view_state *ctx_view = &ui->memory_views[ctx_idx];
             uint64_t write_history =
-                frontend_memory_write_history_at(debug_state, ctx_view, ctx_view->cursor_address);
+                frontend_memory_write_history_at(debug_state, ctx_view, ui->memory_context_menu_address);
 
             frontend_context_menu_heading(ui->ctx, "Source");
             if (frontend_context_menu_mode_item(
