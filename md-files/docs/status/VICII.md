@@ -31,6 +31,7 @@
 - Sprite BA now selects a PAL 6569 or NTSC 6567R8 BA-assert table from the machine video standard.
 - Existing PAL sprite BA tests still cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior.
 - NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
+- Galencia NTSC sprite multiplex corruption was fixed by preserving RAM underneath visible `$D000-$DFFF` I/O writes; VIC sprite data fetched from RAM under I/O is no longer overwritten by VIC register writes.
 
 ## Known limitations / deferred
 

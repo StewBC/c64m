@@ -48,6 +48,7 @@ This is expected when the CPU interrupt-disable flag remains set.
 - RAM/ROM/banking/address decode are implemented.
 - CPU-visible memory map is used for normal bus access and debugger Map source mode.
 - Physical ROM and raw RAM debugger views are available through dedicated debug read paths.
+- Visible `$D000-$DFFF` I/O writes update the mapped device and do not mutate RAM underneath; RAM under I/O remains accessible to VIC fetches and raw RAM/debug paths.
 - VIC bank selection is cached from CIA #2 port state as an accepted optimization.
 - CPU opcode writes maintain a 64K write-history table keyed by CPU-visible
   16-bit address. Each entry stores the last four opcode PCs in 16-bit lanes,
