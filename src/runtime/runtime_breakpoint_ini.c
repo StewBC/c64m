@@ -114,6 +114,12 @@ static bool runtime_ini_parse_swap_param(const char *text, int32_t *out_param, u
     return true;
 }
 
+typedef struct runtime_ini_breakpoint_parse_state {
+    bool saw_access;
+    bool saw_action;
+    bool saw_reset;
+} runtime_ini_breakpoint_parse_state;
+
 static void runtime_ini_warn(const char *key, const char *message) {
     fprintf(stderr, "warning: breakpoint `%s`: %s\n", key, message);
 }
@@ -169,16 +175,181 @@ static bool runtime_ini_parse_address_key(
     return true;
 }
 
+static bool runtime_ini_parse_breakpoint_item(
+    const char *key,
+    char *item,
+    runtime_breakpoint_definition *definition,
+    runtime_ini_breakpoint_parse_state *state) {
+    if (runtime_ini_streq(item, "execute")) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+        state->saw_access = true;
+    } else if (runtime_ini_streq(item, "read")) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_READ;
+        state->saw_access = true;
+    } else if (runtime_ini_streq(item, "write")) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_WRITE;
+        state->saw_access = true;
+    } else if (runtime_ini_streq(item, "access")) {
+        definition->access |= RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
+        state->saw_access = true;
+    } else if (runtime_ini_streq(item, "map")) {
+        definition->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+    } else if (runtime_ini_streq(item, "rom")) {
+        definition->mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    } else if (runtime_ini_streq(item, "ram")) {
+        definition->mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+    } else if (runtime_ini_streq(item, "break")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_BREAK;
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "fast")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_FAST;
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "slow")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_SLOW;
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "tron")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+        definition->tron_path[0] = '\0';
+        state->saw_action = true;
+    } else if (strncmp(item, "tron=", 5) == 0) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+        snprintf(definition->tron_path, sizeof(definition->tron_path), "%s", item + 5);
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "troff")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TROFF;
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "type")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+        definition->type_text[0] = '\0';
+        state->saw_action = true;
+    } else if (strncmp(item, "type=", 5) == 0) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+        snprintf(definition->type_text, sizeof(definition->type_text), "%s", item + 5);
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "swap")) {
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+        definition->swap_param = 0;
+        definition->swap_relative = 0;
+        state->saw_action = true;
+    } else if (strncmp(item, "swap=", 5) == 0) {
+        int32_t param = 0;
+        uint8_t relative = 0;
+        if (!runtime_ini_parse_swap_param(item + 5, &param, &relative)) {
+            runtime_ini_warn(key, "invalid swap parameter");
+            return false;
+        }
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+        definition->swap_param = param;
+        definition->swap_relative = relative;
+        state->saw_action = true;
+    } else if (runtime_ini_streq(item, "enabled")) {
+        definition->enabled = 1;
+    } else if (runtime_ini_streq(item, "disabled")) {
+        definition->enabled = 0;
+    } else if (strncmp(item, "count=", 6) == 0) {
+        if (!runtime_ini_parse_u32(item + 6, &definition->initial_count)) {
+            runtime_ini_warn(key, "invalid count");
+            return false;
+        }
+        definition->use_counter = 1;
+    } else if (strncmp(item, "reset=", 6) == 0) {
+        if (!runtime_ini_parse_u32(item + 6, &definition->reset_count)) {
+            runtime_ini_warn(key, "invalid reset");
+            return false;
+        }
+        state->saw_reset = true;
+    } else if (*item != '\0') {
+        runtime_ini_warn(key, "unknown keyword ignored");
+    }
+
+    return true;
+}
+
+static bool runtime_ini_parse_breakpoint_items(
+    const char *key,
+    char *text,
+    runtime_breakpoint_definition *definition,
+    runtime_ini_breakpoint_parse_state *state) {
+    char *token = strtok(text, ",");
+
+    while (token != NULL) {
+        char *item = runtime_ini_trim(token);
+        if (!runtime_ini_parse_breakpoint_item(key, item, definition, state)) {
+            return false;
+        }
+        token = strtok(NULL, ",");
+    }
+
+    return true;
+}
+
+static bool runtime_ini_find_type_assignment(char *text, char **token_start, char **value_start) {
+    char *start = text;
+
+    while (start != NULL) {
+        char *item = start;
+        char *comma;
+
+        while (isspace((unsigned char)*item)) {
+            item++;
+        }
+        if (strncmp(item, "type=", 5) == 0) {
+            *token_start = start;
+            *value_start = item + 5;
+            return true;
+        }
+
+        comma = strchr(start, ',');
+        start = comma != NULL ? comma + 1 : NULL;
+    }
+
+    return false;
+}
+
+static bool runtime_ini_parse_type_trailing_counter(
+    const char *key,
+    char *type_value,
+    runtime_breakpoint_definition *definition,
+    runtime_ini_breakpoint_parse_state *state) {
+    char *end = type_value + strlen(type_value);
+
+    while (end > type_value) {
+        char *comma = end;
+        char tail[RUNTIME_BREAKPOINT_VALUE_MAX];
+        char *item;
+
+        while (comma > type_value && comma[-1] != ',') {
+            comma--;
+        }
+        if (comma == type_value) {
+            break;
+        }
+
+        snprintf(tail, sizeof(tail), "%.*s", (int)(end - comma), comma);
+        item = runtime_ini_trim(tail);
+        if (strncmp(item, "count=", 6) != 0 && strncmp(item, "reset=", 6) != 0) {
+            break;
+        }
+        if (!runtime_ini_parse_breakpoint_item(key, item, definition, state)) {
+            return false;
+        }
+
+        comma[-1] = '\0';
+        end = comma - 1;
+    }
+
+    return true;
+}
+
 static bool runtime_ini_parse_breakpoint(
     const char *key,
     const char *value,
     runtime_breakpoint_definition *definition) {
     char buffer[RUNTIME_BREAKPOINT_VALUE_MAX];
-    char *token;
+    runtime_ini_breakpoint_parse_state state = {0};
+    char *type_token = NULL;
+    char *type_value = NULL;
     bool has_end = false;
-    bool saw_access = false;
-    bool saw_action = false;
-    bool saw_reset = false;
 
     memset(definition, 0, sizeof(*definition));
     definition->enabled = 1;
@@ -195,100 +366,33 @@ static bool runtime_ini_parse_breakpoint(
     definition->has_end_address = has_end ? 1u : 0u;
 
     snprintf(buffer, sizeof(buffer), "%s", value != NULL ? value : "");
-    token = strtok(buffer, ",");
-    while (token != NULL) {
-        char *item = runtime_ini_trim(token);
 
-        if (runtime_ini_streq(item, "execute")) {
-            definition->access |= RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
-            saw_access = true;
-        } else if (runtime_ini_streq(item, "read")) {
-            definition->access |= RUNTIME_BREAKPOINT_ACCESS_READ;
-            saw_access = true;
-        } else if (runtime_ini_streq(item, "write")) {
-            definition->access |= RUNTIME_BREAKPOINT_ACCESS_WRITE;
-            saw_access = true;
-        } else if (runtime_ini_streq(item, "access")) {
-            definition->access |= RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
-            saw_access = true;
-        } else if (runtime_ini_streq(item, "map")) {
-            definition->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
-        } else if (runtime_ini_streq(item, "rom")) {
-            definition->mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
-        } else if (runtime_ini_streq(item, "ram")) {
-            definition->mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
-        } else if (runtime_ini_streq(item, "break")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_BREAK;
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "fast")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_FAST;
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "slow")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_SLOW;
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "tron")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
-            definition->tron_path[0] = '\0';
-            saw_action = true;
-        } else if (strncmp(item, "tron=", 5) == 0) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
-            snprintf(definition->tron_path, sizeof(definition->tron_path), "%s", item + 5);
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "troff")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TROFF;
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "type")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
-            definition->type_text[0] = '\0';
-            saw_action = true;
-        } else if (strncmp(item, "type=", 5) == 0) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
-            snprintf(definition->type_text, sizeof(definition->type_text), "%s", item + 5);
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "swap")) {
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
-            definition->swap_param = 0;
-            definition->swap_relative = 0;
-            saw_action = true;
-        } else if (strncmp(item, "swap=", 5) == 0) {
-            int32_t param = 0;
-            uint8_t relative = 0;
-            if (!runtime_ini_parse_swap_param(item + 5, &param, &relative)) {
-                runtime_ini_warn(key, "invalid swap parameter");
-                return false;
-            }
-            definition->actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
-            definition->swap_param = param;
-            definition->swap_relative = relative;
-            saw_action = true;
-        } else if (runtime_ini_streq(item, "enabled")) {
-            definition->enabled = 1;
-        } else if (runtime_ini_streq(item, "disabled")) {
-            definition->enabled = 0;
-        } else if (strncmp(item, "count=", 6) == 0) {
-            if (!runtime_ini_parse_u32(item + 6, &definition->initial_count)) {
-                runtime_ini_warn(key, "invalid count");
-                return false;
-            }
-            definition->use_counter = 1;
-        } else if (strncmp(item, "reset=", 6) == 0) {
-            if (!runtime_ini_parse_u32(item + 6, &definition->reset_count)) {
-                runtime_ini_warn(key, "invalid reset");
-                return false;
-            }
-            saw_reset = true;
-        } else if (*item != '\0') {
-            runtime_ini_warn(key, "unknown keyword ignored");
+    if (runtime_ini_find_type_assignment(buffer, &type_token, &type_value)) {
+        if (type_token > buffer && type_token[-1] == ',') {
+            type_token[-1] = '\0';
+        } else {
+            *type_token = '\0';
         }
-
-        token = strtok(NULL, ",");
+        if (!runtime_ini_parse_breakpoint_items(key, buffer, definition, &state)) {
+            return false;
+        }
+        if (!runtime_ini_parse_type_trailing_counter(key, type_value, definition, &state)) {
+            return false;
+        }
+        definition->actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+        snprintf(definition->type_text, sizeof(definition->type_text), "%s", type_value);
+        state.saw_action = true;
+    } else {
+        if (!runtime_ini_parse_breakpoint_items(key, buffer, definition, &state)) {
+            return false;
+        }
     }
 
-    if (definition->use_counter && !saw_reset) {
+    if (definition->use_counter && !state.saw_reset) {
         definition->reset_count = definition->initial_count;
     }
 
-    if (!saw_access || !saw_action) {
+    if (!state.saw_access || !state.saw_action) {
         runtime_ini_warn(key, "missing access or action");
         return false;
     }

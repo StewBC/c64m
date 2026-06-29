@@ -54,6 +54,13 @@ static void expect_u64_gt(const char *name, uint64_t lhs, uint64_t rhs) {
     }
 }
 
+static void expect_string(const char *name, const char *expected, const char *actual) {
+    if (strcmp(expected, actual) != 0) {
+        fprintf(stderr, "%s: expected \"%s\", got \"%s\"\n", name, expected, actual);
+        exit(1);
+    }
+}
+
 static void test_runtime_turbo_csv_config(void) {
     runtime_config config = {0};
 
@@ -1333,12 +1340,13 @@ static void test_runtime_loads_breakpoints_from_ini(void) {
     fprintf(file, "break.C000=execute,map,break\n");
     fprintf(file, "break.C000.1=write,ram,break\n");
     fprintf(file, "break.D000-D0FF=read,rom,tron,count=3\n");
+    fprintf(file, "break.A469=execute,map,type= load \"galntsc\",8\\[rt]run\\[rt]\\[w:20]\\j1,b\\[w:20]\\j1,b,count=0,reset=0\n");
     fprintf(file, "break.GGGG=execute,map,break\n");
     fprintf(file, "break.C100=execute,map,break,count=-1\n");
     fclose(file);
 
     rt = start_runtime_with_ini(&client, "scheduler_debug.ini", false);
-    poll_breakpoint_count(client, &event, 3);
+    poll_breakpoint_count(client, &event, 4);
 
     expect_u16("ini breakpoint 0 start", 0xc000, event.data.breakpoints.entries[0].start_address);
     expect_u64("ini breakpoint 0 access", RUNTIME_BREAKPOINT_ACCESS_EXECUTE, event.data.breakpoints.entries[0].access);
@@ -1349,6 +1357,14 @@ static void test_runtime_loads_breakpoints_from_ini(void) {
     expect_u16("ini range end", 0xd0ff, event.data.breakpoints.entries[2].end_address);
     expect_u8("ini range flag", 1, event.data.breakpoints.entries[2].has_end_address);
     expect_u64("ini reset defaults to count", 3, event.data.breakpoints.entries[2].reset_count);
+    expect_u16("ini type breakpoint start", 0xa469, event.data.breakpoints.entries[3].start_address);
+    expect_u64("ini type breakpoint action", RUNTIME_BREAKPOINT_ACTION_TYPE, event.data.breakpoints.entries[3].actions);
+    expect_u64("ini type breakpoint count", 0, event.data.breakpoints.entries[3].initial_count);
+    expect_u64("ini type breakpoint reset", 0, event.data.breakpoints.entries[3].reset_count);
+    expect_string(
+        "ini type text with leading space, quotes, and commas",
+        " load \"galntsc\",8\\[rt]run\\[rt]\\[w:20]\\j1,b\\[w:20]\\j1,b",
+        event.data.breakpoints.entries[3].type_text);
 
     stop_runtime(rt, client);
     remove("scheduler_debug.ini");
@@ -1396,6 +1412,11 @@ static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
     definition.use_counter = 1;
     definition.initial_count = 10;
     definition.reset_count = 2;
+    snprintf(
+        definition.type_text,
+        sizeof(definition.type_text),
+        "%s",
+        " load \"galntsc\",8\\[rt]run\\[rt]\\[w:20]\\j1,b\\[w:20]\\j1,b");
     expect_true("create save breakpoint duplicate", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, 2);
 
@@ -1416,7 +1437,9 @@ static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
     if (strstr(contents, "standard=NTSC") == NULL ||
         strstr(contents, "break.1234") != NULL ||
         strstr(contents, "break.C000=execute,map,break") == NULL ||
-        strstr(contents, "break.C000.1=disabled,read,write,ram,break,swap,type,count=10,reset=2") == NULL) {
+        strstr(
+            contents,
+            "break.C000.1=disabled,read,write,ram,break,swap,type= load \"galntsc\",8\\[rt]run\\[rt]\\[w:20]\\j1,b\\[w:20]\\j1,b,count=10,reset=2") == NULL) {
         fprintf(stderr, "saved ini contents unexpected:\n%s\n", contents);
         exit(1);
     }
