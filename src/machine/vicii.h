@@ -91,6 +91,10 @@ struct vicii {
     uint8_t  sprite_priority;              /* $D01B: 1 = sprite behind foreground graphics */
     uint8_t  sprite_sprite_collision;      /* $D01E: sprite-sprite collision latch, clear on read */
     uint8_t  sprite_background_collision;  /* $D01F: sprite-background collision latch, clear on read */
+
+    /* Live vertical border-unit state. Snapshot rendering keeps using conventional
+       geometry; completed live frames preserve mid-frame RSEL timing effects. */
+    bool     vertical_border_active;
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);

@@ -140,6 +140,7 @@ static void vicii_begin_live_frame(vicii *v) {
         (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
     fill_color = vicii_palette_argb[fill_index];
     vicii_prepare_frame(&v->working_frame, v->timing.frame_number, 0, fill_color);
+    v->vertical_border_active = true;
 }
 
 bool vicii_init(vicii *v, char *error, size_t error_size) {
@@ -199,6 +200,7 @@ void vicii_reset(vicii *v) {
     v->sprite_priority = 0;
     v->sprite_sprite_collision = 0;
     v->sprite_background_collision = 0;
+    v->vertical_border_active = true;
     vicii_begin_live_frame(v);
 }
 
@@ -682,7 +684,6 @@ static uint32_t vicii_compose_pixel(
 }
 
 static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, uint32_t x, uint32_t y) {
-    bool vborder = y < g->top || y >= g->bottom;
     bool hborder = x < g->left || x >= g->right;
     uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, x, y);
@@ -695,7 +696,7 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     }
 
     if (!any_sprite_enabled) {
-        if (vborder || hborder) {
+        if (v->vertical_border_active || hborder) {
             if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
                 return bg.color;
             }
@@ -714,7 +715,19 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
         }
     }
 
-    return vicii_compose_pixel(v, vborder || hborder, border_color, bg, sprites);
+    return vicii_compose_pixel(v, v->vertical_border_active || hborder, border_color, bg, sprites);
+}
+
+static void vicii_update_live_vertical_border(vicii *v) {
+    vicii_border_geometry g;
+
+    g = vicii_get_border_geometry(v);
+    if (v->timing.raster_line == g.top) {
+        v->vertical_border_active = false;
+    }
+    if (v->timing.raster_line == g.bottom) {
+        v->vertical_border_active = true;
+    }
 }
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
@@ -797,6 +810,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         if (v->timing.raster_line == v->timing.raster_compare) {
             vicii_assert_raster_irq(v);
         }
+
+        vicii_update_live_vertical_border(v);
 
         v->bad_line = vicii_is_bad_line(v);
 

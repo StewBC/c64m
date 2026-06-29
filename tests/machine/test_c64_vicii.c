@@ -865,6 +865,53 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
+static void test_live_bottom_border_can_be_opened_for_sprites(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 251, 7);
+
+    make_live_frame(&machine, &frame, "closed bottom border frame");
+    expect_u32("closed bottom border hides sprite", TEST_PALETTE_2,
+               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 251, 7);
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    /* The 24-row bottom compare at raster 247 has already been missed. Clearing
+       RSEL before raster 251 makes the VIC also miss the 25-row bottom compare,
+       leaving the vertical border open until the next frame. */
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* DEN=1, RSEL=0, YSCROLL=3 */
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("opened bottom border frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    expect_u32("opened bottom border shows sprite first row", TEST_PALETTE_7,
+               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+    expect_u32("opened bottom border shows sprite last row", TEST_PALETTE_7,
+               frame.pixels[271 * C64_FRAME_WIDTH + 46]);
+    expect_u32("opened bottom border keeps side border", TEST_PALETTE_2,
+               frame.pixels[251 * C64_FRAME_WIDTH + 10]);
+}
+
 static void test_den_clear_blanks_text_display(void) {
     c64_t machine;
     c64_frame frame;
@@ -1523,6 +1570,7 @@ int main(void) {
     test_sprite_sprite_collision_priority_and_irq();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
+    test_live_bottom_border_can_be_opened_for_sprites();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();

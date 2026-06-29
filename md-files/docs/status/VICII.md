@@ -11,6 +11,7 @@
 - Open/unused register reads are implemented according to the current Phase G policy.
 - PAL and NTSC sprite BA stealing are implemented.
 - DEN-off blanking is implemented.
+- The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 
 ## Important invariants
 
@@ -32,6 +33,7 @@
 - Existing PAL sprite BA tests still cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior.
 - NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - Galencia NTSC sprite multiplex corruption was fixed by preserving RAM underneath visible `$D000-$DFFF` I/O writes; VIC sprite data fetched from RAM under I/O is no longer overwritten by VIC register writes.
+- Bottom-border opening is covered by a live-frame regression: after the 24-row bottom compare has been missed, clearing RSEL before the 25-row bottom compare keeps the vertical border open and allows sprites at raster 251+ to show.
 
 ## Known limitations / deferred
 
@@ -40,6 +42,7 @@
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access fetch behavior from `$3FFF` / `$39FF` in the renderer is deferred.
+- Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
 
 ## Tests / smoke checks
