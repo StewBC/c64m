@@ -78,7 +78,14 @@ struct vicii {
     bool     sprite_active[8];      /* sprite sequencer remains active for future lines */
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
-    uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes */
+    uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes (committed to renderer) */
+    bool     sprite_line_enabled[8]; /* display controls latched for the current raster line */
+    uint16_t sprite_line_x[8];
+    bool     sprite_line_x_expand[8];
+    bool     sprite_line_multicolor[8];
+    uint8_t  sprite_line_color[8];
+    uint8_t  sprite_line_mm0;
+    uint8_t  sprite_line_mm1;
 
     /* Phase E: sprite priority and collision latches */
     uint8_t  sprite_priority;              /* $D01B: 1 = sprite behind foreground graphics */

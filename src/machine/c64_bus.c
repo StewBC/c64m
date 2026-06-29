@@ -223,11 +223,6 @@ uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {
 void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     assert(bus);
 
-    bus->ram[address] = value;
-    if (address >= C64_DEFAULT_SCREEN_BASE && address < C64_DEFAULT_SCREEN_BASE + 1000u) {
-        bus->screen_ram_writes++;
-    }
-
     if (address == C64_CPU_PORT_DIRECTION) {
         bus->cpu_port_direction = value;
         return;
@@ -240,6 +235,12 @@ void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
 
     if (address >= 0xd000 && address <= 0xdfff && c64_bus_io_visible(bus)) {
         c64_io_write(bus, address, value);
+        return;
+    }
+
+    bus->ram[address] = value;
+    if (address >= C64_DEFAULT_SCREEN_BASE && address < C64_DEFAULT_SCREEN_BASE + 1000u) {
+        bus->screen_ram_writes++;
     }
 }
 

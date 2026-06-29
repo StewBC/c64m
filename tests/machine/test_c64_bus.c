@@ -102,9 +102,16 @@ static void test_vicii_io_mirroring_and_banking(void) {
 
     c64_init(&machine);
 
+    c64_bus_write(&machine.bus, 0x0001, 0x34);
+    c64_bus_write(&machine.bus, 0xd020, 0x42);
+    expect_u8("ram under io initialized", 0x42, c64_bus_read(&machine.bus, 0xd020));
+
+    c64_bus_write(&machine.bus, 0x0001, 0x37);
     c64_bus_write(&machine.bus, 0xd020, 0x05);
     expect_u8("vic border visible", 0xF5, c64_bus_read(&machine.bus, 0xd020));
     expect_u8("vic border mirror", 0xF5, c64_bus_read(&machine.bus, 0xd060));
+    expect_u8("visible vic write does not touch ram", 0x42,
+              c64_bus_vic_read_ram(&machine.bus, 0xd020));
 
     c64_bus_write(&machine.bus, 0x0001, 0x34);
     c64_bus_write(&machine.bus, 0xd020, 0x09);

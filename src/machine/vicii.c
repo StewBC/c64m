@@ -188,7 +188,14 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
-    memset(v->sprite_data,     0, sizeof(v->sprite_data));
+    memset(v->sprite_data,         0, sizeof(v->sprite_data));
+    memset(v->sprite_line_enabled,    0, sizeof(v->sprite_line_enabled));
+    memset(v->sprite_line_x,          0, sizeof(v->sprite_line_x));
+    memset(v->sprite_line_x_expand,   0, sizeof(v->sprite_line_x_expand));
+    memset(v->sprite_line_multicolor, 0, sizeof(v->sprite_line_multicolor));
+    memset(v->sprite_line_color,      0, sizeof(v->sprite_line_color));
+    v->sprite_line_mm0 = 0;
+    v->sprite_line_mm1 = 0;
     v->sprite_priority = 0;
     v->sprite_sprite_collision = 0;
     v->sprite_background_collision = 0;
@@ -266,8 +273,68 @@ static bool vicii_display_adjusted_y(uint32_t sy, uint8_t yscroll, uint32_t *out
     return true;
 }
 
-static uint32_t vicii_sprite_display_y(uint8_t spr_y) {
-    return (uint32_t)spr_y + 1u;
+static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
+    uint16_t vic_bank;
+    uint16_t screen_base;
+    uint8_t  enable;
+    int      n;
+
+    memset(v->sprite_visible, 0, sizeof(v->sprite_visible));
+
+    if (!bus) return;
+
+    vic_bank    = c64_bus_vic_bank_base(bus);
+    screen_base = (uint16_t)(((v->registers[0x18] >> 4) & 0x0Fu) * 0x0400u);
+    enable      = v->registers[VICII_REG_SPR_ENABLE];
+
+    for (n = 0; n < 8; n++) {
+        uint8_t  spr_y    = v->registers[1 + n * 2];
+        uint32_t raster_y = v->timing.raster_line;
+        bool     y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
+
+        if ((enable >> n) & 1u) {
+            if (raster_y == (uint32_t)spr_y) {
+                v->sprite_mc[n]       = 0;
+                v->sprite_active[n]   = true;
+                v->sprite_y_exp_ff[n] = false;
+            }
+        } else {
+            v->sprite_active[n]  = false;
+            v->sprite_visible[n] = false;
+        }
+
+        if (v->sprite_active[n]) {
+            uint8_t  mc = v->sprite_mc[n];
+            bool     advance_mc;
+            uint16_t ptr_addr;
+            uint8_t  pointer;
+            uint16_t data_base;
+
+            if (y_expand) {
+                advance_mc             = v->sprite_y_exp_ff[n];
+                v->sprite_y_exp_ff[n] ^= 1u;
+            } else {
+                advance_mc = true;
+            }
+
+            ptr_addr  = (uint16_t)((vic_bank + screen_base + 0x03F8u + (uint16_t)n) & 0xFFFFu);
+            pointer   = c64_bus_vic_read_ram(bus, ptr_addr);
+            data_base = (uint16_t)((vic_bank + (uint16_t)pointer * 64u) & 0xFFFFu);
+            v->sprite_data[n][0] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc)      & 0xFFFFu));
+            v->sprite_data[n][1] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 1u) & 0xFFFFu));
+            v->sprite_data[n][2] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 2u) & 0xFFFFu));
+            v->sprite_visible[n] = true;
+
+            if (advance_mc) {
+                mc = (uint8_t)(mc + 3u);
+                if (mc >= 63u) {
+                    v->sprite_active[n] = false;
+                } else {
+                    v->sprite_mc[n] = mc;
+                }
+            }
+        }
+    }
 }
 
 static vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
@@ -321,6 +388,64 @@ static vicii_sprite_pixel vicii_sprite_pixel_from_data(
             return vicii_sprite_pixel_make(0, false);
         }
         return vicii_sprite_pixel_make(vicii_palette_argb[v->registers[0x27u + (uint8_t)n] & 0x0Fu], true);
+    }
+}
+
+static vicii_sprite_pixel vicii_sprite_pixel_from_latched_data(
+    const vicii *v,
+    const uint8_t data[3],
+    int n,
+    int dx)
+{
+    bool    x_expand   = v->sprite_line_x_expand[n];
+    bool    multicolor = v->sprite_line_multicolor[n];
+    int     spr_width  = x_expand ? 48 : 24;
+
+    if (dx < 0 || dx >= spr_width) {
+        return vicii_sprite_pixel_make(0, false);
+    }
+
+    if (multicolor) {
+        int     pair_index = x_expand ? (dx / 4) : (dx / 2);
+        int     bit_shift  = 6 - (pair_index * 2) % 8;
+        uint8_t pair       = (data[(pair_index * 2) / 8] >> bit_shift) & 3u;
+        switch (pair) {
+        case 0u:
+            return vicii_sprite_pixel_make(0, false);
+        case 1u:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_mm0 & 0x0Fu], true);
+        case 2u:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_color[n] & 0x0Fu], true);
+        default:
+            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_mm1 & 0x0Fu], true);
+        }
+    } else {
+        int     bit_pos = x_expand ? (dx / 2) : dx;
+        uint8_t bit     = (data[bit_pos / 8] >> (7 - bit_pos % 8)) & 1u;
+        if (!bit) {
+            return vicii_sprite_pixel_make(0, false);
+        }
+        return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_color[n] & 0x0Fu], true);
+    }
+}
+
+static void vicii_latch_sprite_line_state(vicii *v) {
+    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
+    uint8_t x_msb = v->registers[VICII_REG_SPR_X_MSB];
+    uint8_t x_expand = v->registers[VICII_REG_SPR_X_EXPAND];
+    uint8_t multicolor = v->registers[VICII_REG_SPR_MULTICOLOR];
+    int n;
+
+    v->sprite_line_mm0 = (uint8_t)(v->registers[VICII_REG_SPR_MM0] & 0x0Fu);
+    v->sprite_line_mm1 = (uint8_t)(v->registers[VICII_REG_SPR_MM1] & 0x0Fu);
+
+    for (n = 0; n < 8; n++) {
+        v->sprite_line_enabled[n] = ((enable >> n) & 1u) != 0;
+        v->sprite_line_x[n] = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
+            (uint16_t)(((x_msb >> n) & 1u) << 8));
+        v->sprite_line_x_expand[n] = ((x_expand >> n) & 1u) != 0;
+        v->sprite_line_multicolor[n] = ((multicolor >> n) & 1u) != 0;
+        v->sprite_line_color[n] = (uint8_t)(v->registers[0x27u + (uint8_t)n] & 0x0Fu);
     }
 }
 
@@ -562,10 +687,14 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, x, y);
     vicii_sprite_pixel sprites[8];
-    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
+    bool any_sprite_enabled = false;
     int n;
 
-    if (enable == 0u) {
+    for (n = 0; n < 8; n++) {
+        any_sprite_enabled = any_sprite_enabled || v->sprite_line_enabled[n];
+    }
+
+    if (!any_sprite_enabled) {
         if (vborder || hborder) {
             if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
                 return bg.color;
@@ -577,13 +706,11 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
 
     for (n = 0; n < 8; n++) {
         sprites[n] = vicii_sprite_pixel_make(0, false);
-        if (!((enable >> n) & 1u)) continue;
+        if (!v->sprite_line_enabled[n]) continue;
         if (!v->sprite_visible[n]) continue;
         {
-            uint16_t spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
-                ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
-            int dx = vicii_sprite_dx_wrapped(x, spr_x);
-            sprites[n] = vicii_sprite_pixel_from_data(v, v->sprite_data[n], n, dx);
+            int dx = vicii_sprite_dx_wrapped(x, v->sprite_line_x[n]);
+            sprites[n] = vicii_sprite_pixel_from_latched_data(v, v->sprite_data[n], n, dx);
         }
     }
 
@@ -621,70 +748,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 }
 
-static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
-    uint16_t vic_bank;
-    uint16_t screen_base;
-    uint8_t  enable;
-    int      n;
-
-    memset(v->sprite_visible, 0, sizeof(v->sprite_visible));
-
-    if (!bus) return;
-
-    vic_bank    = c64_bus_vic_bank_base(bus);
-    screen_base = (uint16_t)(((v->registers[0x18] >> 4) & 0x0Fu) * 0x0400u);
-    enable      = v->registers[VICII_REG_SPR_ENABLE];
-
-    for (n = 0; n < 8; n++) {
-        uint8_t  spr_y    = v->registers[1 + n * 2];
-        uint32_t sprite_y = vicii_sprite_display_y(spr_y);
-        uint32_t raster_y = v->timing.raster_line;
-        bool     y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
-
-        if ((enable >> n) & 1u) {
-            if (raster_y == sprite_y) {
-                v->sprite_mc[n]       = 0;
-                v->sprite_active[n]   = true;
-                v->sprite_y_exp_ff[n] = false;
-            }
-        } else {
-            v->sprite_active[n]  = false;
-            v->sprite_visible[n] = false;
-        }
-
-        if (v->sprite_active[n]) {
-            uint8_t mc = v->sprite_mc[n];
-            bool    advance_mc;
-            uint16_t ptr_addr;
-            uint8_t  pointer;
-            uint16_t data_base;
-
-            if (y_expand) {
-                advance_mc             = v->sprite_y_exp_ff[n];
-                v->sprite_y_exp_ff[n] ^= 1u;
-            } else {
-                advance_mc = true;
-            }
-
-            ptr_addr  = (uint16_t)((vic_bank + screen_base + 0x03F8u + (uint16_t)n) & 0xFFFFu);
-            pointer   = c64_bus_vic_read_ram(bus, ptr_addr);
-            data_base = (uint16_t)((vic_bank + (uint16_t)pointer * 64u) & 0xFFFFu);
-            v->sprite_data[n][0] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc)      & 0xFFFFu));
-            v->sprite_data[n][1] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 1u) & 0xFFFFu));
-            v->sprite_data[n][2] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 2u) & 0xFFFFu));
-            v->sprite_visible[n] = true;
-
-            if (advance_mc) {
-                mc = (uint8_t)(mc + 3u);
-                if (mc >= 63u) {
-                    v->sprite_active[n] = false;
-                } else {
-                    v->sprite_mc[n] = mc;
-                }
-            }
-        }
-    }
-}
 
 static void vicii_assert_raster_irq(vicii *v) {
     vicii_set_irq_flag(v, VICII_IRQ_RASTER);
@@ -692,9 +755,9 @@ static void vicii_assert_raster_irq(vicii *v) {
 
 /* Returns true if sprite n will perform a DMA fetch on the NEXT raster line.
    Called during the previous line (at the sprite's BA-assert cycle) to determine
-   whether to open a sprite BA window that spans the line boundary. Reuses the
-   per-sprite active flag set by vicii_fetch_sprites() rather than redoing the
-   Y-range/enable check independently. */
+   whether to open a sprite BA window that spans the line boundary.
+   Sprites 3-4 display on the line whose number equals spr_y (no +1 offset);
+   the next_y == spr_y check mirrors the Y-match logic in vicii_fetch_sprites(). */
 static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
     uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t  spr_y    = v->registers[1 + n * 2];
@@ -704,7 +767,7 @@ static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
         return true;
     }
     if ((enable >> n) & 1u) {
-        if (next_y == vicii_sprite_display_y(spr_y)) {
+        if (next_y == (uint32_t)spr_y) {
             return true;
         }
     }
@@ -742,8 +805,11 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
             v->vc            = v->vc_base;
             v->display_state = true;
         }
+    }
 
+    if (cycle == 0) {
         vicii_fetch_sprites(v, bus);
+        vicii_latch_sprite_line_state(v);
     }
 
     /* Bad-line BA: assert at cycle 12 for the 43-cycle c-access window (12-54
@@ -1085,7 +1151,7 @@ static void vicii_snapshot_sprite_line(
         if (!((enable >> n) & 1u)) continue;
 
         spr_y    = v->registers[1 + n * 2];
-        sprite_y = vicii_sprite_display_y(spr_y);
+        sprite_y = (uint32_t)spr_y;
         y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
         dy       = (int)raster_y - (int)sprite_y;
 
