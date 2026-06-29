@@ -25,7 +25,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_ASSEMBLE_ERROR,
     RUNTIME_EVENT_FRAME_READY,
     RUNTIME_EVENT_CALL_STACK_RESPONSE,
-    RUNTIME_EVENT_DISK_SWAP
+    RUNTIME_EVENT_DISK_SWAP,
+    RUNTIME_EVENT_DEBUG_MEMORY_READY
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -168,6 +169,15 @@ typedef struct runtime_memory_snapshot {
     uint64_t write_history[RUNTIME_MEMORY_SNAPSHOT_MAX];
 } runtime_memory_snapshot;
 
+typedef struct runtime_debug_memory_snapshot {
+    uint64_t generation;
+    uint8_t has_write_history;
+    uint8_t map[C64_RAM_SIZE];
+    uint8_t ram[C64_RAM_SIZE];
+    uint8_t rom[C64_RAM_SIZE];
+    uint64_t write_history[C64_RAM_SIZE];
+} runtime_debug_memory_snapshot;
+
 typedef struct runtime_breakpoint_snapshot_entry {
     uint32_t id;
     uint16_t start_address;
@@ -251,5 +261,9 @@ typedef struct runtime_event {
             uint8_t swap_relative;
             uint8_t device;
         } disk_swap;
+        struct {
+            uint64_t generation;
+            uint8_t has_write_history;
+        } debug_memory_ready;
     } data;
 } runtime_event;

@@ -22,6 +22,7 @@
 - Runtime owns machine state, breakpoints, watchpoints, stop reason, counters, and actions.
 - Frontend renders copied snapshots only.
 - Frontend sends intents/commands to runtime.
+- Memory and disassembly views render from the same runtime-published full debugger memory snapshot generation. The snapshot includes 64K CPU-visible Map bytes, 64K raw RAM bytes, and 64K ROM-source bytes; write-history is included only for context-menu access lookup requests.
 - Register and memory edits apply only while paused.
 - Running edits are ignored.
 - Debugger input focus is explicit: C64 display versus debugger views.

@@ -35,6 +35,7 @@ struct runtime_client {
     message_queue *command_queue;
     message_queue *event_queue;
     struct runtime_frame_slot *frame_slot;
+    struct runtime_debug_memory_slot *debug_memory_slot;
     struct runtime_symbol_slot *symbol_slot;
 };
 
@@ -71,6 +72,13 @@ typedef struct runtime_frame_slot {
     uint64_t dropped_frames;
 } runtime_frame_slot;
 
+typedef struct runtime_debug_memory_slot {
+    mutex *mutex;
+    runtime_debug_memory_snapshot snapshot;
+    bool has_snapshot;
+    uint64_t generation;
+} runtime_debug_memory_slot;
+
 typedef struct runtime_symbol_slot {
     mutex *mutex;
     runtime_symbol_snapshot snapshot;
@@ -103,6 +111,7 @@ struct runtime {
     message_queue *event_queue;
     runtime_client client;
     runtime_frame_slot frame_slot;
+    runtime_debug_memory_slot debug_memory_slot;
     c64_frame publish_frame;
     runtime_symbol_slot symbol_slot;
     symbol_table *symbols;

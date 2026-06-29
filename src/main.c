@@ -324,6 +324,9 @@ static void update_debug_state_from_event(
             debug_state->has_call_stack = true;
             break;
 
+        case RUNTIME_EVENT_DEBUG_MEMORY_READY:
+            break;
+
         case RUNTIME_EVENT_STARTED:
             if (debug_state->runtime_state == FRONTEND_RUNTIME_STATE_UNKNOWN ||
                 debug_state->runtime_state == FRONTEND_RUNTIME_STATE_ERROR) {
@@ -399,6 +402,11 @@ static void poll_runtime_events(
                 if (ui != NULL) {
                     frontend_set_disk_queue(ui, device, slot);
                 }
+            }
+        } else if (event.type == RUNTIME_EVENT_DEBUG_MEMORY_READY &&
+                   debug_state != NULL) {
+            if (runtime_client_poll_debug_memory(client, &debug_state->debug_memory)) {
+                debug_state->has_debug_memory = true;
             }
         }
     }
@@ -914,6 +922,10 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     intent.address,
                     intent.length,
                     intent.memory_mode);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_REQUEST_DEBUG_MEMORY:
+                sent = runtime_client_request_debug_memory(client, intent.include_write_history);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_MEMORY_WRITE_BYTE:

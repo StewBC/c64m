@@ -52,7 +52,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_SAVE_BIN,
     RUNTIME_COMMAND_REQUEST_CALL_STACK,
     RUNTIME_COMMAND_PASTE_EVENTS,
-    RUNTIME_COMMAND_REARM_ONESHOT_BREAKPOINTS
+    RUNTIME_COMMAND_REARM_ONESHOT_BREAKPOINTS,
+    RUNTIME_COMMAND_REQUEST_DEBUG_MEMORY
 } runtime_command_type;
 
 enum {
@@ -196,5 +197,9 @@ typedef struct runtime_command {
             paste_event_t events[PASTE_EVENTS_MAX];
             size_t count;
         } paste_events;
+
+        struct {
+            uint8_t include_write_history;
+        } request_debug_memory;
     } data;
 } runtime_command;

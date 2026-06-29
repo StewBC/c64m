@@ -51,6 +51,7 @@ bool runtime_client_request_memory_view(
     uint16_t address,
     uint16_t length,
     runtime_memory_mode mode);
+bool runtime_client_request_debug_memory(runtime_client *client, bool include_write_history);
 bool runtime_client_request_frame(runtime_client *client);
 bool runtime_client_keyboard_key(runtime_client *client, c64_key key, bool pressed);
 bool runtime_client_restore(runtime_client *client);
@@ -106,6 +107,7 @@ bool runtime_client_apply_machine_config(
     bool reset,
     bool save_ini);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
+bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memory_snapshot *out_snapshot);
 
 bool runtime_client_step_out(runtime_client *client);
 bool runtime_client_step_over(runtime_client *client);

@@ -479,6 +479,33 @@ static void runtime_publish_memory(
     runtime_publish_event(rt, &event);
 }
 
+static void runtime_publish_debug_memory(runtime *rt, bool include_write_history) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_DEBUG_MEMORY_READY,
+    };
+    uint32_t address;
+    uint64_t generation;
+
+    mutex_lock(rt->debug_memory_slot.mutex);
+    generation = ++rt->debug_memory_slot.generation;
+    rt->debug_memory_slot.snapshot.generation = generation;
+    rt->debug_memory_slot.snapshot.has_write_history = include_write_history ? 1u : 0u;
+    for (address = 0; address < C64_RAM_SIZE; ++address) {
+        uint16_t a = (uint16_t)address;
+        rt->debug_memory_slot.snapshot.map[address] = c64_debug_read_cpu_map(&rt->machine, a);
+        rt->debug_memory_slot.snapshot.ram[address] = c64_debug_read_ram(&rt->machine, a);
+        rt->debug_memory_slot.snapshot.rom[address] = c64_debug_read_rom(&rt->machine, a);
+        rt->debug_memory_slot.snapshot.write_history[address] = include_write_history ?
+            c64_debug_read_write_history(&rt->machine, a) : 0u;
+    }
+    rt->debug_memory_slot.has_snapshot = true;
+    mutex_unlock(rt->debug_memory_slot.mutex);
+
+    event.data.debug_memory_ready.generation = generation;
+    event.data.debug_memory_ready.has_write_history = include_write_history ? 1u : 0u;
+    runtime_publish_event(rt, &event);
+}
+
 static void runtime_publish_breakpoints(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
@@ -2500,6 +2527,12 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             } else {
                 runtime_publish_error(rt, "unsupported memory view request mode");
             }
+            break;
+
+        case RUNTIME_COMMAND_REQUEST_DEBUG_MEMORY:
+            runtime_publish_debug_memory(
+                rt,
+                command->data.request_debug_memory.include_write_history != 0);
             break;
 
         case RUNTIME_COMMAND_REQUEST_FRAME:

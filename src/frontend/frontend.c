@@ -172,6 +172,7 @@ typedef struct frontend_disassembly_view_state {
     bool has_snapshot;
     bool scrollbar_dragging;
     float scrollbar_grab_offset;
+    uint64_t cache_generation;
     runtime_memory_snapshot snapshot;
     frontend_disassembly_line lines[FRONTEND_DISASM_MAX_ROWS];
     frontend_disasm_cache mem_cache[3];
@@ -372,6 +373,9 @@ struct frontend {
     bool has_pending_memory_key;
     SDL_KeyboardEvent pending_disassembly_key;
     bool has_pending_disassembly_key;
+    bool debug_memory_request_pending;
+    uint64_t debug_memory_seen_generation;
+    bool debug_memory_request_write_history;
     struct nk_rect memory_scrollbar_bounds;
     bool has_memory_scrollbar_bounds;
     struct nk_rect disassembly_scrollbar_bounds;
@@ -1716,6 +1720,26 @@ static void frontend_push_memory_view_request(
     ui->intent_write = next;
 }
 
+static void frontend_push_debug_memory_request(frontend *ui, bool include_write_history)
+{
+    size_t next;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_REQUEST_DEBUG_MEMORY;
+    ui->intents[ui->intent_write].include_write_history = include_write_history;
+    ui->intent_write = next;
+    ui->debug_memory_request_pending = true;
+    ui->debug_memory_request_write_history = include_write_history;
+}
+
 static void frontend_push_memory_write_byte(
     frontend *ui,
     uint16_t address,
@@ -2221,6 +2245,33 @@ static void frontend_disasm_cache_merge(
     }
 }
 
+static const uint8_t *frontend_debug_memory_source(
+    const runtime_debug_memory_snapshot *snapshot,
+    runtime_memory_mode mode)
+{
+    if (snapshot == NULL) {
+        return NULL;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_RAM) {
+        return snapshot->ram;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_ROM) {
+        return snapshot->rom;
+    }
+    return snapshot->map;
+}
+
+static void frontend_disasm_cache_replace(
+    frontend_disasm_cache *cache,
+    const uint8_t *bytes)
+{
+    if (cache == NULL || bytes == NULL) {
+        return;
+    }
+    memcpy(cache->bytes, bytes, C64_RAM_SIZE);
+    memset(cache->valid, 1, sizeof(cache->valid));
+}
+
 static bool frontend_disasm_cache_range_valid(
     const frontend_disasm_cache *cache,
     uint16_t address,
@@ -2422,34 +2473,37 @@ static uint16_t frontend_disassembly_visible_decode_length(const frontend_disass
 static void frontend_disassembly_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
 {
     frontend_disassembly_view_state *view = &ui->disassembly;
-    uint16_t length = FRONTEND_DISASM_FETCH_BYTES;
-    uint16_t pre_pc_rows = view->rows / 2u;
-    uint16_t request_address = view->pc_lock_active ?
-        (uint16_t)(view->pc_lock_address - (uint16_t)(pre_pc_rows * 3u + FRONTEND_DISASM_CENTER_SLOP)) :
-        view->top_address;
+    bool want_history = ui->memory_context_popup.open || ui->disassembly_context_popup.open;
 
-    /* Merge any incoming memory response into cache, regardless of address match */
-    if (debug_state != NULL &&
-        debug_state->has_memory &&
-        debug_state->memory.mode == view->mode) {
-        view->snapshot = debug_state->memory;
-        frontend_disasm_cache_merge(
-            frontend_disassembly_active_cache(view), &debug_state->memory);
-        view->request_pending = false;
+    if (debug_state != NULL && debug_state->has_debug_memory) {
+        uint64_t generation = debug_state->debug_memory.generation;
+        if (generation != view->cache_generation) {
+            frontend_disasm_cache_replace(
+                &view->mem_cache[RUNTIME_MEMORY_MODE_CPU_MAP],
+                debug_state->debug_memory.map);
+            frontend_disasm_cache_replace(
+                &view->mem_cache[RUNTIME_MEMORY_MODE_RAM],
+                debug_state->debug_memory.ram);
+            frontend_disasm_cache_replace(
+                &view->mem_cache[RUNTIME_MEMORY_MODE_ROM],
+                debug_state->debug_memory.rom);
+            view->cache_generation = generation;
+            ui->debug_memory_seen_generation = generation;
+            ui->debug_memory_request_pending = false;
+        }
+        if (debug_state->debug_memory.has_write_history) {
+            ui->debug_memory_request_write_history = false;
+        }
     }
 
-    /* Only issue a new request if the PC window is not fully covered */
-    if (!frontend_disassembly_cache_covers(view, request_address, length)) {
-        if (!view->request_pending ||
-            view->requested_address != request_address ||
-            view->requested_length != length ||
-            view->requested_mode != view->mode) {
-            frontend_push_memory_request(ui, request_address, length, view->mode);
-            view->requested_address = request_address;
-            view->requested_length = length;
-            view->requested_mode = view->mode;
-            view->request_pending = true;
-        }
+    if (ui->debug_memory_request_pending &&
+        want_history &&
+        !ui->debug_memory_request_write_history) {
+        ui->debug_memory_request_pending = false;
+    }
+
+    if (!ui->debug_memory_request_pending) {
+        frontend_push_debug_memory_request(ui, want_history);
     }
 }
 
@@ -2471,12 +2525,9 @@ static void frontend_disassembly_emit_provisional(
 
 static void frontend_disassembly_force_refresh_pc(frontend_disassembly_view_state *view)
 {
-    uint16_t pre_pc_rows = view->rows / 2u;
-    uint16_t request_address = (uint16_t)(
-        view->pc_lock_address - (uint16_t)(pre_pc_rows * 3u + FRONTEND_DISASM_CENTER_SLOP));
-    frontend_disasm_cache_invalidate_range(
-        frontend_disassembly_active_cache(view), request_address, FRONTEND_DISASM_FETCH_BYTES);
-    view->request_pending = false;
+    if (view != NULL) {
+        view->request_pending = false;
+    }
 }
 
 static void frontend_disassembly_build_pc_locked_lines(
@@ -3576,13 +3627,13 @@ static uint64_t frontend_disassembly_write_history_at(
     const frontend_disassembly_view_state *view,
     uint16_t address)
 {
-    if (debug_state == NULL || view == NULL || !debug_state->has_memory) {
+    (void)view;
+    if (debug_state == NULL ||
+        !debug_state->has_debug_memory ||
+        !debug_state->debug_memory.has_write_history) {
         return 0;
     }
-    if (debug_state->memory.mode != view->mode) {
-        return 0;
-    }
-    return frontend_memory_snapshot_write_history_at(&debug_state->memory, address);
+    return debug_state->debug_memory.write_history[address];
 }
 
 static uint64_t frontend_memory_write_history_at(
@@ -3590,21 +3641,13 @@ static uint64_t frontend_memory_write_history_at(
     const frontend_memory_view_state *view,
     uint16_t address)
 {
-    int i;
-
-    if (debug_state == NULL || view == NULL) {
+    (void)view;
+    if (debug_state == NULL ||
+        !debug_state->has_debug_memory ||
+        !debug_state->debug_memory.has_write_history) {
         return 0;
     }
-
-    for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
-        const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
-        if (snap->address == view->requested_address &&
-            snap->length == view->requested_length &&
-            snap->mode == view->requested_mode) {
-            return frontend_memory_snapshot_write_history_at(snap, address);
-        }
-    }
-    return 0;
+    return debug_state->debug_memory.write_history[address];
 }
 
 static void frontend_context_menu_label(struct nk_context *ctx, const char *label)
@@ -3808,22 +3851,14 @@ static uint8_t frontend_memory_view_byte_at(
     const frontend_memory_view_state *view,
     uint16_t address)
 {
-    int i, index;
+    const uint8_t *bytes;
 
-    if (debug_state == NULL || view == NULL) {
+    if (debug_state == NULL || view == NULL || !debug_state->has_debug_memory) {
         return 0;
     }
 
-    for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
-        const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
-        if (snap->address == view->requested_address &&
-            snap->length == view->requested_length &&
-            snap->mode == view->requested_mode) {
-            index = frontend_memory_snapshot_index(snap, address);
-            return index >= 0 ? snap->bytes[index] : 0;
-        }
-    }
-    return 0;
+    bytes = frontend_debug_memory_source(&debug_state->debug_memory, view->mode);
+    return bytes != NULL ? bytes[address] : 0;
 }
 
 static char frontend_memory_ascii(uint8_t value)
@@ -3837,7 +3872,34 @@ static char frontend_memory_ascii(uint8_t value)
 
 static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug_state *debug_state)
 {
-    int v, i;
+    int v;
+    bool want_history;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    want_history = ui->memory_context_popup.open || ui->disassembly_context_popup.open;
+
+    if (debug_state != NULL && debug_state->has_debug_memory) {
+        if (debug_state->debug_memory.generation != ui->debug_memory_seen_generation) {
+            ui->debug_memory_seen_generation = debug_state->debug_memory.generation;
+            ui->debug_memory_request_pending = false;
+        }
+        if (debug_state->debug_memory.has_write_history) {
+            ui->debug_memory_request_write_history = false;
+        }
+    }
+
+    if (ui->debug_memory_request_pending &&
+        want_history &&
+        !ui->debug_memory_request_write_history) {
+        ui->debug_memory_request_pending = false;
+    }
+
+    if (!ui->debug_memory_request_pending) {
+        frontend_push_debug_memory_request(ui, want_history);
+    }
 
     for (v = 0; v < ui->memory_view_count; v++) {
         frontend_memory_view_state *memory = &ui->memory_views[v];
@@ -3847,28 +3909,10 @@ static void frontend_memory_request_if_needed(frontend *ui, const frontend_debug
             continue;
         }
 
-        if (memory->request_pending && debug_state != NULL) {
-            for (i = 0; i < debug_state->memory_view_snapshot_count; i++) {
-                const runtime_memory_snapshot *snap = &debug_state->memory_view_snapshots[i];
-                if (snap->address == memory->requested_address &&
-                    snap->length == memory->requested_length &&
-                    snap->mode == memory->requested_mode) {
-                    memory->request_pending = false;
-                    break;
-                }
-            }
-        }
-
-        if (!memory->request_pending ||
-            memory->requested_address != memory->view_address ||
-            memory->requested_length != length ||
-            memory->requested_mode != memory->mode) {
-            frontend_push_memory_view_request(ui, memory->view_address, length, memory->mode);
-            memory->requested_address = memory->view_address;
-            memory->requested_length = length;
-            memory->requested_mode = memory->mode;
-            memory->request_pending = true;
-        }
+        memory->requested_address = memory->view_address;
+        memory->requested_length = length;
+        memory->requested_mode = memory->mode;
+        memory->request_pending = false;
     }
 }
 
@@ -3895,6 +3939,7 @@ static void frontend_memory_write_byte(
 
     frontend_push_memory_write_byte(ui, address, value, memory->mode);
     memory->request_pending = false;
+    ui->debug_memory_request_pending = false;
 }
 
 static void frontend_memory_apply_hex_digit(

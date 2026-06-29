@@ -26,6 +26,7 @@ typedef struct frontend_debug_state {
     runtime_memory_snapshot memory;
     runtime_memory_snapshot memory_view_snapshots[16];
     int memory_view_snapshot_count;
+    runtime_debug_memory_snapshot debug_memory;
     runtime_breakpoint_snapshot breakpoints;
     runtime_memory_banking_snapshot memory_banking;
     c64_vicii_hardware_snapshot vicii_hardware;
@@ -60,6 +61,7 @@ typedef struct frontend_debug_state {
     bool has_frame;
     bool has_cpu;
     bool has_memory;
+    bool has_debug_memory;
     bool has_breakpoints;
     bool has_memory_banking;
     bool has_hardware;
@@ -92,6 +94,7 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS,
     FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY,
     FRONTEND_DEBUGGER_INTENT_REQUEST_MEMORY_VIEW,
+    FRONTEND_DEBUGGER_INTENT_REQUEST_DEBUG_MEMORY,
     FRONTEND_DEBUGGER_INTENT_MEMORY_WRITE_BYTE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_SET_EXECUTE,
     FRONTEND_DEBUGGER_INTENT_BREAKPOINT_CLEAR,
@@ -133,6 +136,7 @@ typedef struct frontend_debugger_intent {
     uint16_t value;
     uint32_t id;
     bool enabled;
+    bool include_write_history;
     runtime_memory_mode memory_mode;
     runtime_breakpoint_definition breakpoint;
     app_options config;

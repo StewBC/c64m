@@ -122,6 +122,19 @@ bool runtime_client_request_memory_view(
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_request_debug_memory(runtime_client *client, bool include_write_history) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_REQUEST_DEBUG_MEMORY,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.request_debug_memory.include_write_history = include_write_history ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_request_frame(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_FRAME);
 }
@@ -488,6 +501,26 @@ bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
     *out_frame = slot->frame;
     slot->has_frame = false;
     slot->consumed_frames++;
+    mutex_unlock(slot->mutex);
+    return true;
+}
+
+bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memory_snapshot *out_snapshot) {
+    runtime_debug_memory_slot *slot;
+
+    if (!client || !out_snapshot || !client->debug_memory_slot) {
+        return false;
+    }
+
+    slot = client->debug_memory_slot;
+    mutex_lock(slot->mutex);
+    if (!slot->has_snapshot) {
+        mutex_unlock(slot->mutex);
+        return false;
+    }
+
+    *out_snapshot = slot->snapshot;
+    slot->has_snapshot = false;
     mutex_unlock(slot->mutex);
     return true;
 }
