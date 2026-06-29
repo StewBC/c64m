@@ -8,6 +8,7 @@
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path.
+- Control port: `tests/control/test_control_protocol.c` covers Phase 1 request parsing and response formatting. `tests/test_app_options.c` covers `--control-port` parsing.
 
 ## Known test gaps
 
@@ -41,6 +42,10 @@
   - Verify modal dialogs block base-view focus changes on outside clicks.
   - Verify memory/disassembly source modes and virtual views.
   - Verify call stack and hardware view are populated from runtime snapshots.
+- Control port:
+  - `./build/c64m --control-port 6510`, connect to `127.0.0.1:6510`, send `1 ping`, and expect `1 ok`.
+  - Verify normal SDL UI still runs without `--control-port`.
+  - Verify quitting the emulator joins the control socket thread cleanly with no connected client and with an idle connected client.
 
 ## Audio measurement practice
 

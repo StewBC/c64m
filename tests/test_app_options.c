@@ -870,6 +870,24 @@ static void test_audio_record_options(void) {
     app_options_destroy(&options);
 }
 
+static void test_control_port_option(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--control-port",
+        "6510",
+    };
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_int("control port", 6510, options.control_port);
+
+    app_options_destroy(&options);
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
@@ -883,6 +901,7 @@ int main(void) {
     test_phase14_config_saved_to_ini();
     test_symbol_files_are_relative_to_ini();
     test_audio_record_options();
+    test_control_port_option();
     test_disk_single_from_ini();
     test_disk_multi_from_ini();
     test_disk_relative_path_from_ini();

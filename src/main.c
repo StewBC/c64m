@@ -1,5 +1,6 @@
 #include "app_options.h"
 #include "audio_buffer.h"
+#include "control_server.h"
 #include "frontend.h"
 #include "frontend_input.h"
 #include "paste_parser.h"
@@ -1210,7 +1211,82 @@ static void handle_drop_file(runtime_client *client, char *path) {
     SDL_free(path);
 }
 
-static bool run_main_loop(platform_window *window, runtime_client *client, frontend *ui, app_options *options) {
+static void dispatch_control_request(control_server *control, const control_request *request)
+{
+    control_response response;
+
+    if (control == NULL || request == NULL) {
+        return;
+    }
+
+    switch (request->type) {
+        case CONTROL_COMMAND_HELLO:
+            control_protocol_format_ok(
+                &response,
+                request->id,
+                "name=c64m protocol=C64M/1",
+                false);
+            break;
+
+        case CONTROL_COMMAND_VERSION:
+            control_protocol_format_ok(
+                &response,
+                request->id,
+                "protocol=C64M/1 app=0.1.0",
+                false);
+            break;
+
+        case CONTROL_COMMAND_CAPABILITIES:
+            control_protocol_format_ok(
+                &response,
+                request->id,
+                "connection introspection",
+                false);
+            break;
+
+        case CONTROL_COMMAND_PING:
+            control_protocol_format_ok(&response, request->id, NULL, false);
+            break;
+
+        case CONTROL_COMMAND_QUIT_CLIENT:
+            control_protocol_format_ok(&response, request->id, NULL, true);
+            break;
+
+        case CONTROL_COMMAND_NONE:
+        default:
+            control_protocol_format_error(
+                &response,
+                request->id,
+                "unknown-command",
+                "unknown command",
+                false);
+            break;
+    }
+
+    if (!control_server_post_response(control, &response)) {
+        SDL_Log("control: response queue full");
+    }
+}
+
+static void dispatch_control_requests(control_server *control)
+{
+    control_request request;
+
+    if (control == NULL) {
+        return;
+    }
+
+    while (control_server_poll_request(control, &request)) {
+        dispatch_control_request(control, &request);
+    }
+}
+
+static bool run_main_loop(
+    platform_window *window,
+    runtime_client *client,
+    frontend *ui,
+    app_options *options,
+    control_server *control) {
     bool running = true;
     bool ui_visible = false;
     frontend_input_mapper input_mapper;
@@ -1346,6 +1422,7 @@ static bool run_main_loop(platform_window *window, runtime_client *client, front
         frontend_end_input(ui);
 
         poll_runtime_events(client, ui, &debug_state, options);
+        dispatch_control_requests(control);
 
         if (!platform_window_clear(window)) {
             return false;
@@ -1366,6 +1443,7 @@ int main(int argc, char **argv) {
     runtime_client *client = NULL;
     frontend *ui = NULL;
     platform_window *window;
+    control_server *control = NULL;
     platform_window_config window_config;
     frontend_layout_state layout_state;
     audio_buffer *abuf = NULL;
@@ -1531,6 +1609,23 @@ int main(int argc, char **argv) {
         frontend_set_assembler_options(ui, &asm_opts);
     }
 
+    if (options.control_port > 0) {
+        control = control_server_create((uint16_t)options.control_port);
+        if (control == NULL || !control_server_start(control)) {
+            SDL_Log("control: failed to listen on 127.0.0.1:%d", options.control_port);
+            control_server_destroy(control);
+            frontend_destroy(ui);
+            platform_window_destroy(window);
+            platform_audio_destroy(paudio);
+            platform_shutdown();
+            runtime_destroy(rt);
+            runtime_shutdown();
+            audio_buffer_destroy(abuf);
+            app_options_destroy(&options);
+            return 1;
+        }
+    }
+
     send_run_command(client);
 
     if (options.prg_path != NULL) {
@@ -1539,10 +1634,11 @@ int main(int argc, char **argv) {
         runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
     }
 
-    if (!run_main_loop(window, client, ui, &options)) {
+    if (!run_main_loop(window, client, ui, &options, control)) {
         exit_code = 1;
     }
 
+    control_server_stop(control);
     runtime_client_quit(client);
     runtime_stop(rt);
     poll_runtime_events(client, NULL, NULL, NULL);
@@ -1575,6 +1671,7 @@ int main(int argc, char **argv) {
     }
 
     frontend_destroy(ui);
+    control_server_destroy(control);
     platform_window_destroy(window);
     /* Stop and destroy the audio device before SDL_Quit so the device handle
        remains valid.  Runtime thread is already joined at this point. */

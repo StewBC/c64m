@@ -24,6 +24,7 @@ add_subdirectory(src/util)
 add_subdirectory(src/machine)
 add_subdirectory(src/runtime)
 add_subdirectory(src/platform)
+add_subdirectory(src/control)
 add_subdirectory(src/tools)
 add_subdirectory(src/frontend)
 
@@ -38,6 +39,7 @@ target_compile_definitions(c64m PRIVATE SDL_MAIN_HANDLED)
 
 target_link_libraries(c64m PRIVATE
     c64m_argparse
+    control
     runtime
     platform
     frontend
@@ -280,6 +282,18 @@ target_link_libraries(test_app_options PRIVATE
 )
 
 add_test(NAME app_options COMMAND test_app_options)
+
+add_executable(test_control_protocol
+    tests/control/test_control_protocol.c
+)
+
+target_compile_features(test_control_protocol PRIVATE c_std_99)
+
+target_link_libraries(test_control_protocol PRIVATE
+    control
+)
+
+add_test(NAME control_protocol COMMAND test_control_protocol)
 
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c

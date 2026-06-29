@@ -3,6 +3,7 @@
 add_library(platform STATIC
     platform.c
     platform_audio.c
+    platform_socket.c
 )
 
 target_include_directories(platform PUBLIC
@@ -17,3 +18,7 @@ target_link_libraries(platform
     PRIVATE
         util
 )
+
+if(WIN32)
+    target_link_libraries(platform PRIVATE ws2_32)
+endif()
