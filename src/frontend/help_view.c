@@ -39,6 +39,7 @@
 #define HELP_COLOR_TABLE_HEADER C64_HELP_LIGHT_RED
 #define HELP_COLOR_SECTION_ACTIVE C64_HELP_PURPLE
 #define HELP_COLOR_SECTION_HOVER C64_HELP_LIGHT_BLUE
+#define HELP_COLOR_SECTION_DISABLED C64_HELP_DARK_GRAY
 
 void help_view_init(frontend_help_state *state)
 {
@@ -52,6 +53,8 @@ void help_view_init(frontend_help_state *state)
     state->content_page_y = 400;
     state->content_max_y = 0;
     state->pending_scroll_restore = false;
+    state->index_popup_open = false;
+    state->index_popup_just_opened = false;
     memset(state->section_scroll_y, 0, sizeof(state->section_scroll_y));
 }
 
@@ -78,6 +81,8 @@ void help_view_close(frontend_help_state *state)
     }
     state->open = false;
     state->paused_by_help = false;
+    state->index_popup_open = false;
+    state->index_popup_just_opened = false;
 }
 
 bool help_view_is_open(const frontend_help_state *state)
@@ -659,42 +664,106 @@ static void help_render_section(struct nk_context *ctx, const help_section *sect
     }
 }
 
-static void help_render_section_buttons(struct nk_context *ctx, frontend_help_state *state, float width)
+static float help_nav_combo_width(struct nk_context *ctx)
 {
     int i;
-    int columns;
-    float button_w = 120.0f;
+    float max_w = 0.0f;
+    float padding = 32.0f;
+
+    if (ctx == NULL || ctx->style.font == NULL) {
+        return 160.0f;
+    }
+
+    for (i = 0; i < help_section_count; ++i) {
+        const char *title = help_sections[i].title;
+        int len = (int)strlen(title);
+        float w = help_text_width(ctx, title, len);
+        if (w > max_w) {
+            max_w = w;
+        }
+    }
+    return max_w + padding;
+}
+
+static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *state, float width)
+{
+    int i;
+    float nav_w = 60.0f;
+    float combo_w;
+    float row_widths[3];
+    bool at_first;
+    bool at_last;
+    struct nk_style_button saved_btn;
 
     if (ctx == NULL || state == NULL || help_section_count <= 0) {
         return;
     }
 
-    columns = (int)(width / button_w);
-    if (columns < 1) {
-        columns = 1;
-    }
-    if (columns > help_section_count) {
-        columns = help_section_count;
+    at_first = state->section_index <= 0;
+    at_last  = state->section_index >= help_section_count - 1;
+
+    combo_w = help_nav_combo_width(ctx);
+    if (combo_w > width - nav_w * 2.0f - 16.0f) {
+        combo_w = width - nav_w * 2.0f - 16.0f;
     }
 
-    for (i = 0; i < help_section_count; ++i) {
-        struct nk_style_button saved = ctx->style.button;
-        if (i == state->section_index) {
+    row_widths[0] = nav_w;
+    row_widths[1] = combo_w;
+    row_widths[2] = nav_w;
+    nk_layout_row(ctx, NK_STATIC, 24.0f, 3, row_widths);
+
+    /* [Prev] */
+    saved_btn = ctx->style.button;
+    if (at_first) {
+        ctx->style.button.normal = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.hover  = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.active = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.text_normal = C64_HELP_GRAY;
+        ctx->style.button.text_hover  = C64_HELP_GRAY;
+        ctx->style.button.text_active = C64_HELP_GRAY;
+    }
+    if (nk_button_label(ctx, "Prev") && !at_first) {
+        help_view_select_section(ctx, state, state->section_index - 1);
+    }
+    ctx->style.button = saved_btn;
+
+    /* [Index button — opens popup via help_view_render] */
+    {
+        const char *label = (state->section_index >= 0 && state->section_index < help_section_count)
+            ? help_sections[state->section_index].title
+            : "Index";
+        saved_btn = ctx->style.button;
+        if (state->index_popup_open) {
             ctx->style.button.normal = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
-            ctx->style.button.hover = nk_style_item_color(HELP_COLOR_SECTION_HOVER);
+            ctx->style.button.hover  = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
             ctx->style.button.active = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
             ctx->style.button.text_normal = HELP_COLOR_HEADING;
-            ctx->style.button.text_hover = HELP_COLOR_HEADING;
+            ctx->style.button.text_hover  = HELP_COLOR_HEADING;
             ctx->style.button.text_active = HELP_COLOR_HEADING;
         }
-        if ((i % columns) == 0) {
-            nk_layout_row_dynamic(ctx, 24.0f, columns);
+        if (nk_button_label(ctx, label)) {
+            state->index_popup_open = !state->index_popup_open;
+            if (state->index_popup_open) {
+                state->index_popup_just_opened = true;
+            }
         }
-        if (nk_button_label(ctx, help_sections[i].title)) {
-            help_view_select_section(ctx, state, i);
-        }
-        ctx->style.button = saved;
+        ctx->style.button = saved_btn;
     }
+
+    /* [Next] */
+    saved_btn = ctx->style.button;
+    if (at_last) {
+        ctx->style.button.normal = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.hover  = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.active = nk_style_item_color(HELP_COLOR_SECTION_DISABLED);
+        ctx->style.button.text_normal = C64_HELP_GRAY;
+        ctx->style.button.text_hover  = C64_HELP_GRAY;
+        ctx->style.button.text_active = C64_HELP_GRAY;
+    }
+    if (nk_button_label(ctx, "Next") && !at_last) {
+        help_view_select_section(ctx, state, state->section_index + 1);
+    }
+    ctx->style.button = saved_btn;
 }
 
 void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct nk_font *help_font, int width, int height)
@@ -705,7 +774,7 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
     nk_uint content_scroll_y = 0;
     float margin;
     float heading_h = 34.0f;
-    float footer_h = 78.0f;
+    float footer_h = 46.0f;
     float content_h;
     bool font_pushed = false;
 
@@ -733,9 +802,6 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
             nk_style_pop_font(ctx);
         }
         return;
-    }
-    if (bounds.h < 320.0f) {
-        footer_h = 54.0f;
     }
     content_h = bounds.h - heading_h - footer_h - 34.0f;
     if (content_h < 80.0f) {
@@ -788,11 +854,70 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
         ctx->style.window = group_window;
         nk_layout_row_dynamic(ctx, footer_h, 1);
         if (nk_group_begin(ctx, "HelpSections", NK_WINDOW_NO_SCROLLBAR)) {
-            help_render_section_buttons(ctx, state, bounds.w - 28.0f);
+            help_render_nav_bar(ctx, state, bounds.w - 28.0f);
             nk_group_end(ctx);
         }
     }
     nk_end(ctx);
+
+    if (state->index_popup_open) {
+        int i;
+        bool just_opened = state->index_popup_just_opened;
+        float nav_w = 60.0f;
+        float combo_w = help_nav_combo_width(ctx);
+        float item_h = 20.0f;
+        float list_h = (float)help_section_count * item_h + 16.0f;
+        float max_list_h = bounds.h - footer_h - heading_h - 8.0f;
+        struct nk_rect popup_bounds;
+        struct nk_style_window saved_popup_window;
+
+        state->index_popup_just_opened = false;
+
+        if (list_h > max_list_h) {
+            list_h = max_list_h;
+        }
+        popup_bounds = nk_rect(
+            bounds.x + 14.0f + nav_w + 8.0f,
+            bounds.y + bounds.h - footer_h - list_h - 2.0f,
+            combo_w,
+            list_h);
+
+        saved_popup_window = ctx->style.window;
+        ctx->style.window.fixed_background = nk_style_item_color(HELP_COLOR_BG);
+        ctx->style.window.border_color = HELP_COLOR_BORDER;
+        ctx->style.window.padding = nk_vec2(4.0f, 4.0f);
+        ctx->style.window.spacing = nk_vec2(4.0f, 1.0f);
+        ctx->style.window.scrollbar_size = nk_vec2(8.0f, 8.0f);
+
+        if (nk_begin(ctx, "HelpIndexPopup", popup_bounds, NK_WINDOW_BORDER)) {
+            for (i = 0; i < help_section_count; ++i) {
+                struct nk_style_button sbtn = ctx->style.button;
+                nk_layout_row_dynamic(ctx, item_h, 1);
+                if (i == state->section_index) {
+                    ctx->style.button.normal = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
+                    ctx->style.button.hover  = nk_style_item_color(HELP_COLOR_SECTION_HOVER);
+                    ctx->style.button.active = nk_style_item_color(HELP_COLOR_SECTION_ACTIVE);
+                    ctx->style.button.text_normal = HELP_COLOR_HEADING;
+                    ctx->style.button.text_hover  = HELP_COLOR_HEADING;
+                    ctx->style.button.text_active = HELP_COLOR_HEADING;
+                }
+                if (nk_button_label(ctx, help_sections[i].title)) {
+                    help_view_select_section(ctx, state, i);
+                    state->index_popup_open = false;
+                }
+                ctx->style.button = sbtn;
+            }
+        }
+        nk_end(ctx);
+        ctx->style.window = saved_popup_window;
+
+        if (!just_opened
+            && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT)
+            && !nk_input_is_mouse_hovering_rect(&ctx->input, popup_bounds)) {
+            state->index_popup_open = false;
+        }
+    }
+
     ctx->style.window = saved_window;
     if (font_pushed) {
         nk_style_pop_font(ctx);

@@ -15,6 +15,8 @@ typedef struct frontend_help_state {
     nk_uint content_page_y;
     nk_uint content_max_y;
     bool pending_scroll_restore;
+    bool index_popup_open;
+    bool index_popup_just_opened;
 } frontend_help_state;
 
 void help_view_init(frontend_help_state *state);
