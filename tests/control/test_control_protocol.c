@@ -202,23 +202,47 @@ static void test_parse_command_arguments(void)
     expect_int("load-prg type", CONTROL_COMMAND_LOAD_PRG, request.type);
     expect_string("load-prg path", "game.prg", request.args.text);
 
+    expect_true("parse load-prg path spaces", control_protocol_parse_request("37 load-prg assets/prg/Fort Apocalypse.prg", &request, &error));
+    expect_string("load-prg spaced path", "assets/prg/Fort Apocalypse.prg", request.args.text);
+
     expect_true("parse load-bin", control_protocol_parse_request("38 load-bin data.bin $0801 1 0 1", &request, &error));
     expect_int("load-bin type", CONTROL_COMMAND_LOAD_BIN, request.type);
+    expect_string("load-bin path", "data.bin", request.args.text);
     expect_u32("load-bin addr", 0x0801u, request.args.address);
     expect_true("load-bin file addr", request.args.use_file_address);
     expect_false("load-bin reset", request.args.reset_first);
     expect_true("load-bin basic", request.args.is_basic);
 
+    expect_true("parse load-bin path spaces", control_protocol_parse_request("38 load-bin assets/prg/Fort Apocalypse.bin $0801 1 0 1", &request, &error));
+    expect_string("load-bin spaced path", "assets/prg/Fort Apocalypse.bin", request.args.text);
+    expect_u32("load-bin spaced addr", 0x0801u, request.args.address);
+    expect_true("load-bin spaced file addr", request.args.use_file_address);
+    expect_false("load-bin spaced reset", request.args.reset_first);
+    expect_true("load-bin spaced basic", request.args.is_basic);
+
     expect_true("parse save-bin", control_protocol_parse_request("39 save-bin out.prg $0801 $0900 true false", &request, &error));
     expect_int("save-bin type", CONTROL_COMMAND_SAVE_BIN, request.type);
+    expect_string("save-bin path", "out.prg", request.args.text);
     expect_u32("save-bin start", 0x0801u, request.args.start_address);
     expect_u32("save-bin end", 0x0900u, request.args.end_address);
     expect_true("save-bin write addr", request.args.write_file_address);
     expect_false("save-bin basic", request.args.is_basic);
 
+    expect_true("parse save-bin path spaces", control_protocol_parse_request("39 save-bin output/Fort Apocalypse.prg $0801 $0900 true false", &request, &error));
+    expect_string("save-bin spaced path", "output/Fort Apocalypse.prg", request.args.text);
+    expect_u32("save-bin spaced start", 0x0801u, request.args.start_address);
+    expect_u32("save-bin spaced end", 0x0900u, request.args.end_address);
+    expect_true("save-bin spaced write addr", request.args.write_file_address);
+    expect_false("save-bin spaced basic", request.args.is_basic);
+
     expect_true("parse mount-d64", control_protocol_parse_request("40 mount-d64 8 disk.d64", &request, &error));
     expect_int("mount-d64 type", CONTROL_COMMAND_MOUNT_D64, request.type);
     expect_u32("mount-d64 device", 8u, request.args.device);
+    expect_string("mount-d64 path", "disk.d64", request.args.text);
+
+    expect_true("parse mount-d64 path spaces", control_protocol_parse_request("40 mount-d64 8 assets/disks/Fort Apocalypse.d64", &request, &error));
+    expect_u32("mount-d64 spaced device", 8u, request.args.device);
+    expect_string("mount-d64 spaced path", "assets/disks/Fort Apocalypse.d64", request.args.text);
 
     expect_true("parse unmount-disk", control_protocol_parse_request("41 unmount-disk 8", &request, &error));
     expect_int("unmount-disk type", CONTROL_COMMAND_UNMOUNT_DISK, request.type);

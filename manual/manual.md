@@ -1490,10 +1490,12 @@ action.
 | `unmount-disk <device>` | Unmount device 8 or 9 |
 | `get-disk-status <device>` | Return mounted/status information |
 
-Boolean flags accept `0`, `1`, `false`, or `true`. Paths are currently single
-whitespace-delimited tokens; paths containing spaces are not supported by the line
-parser. `save-bin` can overwrite host files, so use it with the same care as any other
-local file-writing command.
+Boolean flags accept `0`, `1`, `false`, or `true`. Paths may contain spaces. For
+`load-prg` and `mount-d64`, the path is the rest of the line after the fixed arguments.
+For `load-bin` and `save-bin`, the parser treats the final fixed address/boolean
+arguments as command arguments and everything before them as the path. `save-bin` can
+overwrite host files, so use it with the same care as any other local file-writing
+command.
 
 ### Breakpoints
 

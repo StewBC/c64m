@@ -147,6 +147,92 @@ static bool copy_token(const char *cursor, const char **out_end, char *out, size
     return true;
 }
 
+static bool copy_rest_argument(const char *cursor, const char **out_end, char *out, size_t out_size)
+{
+    const char *start = cursor;
+    const char *end;
+    size_t length;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    skip_spaces(&start);
+    if (*start == '\0' || *start == '\r' || *start == '\n') {
+        return false;
+    }
+    end = start;
+    while (*end != '\0' && *end != '\r' && *end != '\n') {
+        end++;
+    }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        end--;
+    }
+    length = (size_t)(end - start);
+    if (length == 0 || length >= out_size) {
+        return false;
+    }
+    memcpy(out, start, length);
+    out[length] = '\0';
+    if (out_end != NULL) {
+        *out_end = end;
+    }
+    return true;
+}
+
+static bool split_trailing_tokens(
+    const char *cursor,
+    size_t trailing_count,
+    char *out_path,
+    size_t out_path_size,
+    const char **out_tokens)
+{
+    const char *start = cursor;
+    const char *end;
+    size_t i;
+    size_t length;
+
+    if (out_path == NULL || out_path_size == 0 || out_tokens == NULL || trailing_count == 0) {
+        return false;
+    }
+    skip_spaces(&start);
+    if (*start == '\0' || *start == '\r' || *start == '\n') {
+        return false;
+    }
+    end = start;
+    while (*end != '\0' && *end != '\r' && *end != '\n') {
+        end++;
+    }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        end--;
+    }
+    for (i = trailing_count; i > 0; i--) {
+        const char *token_end = end;
+        const char *token_start;
+        while (token_end > start && (token_end[-1] == ' ' || token_end[-1] == '\t')) {
+            token_end--;
+        }
+        if (token_end == start) {
+            return false;
+        }
+        token_start = token_end;
+        while (token_start > start && token_start[-1] != ' ' && token_start[-1] != '\t') {
+            token_start--;
+        }
+        out_tokens[i - 1u] = token_start;
+        end = token_start;
+    }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        end--;
+    }
+    length = (size_t)(end - start);
+    if (length == 0 || length >= out_path_size) {
+        return false;
+    }
+    memcpy(out_path, start, length);
+    out_path[length] = '\0';
+    return true;
+}
+
 static bool parse_bool_token(const char *cursor, const char **out_end, bool *out_value)
 {
     const char *start;
@@ -574,70 +660,86 @@ bool control_protocol_parse_request(
         }
         skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_LOAD_PRG) {
-        if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
+        if (!copy_rest_argument(cursor, &cursor, args.text, sizeof(args.text))) {
             set_parse_error(out_error, id, "bad-args", "expected path");
             return false;
         }
         skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_LOAD_BIN) {
-        if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
-            set_parse_error(out_error, id, "bad-args", "expected path");
+        const char *tokens[4];
+        const char *token_end;
+        if (!split_trailing_tokens(cursor, 4, args.text, sizeof(args.text), tokens)) {
+            set_parse_error(out_error, id, "bad-args", "expected path and load arguments");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_u16_token(cursor, &cursor, &args.address)) {
+        if (!parse_u16_token(tokens[0], &token_end, &args.address) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected load address");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_bool_token(cursor, &cursor, &args.use_file_address)) {
+        if (!parse_bool_token(tokens[1], &token_end, &args.use_file_address) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected use_file_addr flag");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_bool_token(cursor, &cursor, &args.reset_first)) {
+        if (!parse_bool_token(tokens[2], &token_end, &args.reset_first) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected reset_first flag");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_bool_token(cursor, &cursor, &args.is_basic)) {
+        if (!parse_bool_token(tokens[3], &token_end, &args.is_basic) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected is_basic flag");
             return false;
         }
-        skip_spaces(&cursor);
+        while (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
+            cursor++;
+        }
     } else if (type == CONTROL_COMMAND_SAVE_BIN) {
-        if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
-            set_parse_error(out_error, id, "bad-args", "expected path");
+        const char *tokens[4];
+        const char *token_end;
+        if (!split_trailing_tokens(cursor, 4, args.text, sizeof(args.text), tokens)) {
+            set_parse_error(out_error, id, "bad-args", "expected path and save arguments");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_u16_token(cursor, &cursor, &args.start_address)) {
+        if (!parse_u16_token(tokens[0], &token_end, &args.start_address) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected start address");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_u16_token(cursor, &cursor, &args.end_address)) {
+        if (!parse_u16_token(tokens[1], &token_end, &args.end_address) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected end address");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_bool_token(cursor, &cursor, &args.write_file_address)) {
+        if (!parse_bool_token(tokens[2], &token_end, &args.write_file_address) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected write_file_addr flag");
             return false;
         }
-        skip_spaces(&cursor);
-        if (!parse_bool_token(cursor, &cursor, &args.is_basic)) {
+        if (!parse_bool_token(tokens[3], &token_end, &args.is_basic) ||
+            (*token_end != ' ' && *token_end != '\t' &&
+             *token_end != '\0' && *token_end != '\r' && *token_end != '\n')) {
             set_parse_error(out_error, id, "bad-args", "expected is_basic flag");
             return false;
         }
-        skip_spaces(&cursor);
+        while (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
+            cursor++;
+        }
     } else if (type == CONTROL_COMMAND_MOUNT_D64) {
         if (!parse_u8_token(cursor, &cursor, &args.device)) {
             set_parse_error(out_error, id, "bad-args", "expected disk device");
             return false;
         }
         skip_spaces(&cursor);
-        if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
+        if (!copy_rest_argument(cursor, &cursor, args.text, sizeof(args.text))) {
             set_parse_error(out_error, id, "bad-args", "expected path");
             return false;
         }
