@@ -117,10 +117,14 @@ UI behavior:
 - PageUp/PageDown/Home/End and Left/Right section switching are implemented.
 - C64-inspired help theme colors are compile-time constants.
 - Safe long-line wrapping is implemented.
-- Generator supports `--level N` to choose which Markdown heading level becomes the bottom-row section list.
+- Generator supports `--level N` to choose which Markdown heading level defines the help sections.
 - Embedded C64 Pro Mono TrueType font is compiled in and used only for help view text at 10 px.
 - Character-level hard-wrap fallback prevents unbroken tokens from overflowing.
 - Code blocks route through the same inline wrap path as body text.
+- Footer navigation bar: `[Prev]` / section-name index button / `[Next]` replace the old section-button grid. `[Prev]`/`[Next]` are inert (styled gray) at the document boundaries.
+- Index button opens a floating pop-up window (separate Nuklear window, not clipped by the help overlay) listing all sections; clicking an entry navigates directly to it. Clicking outside or clicking the button again closes the pop-up.
+- Footer search controls: `Search:` label, free-text edit box (fills remaining width, supports regular expressions via `external/tiny-regex-c`), `[<-]` (backward), `[->]` (forward). Enter in the edit box triggers a forward search. Case-insensitive (both pattern and text are lowercased before matching). Wraps at document boundaries in both directions. No-match state turns the edit-box text red; cleared on next edit. Search position tracks section navigation and resets to the top of the new section when Prev/Next/Index is used.
+- `external/tiny-regex-c` (`re.h` / `re.c`, Unlicense) vendored as `c64m_tiny_regex` static library; linked by frontend only.
 
 ## Dialog modal input exclusivity
 

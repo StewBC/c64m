@@ -1,9 +1,11 @@
 #include "help_view.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "generated/help_content.inc"
+#include "re.h"
 
 #define HELP_INLINE_CODE_ON '\001'
 #define HELP_INLINE_CODE_OFF '\002'
@@ -55,6 +57,10 @@ void help_view_init(frontend_help_state *state)
     state->pending_scroll_restore = false;
     state->index_popup_open = false;
     state->index_popup_just_opened = false;
+    state->search_buf[0] = '\0';
+    state->search_no_match = false;
+    state->search_section = 0;
+    state->search_span = -1;
     memset(state->section_scroll_y, 0, sizeof(state->section_scroll_y));
 }
 
@@ -72,6 +78,8 @@ void help_view_open(frontend_help_state *state, bool paused_by_help)
         state->pending_scroll_y = state->section_scroll_y[state->section_index];
         state->pending_scroll_restore = true;
     }
+    state->search_section = state->section_index;
+    state->search_span = -1;
 }
 
 void help_view_close(frontend_help_state *state)
@@ -83,6 +91,7 @@ void help_view_close(frontend_help_state *state)
     state->paused_by_help = false;
     state->index_popup_open = false;
     state->index_popup_just_opened = false;
+    state->search_no_match = false;
 }
 
 bool help_view_is_open(const frontend_help_state *state)
@@ -152,6 +161,8 @@ bool help_view_select_section(struct nk_context *ctx, frontend_help_state *state
     help_view_store_current_scroll(ctx, state);
     state->section_index = next;
     help_view_request_restore(state);
+    state->search_section = next;
+    state->search_span = -1;
     return true;
 }
 
@@ -664,6 +675,126 @@ static void help_render_section(struct nk_context *ctx, const help_section *sect
     }
 }
 
+static void help_strip_markers(char *dst, const char *src, int max)
+{
+    int j = 0;
+    while (*src && j < max - 1) {
+        unsigned char c = (unsigned char)*src++;
+        if (c != HELP_INLINE_CODE_ON && c != HELP_INLINE_CODE_OFF)
+            dst[j++] = (char)c;
+    }
+    dst[j] = '\0';
+}
+
+static void help_tolower_buf(char *buf)
+{
+    for (; *buf; buf++)
+        *buf = (char)tolower((unsigned char)*buf);
+}
+
+static float help_estimate_span_y(struct nk_context *ctx, int sec, int target_span)
+{
+    float row_h = help_row_height(ctx);
+    float y = 0.0f;
+    int i;
+
+    if (sec < 0 || sec >= help_section_count) return 0.0f;
+    for (i = 0; i < target_span && i < help_sections[sec].span_count; i++) {
+        y += (help_sections[sec].spans[i].kind == HELP_SPAN_BLANK) ? 6.0f : (row_h + 2.0f);
+    }
+    return y;
+}
+
+static void help_search_execute(struct nk_context *ctx, frontend_help_state *state, bool forward)
+{
+    char pattern[128];
+    char text[2048];
+    re_t re;
+    int total = 0;
+    int cur_sec, cur_span;
+    int i, ml;
+
+    if (state->search_buf[0] == '\0') return;
+
+    /* Compile case-insensitive: lowercase both pattern and text before matching. */
+    strncpy(pattern, state->search_buf, sizeof(pattern) - 1);
+    pattern[sizeof(pattern) - 1] = '\0';
+    help_tolower_buf(pattern);
+    re = re_compile(pattern);
+    if (!re) { state->search_no_match = true; return; }
+
+    for (i = 0; i < help_section_count; i++)
+        total += help_sections[i].span_count;
+    if (total == 0) { state->search_no_match = true; return; }
+
+    /* Starting position: one step past (forward) or before (backward) current. */
+    cur_sec  = state->search_section;
+    cur_span = state->search_span + (forward ? 1 : -1);
+
+    /* Normalize across section boundaries. */
+    if (forward) {
+        if (cur_sec < 0 || cur_sec >= help_section_count)
+            cur_sec = 0;
+        while (cur_sec < help_section_count &&
+               cur_span >= help_sections[cur_sec].span_count) {
+            cur_sec = (cur_sec + 1) % help_section_count;
+            cur_span = 0;
+        }
+    } else {
+        if (cur_sec < 0 || cur_sec >= help_section_count)
+            cur_sec = help_section_count - 1;
+        while (cur_span < 0) {
+            cur_sec = (cur_sec - 1 + help_section_count) % help_section_count;
+            cur_span = help_sections[cur_sec].span_count - 1;
+        }
+    }
+
+    /* Iterate over at most `total` spans (full wrap). */
+    for (i = 0; i < total; i++) {
+        const help_span *sp;
+
+        if (cur_sec < 0 || cur_sec >= help_section_count ||
+            cur_span < 0 || cur_span >= help_sections[cur_sec].span_count)
+            break;
+
+        sp = &help_sections[cur_sec].spans[cur_span];
+        if (sp->kind != HELP_SPAN_BLANK && sp->text && sp->text[0] != '\0') {
+            help_strip_markers(text, sp->text, (int)sizeof(text));
+            help_tolower_buf(text);
+            ml = 0;
+            if (re_matchp(re, text, &ml) >= 0) {
+                float span_y = help_estimate_span_y(ctx, cur_sec, cur_span);
+                if (cur_sec != state->section_index)
+                    help_view_select_section(ctx, state, cur_sec);
+                if (cur_sec < FRONTEND_HELP_MAX_SECTIONS)
+                    state->section_scroll_y[cur_sec] = (nk_uint)span_y;
+                state->pending_scroll_y = (nk_uint)span_y;
+                state->pending_scroll_restore = true;
+                state->search_section = cur_sec;
+                state->search_span = cur_span;
+                state->search_no_match = false;
+                return;
+            }
+        }
+
+        if (forward) {
+            cur_span++;
+            if (cur_span >= help_sections[cur_sec].span_count) {
+                cur_sec = (cur_sec + 1) % help_section_count;
+                cur_span = 0;
+            }
+        } else {
+            cur_span--;
+            if (cur_span < 0) {
+                cur_sec = (cur_sec - 1 + help_section_count) % help_section_count;
+                cur_span = help_sections[cur_sec].span_count - 1;
+            }
+        }
+    }
+
+    state->search_no_match = true;
+}
+
 static float help_nav_combo_width(struct nk_context *ctx)
 {
     int i;
@@ -688,9 +819,10 @@ static float help_nav_combo_width(struct nk_context *ctx)
 static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *state, float width)
 {
     int i;
-    float nav_w = 60.0f;
+    float nav_w   = 60.0f;
+    float arrow_w = 32.0f;
     float combo_w;
-    float row_widths[3];
+    float label_w;
     bool at_first;
     bool at_last;
     struct nk_style_button saved_btn;
@@ -703,14 +835,25 @@ static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *sta
     at_last  = state->section_index >= help_section_count - 1;
 
     combo_w = help_nav_combo_width(ctx);
-    if (combo_w > width - nav_w * 2.0f - 16.0f) {
-        combo_w = width - nav_w * 2.0f - 16.0f;
+    label_w = help_text_width(ctx, "Search:", 7) + 12.0f;
+
+    /* Clamp combo width so nav + search controls always fit. */
+    {
+        float min_search = label_w + arrow_w * 2.0f + 60.0f;
+        float max_combo  = width - nav_w * 2.0f - min_search - 16.0f;
+        if (combo_w > max_combo && max_combo > 40.0f)
+            combo_w = max_combo;
     }
 
-    row_widths[0] = nav_w;
-    row_widths[1] = combo_w;
-    row_widths[2] = nav_w;
-    nk_layout_row(ctx, NK_STATIC, 24.0f, 3, row_widths);
+    nk_layout_row_template_begin(ctx, 24.0f);
+    nk_layout_row_template_push_static(ctx, nav_w);    /* Prev   */
+    nk_layout_row_template_push_static(ctx, combo_w);  /* Index  */
+    nk_layout_row_template_push_static(ctx, nav_w);    /* Next   */
+    nk_layout_row_template_push_static(ctx, label_w);  /* Search:*/
+    nk_layout_row_template_push_dynamic(ctx);           /* box    */
+    nk_layout_row_template_push_static(ctx, arrow_w);  /* [<-]   */
+    nk_layout_row_template_push_static(ctx, arrow_w);  /* [->]   */
+    nk_layout_row_template_end(ctx);
 
     /* [Prev] */
     saved_btn = ctx->style.button;
@@ -743,9 +886,8 @@ static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *sta
         }
         if (nk_button_label(ctx, label)) {
             state->index_popup_open = !state->index_popup_open;
-            if (state->index_popup_open) {
+            if (state->index_popup_open)
                 state->index_popup_just_opened = true;
-            }
         }
         ctx->style.button = saved_btn;
     }
@@ -764,6 +906,50 @@ static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *sta
         help_view_select_section(ctx, state, state->section_index + 1);
     }
     ctx->style.button = saved_btn;
+
+    /* Search: label */
+    nk_label_colored(ctx, "Search:", NK_TEXT_RIGHT, HELP_COLOR_BODY);
+
+    /* Search edit box */
+    {
+        char prev_buf[128];
+        nk_flags edit_res;
+        struct nk_style_edit saved_edit = ctx->style.edit;
+
+        memcpy(prev_buf, state->search_buf, sizeof(prev_buf));
+
+        if (state->search_no_match) {
+            struct nk_color red = nk_rgb(220, 60, 60);
+            ctx->style.edit.text_normal = red;
+            ctx->style.edit.text_active = red;
+            ctx->style.edit.text_hover  = red;
+        }
+
+        edit_res = nk_edit_string_zero_terminated(
+            ctx,
+            NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            state->search_buf, (int)sizeof(state->search_buf),
+            nk_filter_default);
+
+        if (edit_res & NK_EDIT_ACTIVE)
+            ctx->current->edit.mode = NK_TEXT_EDIT_MODE_REPLACE;
+        if (edit_res & NK_EDIT_COMMITED) {
+            nk_edit_unfocus(ctx);
+            help_search_execute(ctx, state, true);
+        }
+        if (memcmp(prev_buf, state->search_buf, sizeof(prev_buf)) != 0)
+            state->search_no_match = false;
+
+        ctx->style.edit = saved_edit;
+    }
+
+    /* [<-] backward search */
+    if (nk_button_label(ctx, "<-"))
+        help_search_execute(ctx, state, false);
+
+    /* [->] forward search */
+    if (nk_button_label(ctx, "->"))
+        help_search_execute(ctx, state, true);
 }
 
 void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct nk_font *help_font, int width, int height)

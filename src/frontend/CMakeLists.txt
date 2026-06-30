@@ -49,10 +49,11 @@ target_link_libraries(frontend
     PUBLIC
         runtime
     PRIVATE
-    platform
-    SDL2::SDL2
-    tools
-    util
+        c64m_tiny_regex
+        platform
+        SDL2::SDL2
+        tools
+        util
 )
 
 if(UNIX AND NOT APPLE)

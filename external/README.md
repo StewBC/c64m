@@ -22,3 +22,6 @@ APIs under `src/util/` before broad use.
 - `whereami/whereami.c`, `whereami/whereami.h`
   - Upstream: <https://github.com/gpakosz/whereami>
   - License: MIT or WTFPL v2
+- `tiny-regex-c/re.c`, `tiny-regex-c/re.h`
+  - Upstream: <https://github.com/kokke/tiny-regex-c>
+  - License: The Unlicense (public domain)

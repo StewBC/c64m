@@ -37,3 +37,11 @@ target_include_directories(c64m_whereami PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/whereami
 )
 target_compile_features(c64m_whereami PUBLIC c_std_99)
+
+add_library(c64m_tiny_regex STATIC
+    tiny-regex-c/re.c
+)
+target_include_directories(c64m_tiny_regex PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tiny-regex-c
+)
+target_compile_features(c64m_tiny_regex PUBLIC c_std_99)

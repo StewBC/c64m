@@ -155,6 +155,38 @@ the INI file on quit.
 **Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
 Turbo speeds are listed in the Configure dialog and stored in the INI file.
 
+### Help
+
+Press **Opt+H** or **ESC** to open or close the in-emulator help overlay. The C64 is
+paused while the overlay is open and resumes when it is dismissed.
+
+The overlay shows one section of the manual at a time in a scrollable content area. A
+navigation bar along the bottom of the overlay contains:
+
+| Control | Action |
+|---------|--------|
+| **Prev** | Go to the previous section. Inert when already on the first section. |
+| *Section name* (centre) | Shows the current section. Click to open a pop-up index of all sections; click any entry to jump directly to it. |
+| **Next** | Go to the next section. Inert when already on the last section. |
+| **Search:** field | Type a search term and press **Enter**, **->**, or **<-** to search. Supports regular expressions. |
+| **<-** | Find the previous match, searching backward from the current match. |
+| **->** | Find the next match, searching forward from the current match. |
+
+Search is case-insensitive. When no match exists the search text turns red; it returns
+to normal as soon as the term is changed. Both directions wrap around the full document.
+Navigating to a new section via **Prev**, **Next**, or the index resets the search
+starting point to the top of that section.
+
+Keyboard shortcuts active while the help overlay is open:
+
+| Key | Action |
+|-----|--------|
+| **Left / Right** | Previous / next section |
+| **PageUp / PageDown** | Scroll content up / down by one page |
+| **Home** | Scroll to top of the current section |
+| **End** | Scroll to bottom of the current section |
+| **ESC** | Close the help overlay |
+
 ## CPU View
 
 The CPU view shows the current state of the 6510 CPU as reported by the most recent

@@ -17,6 +17,10 @@ typedef struct frontend_help_state {
     bool pending_scroll_restore;
     bool index_popup_open;
     bool index_popup_just_opened;
+    char search_buf[128];
+    bool search_no_match;
+    int  search_section;
+    int  search_span;
 } frontend_help_state;
 
 void help_view_init(frontend_help_state *state);
