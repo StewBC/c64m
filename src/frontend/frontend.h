@@ -69,6 +69,9 @@ typedef struct frontend_debug_state {
     bool has_call_stack;
 } frontend_debug_state;
 
+const char *frontend_runtime_state_name(frontend_runtime_state state);
+const char *frontend_stop_reason_name(runtime_stop_reason reason);
+
 typedef struct frontend_assembler_state {
     bool initialized;
     char file_path[1024];

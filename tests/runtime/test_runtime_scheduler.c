@@ -158,6 +158,17 @@ static void write_runtime_roms(void) {
         fputc(0xea, system);
     }
 
+    /* Several tests rely on the CPU marching through the flat NOP sled from
+       $E000 and naturally reaching the $E38B KERNAL load trap, so the loop
+       point must sit near the end of the ROM rather than near the start:
+       JMP $E000 at $FFF0 sends a free-running CPU back into the NOP sled
+       instead of off the end of ROM into zero-filled RAM, where an
+       unintended BRK would now pause the runtime. */
+    fseek(system, (long)(C64_BASIC_ROM_SIZE + 0x1ff0), SEEK_SET);
+    fputc(0x4c, system);
+    fputc(0x00, system);
+    fputc(0xe0, system);
+
     fseek(system, (long)(C64_BASIC_ROM_SIZE + 0x1ffc), SEEK_SET);
     fputc(0x00, system);
     fputc(0xe0, system);
@@ -932,6 +943,42 @@ static void test_runtime_stops_on_enabled_execute_breakpoint(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_brk_pauses_without_executing(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    const uint8_t brk_opcode[] = { 0x00 };
+    uint8_t initial_sp;
+
+    write_runtime_roms();
+    patch_runtime_kernal_reset_code(brk_opcode, sizeof(brk_opcode));
+    rt = start_runtime(&client);
+
+    expect_true("request CPU state before BRK run", runtime_client_request_cpu_state(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU state before BRK run not received");
+    }
+    initial_sp = event.data.cpu_state.sp;
+
+    expect_true("run into BRK", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received before BRK");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received for BRK");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for BRK");
+    }
+    expect_u64("BRK pause leaves runtime paused", 0, event.data.machine_state.running);
+    expect_u16("BRK pause PC unchanged", TEST_RESET_VECTOR, event.data.machine_state.pc);
+    expect_u64("BRK stop reason", RUNTIME_STOP_REASON_BRK, event.data.machine_state.stop_reason);
+    expect_u8("BRK pause leaves SP untouched", initial_sp, (uint8_t)event.data.machine_state.sp);
+
+    stop_runtime(rt, client);
+    write_runtime_roms();
+}
+
 static void test_runtime_ignores_disabled_execute_breakpoint(void) {
     runtime *rt;
     runtime_client *client;
@@ -1555,6 +1602,7 @@ int main(void) {
     test_runtime_cpu_register_setters_are_paused_only();
     test_runtime_memory_snapshots_and_writes_are_paused_only();
     test_runtime_stops_on_enabled_execute_breakpoint();
+    test_runtime_brk_pauses_without_executing();
     test_runtime_ignores_disabled_execute_breakpoint();
     test_runtime_clear_breakpoint_removes_it();
     test_runtime_clear_all_breakpoints_removes_all();

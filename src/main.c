@@ -401,6 +401,8 @@ static const char *control_stop_reason_name(runtime_stop_reason reason)
             return "run-complete";
         case RUNTIME_STOP_REASON_BREAKPOINT:
             return "breakpoint";
+        case RUNTIME_STOP_REASON_BRK:
+            return "brk";
         case RUNTIME_STOP_REASON_ERROR:
             return "error";
         case RUNTIME_STOP_REASON_NONE:
@@ -2854,6 +2856,31 @@ static void dispatch_control_requests(
     }
 }
 
+static void update_window_title(
+    platform_window *window,
+    frontend_runtime_state state,
+    runtime_stop_reason stop_reason) {
+    char title[64];
+
+    switch (state) {
+        case FRONTEND_RUNTIME_STATE_RUNNING:
+            snprintf(title, sizeof(title), "c64m - Running");
+            break;
+        case FRONTEND_RUNTIME_STATE_PAUSED:
+            snprintf(title, sizeof(title), "c64m - Paused (%s)",
+                frontend_stop_reason_name(stop_reason));
+            break;
+        case FRONTEND_RUNTIME_STATE_ERROR:
+            snprintf(title, sizeof(title), "c64m - Error");
+            break;
+        case FRONTEND_RUNTIME_STATE_UNKNOWN:
+        default:
+            snprintf(title, sizeof(title), "c64m");
+            break;
+    }
+    platform_window_set_title(window, title);
+}
+
 static bool run_main_loop(
     platform_window *window,
     runtime_client *client,
@@ -2862,6 +2889,9 @@ static bool run_main_loop(
     control_server *control) {
     bool running = true;
     bool ui_visible = false;
+    bool title_set = false;
+    frontend_runtime_state last_title_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
+    runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
     deferred_control_response deferred_control = {0};
@@ -3011,6 +3041,15 @@ static bool run_main_loop(
             &debug_state,
             &control_cache,
             &deferred_control);
+
+        if (!title_set ||
+            debug_state.runtime_state != last_title_state ||
+            debug_state.stop_reason != last_title_stop_reason) {
+            update_window_title(window, debug_state.runtime_state, debug_state.stop_reason);
+            last_title_state = debug_state.runtime_state;
+            last_title_stop_reason = debug_state.stop_reason;
+            title_set = true;
+        }
 
         if (!platform_window_clear(window)) {
             return false;

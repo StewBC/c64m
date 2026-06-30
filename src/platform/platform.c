@@ -143,6 +143,14 @@ void platform_window_set_minimum_size(platform_window *window, int min_w, int mi
     SDL_SetWindowMinimumSize(window->window, min_w, min_h);
 }
 
+void platform_window_set_title(platform_window *window, const char *title)
+{
+    if (window == NULL || window->window == NULL || title == NULL) {
+        return;
+    }
+    SDL_SetWindowTitle(window->window, title);
+}
+
 void platform_window_get_size(platform_window *window, int *out_width, int *out_height)
 {
     int width = 0;

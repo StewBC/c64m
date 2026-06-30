@@ -558,7 +558,7 @@ static bool frontend_click_in_any_dialog(const frontend *ui, float x, float y)
     return false;
 }
 
-static const char *frontend_runtime_state_name(frontend_runtime_state state)
+const char *frontend_runtime_state_name(frontend_runtime_state state)
 {
     switch (state) {
         case FRONTEND_RUNTIME_STATE_RUNNING:
@@ -573,7 +573,7 @@ static const char *frontend_runtime_state_name(frontend_runtime_state state)
     }
 }
 
-static const char *frontend_stop_reason_name(runtime_stop_reason reason)
+const char *frontend_stop_reason_name(runtime_stop_reason reason)
 {
     switch (reason) {
         case RUNTIME_STOP_REASON_RESET:
@@ -586,6 +586,8 @@ static const char *frontend_stop_reason_name(runtime_stop_reason reason)
             return "run complete";
         case RUNTIME_STOP_REASON_BREAKPOINT:
             return "breakpoint";
+        case RUNTIME_STOP_REASON_BRK:
+            return "BRK";
         case RUNTIME_STOP_REASON_ERROR:
             return "error";
         case RUNTIME_STOP_REASON_NONE:

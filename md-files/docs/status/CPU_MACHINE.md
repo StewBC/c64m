@@ -43,6 +43,34 @@ CIA #1 ICR reads = 0
 
 This is expected when the CPU interrupt-disable flag remains set.
 
+## BRK handling
+
+- `src/machine/c6510.c` / `c6510_inln.h` still execute BRK exactly per 6502
+  hardware: push PCH, PCL, flags (with B set), then jump through the
+  `$FFFE`/`$FFFF` vector. This is unchanged and stays hardware-accurate for
+  any code that legitimately uses BRK as a vectored trap.
+- The runtime layer (`src/runtime/runtime_thread.c`) now treats a fetched
+  BRK opcode (`$00`) the same way it treats an execute breakpoint: before
+  letting the CPU execute the next instruction in any free-running loop
+  (continuous run, run-N-instructions, run-N-cycles, step-over, step-out),
+  it peeks the opcode at PC and, if it is BRK, pauses instead of executing
+  with `RUNTIME_STOP_REASON_BRK` rather than running the instruction. No
+  stack push happens for an auto-stopped BRK.
+- This is unconditional (no opt-out yet) since real C64 software essentially
+  never executes BRK on its normal control path. Previously, an unhandled
+  BRK vector (e.g. pointing at uninitialized/zero-filled memory) caused the
+  CPU to keep re-triggering BRK, wrapping the stack pointer and overwriting
+  `$0100-$01FF` indefinitely with no way to tell from the UI that the
+  machine had effectively run away.
+- A manual single "step into" instruction is NOT gated by this check and
+  still executes a BRK normally (explicit user action).
+- The window title bar (`src/main.c`, `update_window_title`) now shows
+  `c64m - Running`, `c64m - Paused (<reason>)` (e.g. `BRK`, `breakpoint`,
+  `step`), or `c64m - Error`, sourced from the same `runtime_state` /
+  `stop_reason` snapshot fields the debugger's status panel already used.
+  `platform_window_set_title()` was added to `src/platform/platform.c` for
+  this.
+
 ## Banking and memory
 
 - RAM/ROM/banking/address decode are implemented.

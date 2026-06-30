@@ -1421,6 +1421,23 @@ static bool runtime_pause_if_breakpoint_pending(runtime *rt) {
     return true;
 }
 
+static bool runtime_brk_pending(runtime *rt) {
+    if (rt->suppress_execute_bp) {
+        return false;
+    }
+    return (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc) == 0x00u;
+}
+
+static void runtime_pause_for_brk(runtime *rt) {
+    rt->breakpoint_hit_pending = false;
+    rt->suppress_execute_bp = true;
+    rt->temp_bp_active = false;
+    rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_BRK;
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+    runtime_publish_machine_state(rt);
+}
+
 static bool runtime_step_cycle(runtime *rt) {
     char error[256];
 
@@ -1481,6 +1498,10 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
             runtime_pause_for_breakpoint(rt);
             return true;
         }
+        if (runtime_brk_pending(rt)) {
+            runtime_pause_for_brk(rt);
+            return true;
+        }
         rt->suppress_execute_bp = false;
 
         if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
@@ -1505,6 +1526,10 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     for (i = 0; i < count; i++) {
         if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
             runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+        if (runtime_brk_pending(rt)) {
+            runtime_pause_for_brk(rt);
             return true;
         }
 
@@ -2038,6 +2063,10 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
             runtime_pause_for_breakpoint(rt);
             return true;
         }
+        if (runtime_brk_pending(rt)) {
+            runtime_pause_for_brk(rt);
+            return true;
+        }
 
         opcode = (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc);
         irq_before = rt->machine.cpu.cpu.irq_entries;
@@ -2127,6 +2156,10 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
                 fprintf(stderr, "STEP OVER: breakpoint hit at PC=%04X jsr=%d idepth=%d\n",
                         (unsigned)rt->machine.cpu.cpu.pc, jsr_counter, interrupt_depth);
                 runtime_pause_for_breakpoint(rt);
+                return true;
+            }
+            if (runtime_brk_pending(rt)) {
+                runtime_pause_for_brk(rt);
                 return true;
             }
 
@@ -3244,6 +3277,10 @@ int runtime_thread_main(void *userdata) {
             for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
                 if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
                     runtime_pause_for_breakpoint(rt);
+                    break;
+                }
+                if (runtime_brk_pending(rt)) {
+                    runtime_pause_for_brk(rt);
                     break;
                 }
                 if (rt->temp_bp_active &&

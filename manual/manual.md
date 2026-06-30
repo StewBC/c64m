@@ -121,6 +121,20 @@ scaled to fit the available area with aspect-ratio correction.
 Press **F9** to open or close Debug Mode. Press **Opt+H** to open or close the in-emulator
 help. **Cmd+Q** (macOS) quits.
 
+### Window Title
+
+The OS window title shows whether the machine is running or paused, even when Debug Mode
+is closed and no other indicator is visible:
+
+| Title                    | Meaning                                                  |
+|---------------------------|----------------------------------------------------------|
+| `c64m - Running`          | The C64 is executing normally.                           |
+| `c64m - Paused (reason)`  | Execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
+| `c64m - Error`            | The runtime hit an error and stopped.                    |
+
+This is the quickest way to tell whether the emulator is waiting on something (paused) or
+just busy (running) without opening the debugger.
+
 ### Debug Mode
 
 In Debug Mode the window is divided into four main areas:
@@ -579,6 +593,25 @@ present.
 | Execute | CPU fetches an instruction at the address                |
 | Read    | CPU reads from the address or range                      |
 | Write   | CPU writes to the address or range                       |
+
+### BRK
+
+A `BRK` opcode ($00) always pauses the emulator, with no breakpoint needed. The CPU does
+not execute it; the instruction is intercepted before the stack is touched, and the
+window title (see **Window Title**) reads `c64m - Paused (BRK)`.
+
+This matters because real C64 software essentially never executes BRK on its normal
+control path. If the CPU lands on one anyway, it is almost always a sign that execution
+has run off the rails — into uninitialized memory, past the end of a program, or through
+a corrupted jump vector. Letting that BRK execute is rarely useful: with no real KERNAL
+handler behind the vector it triggers, the CPU just re-enters BRK on whatever it jumps to
+next, repeatedly pushing to the stack and wrapping the stack pointer through `$0100-$01FF`
+forever. Pausing on the first BRK stops that immediately so you can inspect what happened
+instead of digging through an overwritten stack.
+
+This applies only to free-running execution (Run, Step Over, Step Out, and run-N
+commands). A single explicit step (**F11**) still executes a BRK normally, since you asked
+for that exact instruction.
 
 ### Breakpoint List Format
 

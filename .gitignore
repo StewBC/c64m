@@ -6,6 +6,7 @@ build/
 disks/
 programs/
 samples/
+Testing/
 *.ini
 trace*.log
 TODO.txt
