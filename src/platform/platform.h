@@ -14,6 +14,7 @@ typedef struct platform_window_config {
 } platform_window_config;
 
 bool platform_init(void);
+bool platform_init_headless(void);
 void platform_shutdown(void);
 
 platform_window *platform_window_create(const platform_window_config *config);

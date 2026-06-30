@@ -65,6 +65,7 @@ typedef struct app_options {
     bool assembler_reset_first;
     bool assembler_rearm_oneshots;
     int control_port;
+    bool headless;
 } app_options;
 
 void app_options_init(app_options *options);

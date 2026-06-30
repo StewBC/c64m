@@ -1228,6 +1228,345 @@ The host keyboard maps semantically to C64 keys. Common mappings:
 All ASCII printable characters are mapped where possible. Characters with no C64
 equivalent are silently ignored during paste.
 
+## Remote
+
+c64m has an opt-in localhost TCP control port for remote debugging and automation. It is
+disabled by default. Start it with:
+
+```sh
+./c64m --control-port 6510
+```
+
+For automation without a visible window or host audio device, use headless mode:
+
+```sh
+./c64m --headless --control-port 6510
+```
+
+The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
+thread performs network I/O only; runtime commands and snapshot requests are dispatched
+by the main loop, so remote control follows the same thread-ownership rules as the GUI
+debugger. The current protocol name is `C64M/1`.
+
+### Quick Start
+
+A remote session is line-oriented. Each request starts with a decimal request id, then a
+command, then command arguments:
+
+```text
+1 ping
+2 pause
+3 get-cpu
+4 get-memory $0400 64 map
+5 quit-client
+```
+
+Responses begin with the same id:
+
+```text
+1 ok
+2 ok accepted=1
+3 ok pc=FD84 a=00 x=00 y=2F sp=FD p=25 cycles=1712136
+4 data memory 64 addr=0400 length=64 mode=0
+<64 raw bytes>
+5 ok
+```
+
+`quit-client` closes the TCP client connection. It does not quit the emulator process.
+Headless automation should terminate the process externally after the final client
+command.
+
+### Request Format
+
+Requests are ASCII lines terminated by `\n`:
+
+```text
+<id> <command> [arguments...]\n
+```
+
+`<id>` is a decimal unsigned integer chosen by the client. c64m does not require ids to
+be sequential, but sequential ids make logs easier to read. Commands are lower-case
+words with hyphens. Hex addresses may be written as `0xC000` or `$C000`; decimal counts
+and timeouts are written without a prefix.
+
+Most commands are single-line. Two paste commands carry a length-prefixed payload:
+
+```text
+<id> paste-text-data <byte_count>\n
+<byte_count raw bytes>\n
+
+<id> paste-events-data <byte_count>\n
+<byte_count raw bytes>\n
+```
+
+The payload may contain arbitrary bytes except that the framing still requires exactly
+one trailing newline after the payload. Payload size is limited to 4096 bytes.
+
+### Response Format
+
+Text responses are ASCII lines terminated by `\n`:
+
+```text
+<id> ok [metadata...]\n
+<id> error <code> <message>\n
+```
+
+Binary responses use a header line, exactly `<byte_count>` raw payload bytes, and one
+trailing newline:
+
+```text
+<id> data <type> <byte_count> [metadata...]\n
+<byte_count raw bytes>
+\n
+```
+
+The client should parse the byte count from the `data` header and then read exactly that
+many bytes before consuming the trailing newline. Do not treat binary payloads as
+newline-delimited text.
+
+Only one deferred response can be active at a time. Commands that wait for a runtime
+event, fresh snapshot, breakpoint mutation, disk status, or wait condition may return:
+
+```text
+<id> error busy deferred-response-active
+```
+
+when another deferred command is still pending. Deferred commands time out with:
+
+```text
+<id> error timeout deferred response timed out
+```
+
+### Connection and Introspection
+
+| Command | Response |
+|---------|----------|
+| `hello` | `ok name=c64m protocol=C64M/1` |
+| `version` | `ok protocol=C64M/1 app=0.1.0` |
+| `capabilities` | Space-separated capability names |
+| `ping` | `ok` |
+| `quit-client` | `ok`, then the server closes the client connection |
+
+### Execution Control
+
+Execution commands return after the command is accepted by the runtime, not after the
+machine reaches a new state. Use `wait-*` commands when a script needs to synchronize.
+
+| Command | Meaning |
+|---------|---------|
+| `reset` | Reset the emulated machine |
+| `run` | Resume execution |
+| `pause` | Pause execution |
+| `step-cycle` | Execute one machine cycle |
+| `step-instruction` | Execute one CPU instruction |
+| `step-over` | Step over a JSR |
+| `step-out` | Run until the current subroutine returns |
+| `run-cycles <count>` | Run for a positive cycle count |
+| `run-instructions <count>` | Run for a positive instruction count |
+| `run-to <addr>` | Run until the PC reaches a 16-bit address |
+
+Accepted execution commands respond:
+
+```text
+<id> ok accepted=1
+```
+
+### State and Snapshots
+
+| Command | Response |
+|---------|----------|
+| `get-state` | Text state summary: runtime state, CPU availability, frame, cycle, stop reason, turbo |
+| `get-cpu` | Text CPU snapshot |
+| `get-frame [format=argb8888]` | Binary frame snapshot |
+| `get-memory <addr> <length> <mode>` | Binary memory snapshot |
+| `get-debug-memory [write-history=0|1]` | Binary debugger memory snapshot |
+| `get-call-stack` | Text call-stack summary |
+
+`get-state` is answered from the main loop's cached frontend debug state. `get-cpu`,
+`get-memory`, and `get-call-stack` request fresh runtime snapshots and complete later.
+`get-frame` uses the latest completed frame cached by the main loop, or requests one if
+no cached frame exists yet. In headless mode the main loop still polls frame snapshots
+for `get-frame` and `wait-frame`.
+
+Memory modes:
+
+| Mode | Meaning |
+|------|---------|
+| `map` | CPU-visible memory after current banking |
+| `ram` | Physical RAM |
+| `rom` | Physical ROM where available, RAM elsewhere |
+
+`get-memory` length is limited to 1..1024 bytes.
+
+Frame payloads are ARGB8888 pixels. The current frame metadata is:
+
+```text
+<id> data frame 417792 width=384 height=272 stride=1536 format=argb8888 frame=<n> cycle=<cycle>
+```
+
+`417792` is `384 * 272 * 4`. `stride` is bytes per row.
+
+`get-debug-memory` returns concatenated 64 K buffers:
+
+```text
+map bytes, then ram bytes, then rom bytes
+```
+
+Without write history the payload is `196608` bytes. With `write-history=1`, an
+additional write-history payload may be included when available; the header metadata
+records whether write history is present.
+
+### Waiting
+
+Wait commands are deferred responses checked by the main loop after normal runtime
+polling. They never block SDL rendering or event processing.
+
+| Command | Completes when |
+|---------|----------------|
+| `wait-paused [timeout_ms]` | Runtime state is paused |
+| `wait-running [timeout_ms]` | Runtime state is running |
+| `wait-frame <frame_delta> [timeout_ms]` | The frame counter advances by at least `frame_delta` |
+| `wait-event <event_name> [timeout_ms]` | A named runtime event is observed |
+
+The default timeout is 2000 ms. Explicit timeouts must be 1..600000 ms.
+
+Useful event names include `running`, `paused`, `reset-complete`, `step-complete`,
+`run-complete`, `frame`, `breakpoints`, `disk-status`, `call-stack`, `debug-memory`,
+`assemble-complete`, `assemble-error`, `disk-swap`, `started`, `stopped`, and `error`.
+
+Example synchronization:
+
+```text
+1 reset
+2 run
+3 wait-running 2000
+4 wait-frame 10 5000
+5 get-frame
+6 pause
+7 wait-paused 2000
+8 get-state
+```
+
+### Input and Paste
+
+| Command | Meaning |
+|---------|---------|
+| `key-down <key>` | Press a C64 key |
+| `key-up <key>` | Release a C64 key |
+| `restore` | Trigger RESTORE/NMI |
+| `joystick <port> <mask>` | Set joystick state for port 1 or 2 |
+| `paste-text <text>` | Paste literal text using timed C64 keystrokes |
+| `paste-events <text>` | Parse and paste input-encoding events |
+| `paste-text-data <byte_count>` | Payload form of `paste-text` |
+| `paste-events-data <byte_count>` | Payload form of `paste-events` |
+
+Key names are lower-case C64 key names: `a` through `z`, `0` through `9`, `space`,
+`return`, `delete`, `left-shift`, `right-shift`, `plus`, `minus`, `asterisk`, `equals`,
+`colon`, `semicolon`, `comma`, `period`, `slash`, `at`, `cursor-right`, `cursor-down`,
+`home`, `run-stop`, `control`, `commodore`, `left-arrow`, `up-arrow`, `pound`, `f1`,
+`f3`, `f5`, and `f7`.
+
+Joystick masks use the C64 joystick bit layout:
+
+| Bit | Value | Meaning |
+|-----|-------|---------|
+| 0 | `1` | Up |
+| 1 | `2` | Down |
+| 2 | `4` | Left |
+| 3 | `8` | Right |
+| 4 | `16` | Fire |
+
+For parser-based paste, use the same input-encoding format as the Type breakpoint
+action.
+
+### Files and Disks
+
+| Command | Meaning |
+|---------|---------|
+| `load-prg <path>` | Load a PRG file using the file's two-byte load address |
+| `load-bin <path> <addr> <use_file_addr> <reset_first> <is_basic>` | Load a binary file with explicit flags |
+| `save-bin <path> <start> <end> <write_file_addr> <is_basic>` | Save a host file from memory |
+| `mount-d64 <device> <path>` | Mount a D64 on device 8 or 9 |
+| `unmount-disk <device>` | Unmount device 8 or 9 |
+| `get-disk-status <device>` | Return mounted/status information |
+
+Boolean flags accept `0`, `1`, `false`, or `true`. Paths are currently single
+whitespace-delimited tokens; paths containing spaces are not supported by the line
+parser. `save-bin` can overwrite host files, so use it with the same care as any other
+local file-writing command.
+
+### Breakpoints
+
+| Command | Meaning |
+|---------|---------|
+| `break-exec <addr>` | Create an enabled execute breakpoint with the default break action |
+| `break-list` | Request the breakpoint list |
+| `get-breakpoints` | Alias for `break-list` |
+| `break-clear <id>` | Clear one breakpoint |
+| `break-clear-all` | Clear all breakpoints |
+| `break-enable <id> <enabled>` | Enable or disable one breakpoint |
+| `break-create <definition>` | Create a breakpoint from an explicit definition |
+| `break-update <id> <definition>` | Replace an existing breakpoint definition |
+| `rearm-oneshots` | Rearm one-shot breakpoints |
+
+Definition syntax:
+
+```text
+exec <addr> [enabled=0|1] [end=<addr>] [actions=<list>] [counter=N] [reset=N]
+```
+
+`actions` is a comma-separated list containing one or more of: `break`, `fast`, `slow`,
+`tron`, `troff`, `type`, and `swap`.
+
+Breakpoint list responses are binary-framed `data breakpoints` responses whose payload
+is newline-separated ASCII text:
+
+```text
+<id> data breakpoints <byte_count> count=<count>
+id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0
+```
+
+The payload is text even though it uses `data` framing, so clients should still honor
+the byte count.
+
+### Example Python Client
+
+This small client sends a command and handles both text and binary responses:
+
+```python
+import socket
+
+def read_line(sock):
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(1)
+        if not chunk:
+            raise EOFError("connection closed")
+        data += chunk
+    return data.decode("ascii").rstrip("\n")
+
+def send(sock, line):
+    sock.sendall((line + "\n").encode("ascii"))
+    header = read_line(sock)
+    parts = header.split()
+    payload = b""
+    if len(parts) >= 4 and parts[1] == "data":
+        byte_count = int(parts[3])
+        while len(payload) < byte_count:
+            payload += sock.recv(byte_count - len(payload))
+        if sock.recv(1) != b"\n":
+            raise RuntimeError("bad data terminator")
+    return header, payload
+
+with socket.create_connection(("127.0.0.1", 6510)) as s:
+    print(send(s, "1 ping")[0])
+    print(send(s, "2 pause")[0])
+    print(send(s, "3 get-cpu")[0])
+    header, frame = send(s, "4 get-frame")
+    print(header, len(frame))
+    print(send(s, "5 quit-client")[0])
+```
+
 ## Details
 
 This section records implementation details that are not necessary for day-to-day use

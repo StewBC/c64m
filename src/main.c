@@ -1292,12 +1292,16 @@ static void poll_runtime_events(
         }
     }
 
-    while (ui != NULL && runtime_client_poll_frame(client, &frame)) {
-        if (frontend_submit_frame(ui, &frame) && debug_state != NULL) {
+    while ((ui != NULL || control != NULL) && runtime_client_poll_frame(client, &frame)) {
+        if (ui != NULL && frontend_submit_frame(ui, &frame) && debug_state != NULL) {
             debug_state->frame_number = frame.frame_number;
             debug_state->frame_cycle = frame.machine_cycle;
             debug_state->has_frame = true;
             consumed_frame = true;
+        } else if (ui == NULL && debug_state != NULL) {
+            debug_state->frame_number = frame.frame_number;
+            debug_state->frame_cycle = frame.machine_cycle;
+            debug_state->has_frame = true;
         }
         if (control_cache != NULL) {
             control_cache->frame = frame;
@@ -3020,13 +3024,58 @@ static bool run_main_loop(
     return true;
 }
 
+static bool run_headless_loop(
+    runtime_client *client,
+    app_options *options,
+    control_server *control)
+{
+    bool running = true;
+    deferred_control_response deferred_control = {0};
+    control_cached_state control_cache = {0};
+    frontend_debug_state debug_state = {
+        .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
+    };
+
+    request_debug_state(client);
+    runtime_client_request_frame(client);
+
+    while (running) {
+        SDL_Event event;
+
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                running = false;
+            }
+        }
+
+        poll_runtime_events(
+            client,
+            NULL,
+            &debug_state,
+            options,
+            control,
+            &deferred_control,
+            &control_cache);
+        check_deferred_control_timeout(control, &deferred_control);
+        dispatch_control_requests(
+            control,
+            client,
+            &debug_state,
+            &control_cache,
+            &deferred_control);
+        SDL_Delay(1);
+    }
+
+    return true;
+}
+
 int main(int argc, char **argv) {
     app_options options;
     runtime *rt = NULL;
     runtime_config runtime_cfg;
     runtime_client *client = NULL;
     frontend *ui = NULL;
-    platform_window *window;
+    platform_window *window = NULL;
     control_server *control = NULL;
     platform_window_config window_config;
     frontend_layout_state layout_state;
@@ -3034,16 +3083,27 @@ int main(int argc, char **argv) {
     platform_audio *paudio = NULL;
     char runtime_symbol_files[1024];
     int exit_code = 0;
+    bool platform_started = false;
 
     if (!app_options_load_startup(&options, argc, argv)) {
         return 1;
+    }
+
+    if (options.headless) {
+        if (!platform_init_headless()) {
+            app_options_destroy(&options);
+            return 1;
+        }
+        platform_started = true;
     }
 
     /* Create the shared audio buffer and open the SDL audio device before
        starting the runtime thread so the actual sample rate is known at
        runtime_create time.  platform_audio_init initialises SDL_INIT_AUDIO
        internally, so this may safely precede platform_init(). */
-    abuf = audio_buffer_create(8192);
+    if (!options.headless) {
+        abuf = audio_buffer_create(8192);
+    }
     if (abuf != NULL) {
         platform_audio_desc audio_desc;
         audio_desc.requested_rate             = 48000;
@@ -3063,6 +3123,9 @@ int main(int argc, char **argv) {
     if (!runtime_init()) {
         platform_audio_destroy(paudio);
         audio_buffer_destroy(abuf);
+        if (platform_started) {
+            platform_shutdown();
+        }
         app_options_destroy(&options);
         return 1;
     }
@@ -3103,6 +3166,9 @@ int main(int argc, char **argv) {
         runtime_shutdown();
         platform_audio_destroy(paudio);
         audio_buffer_destroy(abuf);
+        if (platform_started) {
+            platform_shutdown();
+        }
         app_options_destroy(&options);
         return 1;
     }
@@ -3112,6 +3178,9 @@ int main(int argc, char **argv) {
         runtime_shutdown();
         platform_audio_destroy(paudio);
         audio_buffer_destroy(abuf);
+        if (platform_started) {
+            platform_shutdown();
+        }
         app_options_destroy(&options);
         return 1;
     }
@@ -3126,6 +3195,49 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (options.headless) {
+        if (options.control_port > 0) {
+            control = control_server_create((uint16_t)options.control_port);
+            if (control == NULL || !control_server_start(control)) {
+                SDL_Log("control: failed to listen on 127.0.0.1:%d", options.control_port);
+                control_server_destroy(control);
+                runtime_destroy(rt);
+                runtime_shutdown();
+                audio_buffer_destroy(abuf);
+                platform_shutdown();
+                app_options_destroy(&options);
+                return 1;
+            }
+        }
+
+        send_run_command(client);
+
+        if (options.prg_path != NULL) {
+            runtime_client_load_prg(client, options.prg_path);
+        } else if (options.basic_path != NULL) {
+            runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
+        }
+
+        if (!run_headless_loop(client, &options, control)) {
+            exit_code = 1;
+        }
+
+        control_server_stop(control);
+        runtime_client_quit(client);
+        runtime_stop(rt);
+        poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (!runtime_save_debug_ini(rt)) {
+            SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
+        }
+        control_server_destroy(control);
+        runtime_destroy(rt);
+        runtime_shutdown();
+        audio_buffer_destroy(abuf);
+        platform_shutdown();
+        app_options_destroy(&options);
+        return exit_code;
+    }
+
     /* Start audio playback now that the runtime thread is producing samples. */
     platform_audio_start(paudio);
 
@@ -3134,9 +3246,13 @@ int main(int argc, char **argv) {
         runtime_shutdown();
         platform_audio_destroy(paudio);
         audio_buffer_destroy(abuf);
+        if (platform_started) {
+            platform_shutdown();
+        }
         app_options_destroy(&options);
         return 1;
     }
+    platform_started = true;
 
     window_config.display_width = options.display_width;
     window_config.display_height = options.display_height;

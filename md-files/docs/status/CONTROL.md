@@ -3,9 +3,11 @@
 ## Current implementation
 
 - Phase 0 design reconciliation is complete.
-- Phases 1 through 6 are implemented.
+- Phases 1 through 7 are implemented.
 - `md-files/C64MCONTROL.md` is the current design source for this feature.
 - `--control-port PORT` enables the server. The default is disabled.
+- `--headless --control-port PORT` runs without creating a window or opening
+  host audio.
 - The server binds only to `127.0.0.1`.
 - One client is accepted at a time.
 - The socket thread owns blocking network I/O only.
@@ -86,6 +88,8 @@
   rearm.
 - Phase 6: wait commands for paused/running state, frame deltas, and named
   runtime events.
+- Phase 7: headless control-port mode with runtime/control polling and frame
+  snapshots without Nuklear/frontend state.
 
 Implementation files:
 
@@ -100,7 +104,6 @@ Implementation files:
 
 - `--control-bind`.
 - `--control-disable`.
-- Headless mode.
 - Runtime fanout / independent runtime-client subscriptions.
 - `save-bin` can overwrite host files; this is accepted for the current
   localhost-only opt-in MVP and needs user-facing help text before broader use.
@@ -134,6 +137,18 @@ Implementation files:
 - Waits use the same single active deferred-response slot as fresh CPU,
   memory, disk, call-stack, and breakpoint responses.
 
+## Headless mode
+
+- `--headless` requires `--control-port PORT`.
+- Headless mode initializes SDL timer/event services, starts the runtime and
+  control server, and skips platform window, renderer, frontend, controller,
+  and host audio-device setup.
+- Runtime frame snapshots are still polled by the main loop and cached for
+  `get-frame` and `wait-frame`.
+- `quit-client` closes the socket client, not the emulator process. Current
+  automated headless workflows should terminate the process externally after
+  the final client command.
+
 ## Tests / smoke checks
 
 - Automated:
@@ -158,3 +173,5 @@ Implementation files:
     enabled=0 actions=break`, and `break-clear-all`.
   - issue wait commands such as `run`, `wait-running 2000`,
     `wait-frame 10 5000`, `pause`, and `wait-paused 2000`.
+  - launch `c64m --headless --control-port 6511`; verify `wait-frame` and
+    `get-frame` work without creating a visible window.

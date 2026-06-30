@@ -23,6 +23,16 @@ bool platform_init(void)
     return true;
 }
 
+bool platform_init_headless(void)
+{
+    if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0) {
+        SDL_Log("SDL_Init headless failed: %s", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
 void platform_shutdown(void)
 {
     SDL_Quit();

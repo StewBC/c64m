@@ -1115,6 +1115,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int audio_smoke = 0;
     int autorun = 0;
     int control_port = 0;
+    int headless = 0;
     int video_pal = 0;
     int video_ntsc = 0;
     float audio_record_start = 0.0f;
@@ -1141,6 +1142,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_STRING('B', "basic", &basic_path, "load file as BASIC program at startup", NULL, 0, 0),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
         OPT_INTEGER('\0', "control-port", &control_port, "enable localhost control server on port", NULL, 0, 0),
+        OPT_BOOLEAN('\0', "headless", &headless, "run without creating a window; requires --control-port", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
@@ -1229,6 +1231,13 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     if (control_port > 0) {
         options->control_port = control_port;
     }
+    if (headless) {
+        options->headless = true;
+    }
+    if (options->headless && options->control_port <= 0) {
+        fprintf(stderr, "--headless requires --control-port PORT\n");
+        return false;
+    }
 
     return true;
 }
@@ -1256,6 +1265,7 @@ void app_options_init(app_options *options)
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
     options->control_port = 0;
+    options->headless = false;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1312,6 +1322,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->assembler_reset_first = src->assembler_reset_first;
     dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
     dest->control_port = src->control_port;
+    dest->headless = src->headless;
 
     if (!replace_string(&dest->ini_path, src->ini_path) ||
         !replace_string(&dest->breakpoint, src->breakpoint) ||
