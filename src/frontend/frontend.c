@@ -7521,10 +7521,20 @@ static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int he
             asm_state->error_scroll_y = scroll.y;
         }
 
-        nk_layout_row_dynamic(ctx, 28.0f, 3);
+        nk_layout_row_template_begin(ctx, 28.0f);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_push_static(ctx, 70.0f);
+        nk_layout_row_template_push_static(ctx, 8.0f);
+        nk_layout_row_template_push_static(ctx, 70.0f);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_end(ctx);
         nk_spacing(ctx, 1);
         if (nk_button_label(ctx, "OK")) {
             asm_state->error_dialog_open = false;
+        }
+        nk_spacing(ctx, 1);
+        if (nk_button_label(ctx, "Copy")) {
+            SDL_SetClipboardText(asm_state->error_text);
         }
         nk_spacing(ctx, 1);
     }
