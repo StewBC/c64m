@@ -149,7 +149,8 @@ def parse_manual(path, section_level=2):
             flush_table(sections, table_lines)
             table_lines = []
             if in_code:
-                add_span(sections, "HELP_SPAN_CODE_BLOCK", "\n".join(code_lines), line_no)
+                for code_line in code_lines:
+                    add_span(sections, "HELP_SPAN_CODE_BLOCK", code_line, line_no)
                 code_lines = []
                 in_code = False
             else:

@@ -644,7 +644,7 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
             break;
 
         case HELP_SPAN_CODE_BLOCK:
-            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_CODE);
+            help_inline_row(ctx, span->text, HELP_COLOR_CODE);
             break;
 
         case HELP_SPAN_TABLE:

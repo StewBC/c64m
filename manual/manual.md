@@ -1751,8 +1751,11 @@ INI file.
 - `whereami/whereami.c`, `whereami/whereami.h`
   - Upstream: <https://github.com/gpakosz/whereami>
   - License: MIT or WTFPL v2
+- `tiny-regex-c/re.c`, `tiny-regex-c/re.h`
+  - Upstream: <https://github.com/kokke/tiny-regex-c>
+  - License: The Unlicense (public domain)
 
 ## Versions
 
-20 Jul 2026
-:   The 1 week into it version.  Not a release yet.
+29 Jun 2026
+:   The 77 hours into it version.  Not a release yet.
