@@ -103,6 +103,58 @@ static bool control_server_read_line(
     return false;
 }
 
+static bool control_server_read_exact(
+    platform_socket_connection *connection,
+    uint8_t *out,
+    size_t size)
+{
+    size_t used = 0;
+
+    while (used < size) {
+        int n = platform_socket_read(connection, out + used, size - used);
+        if (n <= 0) {
+            return false;
+        }
+        used += (size_t)n;
+    }
+    return true;
+}
+
+static bool control_server_read_request_payload(
+    platform_socket_connection *connection,
+    control_request *request,
+    control_response *response)
+{
+    char newline;
+
+    if (request == NULL || request->payload_size == 0) {
+        return true;
+    }
+    request->payload = (uint8_t *)malloc(request->payload_size);
+    if (request->payload == NULL) {
+        control_protocol_format_error(
+            response,
+            request->id,
+            "memory",
+            "payload allocation failed",
+            false);
+        return false;
+    }
+    if (!control_server_read_exact(connection, request->payload, request->payload_size) ||
+        platform_socket_read(connection, &newline, 1) != 1 ||
+        newline != '\n') {
+        control_request_release(request);
+        control_protocol_format_error(
+            response,
+            request->id,
+            "bad-payload",
+            "payload framing error",
+            true);
+        return false;
+    }
+    return true;
+}
+
 static bool control_server_send_response(
     platform_socket_connection *connection,
     const control_response *response)
@@ -112,7 +164,19 @@ static bool control_server_send_response(
     if (!control_protocol_write_response_line(response, line, sizeof(line))) {
         return false;
     }
-    return platform_socket_write_all(connection, line, strlen(line));
+    if (!platform_socket_write_all(connection, line, strlen(line))) {
+        return false;
+    }
+    if (response->type == CONTROL_RESPONSE_DATA) {
+        static const char newline = '\n';
+        if (!platform_socket_write_all(connection, response->payload, response->payload_size)) {
+            return false;
+        }
+        if (!platform_socket_write_all(connection, &newline, 1)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool control_server_handle_connection(
@@ -137,7 +201,14 @@ static bool control_server_handle_connection(
             continue;
         }
 
+        if (!control_server_read_request_payload(connection, &request, &response)) {
+            control_server_send_response(connection, &response);
+            keep_open = !response.close_client;
+            continue;
+        }
+
         if (!message_queue_push(server->requests, &request)) {
+            control_request_release(&request);
             control_protocol_format_error(
                 &response,
                 request.id,
@@ -154,8 +225,10 @@ static bool control_server_handle_connection(
             break;
         }
         if (!control_server_send_response(connection, &response)) {
+            control_response_release(&response);
             break;
         }
+        control_response_release(&response);
         keep_open = !response.close_client;
     }
 

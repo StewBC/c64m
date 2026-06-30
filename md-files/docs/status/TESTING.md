@@ -8,7 +8,7 @@
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path.
-- Control port: `tests/control/test_control_protocol.c` covers Phase 1 request parsing and response formatting. `tests/test_app_options.c` covers `--control-port` parsing.
+- Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` parsing.
 
 ## Known test gaps
 
@@ -44,6 +44,11 @@
   - Verify call stack and hardware view are populated from runtime snapshots.
 - Control port:
   - `./build/c64m --control-port 6510`, connect to `127.0.0.1:6510`, send `1 ping`, and expect `1 ok`.
+  - Verify Phase 2 with `reset`, `step-instruction`, and deferred `get-cpu`.
+  - Verify Phase 3 binary payloads: `get-frame` returns `384 * 272 * 4` bytes, `get-memory $0400 64 map` returns 64 bytes, and `get-debug-memory` returns 196608 bytes without write history.
+  - Verify Phase 4 commands: key up/down, joystick, RESTORE, `paste-text-data`, D64 mount/unmount/status, `load-prg`, `load-bin`, and `save-bin`.
+  - Verify Phase 5 breakpoint commands: `break-exec`, `break-enable`, `break-list`, `break-clear`, `break-clear-all`, `break-create`, `break-update`, and `rearm-oneshots`.
+  - Verify Phase 6 wait commands: `wait-paused`, `wait-running`, `wait-frame`, and `wait-event`, including timeout behavior.
   - Verify normal SDL UI still runs without `--control-port`.
   - Verify quitting the emulator joins the control socket thread cleanly with no connected client and with an idle connected client.
 

@@ -3,7 +3,7 @@
 ## Current implementation
 
 - Phase 0 design reconciliation is complete.
-- Phase 1 localhost control server skeleton is implemented.
+- Phases 1 through 6 are implemented.
 - `md-files/C64MCONTROL.md` is the current design source for this feature.
 - `--control-port PORT` enables the server. The default is disabled.
 - The server binds only to `127.0.0.1`.
@@ -15,7 +15,26 @@
   - `version`;
   - `capabilities`;
   - `ping`;
-  - `quit-client`.
+  - `quit-client`;
+  - `reset`, `run`, `pause`, `step-cycle`, `step-instruction`,
+    `step-over`, `step-out`, `run-cycles`, `run-instructions`, `run-to`;
+  - `get-state`, `get-cpu`;
+  - `get-frame`, `get-memory`, `get-debug-memory`, `get-call-stack`;
+  - `key-down`, `key-up`, `restore`, `joystick`;
+  - `paste-text`, `paste-events`, `paste-text-data`, `paste-events-data`;
+  - `load-prg`, `load-bin`, `save-bin`, `mount-d64`, `unmount-disk`,
+    `get-disk-status`;
+  - `break-exec`, `break-clear`, `break-enable`, `break-list`,
+    `get-breakpoints`, `break-clear-all`, `break-create`, `break-update`,
+    `rearm-oneshots`;
+  - `wait-paused`, `wait-running`, `wait-frame`, `wait-event`.
+- Binary responses use:
+  - `<id> data <type> <byte_count> <metadata...>`;
+  - `<byte_count>` raw bytes;
+  - a trailing newline.
+- In SDL mode, frame and debug-memory responses are served only from main-loop
+  cached copies or from deferred responses completed after normal main-loop
+  runtime polling.
 
 ## Phase 0 reconciliation
 
@@ -56,9 +75,17 @@
   `control` static library and link it into `c64m`; protocol unit tests can
   link that library without `frontend`.
 
-## Phase 1 target
+## Completed phases
 
-Complete.
+- Phase 1: localhost control server skeleton.
+- Phase 2: execution control, cached `get-state`, fresh deferred `get-cpu`.
+- Phase 3: binary `get-frame`, `get-memory`, `get-debug-memory`, and
+  `get-call-stack`.
+- Phase 4: input, paste, file/media, disk mount/status commands.
+- Phase 5: breakpoint list/create/update/clear/enable helpers plus one-shot
+  rearm.
+- Phase 6: wait commands for paused/running state, frame deltas, and named
+  runtime events.
 
 Implementation files:
 
@@ -73,11 +100,39 @@ Implementation files:
 
 - `--control-bind`.
 - `--control-disable`.
-- Runtime command dispatch.
-- Binary frame and memory payloads.
-- Deferred runtime responses and wait commands.
 - Headless mode.
 - Runtime fanout / independent runtime-client subscriptions.
+- `save-bin` can overwrite host files; this is accepted for the current
+  localhost-only opt-in MVP and needs user-facing help text before broader use.
+
+## Breakpoint control syntax
+
+- `break-exec ADDR` creates an enabled execute breakpoint with the default
+  break action.
+- `break-create exec ADDR [enabled=0|1] [end=ADDR] [actions=...] [counter=N] [reset=N]`
+  creates a breakpoint from an explicit definition.
+- `break-update ID exec ADDR [enabled=0|1] [end=ADDR] [actions=...] [counter=N] [reset=N]`
+  replaces an existing breakpoint definition.
+- `actions` is a comma-separated list of `break`, `fast`, `slow`, `tron`,
+  `troff`, `type`, and `swap`.
+- Breakpoint list responses use `data breakpoints` with newline-separated text
+  rows containing id, enabled state, address range, actions, and counter state.
+
+## Wait command behavior
+
+- `wait-paused [timeout_ms]` completes when the cached frontend runtime state
+  becomes paused or is already paused.
+- `wait-running [timeout_ms]` completes when the cached frontend runtime state
+  becomes running or is already running.
+- `wait-frame FRAME_DELTA [timeout_ms]` completes when the main-loop frame
+  counter advances by at least `FRAME_DELTA`.
+- `wait-event EVENT_NAME [timeout_ms]` completes when a runtime event with the
+  matching protocol name is observed. Examples include `running`, `paused`,
+  `reset-complete`, `step-complete`, `run-complete`, `frame`, `breakpoints`,
+  `disk-status`, and `debug-memory`.
+- The default timeout is 2000 ms. Explicit timeouts must be 1..600000 ms.
+- Waits use the same single active deferred-response slot as fresh CPU,
+  memory, disk, call-stack, and breakpoint responses.
 
 ## Tests / smoke checks
 
@@ -88,3 +143,18 @@ Implementation files:
   - connect to `127.0.0.1:6510`;
   - send `1 ping`;
   - receive `1 ok`.
+  - issue `reset`, `step-instruction`, `get-cpu`; verify accepted responses
+    and a CPU snapshot response.
+  - issue `get-frame`; verify byte count is `384 * 272 * 4`.
+  - issue `get-memory $0400 64 map`; verify a 64-byte payload.
+  - issue `get-debug-memory`; verify a `196608` byte payload when write
+    history is not requested.
+  - issue input and media commands such as `key-down return`, `paste-text-data`,
+    `mount-d64 8 assets/disks/blank.d64`, `get-disk-status 8`,
+    `unmount-disk 8`, and `load-prg samples/el_cartero.prg`.
+  - issue breakpoint commands such as `break-exec 0xC000`,
+    `break-enable ID 0`, `break-list`, `break-clear ID`,
+    `break-create exec 0xC001 actions=break`, `break-update ID exec 0xC002
+    enabled=0 actions=break`, and `break-clear-all`.
+  - issue wait commands such as `run`, `wait-running 2000`,
+    `wait-frame 10 5000`, `pause`, and `wait-paused 2000`.

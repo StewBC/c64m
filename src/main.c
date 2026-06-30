@@ -38,6 +38,33 @@ typedef struct sdl_c64_controller_state {
     bool swapped;
 } sdl_c64_controller_state;
 
+typedef struct deferred_control_response {
+    bool active;
+    uint32_t request_id;
+    control_command_type command_type;
+    uint64_t deadline_ms;
+    uint16_t memory_address;
+    uint16_t memory_length;
+    runtime_memory_mode memory_mode;
+    uint16_t expected_breakpoint_count;
+    uint32_t expected_breakpoint_id;
+    bool expected_breakpoint_enabled;
+    uint16_t expected_breakpoint_start;
+    bool has_expected_breakpoint_count;
+    bool has_expected_breakpoint_enabled;
+    bool has_expected_breakpoint_start;
+    bool expect_breakpoint_absent;
+    bool include_write_history;
+    uint64_t start_frame_number;
+    uint64_t frame_delta;
+    char wait_event_name[32];
+} deferred_control_response;
+
+typedef struct control_cached_state {
+    bool has_frame;
+    c64_frame frame;
+} control_cached_state;
+
 static bool choose_file_path(char *out_path, size_t out_size, const char *prompt, const char *types) {
 #if defined(__APPLE__)
     FILE *pipe;
@@ -346,17 +373,856 @@ static void update_debug_state_from_event(
     }
 }
 
+static const char *control_runtime_state_name(frontend_runtime_state state)
+{
+    switch (state) {
+        case FRONTEND_RUNTIME_STATE_RUNNING:
+            return "running";
+        case FRONTEND_RUNTIME_STATE_PAUSED:
+            return "paused";
+        case FRONTEND_RUNTIME_STATE_ERROR:
+            return "error";
+        case FRONTEND_RUNTIME_STATE_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
+static const char *control_stop_reason_name(runtime_stop_reason reason)
+{
+    switch (reason) {
+        case RUNTIME_STOP_REASON_RESET:
+            return "reset";
+        case RUNTIME_STOP_REASON_PAUSE_COMMAND:
+            return "pause-command";
+        case RUNTIME_STOP_REASON_STEP:
+            return "step";
+        case RUNTIME_STOP_REASON_RUN_COMPLETE:
+            return "run-complete";
+        case RUNTIME_STOP_REASON_BREAKPOINT:
+            return "breakpoint";
+        case RUNTIME_STOP_REASON_ERROR:
+            return "error";
+        case RUNTIME_STOP_REASON_NONE:
+        default:
+            return "none";
+    }
+}
+
+static const char *control_runtime_event_name(runtime_event_type type)
+{
+    switch (type) {
+        case RUNTIME_EVENT_PONG:
+            return "pong";
+        case RUNTIME_EVENT_STARTED:
+            return "started";
+        case RUNTIME_EVENT_RUNNING:
+            return "running";
+        case RUNTIME_EVENT_PAUSED:
+            return "paused";
+        case RUNTIME_EVENT_STOPPED:
+            return "stopped";
+        case RUNTIME_EVENT_ERROR:
+            return "error";
+        case RUNTIME_EVENT_RESET_COMPLETE:
+            return "reset-complete";
+        case RUNTIME_EVENT_STEP_COMPLETE:
+            return "step-complete";
+        case RUNTIME_EVENT_RUN_COMPLETE:
+            return "run-complete";
+        case RUNTIME_EVENT_CPU_STATE_RESPONSE:
+            return "cpu-state";
+        case RUNTIME_EVENT_MACHINE_STATE_RESPONSE:
+            return "machine-state";
+        case RUNTIME_EVENT_MEMORY_RESPONSE:
+            return "memory";
+        case RUNTIME_EVENT_MEMORY_VIEW_RESPONSE:
+            return "memory-view";
+        case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
+            return "breakpoints";
+        case RUNTIME_EVENT_DISK_STATUS_RESPONSE:
+            return "disk-status";
+        case RUNTIME_EVENT_ASSEMBLE_COMPLETE:
+            return "assemble-complete";
+        case RUNTIME_EVENT_ASSEMBLE_ERROR:
+            return "assemble-error";
+        case RUNTIME_EVENT_FRAME_READY:
+            return "frame";
+        case RUNTIME_EVENT_CALL_STACK_RESPONSE:
+            return "call-stack";
+        case RUNTIME_EVENT_DISK_SWAP:
+            return "disk-swap";
+        case RUNTIME_EVENT_DEBUG_MEMORY_READY:
+            return "debug-memory";
+        case RUNTIME_EVENT_NONE:
+        default:
+            return "none";
+    }
+}
+
+static void control_format_cpu_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_cpu_snapshot *cpu)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || cpu == NULL) {
+        return;
+    }
+    snprintf(
+        text,
+        sizeof(text),
+        "pc=%04X a=%02X x=%02X y=%02X sp=%02X p=%02X cycles=%llu",
+        cpu->pc,
+        cpu->a,
+        cpu->x,
+        cpu->y,
+        cpu->sp,
+        cpu->p,
+        (unsigned long long)cpu->cycles);
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
+static void control_format_memory_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_memory_snapshot *memory)
+{
+    uint8_t *payload;
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || memory == NULL || memory->length == 0) {
+        return;
+    }
+    payload = (uint8_t *)malloc(memory->length);
+    if (payload == NULL) {
+        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+        return;
+    }
+    memcpy(payload, memory->bytes, memory->length);
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "addr=%04X length=%u mode=%u",
+        memory->address,
+        memory->length,
+        (unsigned)memory->mode);
+    control_protocol_format_data(
+        response,
+        request_id,
+        "memory",
+        payload,
+        memory->length,
+        metadata,
+        false);
+}
+
+static void control_format_frame_response(
+    control_response *response,
+    uint32_t request_id,
+    const c64_frame *frame)
+{
+    uint8_t *payload;
+    size_t payload_size;
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || frame == NULL) {
+        return;
+    }
+    payload_size = (size_t)frame->height * (size_t)frame->stride_bytes;
+    payload = (uint8_t *)malloc(payload_size);
+    if (payload == NULL) {
+        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+        return;
+    }
+    memcpy(payload, frame->pixels, payload_size);
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "width=%u height=%u stride=%u format=argb8888 frame=%llu cycle=%llu",
+        frame->width,
+        frame->height,
+        frame->stride_bytes,
+        (unsigned long long)frame->frame_number,
+        (unsigned long long)frame->machine_cycle);
+    control_protocol_format_data(
+        response,
+        request_id,
+        "frame",
+        payload,
+        payload_size,
+        metadata,
+        false);
+}
+
+static void control_format_debug_memory_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_debug_memory_snapshot *debug_memory,
+    bool include_write_history)
+{
+    uint8_t *payload;
+    uint8_t *cursor;
+    size_t payload_size = (size_t)C64_RAM_SIZE * 3u;
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || debug_memory == NULL) {
+        return;
+    }
+    if (include_write_history) {
+        payload_size += (size_t)C64_RAM_SIZE * sizeof(debug_memory->write_history[0]);
+    }
+    payload = (uint8_t *)malloc(payload_size);
+    if (payload == NULL) {
+        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+        return;
+    }
+    cursor = payload;
+    memcpy(cursor, debug_memory->map, C64_RAM_SIZE);
+    cursor += C64_RAM_SIZE;
+    memcpy(cursor, debug_memory->ram, C64_RAM_SIZE);
+    cursor += C64_RAM_SIZE;
+    memcpy(cursor, debug_memory->rom, C64_RAM_SIZE);
+    cursor += C64_RAM_SIZE;
+    if (include_write_history) {
+        memcpy(cursor, debug_memory->write_history,
+            (size_t)C64_RAM_SIZE * sizeof(debug_memory->write_history[0]));
+    }
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "generation=%llu map=%u ram=%u rom=%u write_history=%u",
+        (unsigned long long)debug_memory->generation,
+        (unsigned)C64_RAM_SIZE,
+        (unsigned)C64_RAM_SIZE,
+        (unsigned)C64_RAM_SIZE,
+        include_write_history ? 1u : 0u);
+    control_protocol_format_data(
+        response,
+        request_id,
+        "debug-memory",
+        payload,
+        payload_size,
+        metadata,
+        false);
+}
+
+static void control_format_call_stack_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_call_stack_snapshot *call_stack)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+    size_t used = 0;
+    int written;
+    uint8_t i;
+
+    if (response == NULL || call_stack == NULL) {
+        return;
+    }
+    written = snprintf(text, sizeof(text), "sp=%02X count=%u", call_stack->sp, call_stack->count);
+    if (written < 0 || (size_t)written >= sizeof(text)) {
+        control_protocol_format_error(response, request_id, "internal", "format failed", false);
+        return;
+    }
+    used = (size_t)written;
+    for (i = 0; i < call_stack->count && i < RUNTIME_CALL_STACK_MAX; i++) {
+        written = snprintf(
+            text + used,
+            sizeof(text) - used,
+            " frame%u=%04X:%04X",
+            (unsigned)i,
+            call_stack->entries[i].jsr_address,
+            call_stack->entries[i].dest_address);
+        if (written < 0 || (size_t)written >= sizeof(text) - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
+static void control_format_disk_status_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_disk_status_snapshot *disk_status)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || disk_status == NULL) {
+        return;
+    }
+    snprintf(
+        text,
+        sizeof(text),
+        "device=%u mounted=%u kind=%u result=%u name=%s title=%s",
+        disk_status->device,
+        disk_status->mounted,
+        (unsigned)disk_status->image_kind,
+        (unsigned)disk_status->last_result,
+        disk_status->display_name,
+        disk_status->disk_title);
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
+static void control_format_breakpoints_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_breakpoint_snapshot *breakpoints)
+{
+    uint8_t *payload;
+    char *cursor;
+    size_t payload_size = 1u + (size_t)RUNTIME_BREAKPOINT_SNAPSHOT_MAX * 192u;
+    size_t used = 0;
+    char metadata[64];
+    uint16_t i;
+
+    if (response == NULL || breakpoints == NULL) {
+        return;
+    }
+    payload = (uint8_t *)malloc(payload_size);
+    if (payload == NULL) {
+        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+        return;
+    }
+    cursor = (char *)payload;
+    for (i = 0; i < breakpoints->count && i < RUNTIME_BREAKPOINT_SNAPSHOT_MAX; i++) {
+        const runtime_breakpoint_snapshot_entry *entry = &breakpoints->entries[i];
+        int written = snprintf(
+            cursor + used,
+            payload_size - used,
+            "id=%u enabled=%u start=%04X end=%04X has_end=%u access=%u mapping=%u actions=%u use_counter=%u hits=%u initial=%u reset=%u counter=%u\n",
+            entry->id,
+            entry->enabled,
+            entry->start_address,
+            entry->end_address,
+            entry->has_end_address,
+            (unsigned)entry->access,
+            (unsigned)entry->mapping,
+            entry->actions,
+            entry->use_counter,
+            entry->current_hits,
+            entry->initial_count,
+            entry->reset_count,
+            entry->counter);
+        if (written < 0 || (size_t)written >= payload_size - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
+    snprintf(metadata, sizeof(metadata), "count=%u", breakpoints->count);
+    control_protocol_format_data(
+        response,
+        request_id,
+        "breakpoints",
+        payload,
+        used,
+        metadata,
+        false);
+}
+
+static bool control_breakpoint_snapshot_find(
+    const runtime_breakpoint_snapshot *breakpoints,
+    uint32_t id,
+    const runtime_breakpoint_snapshot_entry **out_entry)
+{
+    uint16_t i;
+
+    if (breakpoints == NULL) {
+        return false;
+    }
+    for (i = 0; i < breakpoints->count && i < RUNTIME_BREAKPOINT_SNAPSHOT_MAX; i++) {
+        if (breakpoints->entries[i].id == id) {
+            if (out_entry != NULL) {
+                *out_entry = &breakpoints->entries[i];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool control_parse_breakpoint_actions(const char *value, uint32_t *out_actions)
+{
+    uint32_t actions = 0;
+    const char *cursor = value;
+
+    if (value == NULL || value[0] == '\0' || out_actions == NULL) {
+        return false;
+    }
+    while (*cursor != '\0') {
+        const char *start = cursor;
+        size_t length;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        length = (size_t)(cursor - start);
+        if (length == 5 && strncmp(start, "break", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_BREAK;
+        } else if (length == 4 && strncmp(start, "fast", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_FAST;
+        } else if (length == 4 && strncmp(start, "slow", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_SLOW;
+        } else if (length == 4 && strncmp(start, "tron", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_TRON;
+        } else if (length == 5 && strncmp(start, "troff", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_TROFF;
+        } else if (length == 4 && strncmp(start, "type", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_TYPE;
+        } else if (length == 4 && strncmp(start, "swap", length) == 0) {
+            actions |= RUNTIME_BREAKPOINT_ACTION_SWAP;
+        } else {
+            return false;
+        }
+        if (*cursor == ',') {
+            cursor++;
+        }
+    }
+    *out_actions = actions;
+    return actions != 0;
+}
+
+static bool control_parse_u32_field(const char *value, uint32_t *out)
+{
+    char *end;
+    unsigned long parsed;
+
+    if (value == NULL || value[0] == '\0' || out == NULL) {
+        return false;
+    }
+    parsed = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || parsed > 0xfffffffful) {
+        return false;
+    }
+    *out = (uint32_t)parsed;
+    return true;
+}
+
+static bool control_parse_u16_field(const char *value, uint16_t *out)
+{
+    char *end;
+    unsigned long parsed;
+    int base = 0;
+
+    if (value == NULL || value[0] == '\0' || out == NULL) {
+        return false;
+    }
+    if (value[0] == '$') {
+        value++;
+        base = 16;
+    }
+    parsed = strtoul(value, &end, base);
+    if (end == value || *end != '\0' || parsed > 0xfffful) {
+        return false;
+    }
+    *out = (uint16_t)parsed;
+    return true;
+}
+
+static bool control_parse_bool_field(const char *value, uint8_t *out)
+{
+    if (value == NULL || out == NULL) {
+        return false;
+    }
+    if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0) {
+        *out = 1u;
+        return true;
+    }
+    if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0) {
+        *out = 0u;
+        return true;
+    }
+    return false;
+}
+
+static bool control_parse_breakpoint_definition(
+    const char *text,
+    runtime_breakpoint_definition *definition)
+{
+    char buffer[1024];
+    char *token;
+
+    if (text == NULL || definition == NULL) {
+        return false;
+    }
+    snprintf(buffer, sizeof(buffer), "%s", text);
+    memset(definition, 0, sizeof(*definition));
+    definition->enabled = 1u;
+    definition->access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+    definition->actions = RUNTIME_BREAKPOINT_ACTION_BREAK;
+    definition->reset_count = 1u;
+
+    token = strtok(buffer, " \t");
+    if (token == NULL || strcmp(token, "exec") != 0) {
+        return false;
+    }
+    token = strtok(NULL, " \t");
+    if (token == NULL || !control_parse_u16_field(token, &definition->start_address)) {
+        return false;
+    }
+    definition->end_address = definition->start_address;
+
+    while ((token = strtok(NULL, " \t")) != NULL) {
+        char *eq = strchr(token, '=');
+        char *key;
+        char *value;
+        if (eq == NULL) {
+            return false;
+        }
+        *eq = '\0';
+        key = token;
+        value = eq + 1;
+        if (strcmp(key, "enabled") == 0) {
+            if (!control_parse_bool_field(value, &definition->enabled)) {
+                return false;
+            }
+        } else if (strcmp(key, "end") == 0) {
+            if (!control_parse_u16_field(value, &definition->end_address)) {
+                return false;
+            }
+            definition->has_end_address = 1u;
+        } else if (strcmp(key, "actions") == 0) {
+            if (!control_parse_breakpoint_actions(value, &definition->actions)) {
+                return false;
+            }
+        } else if (strcmp(key, "counter") == 0) {
+            if (!control_parse_u32_field(value, &definition->initial_count)) {
+                return false;
+            }
+            definition->use_counter = 1u;
+        } else if (strcmp(key, "reset") == 0) {
+            if (!control_parse_u32_field(value, &definition->reset_count)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void complete_deferred_control_response(
+    control_server *control,
+    deferred_control_response *deferred,
+    const runtime_event *event)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active || event == NULL) {
+        return;
+    }
+
+    if (deferred->command_type == CONTROL_COMMAND_GET_CPU &&
+        event->type == RUNTIME_EVENT_CPU_STATE_RESPONSE) {
+        control_format_cpu_response(&response, deferred->request_id, &event->data.cpu_state);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_MEMORY &&
+               event->type == RUNTIME_EVENT_MEMORY_RESPONSE &&
+               event->data.memory.address == deferred->memory_address &&
+               event->data.memory.length == deferred->memory_length &&
+               event->data.memory.mode == deferred->memory_mode) {
+        control_format_memory_response(&response, deferred->request_id, &event->data.memory);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_CALL_STACK &&
+               event->type == RUNTIME_EVENT_CALL_STACK_RESPONSE) {
+        control_format_call_stack_response(&response, deferred->request_id, &event->data.call_stack);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_DISK_STATUS &&
+               event->type == RUNTIME_EVENT_DISK_STATUS_RESPONSE &&
+               event->data.disk_status.device == deferred->memory_address) {
+        control_format_disk_status_response(&response, deferred->request_id, &event->data.disk_status);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if ((deferred->command_type == CONTROL_COMMAND_BREAK_EXEC ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_ENABLE ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_LIST ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR_ALL ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_CREATE ||
+                deferred->command_type == CONTROL_COMMAND_BREAK_UPDATE ||
+                deferred->command_type == CONTROL_COMMAND_REARM_ONESHOTS) &&
+               event->type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE) {
+        if (deferred->has_expected_breakpoint_count &&
+            event->data.breakpoints.count < deferred->expected_breakpoint_count) {
+            return;
+        }
+        if (deferred->has_expected_breakpoint_enabled) {
+            const runtime_breakpoint_snapshot_entry *entry = NULL;
+            if (!control_breakpoint_snapshot_find(
+                    &event->data.breakpoints,
+                    deferred->expected_breakpoint_id,
+                    &entry) ||
+                ((entry->enabled != 0) != deferred->expected_breakpoint_enabled)) {
+                return;
+            }
+        }
+        if (deferred->has_expected_breakpoint_start) {
+            const runtime_breakpoint_snapshot_entry *entry = NULL;
+            if (!control_breakpoint_snapshot_find(
+                    &event->data.breakpoints,
+                    deferred->expected_breakpoint_id,
+                    &entry) ||
+                entry->start_address != deferred->expected_breakpoint_start) {
+                return;
+            }
+        }
+        if (deferred->expect_breakpoint_absent &&
+            control_breakpoint_snapshot_find(
+                &event->data.breakpoints,
+                deferred->expected_breakpoint_id,
+                NULL)) {
+            return;
+        }
+        control_format_breakpoints_response(&response, deferred->request_id, &event->data.breakpoints);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    }
+}
+
+static void complete_deferred_debug_memory_response(
+    control_server *control,
+    deferred_control_response *deferred,
+    const runtime_debug_memory_snapshot *debug_memory)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active ||
+        debug_memory == NULL ||
+        deferred->command_type != CONTROL_COMMAND_GET_DEBUG_MEMORY) {
+        return;
+    }
+
+    control_format_debug_memory_response(
+        &response,
+        deferred->request_id,
+        debug_memory,
+        deferred->include_write_history);
+    if (control_server_post_response(control, &response)) {
+        deferred->active = false;
+    } else {
+        control_response_release(&response);
+        SDL_Log("control: response queue full");
+    }
+}
+
+static void complete_deferred_frame_response(
+    control_server *control,
+    deferred_control_response *deferred,
+    const c64_frame *frame)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active ||
+        frame == NULL ||
+        deferred->command_type != CONTROL_COMMAND_GET_FRAME) {
+        return;
+    }
+
+    control_format_frame_response(&response, deferred->request_id, frame);
+    if (control_server_post_response(control, &response)) {
+        deferred->active = false;
+    } else {
+        control_response_release(&response);
+        SDL_Log("control: response queue full");
+    }
+}
+
+static uint32_t control_timeout_or_default(uint32_t timeout_ms)
+{
+    return timeout_ms != 0 ? timeout_ms : 2000u;
+}
+
+static void complete_deferred_wait_response(
+    control_server *control,
+    deferred_control_response *deferred,
+    const char *metadata)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active) {
+        return;
+    }
+    control_protocol_format_ok(
+        &response,
+        deferred->request_id,
+        metadata,
+        false);
+    if (control_server_post_response(control, &response)) {
+        deferred->active = false;
+    } else {
+        control_response_release(&response);
+        SDL_Log("control: response queue full");
+    }
+}
+
+static void check_deferred_state_wait(
+    control_server *control,
+    deferred_control_response *deferred,
+    const frontend_debug_state *debug_state)
+{
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (control == NULL || deferred == NULL || !deferred->active ||
+        debug_state == NULL) {
+        return;
+    }
+    if (deferred->command_type == CONTROL_COMMAND_WAIT_PAUSED &&
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+        snprintf(
+            metadata,
+            sizeof(metadata),
+            "state=paused frame=%llu stop=%s",
+            (unsigned long long)debug_state->frame_number,
+            control_stop_reason_name(debug_state->stop_reason));
+        complete_deferred_wait_response(control, deferred, metadata);
+    } else if (deferred->command_type == CONTROL_COMMAND_WAIT_RUNNING &&
+               debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        snprintf(
+            metadata,
+            sizeof(metadata),
+            "state=running frame=%llu",
+            (unsigned long long)debug_state->frame_number);
+        complete_deferred_wait_response(control, deferred, metadata);
+    }
+}
+
+static void check_deferred_frame_wait(
+    control_server *control,
+    deferred_control_response *deferred,
+    uint64_t frame_number)
+{
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (control == NULL || deferred == NULL || !deferred->active ||
+        deferred->command_type != CONTROL_COMMAND_WAIT_FRAME) {
+        return;
+    }
+    if (frame_number < deferred->start_frame_number + deferred->frame_delta) {
+        return;
+    }
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "frame=%llu delta=%llu",
+        (unsigned long long)frame_number,
+        (unsigned long long)(frame_number - deferred->start_frame_number));
+    complete_deferred_wait_response(control, deferred, metadata);
+}
+
+static void check_deferred_event_wait(
+    control_server *control,
+    deferred_control_response *deferred,
+    const runtime_event *event)
+{
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+    const char *event_name;
+
+    if (control == NULL || deferred == NULL || !deferred->active ||
+        deferred->command_type != CONTROL_COMMAND_WAIT_EVENT ||
+        event == NULL) {
+        return;
+    }
+    event_name = control_runtime_event_name(event->type);
+    if (strcmp(event_name, deferred->wait_event_name) != 0) {
+        return;
+    }
+    snprintf(metadata, sizeof(metadata), "event=%s", event_name);
+    complete_deferred_wait_response(control, deferred, metadata);
+}
+
+static void check_deferred_control_timeout(
+    control_server *control,
+    deferred_control_response *deferred)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active) {
+        return;
+    }
+    if (SDL_GetTicks64() < deferred->deadline_ms) {
+        return;
+    }
+
+    control_protocol_format_error(
+        &response,
+        deferred->request_id,
+        "timeout",
+        "deferred response timed out",
+        false);
+    if (control_server_post_response(control, &response)) {
+        deferred->active = false;
+    } else {
+        control_response_release(&response);
+        SDL_Log("control: response queue full");
+    }
+}
+
+static bool control_parse_and_send_paste_events(
+    runtime_client *client,
+    const char *text,
+    size_t length)
+{
+    paste_event_t events[PASTE_EVENTS_MAX];
+    paste_parse_error_t parse_error = { -1, NULL };
+    size_t count = 0;
+    char buffer[4097];
+
+    if (client == NULL || text == NULL || length == 0 || length >= sizeof(buffer)) {
+        return false;
+    }
+    memcpy(buffer, text, length);
+    buffer[length] = '\0';
+    if (!paste_parse(buffer, events, PASTE_EVENTS_MAX, &count, &parse_error) || count == 0) {
+        return false;
+    }
+    return runtime_client_paste_events(client, events, count);
+}
+
 static void poll_runtime_events(
     runtime_client *client,
     frontend *ui,
     frontend_debug_state *debug_state,
-    app_options *options) {
+    app_options *options,
+    control_server *control,
+    deferred_control_response *deferred,
+    control_cached_state *control_cache) {
     runtime_event event;
     c64_frame frame;
     bool consumed_frame = false;
 
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
+        complete_deferred_control_response(control, deferred, &event);
+        check_deferred_event_wait(control, deferred, &event);
+        check_deferred_state_wait(control, deferred, debug_state);
+        if (debug_state != NULL && debug_state->has_frame) {
+            check_deferred_frame_wait(control, deferred, debug_state->frame_number);
+        }
         if (event.type == RUNTIME_EVENT_ERROR) {
             SDL_Log("runtime error: %s", event.data.error.message);
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_ERROR) {
@@ -408,6 +1274,10 @@ static void poll_runtime_events(
                    debug_state != NULL) {
             if (runtime_client_poll_debug_memory(client, &debug_state->debug_memory)) {
                 debug_state->has_debug_memory = true;
+                complete_deferred_debug_memory_response(
+                    control,
+                    deferred,
+                    &debug_state->debug_memory);
             }
         }
     }
@@ -428,6 +1298,12 @@ static void poll_runtime_events(
             debug_state->frame_cycle = frame.machine_cycle;
             debug_state->has_frame = true;
             consumed_frame = true;
+        }
+        if (control_cache != NULL) {
+            control_cache->frame = frame;
+            control_cache->has_frame = true;
+            complete_deferred_frame_response(control, deferred, &control_cache->frame);
+            check_deferred_frame_wait(control, deferred, frame.frame_number);
         }
     }
 
@@ -1211,12 +2087,32 @@ static void handle_drop_file(runtime_client *client, char *path) {
     SDL_free(path);
 }
 
-static void dispatch_control_request(control_server *control, const control_request *request)
+static void dispatch_control_request(
+    control_server *control,
+    runtime_client *client,
+    const frontend_debug_state *debug_state,
+    const control_cached_state *control_cache,
+    deferred_control_response *deferred,
+    const control_request *request)
 {
     control_response response;
+    bool accepted = false;
 
-    if (control == NULL || request == NULL) {
+    if (control == NULL || client == NULL || request == NULL) {
         return;
+    }
+
+    memset(&response, 0, sizeof(response));
+    if (deferred != NULL && !deferred->active) {
+        deferred->has_expected_breakpoint_count = false;
+        deferred->expected_breakpoint_count = 0;
+        deferred->has_expected_breakpoint_enabled = false;
+        deferred->has_expected_breakpoint_start = false;
+        deferred->expect_breakpoint_absent = false;
+        deferred->expected_breakpoint_id = 0;
+        deferred->start_frame_number = 0;
+        deferred->frame_delta = 0;
+        deferred->wait_event_name[0] = '\0';
     }
 
     switch (request->type) {
@@ -1240,7 +2136,7 @@ static void dispatch_control_request(control_server *control, const control_requ
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection",
+                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait",
                 false);
             break;
 
@@ -1250,6 +2146,632 @@ static void dispatch_control_request(control_server *control, const control_requ
 
         case CONTROL_COMMAND_QUIT_CLIENT:
             control_protocol_format_ok(&response, request->id, NULL, true);
+            break;
+
+        case CONTROL_COMMAND_RESET:
+            accepted = runtime_client_reset(client);
+            break;
+
+        case CONTROL_COMMAND_RUN:
+            accepted = runtime_client_run(client);
+            break;
+
+        case CONTROL_COMMAND_PAUSE:
+            accepted = runtime_client_pause(client);
+            break;
+
+        case CONTROL_COMMAND_STEP_CYCLE:
+            accepted = runtime_client_step_cycle(client);
+            break;
+
+        case CONTROL_COMMAND_STEP_INSTRUCTION:
+            accepted = runtime_client_step_instruction(client);
+            break;
+
+        case CONTROL_COMMAND_STEP_OVER:
+            accepted = runtime_client_step_over(client);
+            break;
+
+        case CONTROL_COMMAND_STEP_OUT:
+            accepted = runtime_client_step_out(client);
+            break;
+
+        case CONTROL_COMMAND_RUN_CYCLES:
+            if (request->args.count > (uint64_t)((size_t)-1)) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "count too large",
+                    false);
+            } else {
+                accepted = runtime_client_run_cycles(client, (size_t)request->args.count);
+            }
+            break;
+
+        case CONTROL_COMMAND_RUN_INSTRUCTIONS:
+            if (request->args.count > (uint64_t)((size_t)-1)) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "count too large",
+                    false);
+            } else {
+                accepted = runtime_client_run_instructions(client, (size_t)request->args.count);
+            }
+            break;
+
+        case CONTROL_COMMAND_RUN_TO:
+            accepted = runtime_client_run_to_cursor(client, request->args.address);
+            break;
+
+        case CONTROL_COMMAND_GET_STATE: {
+            char text[CONTROL_RESPONSE_TEXT_MAX];
+            const bool has_state = debug_state != NULL;
+            snprintf(
+                text,
+                sizeof(text),
+                "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u",
+                has_state ? control_runtime_state_name(debug_state->runtime_state) : "unknown",
+                has_state && debug_state->has_cpu ? 1u : 0u,
+                has_state ? (unsigned long long)debug_state->frame_number : 0ull,
+                has_state ? (unsigned long long)debug_state->machine_cycle : 0ull,
+                has_state ? control_stop_reason_name(debug_state->stop_reason) : "none",
+                has_state ? debug_state->active_turbo_multiplier : 0u);
+            control_protocol_format_ok(&response, request->id, text, false);
+            break;
+        }
+
+        case CONTROL_COMMAND_GET_CPU:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_cpu_state(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_FRAME:
+            if (control_cache != NULL && control_cache->has_frame) {
+                control_format_frame_response(&response, request->id, &control_cache->frame);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_frame(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_MEMORY:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_memory(
+                           client,
+                           request->args.address,
+                           request->args.length,
+                           (runtime_memory_mode)request->args.memory_mode)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->memory_address = request->args.address;
+                    deferred->memory_length = request->args.length;
+                    deferred->memory_mode = (runtime_memory_mode)request->args.memory_mode;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_DEBUG_MEMORY:
+            if (debug_state != NULL && debug_state->has_debug_memory &&
+                (!request->args.include_write_history ||
+                 debug_state->debug_memory.has_write_history)) {
+                control_format_debug_memory_response(
+                    &response,
+                    request->id,
+                    &debug_state->debug_memory,
+                    request->args.include_write_history);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_debug_memory(
+                           client,
+                           request->args.include_write_history)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->include_write_history = request->args.include_write_history;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_CALL_STACK:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_call_stack(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_KEY_DOWN:
+            accepted = runtime_client_keyboard_key(client, (c64_key)request->args.key, true);
+            break;
+
+        case CONTROL_COMMAND_KEY_UP:
+            accepted = runtime_client_keyboard_key(client, (c64_key)request->args.key, false);
+            break;
+
+        case CONTROL_COMMAND_RESTORE:
+            accepted = runtime_client_restore(client);
+            break;
+
+        case CONTROL_COMMAND_JOYSTICK:
+            accepted = runtime_client_set_joystick(
+                client,
+                request->args.port,
+                request->args.mask);
+            break;
+
+        case CONTROL_COMMAND_PASTE_TEXT:
+            accepted = runtime_client_paste_text_buffer(
+                client,
+                request->args.text,
+                strlen(request->args.text));
+            break;
+
+        case CONTROL_COMMAND_PASTE_EVENTS:
+            accepted = control_parse_and_send_paste_events(
+                client,
+                request->args.text,
+                strlen(request->args.text));
+            break;
+
+        case CONTROL_COMMAND_PASTE_TEXT_DATA:
+            accepted = request->payload != NULL &&
+                runtime_client_paste_text_buffer(
+                    client,
+                    (const char *)request->payload,
+                    request->payload_size);
+            break;
+
+        case CONTROL_COMMAND_PASTE_EVENTS_DATA:
+            accepted = request->payload != NULL &&
+                control_parse_and_send_paste_events(
+                    client,
+                    (const char *)request->payload,
+                    request->payload_size);
+            break;
+
+        case CONTROL_COMMAND_LOAD_PRG:
+            accepted = runtime_client_load_prg(client, request->args.text);
+            break;
+
+        case CONTROL_COMMAND_LOAD_BIN:
+            accepted = runtime_client_load_bin(
+                client,
+                request->args.text,
+                request->args.address,
+                request->args.use_file_address,
+                request->args.reset_first,
+                request->args.is_basic);
+            break;
+
+        case CONTROL_COMMAND_SAVE_BIN:
+            accepted = runtime_client_save_bin(
+                client,
+                request->args.text,
+                request->args.start_address,
+                request->args.end_address,
+                request->args.write_file_address,
+                request->args.is_basic);
+            break;
+
+        case CONTROL_COMMAND_MOUNT_D64:
+            accepted = runtime_client_mount_d64(client, request->args.device, request->args.text);
+            break;
+
+        case CONTROL_COMMAND_UNMOUNT_DISK:
+            accepted = runtime_client_unmount_disk(client, request->args.device);
+            break;
+
+        case CONTROL_COMMAND_GET_DISK_STATUS:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_disk_status(client, request->args.device)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->memory_address = request->args.device;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_EXEC:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_set_execute_breakpoint(client, request->args.address)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->expected_breakpoint_count =
+                        debug_state != NULL && debug_state->has_breakpoints ?
+                        (uint16_t)(debug_state->breakpoints.count + 1u) :
+                        1u;
+                    deferred->has_expected_breakpoint_count = true;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_CLEAR:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_clear_breakpoint(client, request->args.id)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->expected_breakpoint_id = request->args.id;
+                    deferred->expect_breakpoint_absent = true;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_ENABLE:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_set_breakpoint_enabled(
+                           client,
+                           request->args.id,
+                           request->args.include_write_history)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->expected_breakpoint_id = request->args.id;
+                    deferred->expected_breakpoint_enabled = request->args.include_write_history;
+                    deferred->has_expected_breakpoint_enabled = true;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_LIST:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_request_breakpoints(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_CLEAR_ALL:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_clear_all_breakpoints(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_BREAK_CREATE: {
+            runtime_breakpoint_definition definition;
+            if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
+                control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_create_breakpoint(client, &definition)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->expected_breakpoint_count =
+                        debug_state != NULL && debug_state->has_breakpoints ?
+                        (uint16_t)(debug_state->breakpoints.count + 1u) :
+                        1u;
+                    deferred->has_expected_breakpoint_count = true;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+        }
+
+        case CONTROL_COMMAND_BREAK_UPDATE: {
+            runtime_breakpoint_definition definition;
+            if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
+                control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_update_breakpoint(client, request->args.id, &definition)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->expected_breakpoint_id = request->args.id;
+                    deferred->expected_breakpoint_start = definition.start_address;
+                    deferred->has_expected_breakpoint_start = true;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+        }
+
+        case CONTROL_COMMAND_REARM_ONESHOTS:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (runtime_client_rearm_oneshot_breakpoints(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            } else {
+                control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_WAIT_PAUSED:
+            if (debug_state != NULL &&
+                debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+                char text[CONTROL_RESPONSE_TEXT_MAX];
+                snprintf(
+                    text,
+                    sizeof(text),
+                    "state=paused frame=%llu stop=%s",
+                    (unsigned long long)debug_state->frame_number,
+                    control_stop_reason_name(debug_state->stop_reason));
+                control_protocol_format_ok(&response, request->id, text, false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (deferred != NULL) {
+                deferred->active = true;
+                deferred->request_id = request->id;
+                deferred->command_type = request->type;
+                deferred->deadline_ms =
+                    SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                return;
+            } else {
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_WAIT_RUNNING:
+            if (debug_state != NULL &&
+                debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+                char text[CONTROL_RESPONSE_TEXT_MAX];
+                snprintf(
+                    text,
+                    sizeof(text),
+                    "state=running frame=%llu",
+                    (unsigned long long)debug_state->frame_number);
+                control_protocol_format_ok(&response, request->id, text, false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (deferred != NULL) {
+                deferred->active = true;
+                deferred->request_id = request->id;
+                deferred->command_type = request->type;
+                deferred->deadline_ms =
+                    SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                return;
+            } else {
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_WAIT_FRAME:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (deferred != NULL) {
+                deferred->active = true;
+                deferred->request_id = request->id;
+                deferred->command_type = request->type;
+                deferred->deadline_ms =
+                    SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                deferred->start_frame_number =
+                    debug_state != NULL ? debug_state->frame_number : 0u;
+                deferred->frame_delta = request->args.count;
+                return;
+            } else {
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_WAIT_EVENT:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (deferred != NULL) {
+                deferred->active = true;
+                deferred->request_id = request->id;
+                deferred->command_type = request->type;
+                deferred->deadline_ms =
+                    SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                snprintf(
+                    deferred->wait_event_name,
+                    sizeof(deferred->wait_event_name),
+                    "%s",
+                    request->args.text);
+                return;
+            } else {
+                control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            }
             break;
 
         case CONTROL_COMMAND_NONE:
@@ -1263,12 +2785,58 @@ static void dispatch_control_request(control_server *control, const control_requ
             break;
     }
 
+    switch (request->type) {
+        case CONTROL_COMMAND_RESET:
+        case CONTROL_COMMAND_RUN:
+        case CONTROL_COMMAND_PAUSE:
+        case CONTROL_COMMAND_STEP_CYCLE:
+        case CONTROL_COMMAND_STEP_INSTRUCTION:
+        case CONTROL_COMMAND_STEP_OVER:
+        case CONTROL_COMMAND_STEP_OUT:
+        case CONTROL_COMMAND_RUN_CYCLES:
+        case CONTROL_COMMAND_RUN_INSTRUCTIONS:
+        case CONTROL_COMMAND_RUN_TO:
+        case CONTROL_COMMAND_KEY_DOWN:
+        case CONTROL_COMMAND_KEY_UP:
+        case CONTROL_COMMAND_RESTORE:
+        case CONTROL_COMMAND_JOYSTICK:
+        case CONTROL_COMMAND_PASTE_TEXT:
+        case CONTROL_COMMAND_PASTE_EVENTS:
+        case CONTROL_COMMAND_PASTE_TEXT_DATA:
+        case CONTROL_COMMAND_PASTE_EVENTS_DATA:
+        case CONTROL_COMMAND_LOAD_PRG:
+        case CONTROL_COMMAND_LOAD_BIN:
+        case CONTROL_COMMAND_SAVE_BIN:
+        case CONTROL_COMMAND_MOUNT_D64:
+        case CONTROL_COMMAND_UNMOUNT_DISK:
+            if (accepted) {
+                control_protocol_format_ok(&response, request->id, "accepted=1", false);
+                request_debug_state(client);
+            } else if (response.text[0] == '\0') {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+        default:
+            break;
+    }
+
     if (!control_server_post_response(control, &response)) {
+        control_response_release(&response);
         SDL_Log("control: response queue full");
     }
 }
 
-static void dispatch_control_requests(control_server *control)
+static void dispatch_control_requests(
+    control_server *control,
+    runtime_client *client,
+    const frontend_debug_state *debug_state,
+    const control_cached_state *control_cache,
+    deferred_control_response *deferred)
 {
     control_request request;
 
@@ -1277,7 +2845,8 @@ static void dispatch_control_requests(control_server *control)
     }
 
     while (control_server_poll_request(control, &request)) {
-        dispatch_control_request(control, &request);
+        dispatch_control_request(control, client, debug_state, control_cache, deferred, &request);
+        control_request_release(&request);
     }
 }
 
@@ -1291,6 +2860,8 @@ static bool run_main_loop(
     bool ui_visible = false;
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
+    deferred_control_response deferred_control = {0};
+    control_cached_state control_cache = {0};
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
@@ -1421,8 +2992,21 @@ static bool run_main_loop(
         }
         frontend_end_input(ui);
 
-        poll_runtime_events(client, ui, &debug_state, options);
-        dispatch_control_requests(control);
+        poll_runtime_events(
+            client,
+            ui,
+            &debug_state,
+            options,
+            control,
+            &deferred_control,
+            &control_cache);
+        check_deferred_control_timeout(control, &deferred_control);
+        dispatch_control_requests(
+            control,
+            client,
+            &debug_state,
+            &control_cache,
+            &deferred_control);
 
         if (!platform_window_clear(window)) {
             return false;
@@ -1641,7 +3225,7 @@ int main(int argc, char **argv) {
     control_server_stop(control);
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client, NULL, NULL, NULL);
+    poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL);
     if (!runtime_save_debug_ini(rt)) {
         SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
     }
