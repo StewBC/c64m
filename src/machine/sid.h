@@ -66,6 +66,7 @@ void    sid_set_sample_output_enabled(sid *s, bool enabled);
    $D419/$D41A return 0xFF (no paddle connected). Other registers return
    the last written value. Reads are non-destructive. */
 uint8_t sid_read(sid *s, uint16_t addr);
+uint8_t sid_debug_read(const sid *s, uint16_t addr);
 
 /* Advance oscillators, envelopes, and filter by |cycles| machine cycles.
    Called once per machine cycle from the c64 step path. */

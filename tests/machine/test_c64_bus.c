@@ -134,6 +134,19 @@ static void test_color_ram_nibble_storage(void) {
     expect_u8("vic color high address", 0x06, c64_bus_vic_read_color(&machine.bus, C64_COLOR_RAM_SIZE - 1));
 }
 
+static void test_debug_cpu_map_reads_sid(void) {
+    c64_t machine;
+
+    c64_init(&machine);
+
+    machine.sid.voice3_osc_read = 0x2a;
+    machine.sid.voice3_env_read = 0x5c;
+
+    expect_u8("sid osc live bus read", 0x2a, c64_bus_read(&machine.bus, 0xd41b));
+    expect_u8("sid osc debug map read", 0x2a, c64_debug_read_cpu_map(&machine, 0xd41b));
+    expect_u8("sid env debug map read", 0x5c, c64_debug_read_cpu_map(&machine, 0xd41c));
+}
+
 static void test_reset_vector(void) {
     c64_t machine;
     c64_rom_set roms;
@@ -196,6 +209,7 @@ int main(void) {
     test_banking();
     test_vicii_io_mirroring_and_banking();
     test_color_ram_nibble_storage();
+    test_debug_cpu_map_reads_sid();
     test_reset_vector();
     test_combined_system_rom();
     return 0;

@@ -1493,6 +1493,10 @@ static uint8_t c64_debug_peek_io(const c64_t *machine, uint16_t address) {
         return vicii_debug_read_register(&machine->vic, address);
     }
 
+    if (address >= 0xd400 && address <= 0xd41f) {
+        return sid_debug_read(&machine->sid, address);
+    }
+
     if (address >= 0xd800 && address <= 0xdbff) {
         return (uint8_t)(machine->bus.color_ram[address - 0xd800u] & 0x0fu);
     }

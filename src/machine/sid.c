@@ -182,6 +182,10 @@ void sid_set_sample_output_enabled(sid *s, bool enabled) {
 /* ------------------------------------------------------------------ */
 
 uint8_t sid_read(sid *s, uint16_t addr) {
+    return sid_debug_read(s, addr);
+}
+
+uint8_t sid_debug_read(const sid *s, uint16_t addr) {
     uint8_t reg;
     if (!s) return 0xFFu;
     reg = (uint8_t)(addr & 0x1Fu);
