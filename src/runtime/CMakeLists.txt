@@ -22,6 +22,7 @@ target_link_libraries(runtime
         assembler
         d64
         symbols
+        t64
         util
     PRIVATE
         SDL2::SDL2

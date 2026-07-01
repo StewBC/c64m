@@ -97,6 +97,7 @@ The file extension determines how the file is handled:
 |-----------|----------------------------------------------------------------|
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B–$2E`) |
+| `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
 | anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |
 
 Extension matching is case-insensitive (`.D64` and `.d64` are treated identically).
@@ -501,6 +502,10 @@ launch the first image in the saved list is mounted.
 | Address field   | Manual load address in hex, active when From File is off   |
 | Reset           | Reset the machine and wait for BASIC (`$E38B`) before injecting |
 | Basic Program   | Update TXTTAB (`$2B/$2C`) and VARTAB (`$2D/$2E`) after load |
+
+Selecting a `.T64` file extracts the first loadable tape-container entry and loads it
+through the PRG-style reset/inject path. The raw binary options in this dialog do not
+apply to `.T64` files.
 
 **[Save]** opens the Save dialog:
 

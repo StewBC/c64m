@@ -9,6 +9,7 @@
 #include "runtime_assembler.h"
 #include "d64.h"
 #include "disasm_6502.h"
+#include "t64.h"
 
 #include <SDL.h>
 #include <ctype.h>
@@ -1741,60 +1742,144 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
     runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
 }
 
-static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
+static bool runtime_path_has_extension(const char *path, const char *extension) {
+    const char *dot;
+
+    if (path == NULL || extension == NULL) {
+        return false;
+    }
+
+    dot = strrchr(path, '.');
+    return dot != NULL && SDL_strcasecmp(dot + 1, extension) == 0;
+}
+
+static bool runtime_read_host_file(
+    runtime *rt,
+    const char *path,
+    const char *label,
+    uint8_t **out_bytes,
+    size_t *out_length)
+{
     FILE *file;
+    long file_size;
     uint8_t *bytes;
-    size_t length;
-    size_t payload_length;
-    uint16_t load_address;
-    size_t i;
+    char message[128];
+
+    if (out_bytes == NULL || out_length == NULL) {
+        runtime_publish_error(rt, "invalid host file read request");
+        return false;
+    }
+
+    *out_bytes = NULL;
+    *out_length = 0;
 
     file = fopen(path, "rb");
     if (file == NULL) {
-        runtime_publish_error(rt, "failed to open PRG file");
+        snprintf(message, sizeof(message), "failed to open %s file", label);
+        runtime_publish_error(rt, message);
         return false;
     }
 
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
-        runtime_publish_error(rt, "failed to inspect PRG file");
+        snprintf(message, sizeof(message), "failed to inspect %s file", label);
+        runtime_publish_error(rt, message);
         return false;
     }
-    length = (size_t)ftell(file);
-    if (fseek(file, 0, SEEK_SET) != 0 || length < 2 || length > 65538u) {
+
+    file_size = ftell(file);
+    if (file_size < 0) {
         fclose(file);
+        snprintf(message, sizeof(message), "failed to inspect %s file", label);
+        runtime_publish_error(rt, message);
+        return false;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        snprintf(message, sizeof(message), "failed to seek %s file", label);
+        runtime_publish_error(rt, message);
+        return false;
+    }
+
+    bytes = malloc((size_t)file_size);
+    if (bytes == NULL && file_size > 0) {
+        fclose(file);
+        snprintf(message, sizeof(message), "failed to allocate %s buffer", label);
+        runtime_publish_error(rt, message);
+        return false;
+    }
+
+    if (file_size > 0 && fread(bytes, 1, (size_t)file_size, file) != (size_t)file_size) {
+        free(bytes);
+        fclose(file);
+        snprintf(message, sizeof(message), "failed to read %s file", label);
+        runtime_publish_error(rt, message);
+        return false;
+    }
+
+    fclose(file);
+    *out_bytes = bytes;
+    *out_length = (size_t)file_size;
+    return true;
+}
+
+static bool runtime_inject_prg_image(runtime *rt, const uint8_t *bytes, size_t length) {
+    size_t payload_length;
+    uint16_t load_address;
+    size_t i;
+
+    if (bytes == NULL || length < 2 || length > 65538u) {
         runtime_publish_error(rt, "invalid PRG file");
         return false;
     }
 
-    bytes = malloc(length);
-    if (bytes == NULL) {
-        fclose(file);
-        runtime_publish_error(rt, "failed to allocate PRG buffer");
-        return false;
-    }
-
-    if (fread(bytes, 1, length, file) != length) {
-        free(bytes);
-        fclose(file);
-        runtime_publish_error(rt, "failed to read PRG file");
-        return false;
-    }
-    fclose(file);
-
     load_address = (uint16_t)bytes[0] | (uint16_t)((uint16_t)bytes[1] << 8);
     payload_length = length - 2u;
+    if ((uint32_t)load_address + payload_length > 0x10000u) {
+        runtime_publish_error(rt, "PRG load range overflows address space");
+        return false;
+    }
+
     for (i = 0; i < payload_length; ++i) {
         c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i + 2u]);
     }
 
-    free(bytes);
     runtime_publish_memory(
         rt,
         load_address,
         payload_length > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)payload_length,
         RUNTIME_MEMORY_MODE_RAM);
     return true;
+}
+
+static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
+    uint8_t *bytes;
+    size_t length;
+    bool loaded;
+
+    if (!runtime_read_host_file(rt, path, "PRG", &bytes, &length)) {
+        return false;
+    }
+
+    if (runtime_path_has_extension(path, "t64")) {
+        t64_file_data file = {0};
+        t64_result result = t64_extract_first_prg(bytes, length, &file);
+        free(bytes);
+        if (result != T64_OK) {
+            char message[128];
+            snprintf(message, sizeof(message), "failed to extract T64 PRG: %s", t64_result_string(result));
+            runtime_publish_error(rt, message);
+            return false;
+        }
+        loaded = runtime_inject_prg_image(rt, file.bytes, file.size);
+        t64_file_data_free(&file);
+        return loaded;
+    }
+
+    loaded = runtime_inject_prg_image(rt, bytes, length);
+    free(bytes);
+    return loaded;
 }
 
 static void runtime_load_prg(runtime *rt, const runtime_command *command) {

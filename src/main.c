@@ -125,6 +125,17 @@ static bool choose_symbol_path(char *out_path, size_t out_size) {
     return choose_file_path(out_path, out_size, "Select Symbol File", NULL);
 }
 
+static bool path_has_extension(const char *path, const char *extension) {
+    const char *dot;
+
+    if (path == NULL || extension == NULL) {
+        return false;
+    }
+
+    dot = strrchr(path, '.');
+    return dot != NULL && SDL_strcasecmp(dot + 1, extension) == 0;
+}
+
 static bool choose_save_path(char *out_path, size_t out_size, const char *prompt) {
 #if defined(__APPLE__)
     FILE *pipe;
@@ -2018,13 +2029,17 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
-                sent = runtime_client_load_bin(
-                    client,
-                    intent.load_bin_path,
-                    intent.load_bin_address,
-                    intent.load_bin_use_file_address,
-                    intent.load_bin_reset_first,
-                    intent.load_bin_is_basic);
+                if (path_has_extension(intent.load_bin_path, "t64")) {
+                    sent = runtime_client_load_prg(client, intent.load_bin_path);
+                } else {
+                    sent = runtime_client_load_bin(
+                        client,
+                        intent.load_bin_path,
+                        intent.load_bin_address,
+                        intent.load_bin_use_file_address,
+                        intent.load_bin_reset_first,
+                        intent.load_bin_is_basic);
+                }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE:
@@ -2076,15 +2091,9 @@ static void handle_keyboard_input(
 }
 
 static void handle_drop_file(runtime_client *client, char *path) {
-    const char *dot;
-    const char *ext;
-
-    dot = strrchr(path, '.');
-    ext = dot != NULL ? dot + 1 : "";
-
-    if (SDL_strcasecmp(ext, "d64") == 0) {
+    if (path_has_extension(path, "d64")) {
         runtime_client_mount_d64(client, 8, path);
-    } else if (SDL_strcasecmp(ext, "bas") == 0) {
+    } else if (path_has_extension(path, "bas")) {
         runtime_client_load_bin(client, path, 0, true, true, true);
     } else {
         runtime_client_load_prg(client, path);

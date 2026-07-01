@@ -335,6 +335,22 @@ target_link_libraries(test_d64 PRIVATE
 
 add_test(NAME d64 COMMAND test_d64)
 
+add_executable(test_t64
+    tests/tools/test_t64.c
+)
+
+target_compile_features(test_t64 PRIVATE c_std_99)
+
+target_compile_definitions(test_t64 PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_t64 PRIVATE
+    t64
+)
+
+add_test(NAME t64 COMMAND test_t64)
+
 add_executable(profile_c64_hotloop
     tools/profile_c64_hotloop.c
 )

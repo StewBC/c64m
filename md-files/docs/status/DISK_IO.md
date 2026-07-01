@@ -1,4 +1,4 @@
-# Disk, PRG, and host file I/O status
+# Disk, PRG, tape-container, and host file I/O status
 
 ## D64 current implementation
 
@@ -68,6 +68,10 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - `--prg` / `-p <file>` loads any file as PRG on startup.
 - `--basic` / `-B <file>` loads any file as a BASIC program on startup.
 - `--prg` resets, boots to BASIC, injects at embedded load address, and resumes running automatically.
+- `.T64` files passed through PRG-style host load paths are parsed as tape
+  containers and the first loadable entry is extracted into PRG-style bytes
+  before injection. This is host-file convenience loading only, not mounted
+  tape state or Datasette/KERNAL tape emulation.
 - `--basic` resets, boots, writes at embedded load address, and updates TXTTAB/VARTAB at `$2B-$2E`.
 - `--autorun` with `--prg` or `--basic` buffer-injects `RUN\r` after bytes land at `$E38B`.
 - `--autorun` with `--disk 8=...` uses a two-phase `$E38B` trap: `LOAD"*",8\r`, then `RUN\r`.
@@ -91,6 +95,8 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - Manual hex field is active when From File is unchecked.
 - Reset waits for `$E38B` before injecting.
 - Basic Program fixes TXTTAB and VARTAB after load.
+- Selecting a `.T64` in the Load dialog routes to PRG-style T64 extraction and
+  ignores the raw binary dialog options.
 - Save dialog has Name + Browse, Basic Program, Write address header, and Start/End hex fields.
 - Basic Program save reads `$2B/$2C` and `$2D/$2E`, treats end as exclusive, and forces Write address header.
 
@@ -98,6 +104,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 - D64 writes are not implemented.
 - SAVE to disk is not implemented.
+- Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps
+  for T64 are not implemented. Current T64 support extracts the first loadable
+  entry only through host load/drop paths.
 - Error channel is not implemented beyond generic 1541 ROM intercept errors.
 - Fast loaders are not broadly validated; loaders that depend on unmodeled
   disk-controller VIA motor/SYNC/head mechanics may still fail.
@@ -115,6 +124,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   - With `[disk] emulate_1541=1` and `[roms] 1541=...`, the same disk autorun path should load through the real 1541 ROM/IEC path, not the KERNAL trap.
 - Host load/save:
   - Load with file-address header.
+  - Load/drop `.T64`; first loadable entry should inject at its directory load address.
   - Load with Basic Program and check `$2B-$2E`.
   - Save as Basic Program and reload.
   - Save raw range with and without header.
@@ -123,6 +133,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 ## Files likely involved
 
 - `src/tools/d64*`
+- `src/tools/t64*`
 - `src/runtime/*disk*`
 - `src/machine/c64*`
 - `src/frontend/*`
