@@ -525,6 +525,7 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 59); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd018, 24); /* screen=$0400, bitmap=$2000 */
 
     /* The user's program clears bitmap RAM, but standard bitmap colors come from
@@ -535,9 +536,9 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
 
     make_live_frame(&machine, &frame, "make live basic hires setup frame");
     expect_u32("basic hires setup foreground", 0xffffffffu,
-               frame.pixels[51 * C64_FRAME_WIDTH + 31]);
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
     expect_u32("basic hires setup background", TEST_PALETTE_0,
-               frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+               frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
 static void test_multicolor_bitmap_mode(void) {

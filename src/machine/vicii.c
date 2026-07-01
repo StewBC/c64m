@@ -475,10 +475,8 @@ static vicii_bg_pixel vicii_background_pixel(
     bool den;
     uint32_t sx_raw;
     uint32_t sy;
-    uint32_t adjusted;
     uint32_t sx;
     uint32_t row_in_cell;
-    uint32_t char_row;
     uint32_t col;
     uint16_t cell;
     uint16_t vic_bank;
@@ -496,23 +494,32 @@ static vicii_bg_pixel vicii_background_pixel(
     xscroll = v->registers[0x16] & 0x07u;
     yscroll = v->registers[0x11] & 0x07u;
     den = (v->registers[0x11] & 0x10u) != 0u;
-    sx_raw = x - g->left;
-    sy = y - g->top;
+    sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
+    sy = y - (uint32_t)VICII_PAL_VBORDER_TOP_25;
 
     if (mode >= 5u) {
         return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[0], false));
     }
 
-    if (sx_raw < (uint32_t)xscroll ||
-        !vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
+    if (sx_raw < (uint32_t)xscroll) {
         return vicii_bg_pixel_make(b0c, false);
     }
 
     sx = sx_raw - (uint32_t)xscroll;
-    row_in_cell = adjusted & 7u;
-    char_row = adjusted / 8u;
     col = sx / 8u;
-    cell = (uint16_t)(char_row * 40u + col);
+    if (col >= 40u) {
+        return vicii_bg_pixel_make(b0c, false);
+    }
+    {
+        uint32_t adjusted;
+        uint32_t char_row;
+        if (!vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
+            return vicii_bg_pixel_make(b0c, false);
+        }
+        row_in_cell = adjusted & 7u;
+        char_row = adjusted / 8u;
+        cell = (uint16_t)(char_row * 40u + col);
+    }
     vic_bank = c64_bus_vic_bank_base(bus);
     screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
     char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
