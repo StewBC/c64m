@@ -384,6 +384,7 @@ bool c64_attach_generic_cartridge(
     char *error,
     size_t error_size);
 void c64_detach_cartridge(c64_t *machine);
+bool c64_cartridge_attached(const c64_t *machine);
 bool c64_drive_device_supported(uint8_t device);
 c64_drive_status_result c64_mount_d64(
     c64_t *machine,

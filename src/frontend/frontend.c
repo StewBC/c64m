@@ -356,6 +356,10 @@ struct frontend {
     bool memory_color_slot_used[MEMORY_VIEW_MAX];
     frontend_disassembly_view_state disassembly;
     frontend_misc_view_state misc;
+    struct {
+        bool open;
+        bool unmount_cartridge;
+    } reset_prompt;
     frontend_config_dialog_state config_dialog;
     frontend_breakpoint_dialog_state breakpoint_dialog;
     frontend_assembler_state assembler;
@@ -5394,6 +5398,57 @@ static const char *frontend_disk_label(const frontend_debug_state *debug_state, 
     return "Mounted";
 }
 
+static bool frontend_push_reset_intent(frontend *ui, bool detach_cartridge)
+{
+    size_t next;
+
+    if (ui == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_MACHINE_RESET;
+    ui->intents[ui->intent_write].machine_reset_detach_cartridge = detach_cartridge;
+    ui->intent_write = next;
+    return true;
+}
+
+static void frontend_draw_reset_prompt(frontend *ui, struct nk_context *ctx)
+{
+    if (ui == NULL || ctx == NULL || !ui->reset_prompt.open) {
+        return;
+    }
+
+    if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Reset",
+                       NK_WINDOW_BORDER | NK_WINDOW_TITLE,
+                       nk_rect(40, 60, 300, 130))) {
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        nk_label(ctx, "A cartridge is attached.", NK_TEXT_LEFT);
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        frontend_checkbox_bool(ctx, "Unmount cartridge on reset",
+                               &ui->reset_prompt.unmount_cartridge);
+
+        nk_layout_row_dynamic(ctx, 26.0f, 2);
+        if (nk_button_label(ctx, "Reset")) {
+            frontend_push_reset_intent(ui, ui->reset_prompt.unmount_cartridge);
+            ui->reset_prompt.open = false;
+            nk_popup_close(ctx);
+        }
+        if (nk_button_label(ctx, "Cancel")) {
+            ui->reset_prompt.open = false;
+            nk_popup_close(ctx);
+        }
+        nk_popup_end(ctx);
+    } else {
+        ui->reset_prompt.open = false;
+    }
+}
+
 static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state *debug_state)
 {
     struct nk_context *ctx;
@@ -5503,7 +5558,13 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
     }
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "Reset")) {
-        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_MACHINE_RESET);
+        if (debug_state != NULL && debug_state->cartridge_attached) {
+            /* A cartridge is attached; ask whether to unmount it on reset. */
+            ui->reset_prompt.open = true;
+            ui->reset_prompt.unmount_cartridge = true;
+        } else {
+            frontend_push_reset_intent(ui, false);
+        }
     }
 }
 
@@ -6427,6 +6488,10 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
             }
             nk_group_end(ctx);
         }
+
+        /* Drawn at window level (not inside the group) so the popup is not
+           clipped by the tab-content group bounds. */
+        frontend_draw_reset_prompt(ui, ctx);
 
         if (!frontend_any_dialog_open(ui) && ui->active_view == FRONTEND_ACTIVE_VIEW_MISC) {
             frontend_draw_active_view_border(ctx);

@@ -67,6 +67,7 @@ typedef struct frontend_debug_state {
     bool has_hardware;
     bool has_disk_status[2];
     bool has_call_stack;
+    bool cartridge_attached;
 } frontend_debug_state;
 
 const char *frontend_runtime_state_name(frontend_runtime_state state);
@@ -165,6 +166,8 @@ typedef struct frontend_debugger_intent {
     uint16_t save_bin_end;
     bool save_bin_write_file_address;
     bool save_bin_is_basic;
+    /* Machine reset */
+    bool machine_reset_detach_cartridge;
 } frontend_debugger_intent;
 
 typedef struct frontend_load_bin_dialog_state {

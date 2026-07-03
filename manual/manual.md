@@ -30,6 +30,7 @@ Useful flags:
 | `--disk <drive>=<image[,image…]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
+| `--crt <file>`         | Attach a generic 8K/16K cartridge at startup        |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
 | `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
 | `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
@@ -68,6 +69,20 @@ and updates the BASIC start and end pointers (`$2B–$2E`).
 For both options the file extension is irrelevant; the flag determines how the file is
 treated, not the filename.
 
+### Cartridges
+
+c64m supports generic 8K and 16K `.crt` cartridges (normal hardware type). `--crt <file>`
+attaches the cartridge at startup and resets with it running; a `.crt` file can also be
+dragged onto the window at any time. ROML maps at `$8000–$9FFF` and, for 16K cartridges,
+ROMH at `$A000–$BFFF`.
+
+Loading a program (drag a `.prg`/`.t64`/`.bas`, or use `--prg`/`--basic`) detaches an
+attached cartridge first, so the program boots to BASIC instead of the cartridge. To go
+from a running cartridge to BASIC without loading a program — for example to reach a disk
+you have mounted — use **[Reset]** and leave **Unmount cartridge on reset** checked (see
+**Emulator Controls**). Because mounting a disk does not reset the machine, mounting a disk
+while a cartridge is running only becomes reachable after such a reset.
+
 ### Auto Run
 
 `--autorun` (or `-a`) can be combined with `--prg`, `--basic`, or `--disk` to start
@@ -98,6 +113,7 @@ The file extension determines how the file is handled:
 | Extension | Action                                                         |
 |-----------|----------------------------------------------------------------|
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
+| `.crt`    | Attach a generic 8K/16K cartridge and reset with it running |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B–$2E`) |
 | `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
 | anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |
@@ -105,6 +121,10 @@ The file extension determines how the file is handled:
 Extension matching is case-insensitive (`.D64` and `.d64` are treated identically).
 Unlike the `--prg` and `--basic` startup flags, the extension drives the decision when
 dropping — there is no way to override it by name alone.
+
+Dropping a program (`.prg`, `.t64`, or `.bas`) while a cartridge is attached automatically
+detaches the cartridge, so the dropped program boots instead of the cartridge. Dropping
+another `.crt` replaces the current cartridge. See **Cartridges**.
 
 ### Audio
 
@@ -553,7 +573,11 @@ apply to `.T64` files.
 **[Configure...]** opens the Configure dialog (see **Configure**).
 
 **[Reset]** performs a hard reset of the emulated C64. Any pending PRG injection or
-assembler-queued run is cancelled.
+assembler-queued run is cancelled. If a cartridge is attached, **[Reset]** first opens
+a prompt with an **Unmount cartridge on reset** checkbox (checked by default): leaving it
+checked resets to BASIC with the cartridge removed, while unchecking it keeps the
+cartridge so the reset re-runs it. When no cartridge is attached, Reset happens
+immediately with no prompt.
 
 ## Debugger
 

@@ -155,6 +155,7 @@ typedef struct runtime_machine_snapshot {
     uint8_t turbo_speed_count;
     uint8_t cia1_irq_pending;
     uint8_t cia2_nmi_pending;
+    uint8_t cartridge_attached;
     runtime_memory_banking_snapshot memory_banking;
     c64_vicii_hardware_snapshot vicii_hardware;
     c64_cia_hardware_snapshot cia1_hardware;

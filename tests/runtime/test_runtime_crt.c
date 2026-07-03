@@ -234,6 +234,49 @@ int main(void) {
         fail("cartridge still mapped at $8000 after loading a PRG");
     }
 
+    /* Re-attach a cartridge to exercise the reset unmount option. */
+    expect_true("reload CRT", runtime_client_load_crt(client, crt_path));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("reload CRT RESET_COMPLETE not received");
+    }
+
+    /* Reset keeping the cartridge: $8000 stays cartridge ROML. */
+    expect_true("reset keeping cartridge", runtime_client_reset_ex(client, false));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("keep-cartridge RESET_COMPLETE not received");
+    }
+    expect_true("pause after keep-cartridge reset", runtime_client_pause(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("keep-cartridge PAUSED not received");
+    }
+    expect_true(
+        "request $8000 after keep reset",
+        runtime_client_request_memory(client, 0x8000, 4, RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("keep-cartridge memory response not received");
+    }
+    expect_u8("cartridge kept ROML byte 0", 0x80, event.data.memory.bytes[0]);
+
+    /* Reset unmounting the cartridge: $8000 becomes RAM. */
+    expect_true("reset unmounting cartridge", runtime_client_reset_ex(client, true));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("unmount RESET_COMPLETE not received");
+    }
+    expect_true("pause after unmount reset", runtime_client_pause(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("unmount PAUSED not received");
+    }
+    expect_true(
+        "request $8000 after unmount reset",
+        runtime_client_request_memory(client, 0x8000, 4, RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("unmount memory response not received");
+    }
+    if (event.data.memory.bytes[0] == 0x80 && event.data.memory.bytes[1] == 0x81 &&
+        event.data.memory.bytes[2] == 0x82 && event.data.memory.bytes[3] == 0x83) {
+        fail("cartridge still mapped at $8000 after reset with unmount");
+    }
+
     runtime_client_quit(client);
     runtime_stop(rt);
     runtime_destroy(rt);

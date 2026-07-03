@@ -412,6 +412,7 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.turbo_speed_count = rt->turbo_speed_count;
     event.data.machine_state.cia1_irq_pending = snapshot.cia1_irq_pending ? 1 : 0;
     event.data.machine_state.cia2_nmi_pending = snapshot.cia2_nmi_pending ? 1 : 0;
+    event.data.machine_state.cartridge_attached = c64_cartridge_attached(&rt->machine) ? 1 : 0;
 
     c64_copy_memory_banking_snapshot(&rt->machine, &banking);
     event.data.machine_state.memory_banking.cpu_port_direction = banking.cpu_port_direction;
@@ -864,8 +865,12 @@ static bool runtime_reset_machine(runtime *rt) {
     return true;
 }
 
-static void runtime_reset_command(runtime *rt) {
+static void runtime_reset_command(runtime *rt, const runtime_command *command) {
     bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+
+    if (command != NULL && command->data.reset.detach_cartridge) {
+        c64_detach_cartridge(&rt->machine);
+    }
 
     if (!runtime_reset_machine(rt)) {
         return;
@@ -2704,7 +2709,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_RESET:
-            runtime_reset_command(rt);
+            runtime_reset_command(rt, command);
             break;
 
         case RUNTIME_COMMAND_RUN:

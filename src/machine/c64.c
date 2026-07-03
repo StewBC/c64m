@@ -1323,6 +1323,12 @@ void c64_detach_cartridge(c64_t *machine) {
     c64_bus_detach_cartridge(&machine->bus);
 }
 
+bool c64_cartridge_attached(const c64_t *machine) {
+    assert(machine);
+
+    return machine->bus.cartridge_mounted;
+}
+
 bool c64_drive_device_supported(uint8_t device) {
     return c64_drive_slot_index(device) >= 0;
 }

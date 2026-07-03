@@ -91,6 +91,16 @@ This is expected when the CPU interrupt-disable flag remains set.
   reset vector and boot instead of BASIC, and the `$E38B` injection would never
   fire. Loading another CRT still replaces the cartridge; mounting a D64 does not
   detach (mounting is passive and does not reset/boot).
+- The Reset command carries an optional `detach_cartridge` flag
+  (`RUNTIME_COMMAND_RESET` / `runtime_client_reset_ex`). Plain
+  `runtime_client_reset` keeps the cartridge (hardware-accurate: reset re-runs
+  the cart). The frontend Reset button, when a cartridge is attached, opens a
+  confirmation popup with an "Unmount cartridge on reset" checkbox (checked by
+  default) so the user can drop back to BASIC to reach a mounted disk, or uncheck
+  to keep the cart. This lets the "mount a disk while a cart is attached" flow
+  become useful (mount disk, Reset with unmount, then LOAD). `cartridge_attached`
+  is published in the machine-state snapshot so the frontend knows whether to
+  prompt.
 - VIC bank selection is cached from CIA #2 port state as an accepted optimization.
 - CPU opcode writes maintain a 64K write-history table keyed by CPU-visible
   16-bit address. Each entry stores the last four opcode PCs in 16-bit lanes,

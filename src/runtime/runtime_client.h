@@ -33,6 +33,7 @@ typedef struct runtime_client runtime_client;
 bool runtime_client_ping(runtime_client *client);
 bool runtime_client_quit(runtime_client *client);
 bool runtime_client_reset(runtime_client *client);
+bool runtime_client_reset_ex(runtime_client *client, bool detach_cartridge);
 bool runtime_client_run(runtime_client *client);
 bool runtime_client_pause(runtime_client *client);
 bool runtime_client_step_cycle(runtime_client *client);

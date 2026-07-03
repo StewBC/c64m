@@ -75,6 +75,10 @@ typedef struct runtime_command {
     runtime_command_type type;
     union {
         struct {
+            uint8_t detach_cartridge;
+        } reset;
+
+        struct {
             size_t count;
         } run_cycles;
 

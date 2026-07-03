@@ -30,8 +30,21 @@ bool runtime_client_quit(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_QUIT);
 }
 
+bool runtime_client_reset_ex(runtime_client *client, bool detach_cartridge) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_RESET,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.reset.detach_cartridge = detach_cartridge ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_reset(runtime_client *client) {
-    return runtime_client_send_command(client, RUNTIME_COMMAND_RESET);
+    return runtime_client_reset_ex(client, false);
 }
 
 bool runtime_client_run(runtime_client *client) {

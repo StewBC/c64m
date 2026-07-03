@@ -307,6 +307,7 @@ static void update_debug_state_from_event(
             debug_state->cia1_interrupt_assertions = event->data.machine_state.cia1_interrupt_assertions;
             debug_state->nmi_entries = event->data.machine_state.nmi_entries;
             debug_state->restore_requests = event->data.machine_state.restore_requests;
+            debug_state->cartridge_attached = event->data.machine_state.cartridge_attached != 0;
             debug_state->has_cpu = true;
             debug_state->has_memory_banking = true;
             debug_state->has_hardware = true;
@@ -1957,7 +1958,7 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_MACHINE_RESET:
-                sent = runtime_client_reset(client);
+                sent = runtime_client_reset_ex(client, intent.machine_reset_detach_cartridge);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
