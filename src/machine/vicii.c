@@ -1194,7 +1194,12 @@ static void vicii_snapshot_sprite_line(
     }
 }
 
-bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
+static bool vicii_make_frame_snapshot_internal(
+    vicii *v,
+    const c64_bus_t *bus,
+    c64_frame *out_frame,
+    uint64_t machine_cycle,
+    bool prefer_completed_frame) {
     vicii_border_geometry g;
     bool     vborder, hborder;
     uint8_t  border_index;
@@ -1205,7 +1210,7 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     assert(bus);
     assert(out_frame);
 
-    if (vicii_copy_completed_frame(v, out_frame, machine_cycle)) {
+    if (prefer_completed_frame && vicii_copy_completed_frame(v, out_frame, machine_cycle)) {
         return true;
     }
 
@@ -1214,12 +1219,12 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     border_color = vicii_palette_argb[border_index];
 
-    v->working_frame.width        = C64_FRAME_WIDTH;
-    v->working_frame.height       = C64_FRAME_HEIGHT;
-    v->working_frame.stride_bytes = C64_FRAME_WIDTH * sizeof(v->working_frame.pixels[0]);
-    v->working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
-    v->working_frame.frame_number = v->timing.frame_number;
-    v->working_frame.machine_cycle = machine_cycle;
+    out_frame->width        = C64_FRAME_WIDTH;
+    out_frame->height       = C64_FRAME_HEIGHT;
+    out_frame->stride_bytes = C64_FRAME_WIDTH * sizeof(out_frame->pixels[0]);
+    out_frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    out_frame->frame_number = v->timing.frame_number;
+    out_frame->machine_cycle = machine_cycle;
 
     vborder = true;   /* border active until the top compare fires */
     hborder = true;
@@ -1259,12 +1264,19 @@ bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_fr
             }
 
             pixel = vicii_compose_pixel(v, vborder || hborder, border_color, bg, sprites);
-            v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = pixel;
+            out_frame->pixels[y * C64_FRAME_WIDTH + x] = pixel;
         }
     }
 
-    memcpy(out_frame, &v->working_frame, sizeof(*out_frame));
     return true;
+}
+
+bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
+    return vicii_make_frame_snapshot_internal(v, bus, out_frame, machine_cycle, true);
+}
+
+bool vicii_make_current_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle) {
+    return vicii_make_frame_snapshot_internal(v, bus, out_frame, machine_cycle, false);
 }
 
 void vicii_copy_snapshot(const vicii *v, c64_vicii_snapshot *out) {

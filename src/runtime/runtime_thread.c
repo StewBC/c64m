@@ -775,7 +775,7 @@ static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
 }
 
 static bool runtime_publish_debug_frame(runtime *rt) {
-    if (!c64_make_frame_snapshot(&rt->machine, &rt->publish_frame)) {
+    if (!c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
         runtime_publish_error(rt, "failed to generate frame");
         return false;
     }
@@ -1458,6 +1458,14 @@ static bool runtime_step_cycle(runtime *rt) {
     return true;
 }
 
+static bool runtime_publish_step_complete(runtime *rt) {
+    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
+    runtime_publish_cpu_state(rt);
+    runtime_publish_machine_state(rt);
+    return runtime_publish_debug_frame(rt);
+}
+
 static bool runtime_step_cycle_command(runtime *rt) {
     rt->suppress_execute_bp = false;
 
@@ -1466,10 +1474,7 @@ static bool runtime_step_cycle_command(runtime *rt) {
     }
 
     rt->breakpoint_hit_pending = false;
-    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-    runtime_publish_machine_state(rt);
-    return true;
+    return runtime_publish_step_complete(rt);
 }
 
 static bool runtime_step_instruction(runtime *rt) {
@@ -1490,10 +1495,7 @@ static bool runtime_step_instruction(runtime *rt) {
         "STEP instruction PC=%04X CYCLES=%llu\n",
         snapshot.pc,
         (unsigned long long)snapshot.cycles);
-    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-    runtime_publish_cpu_state(rt);
-    return true;
+    return runtime_publish_step_complete(rt);
 }
 
 static bool runtime_run_instructions(runtime *rt, size_t count) {
@@ -1521,10 +1523,7 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
         }
     }
 
-    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-    runtime_publish_cpu_state(rt);
-    return true;
+    return runtime_publish_step_complete(rt);
 }
 
 static bool runtime_run_cycles(runtime *rt, size_t count) {
@@ -2330,10 +2329,7 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
             } else if (opcode == 0x60u /* RTS */) {
                 jsr_counter--;
                 if (jsr_counter <= 0) {
-                    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-                    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-                    runtime_publish_cpu_state(rt);
-                    return true;
+                    return runtime_publish_step_complete(rt);
                 }
             }
         }
@@ -2368,10 +2364,7 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             return false;
         }
         rt->breakpoint_hit_pending = false;
-        rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-        runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-        runtime_publish_cpu_state(rt);
-        return true;
+        return runtime_publish_step_complete(rt);
     }
 
     stop_pc = (uint16_t)(rt->machine.cpu.cpu.pc + 3u);
@@ -2445,10 +2438,7 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
                 rt->machine.cpu.cpu.pc == stop_pc) {
                 fprintf(stderr, "STEP OVER: done at PC=%04X after %d instructions\n",
                         (unsigned)stop_pc, fast_limit);
-                rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-                runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-                runtime_publish_cpu_state(rt);
-                return true;
+                return runtime_publish_step_complete(rt);
             }
 
             if (++fast_limit % STEP_OVER_LOG_INTERVAL == 0) {
@@ -3532,9 +3522,7 @@ int runtime_thread_main(void *userdata) {
                     rt->temp_bp_active = false;
                     rt->suppress_execute_bp = false;
                     rt->exec_state = RUNTIME_EXEC_PAUSED;
-                    rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
-                    runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
-                    runtime_publish_machine_state(rt);
+                    runtime_publish_step_complete(rt);
                     break;
                 }
                 if (rt->pending_prg_path != NULL &&

@@ -24,6 +24,7 @@
 - Frontend renders copied snapshots only.
 - Frontend sends intents/commands to runtime.
 - Memory and disassembly views render from the same runtime-published full debugger memory snapshot generation. The snapshot includes 64K CPU-visible Map bytes, 64K raw RAM bytes, and 64K ROM-source bytes; write-history is included only for context-menu access lookup requests.
+- Runtime step completion publishes a paused current-state debug frame after updating CPU/machine state, so the C64 view refreshes immediately during single-step debugging, including text screen RAM and high-res bitmap writes that occur long before the next live VIC-II frame completes. This path deliberately bypasses the last completed live VIC-II frame; otherwise a paused post-boot screen would keep redisplaying stale completed-frame pixels while step-time RAM writes were happening.
 - Register and memory edits apply only while paused.
 - Running edits are ignored.
 - Debugger input focus is explicit: C64 display versus debugger views.

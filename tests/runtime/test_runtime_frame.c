@@ -13,6 +13,8 @@ enum {
     TEST_COLOR_GREEN = 0xff56ac4du,
     TEST_COLOR_BLUE = 0xff2e2c9bu,
     TEST_COLOR_LIGHT_BLUE = 0xff706debu,
+    TEST_COLOR_WHITE = 0xffffffffu,
+    TEST_ACTIVE_PIXEL = 51 * C64_FRAME_WIDTH + 24,
 };
 
 static void fail(const char *message) {
@@ -68,8 +70,13 @@ static void write_runtime_roms(void) {
     fputc(0x8d, system); /* STA $D020 */
     fputc(0x20, system);
     fputc(0xd0, system);
-    fputc(0x4c, system); /* JMP $E00A */
-    fputc(0x0a, system);
+    fputc(0xa9, system); /* LDA #$01 */
+    fputc(0x01, system);
+    fputc(0x8d, system); /* STA $0400 */
+    fputc(0x00, system);
+    fputc(0x04, system);
+    fputc(0x4c, system); /* JMP $E00F */
+    fputc(0x0f, system);
     fputc(0xe0, system);
 
     fseek(system, (long)(C64_BASIC_ROM_SIZE + 0x1ffc), SEEK_SET);
@@ -79,6 +86,8 @@ static void write_runtime_roms(void) {
     for (i = 0; i < C64_CHAR_ROM_SIZE; i++) {
         fputc(0x00, character);
     }
+    fseek(character, 8, SEEK_SET);
+    fputc(0x80, character);
 
     fclose(system);
     fclose(character);
@@ -100,6 +109,40 @@ static int poll_event(runtime_client *client, runtime_event *event, runtime_even
     }
 
     return 0;
+}
+
+static void step_and_expect_frame(runtime_client *client, runtime_event *event, c64_frame *frame) {
+    expect_true("step instruction", runtime_client_step_instruction(client));
+    if (!poll_event(client, event, RUNTIME_EVENT_STEP_COMPLETE)) {
+        fail("STEP_COMPLETE not received");
+    }
+    if (!poll_event(client, event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("FRAME_READY not received after step");
+    }
+    expect_true("poll step frame", runtime_client_poll_frame(client, frame));
+}
+
+static void write_byte(
+    runtime_client *client,
+    uint16_t address,
+    uint8_t value,
+    runtime_memory_mode mode) {
+    expect_true("write memory byte", runtime_client_write_memory_byte(client, address, value, mode));
+}
+
+static void run_until_frame_then_pause(runtime_client *client, runtime_event *event, c64_frame *frame) {
+    expect_true("run command", runtime_client_run(client));
+    if (!poll_event(client, event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING event not received");
+    }
+    if (!poll_event(client, event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("running FRAME_READY not received");
+    }
+    expect_true("poll running frame", runtime_client_poll_frame(client, frame));
+    expect_true("pause command", runtime_client_pause(client));
+    if (!poll_event(client, event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED event not received");
+    }
 }
 
 static runtime *start_runtime(runtime_client **out_client) {
@@ -199,10 +242,98 @@ static void test_frame_while_running(void) {
     stop_runtime(rt, client);
 }
 
+static void test_step_instruction_publishes_updated_frame(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    c64_frame frame;
+    uint32_t before;
+
+    rt = start_runtime(&client);
+
+    run_until_frame_then_pause(client, &event, &frame);
+
+    write_byte(client, 0xd011, 0x1b, RUNTIME_MEMORY_MODE_CPU_MAP); /* DEN=1, RSEL=1, YSCROLL=3 */
+    write_byte(client, 0xd016, 0x08, RUNTIME_MEMORY_MODE_CPU_MAP); /* CSEL=1, MCM=0 */
+    write_byte(client, 0x0400, 0x00, RUNTIME_MEMORY_MODE_RAM);
+    write_byte(client, 0xc000, 0xa9, RUNTIME_MEMORY_MODE_RAM);     /* LDA #$01 */
+    write_byte(client, 0xc001, 0x01, RUNTIME_MEMORY_MODE_RAM);
+    write_byte(client, 0xc002, 0x8d, RUNTIME_MEMORY_MODE_RAM);     /* STA $0400 */
+    write_byte(client, 0xc003, 0x00, RUNTIME_MEMORY_MODE_RAM);
+    write_byte(client, 0xc004, 0x04, RUNTIME_MEMORY_MODE_RAM);
+    expect_true("set text PC", runtime_client_set_pc(client, 0xc000));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU_STATE not received after text PC set");
+    }
+
+    expect_true("request initial frame", runtime_client_request_frame(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("initial FRAME_READY not received");
+    }
+    expect_true("poll initial frame", runtime_client_poll_frame(client, &frame));
+    before = frame.pixels[TEST_ACTIVE_PIXEL];
+
+    step_and_expect_frame(client, &event, &frame); /* LDA #$01 */
+    step_and_expect_frame(client, &event, &frame); /* STA $0400 */
+
+    if (frame.pixels[TEST_ACTIVE_PIXEL] == before) {
+        fail("step frame did not reflect screen RAM write");
+    }
+
+    stop_runtime(rt, client);
+}
+
+static void test_step_instruction_publishes_updated_hires_frame(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    c64_frame frame;
+    uint32_t before;
+
+    rt = start_runtime(&client);
+
+    run_until_frame_then_pause(client, &event, &frame);
+
+    write_byte(client, 0xd011, 0x3b, RUNTIME_MEMORY_MODE_CPU_MAP); /* BMM=1, DEN=1, RSEL=1 */
+    write_byte(client, 0xd016, 0x08, RUNTIME_MEMORY_MODE_CPU_MAP); /* CSEL=1, MCM=0 */
+    write_byte(client, 0xd018, 0x18, RUNTIME_MEMORY_MODE_CPU_MAP); /* screen=$0400, bitmap=$2000 */
+    write_byte(client, 0x0400, 0x10, RUNTIME_MEMORY_MODE_RAM);     /* white foreground, black background */
+
+    write_byte(client, 0xc000, 0xa9, RUNTIME_MEMORY_MODE_RAM);     /* LDA #$80 */
+    write_byte(client, 0xc001, 0x80, RUNTIME_MEMORY_MODE_RAM);
+    write_byte(client, 0xc002, 0x8d, RUNTIME_MEMORY_MODE_RAM);     /* STA $2000 */
+    write_byte(client, 0xc003, 0x00, RUNTIME_MEMORY_MODE_RAM);
+    write_byte(client, 0xc004, 0x20, RUNTIME_MEMORY_MODE_RAM);
+
+    expect_true("set PC", runtime_client_set_pc(client, 0xc000));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU_STATE not received after PC set");
+    }
+
+    expect_true("request hires initial frame", runtime_client_request_frame(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("initial hires FRAME_READY not received");
+    }
+    expect_true("poll initial hires frame", runtime_client_poll_frame(client, &frame));
+    before = frame.pixels[TEST_ACTIVE_PIXEL];
+    if (before == TEST_COLOR_WHITE) {
+        fail("initial hires pixel was already foreground color");
+    }
+
+    step_and_expect_frame(client, &event, &frame); /* LDA #$80 */
+    step_and_expect_frame(client, &event, &frame); /* STA $2000 */
+
+    expect_u32("hires bitmap step foreground", TEST_COLOR_WHITE, frame.pixels[TEST_ACTIVE_PIXEL]);
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
     test_request_frame_while_paused();
     test_frame_while_running();
+    test_step_instruction_publishes_updated_frame();
+    test_step_instruction_publishes_updated_hires_frame();
     remove("frame_64c.bin");
     remove("frame_character.bin");
     return 0;

@@ -355,6 +355,7 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);
 bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
 bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
+bool c64_make_current_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_consume_frame_complete(c64_t *machine);
 bool c64_consume_instruction_complete(c64_t *machine);

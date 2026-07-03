@@ -1170,6 +1170,13 @@ bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame) {
     return vicii_make_frame_snapshot(&machine->vic, &machine->bus, out_frame, machine->clock.cycle);
 }
 
+bool c64_make_current_frame_snapshot(c64_t *machine, c64_frame *out_frame) {
+    assert(machine);
+    assert(out_frame);
+
+    return vicii_make_current_frame_snapshot(&machine->vic, &machine->bus, out_frame, machine->clock.cycle);
+}
+
 bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame) {
     assert(machine);
     assert(out_frame);
