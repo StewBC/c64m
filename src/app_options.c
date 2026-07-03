@@ -1122,6 +1122,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     float audio_record_duration = 0.0f;
     const char *basic_path = NULL;
     const char *breakpoint = NULL;
+    const char *crt_path = NULL;
     const char *disk = NULL;
     const char *ini_path = NULL;
     const char *prg_path = NULL;
@@ -1141,6 +1142,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('a', "autorun", &autorun, "run automatically after load", NULL, 0, OPT_NONEG),
         OPT_STRING('B', "basic", &basic_path, "load file as BASIC program at startup", NULL, 0, 0),
         OPT_STRING('b', "break", &breakpoint, "install a breakpoint", NULL, 0, 0),
+        OPT_STRING('\0', "crt", &crt_path, "load CRT cartridge at startup", NULL, 0, 0),
         OPT_INTEGER('\0', "control-port", &control_port, "enable localhost control server on port", NULL, 0, 0),
         OPT_BOOLEAN('\0', "headless", &headless, "run without creating a window; requires --control-port", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
@@ -1181,6 +1183,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (prg_path != NULL) {
         replace_string(&options->prg_path, prg_path);
+    }
+    if (crt_path != NULL) {
+        replace_string(&options->crt_path, crt_path);
     }
     if (basic_path != NULL) {
         replace_string(&options->basic_path, basic_path);
@@ -1335,6 +1340,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->kernal_rom_path, src->kernal_rom_path) ||
         !replace_string(&dest->system_rom_path, src->system_rom_path) ||
         !replace_string(&dest->rom1541_path, src->rom1541_path) ||
+        !replace_string(&dest->crt_path, src->crt_path) ||
         !replace_string(&dest->prg_path, src->prg_path) ||
         !replace_string(&dest->basic_path, src->basic_path) ||
         !replace_string(&dest->audio_record_path, src->audio_record_path) ||
@@ -1516,6 +1522,7 @@ void app_options_destroy(app_options *options)
     free(options->kernal_rom_path);
     free(options->system_rom_path);
     free(options->rom1541_path);
+    free(options->crt_path);
     free(options->prg_path);
     free(options->basic_path);
     free(options->audio_record_path);

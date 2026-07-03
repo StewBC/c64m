@@ -20,6 +20,7 @@ The emulator currently includes:
 - Runtime audio infrastructure with cycle-stepped sample production, SDL output, recording, smoke tone, turbo mute, and overrun/underrun counters.
 - Debugger/config/frontend UI through the documented phases, including hardware view, memory/disassembly source modes, virtual memory views, assembler tab, help UI, host load/save UI, and modal input isolation.
 - D64 read-only disk support for devices 8 and 9, KERNAL LOAD traps, directory loads, wildcard matching, runtime mount/unmount, startup autorun flows, and optional real 1541 ROM/IEC LOAD path when `[disk] emulate_1541=1`.
+- Generic 8K/16K CRT cartridge loading through tools parsing, machine bus mapping, runtime load command, drag/drop, Machine Load auto-detection, and `--crt`.
 - Practical undocumented 6510 opcode coverage.
 
 ## Recent high-value handoff notes
@@ -29,6 +30,7 @@ The emulator currently includes:
 - Breakpoint actions Tron, Swap, and Type now carry parameters persisted in the INI and editable in the Breakpoint Editor. Tron accepts an optional custom trace file path; Swap accepts `+N`/`-N` (relative) or `N` (absolute 1-based, wraps) for disk queue navigation on device 8; Type stores raw text in the input-encoding format; the translator is implemented in `util/paste_parser` and delivers events via `RUNTIME_COMMAND_PASTE_EVENTS`, including one-shot modifier and wait-token support. Tron and Troff are mutually exclusive. See `docs/status/FRONTEND_DEBUGGER.md` for parser syntax details.
 - Control port Phases 1 through 7 are implemented as an opt-in localhost-only service with main-loop-owned runtime dispatch, execution/state commands, binary frame/memory/debug-memory responses, input injection, paste payloads, file/disk commands, breakpoint management, wait commands, and a `--headless --control-port PORT` mode. See `docs/status/CONTROL.md`.
 - Disk images are now persisted in the `[disk]` INI section on quit; paths are stored relative to the INI file and each drive holds an ordered queue (comma-separated). The disk UI shows `[N][Add][Eject] <combo>` per device; Shift+Eject clears the whole queue. See `docs/status/DISK_IO.md` for full semantics.
+- Generic CRT support covers normal hardware type 0 8K/16K ROM cartridges only. Writes under cartridge ROM update shadow RAM, resets preserve the attached cartridge, and broader mappers/INI persistence are deferred. See `docs/status/CPU_MACHINE.md`, `docs/status/DISK_IO.md`, and `c64mcrt.md`.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
 - VIC-II sprite BA timing now uses per-standard PAL 6569 and NTSC 6567R8 tables selected from machine video configuration.
 - Runtime audio production now advances from the cycle-stepping path, not from 1024-cycle batches.

@@ -922,6 +922,26 @@ static void test_headless_with_control_port(void) {
     app_options_destroy(&options);
 }
 
+static void test_crt_path_with_spaces(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--crt",
+        "assets/crt/International Soccer (1983)(Commodore).crt",
+    };
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_string(
+        "crt path",
+        "assets/crt/International Soccer (1983)(Commodore).crt",
+        options.crt_path);
+    app_options_destroy(&options);
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
@@ -938,6 +958,7 @@ int main(void) {
     test_control_port_option();
     test_headless_requires_control_port();
     test_headless_with_control_port();
+    test_crt_path_with_spaces();
     test_disk_single_from_ini();
     test_disk_multi_from_ini();
     test_disk_relative_path_from_ini();

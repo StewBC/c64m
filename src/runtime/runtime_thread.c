@@ -7,6 +7,7 @@
 #include "runtime_command.h"
 #include "runtime_event.h"
 #include "runtime_assembler.h"
+#include "crt.h"
 #include "d64.h"
 #include "disasm_6502.h"
 #include "t64.h"
@@ -1853,6 +1854,147 @@ static bool runtime_inject_prg_image(runtime *rt, const uint8_t *bytes, size_t l
     return true;
 }
 
+static bool runtime_copy_generic_crt_roms(
+    runtime *rt,
+    const crt_image *image,
+    uint8_t *roml,
+    uint8_t *romh,
+    bool *out_has_roml,
+    bool *out_has_romh)
+{
+    size_t i;
+    size_t chip_count;
+
+    memset(roml, 0, C64_CARTRIDGE_ROM_BANK_SIZE);
+    memset(romh, 0, C64_CARTRIDGE_ROM_BANK_SIZE);
+    *out_has_roml = false;
+    *out_has_romh = false;
+
+    chip_count = crt_image_chip_count(image);
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK ||
+            chip.type != CRT_CHIP_TYPE_ROM ||
+            chip.bank != 0) {
+            runtime_publish_error(rt, "unsupported CRT CHIP layout");
+            return false;
+        }
+
+        if (chip.load_address == 0x8000u && chip.rom_size == 0x2000u) {
+            if (*out_has_roml) {
+                runtime_publish_error(rt, "duplicate CRT ROML chip");
+                return false;
+            }
+            memcpy(roml, chip.bytes, C64_CARTRIDGE_ROM_BANK_SIZE);
+            *out_has_roml = true;
+        } else if (chip.load_address == 0x8000u && chip.rom_size == 0x4000u) {
+            if (*out_has_roml || *out_has_romh) {
+                runtime_publish_error(rt, "duplicate CRT ROM chip");
+                return false;
+            }
+            memcpy(roml, chip.bytes, C64_CARTRIDGE_ROM_BANK_SIZE);
+            memcpy(romh, chip.bytes + C64_CARTRIDGE_ROM_BANK_SIZE, C64_CARTRIDGE_ROM_BANK_SIZE);
+            *out_has_roml = true;
+            *out_has_romh = true;
+        } else if (chip.load_address == 0xa000u && chip.rom_size == 0x2000u) {
+            if (*out_has_romh) {
+                runtime_publish_error(rt, "duplicate CRT ROMH chip");
+                return false;
+            }
+            memcpy(romh, chip.bytes, C64_CARTRIDGE_ROM_BANK_SIZE);
+            *out_has_romh = true;
+        } else {
+            runtime_publish_error(rt, "unsupported CRT CHIP address or size");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void runtime_load_crt(runtime *rt, const runtime_command *command) {
+    uint8_t *bytes;
+    size_t length;
+    crt_result result;
+    crt_image *image;
+    const crt_header *header;
+    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    uint8_t romh[C64_CARTRIDGE_ROM_BANK_SIZE];
+    bool has_roml = false;
+    bool has_romh = false;
+    char error[256];
+
+    if (!runtime_read_host_file(rt, command->data.load_crt.path, "CRT", &bytes, &length)) {
+        return;
+    }
+
+    image = crt_image_create(bytes, length, &result);
+    free(bytes);
+    if (image == NULL) {
+        char message[128];
+        snprintf(message, sizeof(message), "failed to parse CRT: %s", crt_result_string(result));
+        runtime_publish_error(rt, message);
+        return;
+    }
+
+    header = crt_image_header(image);
+    if (header == NULL || !crt_image_is_generic_supported(image)) {
+        crt_image_destroy(image);
+        runtime_publish_error(rt, "unsupported CRT cartridge type");
+        return;
+    }
+
+    if (!runtime_copy_generic_crt_roms(rt, image, roml, romh, &has_roml, &has_romh)) {
+        crt_image_destroy(image);
+        return;
+    }
+
+    if (header->exrom == 0 && header->game != 0) {
+        if (!has_roml || has_romh) {
+            crt_image_destroy(image);
+            runtime_publish_error(rt, "unsupported 8K CRT ROM layout");
+            return;
+        }
+    } else if (header->exrom == 0 && header->game == 0) {
+        if (!has_roml || !has_romh) {
+            crt_image_destroy(image);
+            runtime_publish_error(rt, "unsupported 16K CRT ROM layout");
+            return;
+        }
+    } else {
+        crt_image_destroy(image);
+        runtime_publish_error(rt, "unsupported CRT EXROM/GAME mode");
+        return;
+    }
+
+    if (!c64_attach_generic_cartridge(
+            &rt->machine,
+            roml,
+            sizeof(roml),
+            has_romh ? romh : NULL,
+            has_romh ? sizeof(romh) : 0u,
+            header->exrom,
+            header->game,
+            error,
+            sizeof(error))) {
+        crt_image_destroy(image);
+        runtime_publish_error(rt, error);
+        return;
+    }
+    crt_image_destroy(image);
+
+    if (!runtime_reset_machine(rt)) {
+        return;
+    }
+
+    rt->exec_state = RUNTIME_EXEC_RUNNING;
+    rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+    runtime_reset_pacer(rt);
+    runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    runtime_publish_machine_state(rt);
+}
+
 static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
     uint8_t *bytes;
     size_t length;
@@ -2718,6 +2860,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_LOAD_PRG:
             runtime_load_prg(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_LOAD_CRT:
+            runtime_load_crt(rt, command);
             break;
 
         case RUNTIME_COMMAND_MOUNT_D64:

@@ -1862,7 +1862,11 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 {
                     char path[1024];
                     if (choose_prg_path(path, sizeof(path))) {
-                        sent = runtime_client_load_prg(client, path);
+                        if (path_has_extension(path, "crt")) {
+                            sent = runtime_client_load_crt(client, path);
+                        } else {
+                            sent = runtime_client_load_prg(client, path);
+                        }
                     }
                 }
                 break;
@@ -2029,7 +2033,9 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
-                if (path_has_extension(intent.load_bin_path, "t64")) {
+                if (path_has_extension(intent.load_bin_path, "crt")) {
+                    sent = runtime_client_load_crt(client, intent.load_bin_path);
+                } else if (path_has_extension(intent.load_bin_path, "t64")) {
                     sent = runtime_client_load_prg(client, intent.load_bin_path);
                 } else {
                     sent = runtime_client_load_bin(
@@ -2093,6 +2099,8 @@ static void handle_keyboard_input(
 static void handle_drop_file(runtime_client *client, char *path) {
     if (path_has_extension(path, "d64")) {
         runtime_client_mount_d64(client, 8, path);
+    } else if (path_has_extension(path, "crt")) {
+        runtime_client_load_crt(client, path);
     } else if (path_has_extension(path, "bas")) {
         runtime_client_load_bin(client, path, 0, true, true, true);
     } else {
@@ -3260,7 +3268,9 @@ int main(int argc, char **argv) {
 
         send_run_command(client);
 
-        if (options.prg_path != NULL) {
+        if (options.crt_path != NULL) {
+            runtime_client_load_crt(client, options.crt_path);
+        } else if (options.prg_path != NULL) {
             runtime_client_load_prg(client, options.prg_path);
         } else if (options.basic_path != NULL) {
             runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
@@ -3376,7 +3386,9 @@ int main(int argc, char **argv) {
 
     send_run_command(client);
 
-    if (options.prg_path != NULL) {
+    if (options.crt_path != NULL) {
+        runtime_client_load_crt(client, options.crt_path);
+    } else if (options.prg_path != NULL) {
         runtime_client_load_prg(client, options.prg_path);
     } else if (options.basic_path != NULL) {
         runtime_client_load_bin(client, options.basic_path, 0, true, true, true);

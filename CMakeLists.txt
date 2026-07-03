@@ -351,6 +351,18 @@ target_link_libraries(test_t64 PRIVATE
 
 add_test(NAME t64 COMMAND test_t64)
 
+add_executable(test_crt
+    tests/tools/test_crt.c
+)
+
+target_compile_features(test_crt PRIVATE c_std_99)
+
+target_link_libraries(test_crt PRIVATE
+    crt
+)
+
+add_test(NAME crt COMMAND test_crt)
+
 add_executable(profile_c64_hotloop
     tools/profile_c64_hotloop.c
 )
@@ -470,6 +482,18 @@ target_link_libraries(test_runtime_disk PRIVATE
 )
 
 add_test(NAME runtime_disk COMMAND test_runtime_disk)
+
+add_executable(test_runtime_crt
+    tests/runtime/test_runtime_crt.c
+)
+
+target_compile_features(test_runtime_crt PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_crt PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_crt COMMAND test_runtime_crt)
 
 add_executable(test_runtime_real_1541_autorun
     tests/runtime/test_runtime_real_1541_autorun.c

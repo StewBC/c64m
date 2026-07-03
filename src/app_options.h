@@ -44,6 +44,7 @@ typedef struct app_options {
     char *kernal_rom_path;
     char *system_rom_path;
     char *rom1541_path;
+    char *crt_path;
     char *prg_path;
     char *basic_path;
     /* When true, runtime emits a 440 Hz square wave via the audio path to

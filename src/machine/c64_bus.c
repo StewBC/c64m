@@ -71,6 +71,19 @@ static bool c64_bus_char_visible(const c64_bus_t *bus) {
     return c64_bus_io_or_char_visible(bus) && (port & 0x04) == 0;
 }
 
+static c64_cartridge_mode c64_bus_cartridge_mode_from_lines(uint8_t exrom, uint8_t game) {
+    if (exrom == 0 && game != 0) {
+        return C64_CARTRIDGE_MODE_8K;
+    }
+    if (exrom == 0 && game == 0) {
+        return C64_CARTRIDGE_MODE_16K;
+    }
+    if (exrom != 0 && game == 0) {
+        return C64_CARTRIDGE_MODE_ULTIMAX;
+    }
+    return C64_CARTRIDGE_MODE_NONE;
+}
+
 static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
     if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
         return vicii_read_register(bus->vic, address);
@@ -193,10 +206,16 @@ void c64_bus_refresh_vic_bank_base(c64_bus_t *bus) {
 }
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address) {
+    uint8_t cartridge_value;
+
     assert(bus);
 
     if (address <= C64_CPU_PORT_DATA) {
         return c64_bus_cpu_port_read(bus, address);
+    }
+
+    if (c64_bus_cartridge_read(bus, address, &cartridge_value)) {
+        return cartridge_value;
     }
 
     if (address >= 0xa000 && address <= 0xbfff && c64_bus_basic_visible(bus)) {
@@ -333,4 +352,94 @@ bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
     memcpy(bus->basic_rom, data, sizeof(bus->basic_rom));
     memcpy(bus->kernal_rom, data + sizeof(bus->basic_rom), sizeof(bus->kernal_rom));
     return true;
+}
+
+bool c64_bus_attach_generic_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *roml,
+    size_t roml_size,
+    const uint8_t *romh,
+    size_t romh_size,
+    uint8_t exrom,
+    uint8_t game)
+{
+    c64_cartridge_mode mode;
+
+    assert(bus);
+
+    mode = c64_bus_cartridge_mode_from_lines(exrom, game);
+    if (mode == C64_CARTRIDGE_MODE_NONE || mode == C64_CARTRIDGE_MODE_ULTIMAX) {
+        return false;
+    }
+    if (roml == NULL || roml_size != C64_CARTRIDGE_ROM_BANK_SIZE) {
+        return false;
+    }
+    if (mode == C64_CARTRIDGE_MODE_16K &&
+        (romh == NULL || romh_size != C64_CARTRIDGE_ROM_BANK_SIZE)) {
+        return false;
+    }
+    if (mode == C64_CARTRIDGE_MODE_8K && romh_size != 0) {
+        return false;
+    }
+
+    memcpy(bus->cartridge_roml, roml, C64_CARTRIDGE_ROM_BANK_SIZE);
+    bus->cartridge_roml_present = true;
+    if (mode == C64_CARTRIDGE_MODE_16K) {
+        memcpy(bus->cartridge_romh, romh, C64_CARTRIDGE_ROM_BANK_SIZE);
+        bus->cartridge_romh_present = true;
+    } else {
+        memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+        bus->cartridge_romh_present = false;
+    }
+    bus->cartridge_exrom = exrom;
+    bus->cartridge_game = game;
+    bus->cartridge_mode = mode;
+    bus->cartridge_mounted = true;
+    return true;
+}
+
+void c64_bus_detach_cartridge(c64_bus_t *bus) {
+    assert(bus);
+
+    memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
+    memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+    bus->cartridge_mounted = false;
+    bus->cartridge_roml_present = false;
+    bus->cartridge_romh_present = false;
+    bus->cartridge_exrom = 1;
+    bus->cartridge_game = 1;
+    bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+}
+
+bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value) {
+    assert(bus);
+
+    if (out_value == NULL || !bus->cartridge_mounted) {
+        return false;
+    }
+
+    if (address >= 0x8000u && address <= 0x9fffu &&
+        bus->cartridge_roml_present &&
+        (bus->cartridge_mode == C64_CARTRIDGE_MODE_8K ||
+         bus->cartridge_mode == C64_CARTRIDGE_MODE_16K ||
+         bus->cartridge_mode == C64_CARTRIDGE_MODE_ULTIMAX)) {
+        *out_value = bus->cartridge_roml[address - 0x8000u];
+        return true;
+    }
+
+    if (address >= 0xa000u && address <= 0xbfffu &&
+        bus->cartridge_romh_present &&
+        bus->cartridge_mode == C64_CARTRIDGE_MODE_16K) {
+        *out_value = bus->cartridge_romh[address - 0xa000u];
+        return true;
+    }
+
+    if (address >= 0xe000u &&
+        bus->cartridge_romh_present &&
+        bus->cartridge_mode == C64_CARTRIDGE_MODE_ULTIMAX) {
+        *out_value = bus->cartridge_romh[address - 0xe000u];
+        return true;
+    }
+
+    return false;
 }

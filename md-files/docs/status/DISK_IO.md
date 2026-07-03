@@ -11,6 +11,8 @@
 - `LOAD "$"` directory loads are implemented.
 - Exact and wildcard filename matching are implemented.
 - Machine-tab disk UI is implemented with per-drive disk queues.
+- Generic 8K/16K `.CRT` host loading is implemented as cartridge attachment,
+  not as PRG/BASIC memory injection.
 
 ## D64 parser behavior
 
@@ -65,6 +67,8 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 - `--disk` / `-d <drive>=<image>` mounts D64 images at startup; comma-separated lists
   are accepted to pre-populate the queue (`--disk 8=side1.d64,side2.d64`).
+- `--crt <file>` loads a generic 8K/16K CRT cartridge at startup. The CRT path
+  is kept as a literal path, so spaces and parentheses are supported.
 - `--prg` / `-p <file>` loads any file as PRG on startup.
 - `--basic` / `-B <file>` loads any file as a BASIC program on startup.
 - `--prg` resets, boots to BASIC, injects at embedded load address, and resumes running automatically.
@@ -97,6 +101,8 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - Basic Program fixes TXTTAB and VARTAB after load.
 - Selecting a `.T64` in the Load dialog routes to PRG-style T64 extraction and
   ignores the raw binary dialog options.
+- Selecting a `.CRT` in the Load dialog routes to cartridge attach/reset/run
+  and ignores the raw binary dialog options.
 - Save dialog has Name + Browse, Basic Program, Write address header, and Start/End hex fields.
 - Basic Program save reads `$2B/$2C` and `$2D/$2E`, treats end as exclusive, and forces Write address header.
 
@@ -107,6 +113,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps
   for T64 are not implemented. Current T64 support extracts the first loadable
   entry only through host load/drop paths.
+- CRT support is limited to generic 8K/16K normal cartridges. Cartridge mappers,
+  INI persistence, detach UI/status, cartridge RAM/flash writes, and freezer
+  buttons are not implemented.
 - Error channel is not implemented beyond generic 1541 ROM intercept errors.
 - Fast loaders are not broadly validated; loaders that depend on unmodeled
   disk-controller VIA motor/SYNC/head mechanics may still fail.
@@ -125,6 +134,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - Host load/save:
   - Load with file-address header.
   - Load/drop `.T64`; first loadable entry should inject at its directory load address.
+  - Load/drop `.CRT`; generic 8K/16K cartridges should attach, reset, and run.
+  - Smoke `assets/crt/International Soccer (1983)(Commodore).crt` to verify
+    spaces and parentheses in paths.
   - Load with Basic Program and check `$2B-$2E`.
   - Save as Basic Program and reload.
   - Save raw range with and without header.
@@ -134,6 +146,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 - `src/tools/d64*`
 - `src/tools/t64*`
+- `src/tools/crt*`
 - `src/runtime/*disk*`
 - `src/machine/c64*`
 - `src/frontend/*`

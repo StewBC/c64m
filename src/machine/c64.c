@@ -1294,6 +1294,35 @@ void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled) {
     }
 }
 
+bool c64_attach_generic_cartridge(
+    c64_t *machine,
+    const uint8_t *roml,
+    size_t roml_size,
+    const uint8_t *romh,
+    size_t romh_size,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_generic_cartridge(
+            &machine->bus, roml, roml_size, romh, romh_size, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported generic cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
+void c64_detach_cartridge(c64_t *machine) {
+    assert(machine);
+
+    c64_bus_detach_cartridge(&machine->bus);
+}
+
 bool c64_drive_device_supported(uint8_t device) {
     return c64_drive_slot_index(device) >= 0;
 }
@@ -1513,7 +1542,13 @@ static uint8_t c64_debug_peek_io(const c64_t *machine, uint16_t address) {
 }
 
 c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address) {
+    uint8_t cartridge_value;
+
     assert(machine);
+
+    if (c64_bus_cartridge_read(&machine->bus, address, &cartridge_value)) {
+        return C64_MEMORY_VISIBILITY_ROM;
+    }
 
     if (address >= 0xa000 && address <= 0xbfff && c64_debug_basic_visible(machine)) {
         return C64_MEMORY_VISIBILITY_ROM;
@@ -1680,6 +1715,8 @@ size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_t
 }
 
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {
+    uint8_t cartridge_value;
+
     assert(machine);
 
     if (address == 0x0000u) {
@@ -1688,6 +1725,10 @@ uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {
 
     if (address == 0x0001u) {
         return machine->bus.cpu_port_data;
+    }
+
+    if (c64_bus_cartridge_read(&machine->bus, address, &cartridge_value)) {
+        return cartridge_value;
     }
 
     if (address >= 0xa000 && address <= 0xbfff && c64_debug_basic_visible(machine)) {

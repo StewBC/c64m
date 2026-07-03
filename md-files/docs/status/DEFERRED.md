@@ -26,6 +26,9 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 - Perfect chip-revision/electrical behavior for unstable undocumented opcodes is deferred.
 - Last-byte-on-bus and analog-dependent CPU perfection are deferred.
+- Cartridge mappers beyond generic 8K/16K normal CRT cartridges are deferred.
+- Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
+  freezer buttons are deferred.
 - Debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present.
 

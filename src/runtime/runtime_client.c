@@ -342,6 +342,19 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_load_crt(runtime_client *client, const char *path) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_LOAD_CRT,
+    };
+
+    if (!client || !path || path[0] == '\0') {
+        return false;
+    }
+
+    snprintf(command.data.load_crt.path, sizeof(command.data.load_crt.path), "%s", path);
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_MOUNT_D64,

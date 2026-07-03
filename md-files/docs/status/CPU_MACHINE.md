@@ -77,6 +77,13 @@ This is expected when the CPU interrupt-disable flag remains set.
 - CPU-visible memory map is used for normal bus access and debugger Map source mode.
 - Physical ROM and raw RAM debugger views are available through dedicated debug read paths.
 - Visible `$D000-$DFFF` I/O writes update the mapped device and do not mutate RAM underneath; RAM under I/O remains accessible to VIC fetches and raw RAM/debug paths.
+- Generic 8K/16K cartridge mapping is implemented for normal CRT hardware type
+  0: ROML maps at `$8000-$9FFF`, ROMH maps at `$A000-$BFFF` for 16K mode,
+  and EXROM/GAME line state derives the cartridge memory mode. CPU-visible
+  reads and debugger Map reads see cartridge ROM; raw RAM reads still see the
+  RAM underneath. Writes to cartridge ROM ranges update the underlying RAM and
+  do not mutate cartridge ROM. Normal reset and config-apply reset preserve the
+  attached cartridge.
 - VIC bank selection is cached from CIA #2 port state as an accepted optimization.
 - CPU opcode writes maintain a 64K write-history table keyed by CPU-visible
   16-bit address. Each entry stores the last four opcode PCs in 16-bit lanes,
@@ -87,6 +94,8 @@ This is expected when the CPU interrupt-disable flag remains set.
 ## Startup load behavior
 
 - `--disk` / `-d <drive>=<image>` mounts D64 images at startup.
+- `--crt <file>` loads a generic 8K/16K CRT cartridge at startup, resets with
+  the cartridge attached, and runs.
 - `--prg` / `-p <file>` loads any file as PRG on startup.
 - `--basic` / `-B <file>` loads any file as a BASIC program on startup.
 - File extension is irrelevant for `--prg` and `--basic`; the flag determines interpretation.
@@ -102,12 +111,17 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
 - Perfect chip-revision/electrical behavior for unstable undocumented opcodes is deferred.
 - Last-byte-on-bus behavior is deferred.
+- Cartridge mappers beyond generic 8K/16K normal cartridges are deferred.
+- Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
+  freezer buttons are deferred.
 - The debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present in the repository.
 
 ## Tests / smoke checks
 
 - Local tests cover documented CPU execution, bus integration, trace timing, IRQ/NMI entry, banking, and BA read/write stalling.
+- Local bus tests cover generic 8K/16K cartridge mapping, shadow-RAM writes,
+  debugger Map visibility, detach, and reset persistence.
 - Local tests do not provide per-opcode undocumented Harte-style semantic coverage.
 - Practical undocumented opcode coverage is sufficient for the current milestone.
 

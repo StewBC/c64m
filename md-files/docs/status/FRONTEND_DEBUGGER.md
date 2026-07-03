@@ -104,6 +104,8 @@ UI behavior:
 - Machine tab layout is Disks, Programs, Emulator.
 - Unified Load and Save buttons are on Machine tab.
 - Load dialog has Name + Browse, From File address, Reset, and Basic Program checkboxes.
+- Load dialog auto-detects `.CRT` paths and sends them through the runtime CRT
+  cartridge load command instead of the raw binary loader.
 - Save dialog has Name + Browse, Basic Program, Write address header, and Start/End range fields.
 - Basic Program save reads `$2B/$2C` as start and `$2D/$2E` as exclusive end, and forces Write address header.
 
@@ -163,6 +165,8 @@ UI behavior:
 - Verify modal dialogs prevent base view focus changes from outside clicks.
 - Verify assembler reset-on and reset-off flows.
 - Verify host load/save paths, especially Basic Program TXTTAB/VARTAB behavior.
+- Verify drag/drop and Machine Load for generic `.CRT`, including paths with
+  spaces and parentheses.
 - Verify symbol lookup opens from both Disassembly and Memory views (Opt+S).
 - Verify search filters symbols with regex patterns; verify column header sorting.
 - Verify DASM selection jumps cursor; verify Memory selection row-aligns view and places cursor.

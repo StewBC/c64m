@@ -97,6 +97,71 @@ static void test_banking(void) {
     expect_u8("kernal hidden by hiram", 0x33, c64_bus_read(&bus, 0xe000));
 }
 
+static void fill_cartridge_rom(uint8_t *rom, size_t size, uint8_t base) {
+    size_t i;
+
+    for (i = 0; i < size; ++i) {
+        rom[i] = (uint8_t)(base + (i & 0x0fu));
+    }
+}
+
+static void test_generic_8k_cartridge_mapping(void) {
+    c64_t machine;
+    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+    fill_cartridge_rom(roml, sizeof(roml), 0x80);
+
+    c64_debug_write_ram(&machine, 0x8000, 0x12);
+    c64_debug_write_ram(&machine, 0xa000, 0x34);
+
+    expect_true(
+        "attach 8k cartridge",
+        c64_attach_generic_cartridge(
+            &machine, roml, sizeof(roml), NULL, 0, 0, 1, error, sizeof(error)));
+    expect_u8("8k roml visible", 0x80, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("8k roml debug visible", 0x80, c64_debug_read_cpu_map(&machine, 0x8000));
+    expect_u8("8k no romh", 0xa0, c64_bus_read(&machine.bus, 0xa000));
+
+    c64_bus_write(&machine.bus, 0x8000, 0x56);
+    expect_u8("8k roml unchanged after write", 0x80, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("8k ram underneath written", 0x56, c64_debug_read_ram(&machine, 0x8000));
+
+    c64_detach_cartridge(&machine);
+    expect_u8("8k detach restores ram", 0x56, c64_bus_read(&machine.bus, 0x8000));
+}
+
+static void test_generic_16k_cartridge_mapping(void) {
+    c64_t machine;
+    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    uint8_t romh[C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+    fill_cartridge_rom(roml, sizeof(roml), 0x80);
+    fill_cartridge_rom(romh, sizeof(romh), 0xa8);
+
+    c64_debug_write_ram(&machine, 0xa000, 0x44);
+
+    expect_true(
+        "attach 16k cartridge",
+        c64_attach_generic_cartridge(
+            &machine, roml, sizeof(roml), romh, sizeof(romh), 0, 0, error, sizeof(error)));
+    expect_u8("16k roml visible", 0x80, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("16k romh visible", 0xa8, c64_bus_read(&machine.bus, 0xa000));
+    expect_u8("16k romh debug visible", 0xa8, c64_debug_read_cpu_map(&machine, 0xa000));
+
+    c64_bus_write(&machine.bus, 0xa000, 0x66);
+    expect_u8("16k romh unchanged after write", 0xa8, c64_bus_read(&machine.bus, 0xa000));
+    expect_u8("16k ram underneath written", 0x66, c64_debug_read_ram(&machine, 0xa000));
+    expect_true(
+        "16k memory visibility rom",
+        c64_memory_visibility_at(&machine, 0xa000) == C64_MEMORY_VISIBILITY_ROM);
+}
+
 static void test_vicii_io_mirroring_and_banking(void) {
     c64_t machine;
 
@@ -181,6 +246,45 @@ static void test_reset_vector(void) {
     expect_u16("cpu reset pc", 0xe134, machine.cpu.cpu.pc);
 }
 
+static void test_cartridge_survives_reset(void) {
+    c64_t machine;
+    c64_rom_set roms;
+    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    uint8_t romh[C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    c64_rom_set_init(&roms);
+
+    for (i = 0; i < sizeof(roms.basic); i++) {
+        roms.basic[i] = (uint8_t)(0xa0 + (i & 0x0f));
+    }
+    for (i = 0; i < sizeof(roms.character); i++) {
+        roms.character[i] = (uint8_t)(0xd0 + (i & 0x0f));
+    }
+    for (i = 0; i < sizeof(roms.kernal); i++) {
+        roms.kernal[i] = (uint8_t)(0xe0 + (i & 0x0f));
+    }
+    roms.kernal[0x1ffc] = 0x34;
+    roms.kernal[0x1ffd] = 0xe1;
+    roms.has_basic = true;
+    roms.has_character = true;
+    roms.has_kernal = true;
+
+    fill_cartridge_rom(roml, sizeof(roml), 0x80);
+    fill_cartridge_rom(romh, sizeof(romh), 0xa8);
+
+    expect_true("install reset cartridge roms", c64_install_roms(&machine, &roms, error, sizeof(error)));
+    expect_true(
+        "attach reset cartridge",
+        c64_attach_generic_cartridge(
+            &machine, roml, sizeof(roml), romh, sizeof(romh), 0, 0, error, sizeof(error)));
+    expect_true("reset with cartridge", c64_reset(&machine, error, sizeof(error)));
+    expect_u8("reset keeps roml", 0x80, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("reset keeps romh", 0xa8, c64_bus_read(&machine.bus, 0xa000));
+}
+
 static void test_combined_system_rom(void) {
     c64_bus_t bus;
     uint8_t system_rom[C64_BASIC_ROM_SIZE + C64_KERNAL_ROM_SIZE];
@@ -207,10 +311,13 @@ int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
     test_banking();
+    test_generic_8k_cartridge_mapping();
+    test_generic_16k_cartridge_mapping();
     test_vicii_io_mirroring_and_banking();
     test_color_ram_nibble_storage();
     test_debug_cpu_map_reads_sid();
     test_reset_vector();
+    test_cartridge_survives_reset();
     test_combined_system_rom();
     return 0;
 }

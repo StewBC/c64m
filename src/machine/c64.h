@@ -373,6 +373,17 @@ void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
 void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled);
+bool c64_attach_generic_cartridge(
+    c64_t *machine,
+    const uint8_t *roml,
+    size_t roml_size,
+    const uint8_t *romh,
+    size_t romh_size,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size);
+void c64_detach_cartridge(c64_t *machine);
 bool c64_drive_device_supported(uint8_t device);
 c64_drive_status_result c64_mount_d64(
     c64_t *machine,

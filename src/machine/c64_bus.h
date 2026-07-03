@@ -25,7 +25,15 @@ enum {
     C64_BASIC_ROM_SIZE = 0x2000,
     C64_CHAR_ROM_SIZE = 0x1000,
     C64_KERNAL_ROM_SIZE = 0x2000,
+    C64_CARTRIDGE_ROM_BANK_SIZE = 0x2000,
 };
+
+typedef enum c64_cartridge_mode {
+    C64_CARTRIDGE_MODE_NONE = 0,
+    C64_CARTRIDGE_MODE_8K,
+    C64_CARTRIDGE_MODE_16K,
+    C64_CARTRIDGE_MODE_ULTIMAX
+} c64_cartridge_mode;
 
 #ifndef C64M_C64_BUS_TYPEDEF
 #define C64M_C64_BUS_TYPEDEF
@@ -38,6 +46,8 @@ struct c64_bus_t {
     uint8_t basic_rom[C64_BASIC_ROM_SIZE];
     uint8_t char_rom[C64_CHAR_ROM_SIZE];
     uint8_t kernal_rom[C64_KERNAL_ROM_SIZE];
+    uint8_t cartridge_roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    uint8_t cartridge_romh[C64_CARTRIDGE_ROM_BANK_SIZE];
     vicii *vic;
     cia *cia1;
     cia *cia2;
@@ -51,6 +61,12 @@ struct c64_bus_t {
     uint64_t cia2_register_writes;
     uint64_t sid_register_writes;
     uint16_t vic_bank_base;
+    bool cartridge_mounted;
+    bool cartridge_roml_present;
+    bool cartridge_romh_present;
+    uint8_t cartridge_exrom;
+    uint8_t cartridge_game;
+    c64_cartridge_mode cartridge_mode;
 };
 
 void c64_bus_init(c64_bus_t *bus);
@@ -76,5 +92,15 @@ bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_char_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
+bool c64_bus_attach_generic_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *roml,
+    size_t roml_size,
+    const uint8_t *romh,
+    size_t romh_size,
+    uint8_t exrom,
+    uint8_t game);
+void c64_bus_detach_cartridge(c64_bus_t *bus);
+bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value);
 
 uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus);

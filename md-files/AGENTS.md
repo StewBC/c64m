@@ -23,7 +23,8 @@ For this milestone, acceptable fidelity means:
 - SID audio is present and recognizable;
 - keyboard and joystick input are usable through the real C64 input paths;
 - host PRG files and read-only D64 images can load through the supported
-  loader paths.
+  loader paths;
+- generic 8K/16K `.crt` cartridges can load through host convenience paths.
 ```
 
 This is not a promise of full demo-scene compatibility, bit-perfect analog
@@ -61,10 +62,11 @@ Explicitly out of scope for the current milestone:
 - Bit-perfect SID filter or SID chip variant modeling.
 - SID 8580 support or runtime SID variant switching.
 - NTSC color generation differences.
-- Cartridge support for this milestone.
+- Full cartridge mapper support beyond generic 8K/16K CRT cartridges.
 ```
 
-Cartridge support is a possible future follow-on, not part of this milestone.
+Generic 8K/16K cartridge loading is implemented. Broader cartridge mapper
+support remains a possible future follow-on, not part of this milestone.
 
 ## Required Reading Order
 
