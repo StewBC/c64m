@@ -3301,6 +3301,155 @@ static void frontend_disassembly_draw_scrollbar(
             nk_rgb(103, 124, 139));
 }
 
+/*
+ * Effective-address / value annotation for the trailing disassembly column.
+ * `show` gates whether the column is rendered at all; `has_value` distinguishes
+ * a data access (which carries the current byte at `address`) from a control-flow
+ * target (address only). Register/pointer-derived targets are only meaningful
+ * while the machine is paused, so the caller must supply a paused snapshot.
+ */
+typedef struct frontend_disasm_target {
+    bool show;
+    bool has_value;
+    uint16_t address;
+    uint8_t value;
+} frontend_disasm_target;
+
+static bool frontend_disasm_map_get(const frontend *ui, uint16_t addr, uint8_t *out)
+{
+    const frontend_disasm_cache *cache =
+        &ui->disassembly.mem_cache[RUNTIME_MEMORY_MODE_CPU_MAP];
+    if (!cache->valid[addr]) {
+        return false;
+    }
+    *out = cache->bytes[addr];
+    return true;
+}
+
+static bool frontend_disasm_has_label(const frontend *ui, uint16_t addr)
+{
+    char label[32];
+    if (ui->symbols.address_to_label == NULL) {
+        return false;
+    }
+    return ui->symbols.address_to_label(
+        ui->symbols.userdata, addr, label, sizeof(label)) == SYMBOL_LOOKUP_FOUND;
+}
+
+static frontend_disasm_target frontend_disassembly_compute_target(
+    const frontend *ui,
+    const frontend_debug_state *debug_state,
+    const disasm_6502_line *line)
+{
+    frontend_disasm_target result = {false, false, 0, 0};
+    disasm_6502_mode mode;
+    uint8_t opcode;
+    uint8_t x;
+    uint8_t y;
+    uint8_t b1;
+    uint16_t op16;
+    uint8_t lo;
+    uint8_t hi;
+
+    if (ui == NULL || debug_state == NULL || line == NULL) {
+        return result;
+    }
+    /* Registers and zero-page pointers are only a coherent snapshot while paused. */
+    if (!debug_state->has_cpu ||
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+        return result;
+    }
+    if (line->forced_byte || line->length == 0) {
+        return result;
+    }
+
+    opcode = line->bytes[0];
+    if (!disasm_6502_opcode_is_valid(opcode)) {
+        return result;
+    }
+
+    mode = disasm_6502_opcode_mode(opcode);
+    x = debug_state->cpu.x;
+    y = debug_state->cpu.y;
+    b1 = line->bytes[1];
+    op16 = (uint16_t)(line->bytes[1] | ((uint16_t)line->bytes[2] << 8));
+
+    switch (mode) {
+        case DISASM_MODE_IMP:
+        case DISASM_MODE_ACC:
+        case DISASM_MODE_IMM:
+        case DISASM_MODE_ZP:
+            /* No memory target, or a plain literal address that is already visible. */
+            return result;
+        case DISASM_MODE_ZPX:
+            result.address = (uint8_t)(b1 + x); /* zero-page wrap */
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_ZPY:
+            result.address = (uint8_t)(b1 + y); /* zero-page wrap */
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_ABSX:
+            result.address = (uint16_t)(op16 + x);
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_ABSY:
+            result.address = (uint16_t)(op16 + y);
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_INDX:
+            if (!frontend_disasm_map_get(ui, (uint8_t)(b1 + x), &lo) ||
+                !frontend_disasm_map_get(ui, (uint8_t)(b1 + x + 1u), &hi)) {
+                return result;
+            }
+            result.address = (uint16_t)(lo | ((uint16_t)hi << 8));
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_INDY:
+            if (!frontend_disasm_map_get(ui, b1, &lo) ||
+                !frontend_disasm_map_get(ui, (uint8_t)(b1 + 1u), &hi)) {
+                return result;
+            }
+            result.address = (uint16_t)((uint16_t)(lo | ((uint16_t)hi << 8)) + y);
+            result.has_value = true;
+            result.show = true;
+            break;
+        case DISASM_MODE_IND: {
+            /* JMP (ind): replicate the 6502 page-boundary wrap bug on the high byte. */
+            uint16_t hi_addr = (uint16_t)((op16 & 0xFF00u) | (uint16_t)((op16 + 1u) & 0x00FFu));
+            if (!frontend_disasm_map_get(ui, op16, &lo) ||
+                !frontend_disasm_map_get(ui, hi_addr, &hi)) {
+                return result;
+            }
+            result.address = (uint16_t)(lo | ((uint16_t)hi << 8));
+            result.show = true; /* control-flow target, no value */
+            break;
+        }
+        case DISASM_MODE_ABS:
+            /* Direct address: only annotate when the operand was rendered as a label. */
+            result.address = op16;
+            result.has_value = (opcode != 0x4Cu && opcode != 0x20u); /* not JMP/JSR */
+            result.show = frontend_disasm_has_label(ui, op16);
+            break;
+        case DISASM_MODE_REL:
+            result.address = (uint16_t)(line->address + 2u + (int8_t)b1);
+            result.show = frontend_disasm_has_label(ui, result.address);
+            break;
+    }
+
+    if (result.show && result.has_value) {
+        if (!frontend_disasm_map_get(ui, result.address, &result.value)) {
+            result.has_value = false;
+        }
+    }
+    return result;
+}
+
 static void frontend_draw_disassembly_view(
     frontend *ui,
     struct nk_rect bounds,
@@ -3443,13 +3592,27 @@ static void frontend_draw_disassembly_view(
                 }
                 address_label[15] = '\0';
 
-                snprintf(rendered, sizeof(rendered), "%c%c %04X %-15s %-8s %s",
-                    is_pc ? '>' : ' ',
-                    is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
-                    line->base.address,
-                    address_label,
-                    bytes,
-                    line->base.text);
+                {
+                    char target[24] = "";
+                    frontend_disasm_target tgt =
+                        frontend_disassembly_compute_target(ui, debug_state, &line->base);
+                    if (tgt.show) {
+                        if (tgt.has_value) {
+                            snprintf(target, sizeof(target), " [$%04X:%02X]",
+                                tgt.address, tgt.value);
+                        } else {
+                            snprintf(target, sizeof(target), " [$%04X]", tgt.address);
+                        }
+                    }
+                    snprintf(rendered, sizeof(rendered), "%c%c %04X %-15s %-8s %-20s%s",
+                        is_pc ? '>' : ' ',
+                        is_breakpoint ? (is_enabled_breakpoint ? 'X' : 'x') : ' ',
+                        line->base.address,
+                        address_label,
+                        bytes,
+                        line->base.text,
+                        target);
+                }
 
                 if (line->is_provisional) {
                     ui->ctx->style.selectable.normal = nk_style_item_color(nk_rgb(20, 24, 28));

@@ -3,25 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef enum disasm_mode {
-    DISASM_MODE_IMP = 0,
-    DISASM_MODE_ACC,
-    DISASM_MODE_IMM,
-    DISASM_MODE_ZP,
-    DISASM_MODE_ZPX,
-    DISASM_MODE_ZPY,
-    DISASM_MODE_ABS,
-    DISASM_MODE_ABSX,
-    DISASM_MODE_ABSY,
-    DISASM_MODE_IND,
-    DISASM_MODE_INDX,
-    DISASM_MODE_INDY,
-    DISASM_MODE_REL
-} disasm_mode;
-
 typedef struct opcode_info {
     const char *mnemonic;
-    disasm_mode mode;
+    disasm_6502_mode mode;
     uint8_t length;
 } opcode_info;
 
@@ -116,6 +100,11 @@ uint8_t disasm_6502_instruction_length(uint8_t opcode)
 bool disasm_6502_opcode_is_valid(uint8_t opcode)
 {
     return opcode_table[opcode].mnemonic != NULL;
+}
+
+disasm_6502_mode disasm_6502_opcode_mode(uint8_t opcode)
+{
+    return opcode_table[opcode].mode;
 }
 
 static bool resolve_label(

@@ -248,6 +248,36 @@ C123: LABEL        A9 00       LDA #$00
 
 Breakpoint addresses show an indicator in the left gutter.
 
+### Effective Address And Value
+
+When the emulator is paused, lines whose target address is not already obvious
+from the operand gain a trailing annotation showing the resolved address and,
+for memory reads and writes, the byte currently at that address:
+
+```
+C123:             B1 FB       LDA ($FB),Y   [$4050:25]
+```
+
+Here the pointer at `$FB/$FC` plus the current **Y** register resolves to
+`$4050`, which currently holds `$25`. The address is computed from the current
+CPU registers and the CPU-visible memory, so it reflects what the running CPU
+would actually read or write.
+
+The annotation appears for:
+
+- indexed and indirect operands, such as `$40,X`, `$40,Y`, `screen,X`,
+  `screen,Y`, `($40,X)`, and `($FB),Y`, which show `[$addr:value]`;
+- `JMP ($xxxx)` indirect jumps, which show the resolved `[$addr]` target;
+- direct addresses, branches, `JMP`, and `JSR` operands that are shown as a
+  **label** — data references show `[$addr:value]`, branch and jump targets
+  show `[$addr]`.
+
+It is deliberately omitted where the address is already plain in the operand,
+such as `LDA #$00` (immediate), `LDA $4000` (literal absolute), and
+`LDA $FB` (literal zero page). Because the annotation depends on the current
+register and memory snapshot, it is shown only while the machine is paused, and
+it is not drawn while the emulator is running.
+
 ### Display Modes
 
 The disassembly view has three source modes that control which bytes are read for

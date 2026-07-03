@@ -29,6 +29,39 @@
 - Debugger input focus is explicit: C64 display versus debugger views.
 - Symbol table is tools/frontend/debug-session-owned, separate from emulator machine and assembler internals.
 
+## Disassembly effective-address column
+
+- Each disassembly row can carry a trailing annotation showing the resolved
+  target address and, for data accesses, the current byte at that address, e.g.
+  `LDA ($FB),Y   [$4050:25]` or `STA screen   [$0400:20]`.
+- The column is computed entirely in the frontend
+  (`frontend_disassembly_compute_target` in `src/frontend/frontend.c`) from the
+  current `runtime_cpu_snapshot` registers (X/Y) and the CPU-visible Map memory
+  snapshot (`mem_cache[RUNTIME_MEMORY_MODE_CPU_MAP]`), regardless of the row's
+  active source mode, so the value reflects what the running CPU would actually
+  read/write. Values are always read from the CPU Map.
+- It is only rendered while the machine is paused. Register and zero-page
+  pointer values are a coherent snapshot only when stopped; while running the
+  column is suppressed.
+- With decision (b), it is populated on every visible line using the current
+  register snapshot, not just the PC line. For indexed/indirect modes this means
+  non-PC rows show an "as-if-executed-now" target rather than the value those
+  rows will see when execution reaches them.
+- Shown for:
+  - indexed/indirect modes: `zp,x`, `zp,y`, `abs,x`, `abs,y`, `(zp,x)`,
+    `(zp),y` (all data accesses, show `[$addr:value]`);
+  - `jmp (ind)` (control-flow target, shows `[$addr]`, replicates the 6502
+    page-boundary wrap bug);
+  - direct `abs`, branch, `jmp`, and `jsr` operands that were rendered as a
+    label (data `abs` shows `[$addr:value]`; `jmp`/`jsr`/branch show `[$addr]`).
+- Not shown for immediate/implied/accumulator modes, or for plain literal
+  direct addresses (`lda #$FF`, `lda $4000`, `lda $fb`) where the address is
+  already visible in the operand text. Zero-page direct operands are never
+  label-substituted by the decoder, so they are never annotated.
+- Addressing mode is obtained from the disassembler via the newly exposed
+  `disasm_6502_opcode_mode()` / `disasm_6502_mode` in
+  `src/tools/disasm_6502/disasm_6502.h`.
+
 ## Memory/disassembly source modes
 
 Modes are independent per view:
