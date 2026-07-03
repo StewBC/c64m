@@ -2027,6 +2027,11 @@ static bool runtime_load_prg_bytes(runtime *rt, const char *path) {
 static void runtime_load_prg(runtime *rt, const runtime_command *command) {
     bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
 
+    /* Loading a program boots to BASIC and injects at the $E38B trap. Any
+       attached cartridge would take over the reset vector and prevent BASIC
+       from running (and the injection from firing), so detach it first. */
+    c64_detach_cartridge(&rt->machine);
+
     if (!runtime_reset_machine(rt)) {
         return;
     }
@@ -2602,6 +2607,9 @@ static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
 
 static void runtime_load_bin(runtime *rt, const runtime_command *command) {
     if (command->data.load_bin.reset_first) {
+        /* A reset preserves any attached cartridge, which would boot instead of
+           BASIC; detach so the freshly loaded program is what runs. */
+        c64_detach_cartridge(&rt->machine);
         if (!runtime_reset_machine(rt)) {
             return;
         }

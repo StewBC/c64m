@@ -84,6 +84,13 @@ This is expected when the CPU interrupt-disable flag remains set.
   RAM underneath. Writes to cartridge ROM ranges update the underlying RAM and
   do not mutate cartridge ROM. Normal reset and config-apply reset preserve the
   attached cartridge.
+- Loading a program that boots to BASIC and injects (PRG/T64 via
+  `runtime_load_prg`, and BASIC/host binary via `runtime_load_bin` with
+  `reset_first`) now calls `c64_detach_cartridge` before the reset. A reset alone
+  preserves the cartridge, so without the detach the cartridge would take the
+  reset vector and boot instead of BASIC, and the `$E38B` injection would never
+  fire. Loading another CRT still replaces the cartridge; mounting a D64 does not
+  detach (mounting is passive and does not reset/boot).
 - VIC bank selection is cached from CIA #2 port state as an accepted optimization.
 - CPU opcode writes maintain a 64K write-history table keyed by CPU-visible
   16-bit address. Each entry stores the last four opcode PCs in 16-bit lanes,

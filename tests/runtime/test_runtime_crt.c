@@ -104,6 +104,21 @@ static void write_generic_16k_crt(const char *path) {
     fclose(file);
 }
 
+static void write_test_prg(const char *path) {
+    FILE *file = fopen(path, "wb");
+
+    if (file == NULL) {
+        fail("failed to create runtime CRT test PRG");
+    }
+
+    /* Load address $0801 (little-endian) followed by two payload bytes. */
+    fputc(0x01, file);
+    fputc(0x08, file);
+    fputc(0xaa, file);
+    fputc(0xbb, file);
+    fclose(file);
+}
+
 static int poll_event(runtime_client *client, runtime_event *event, runtime_event_type type) {
     clock_t start = clock();
 
@@ -195,12 +210,37 @@ int main(void) {
     expect_u8("ROMH byte 0", 0xa0, event.data.memory.bytes[0]);
     expect_u8("ROMH byte 1", 0xa1, event.data.memory.bytes[1]);
 
+    /* Loading a PRG must detach the cartridge so the program boots instead of
+       the cartridge. After the load, $8000 should read RAM, not cartridge
+       ROML (which the CRT filled with 0x80,0x81,0x82,0x83). */
+    write_test_prg("runtime_crt_test.prg");
+    expect_true("load PRG detaches CRT",
+                runtime_client_load_prg(client, "runtime_crt_test.prg"));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("PRG RESET_COMPLETE not received");
+    }
+    expect_true("pause after PRG", runtime_client_pause(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PRG PAUSED event not received");
+    }
+    expect_true(
+        "request $8000 after PRG",
+        runtime_client_request_memory(client, 0x8000, 4, RUNTIME_MEMORY_MODE_CPU_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("post-PRG memory response not received");
+    }
+    if (event.data.memory.bytes[0] == 0x80 && event.data.memory.bytes[1] == 0x81 &&
+        event.data.memory.bytes[2] == 0x82 && event.data.memory.bytes[3] == 0x83) {
+        fail("cartridge still mapped at $8000 after loading a PRG");
+    }
+
     runtime_client_quit(client);
     runtime_stop(rt);
     runtime_destroy(rt);
     runtime_shutdown();
 
     remove(crt_path);
+    remove("runtime_crt_test.prg");
     remove("runtime_crt_64c.bin");
     remove("runtime_crt_character.bin");
     return 0;

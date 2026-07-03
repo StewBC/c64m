@@ -10,6 +10,7 @@
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path.
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
 - Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.
+- Cartridge detach on program load: `tests/runtime/test_runtime_crt.c` loads a CRT, confirms ROML/ROMH map at `$8000`/`$A000`, then loads a PRG and confirms `$8000` no longer reads cartridge ROM (the cartridge is detached so the program boots instead).
 - Runtime BRK auto-stop: `test_runtime_brk_pauses_without_executing` in `tests/runtime/test_runtime_scheduler.c` confirms a fetched BRK opcode pauses the runtime with `RUNTIME_STOP_REASON_BRK`, PC unchanged, and SP untouched (no stack push). The synthetic ROM builder in the same file (`write_runtime_roms`) now places `JMP $E000` at `$FFF0` so cycle-counted free-run tests loop inside ROM instead of running off the end into zero-filled RAM, which would now trip the same BRK auto-stop.
 
 ## Known test gaps
@@ -23,6 +24,7 @@
 
 - GUI D64 picker: mount a D64, type BASIC LOAD commands, confirm directory and PRG loads.
 - Reset/PRG loader: verify reset-before-load and autostart collection PRGs.
+- Cartridge auto-detach on program load: launch with `--crt <cart>.crt`, then drop a `.t64`/PRG and confirm the program boots (cart auto-detached).
 - Autorun:
   - `--prg foo.prg --autorun` should boot and immediately run.
   - `--basic foo.bas --autorun` should boot and immediately run.
