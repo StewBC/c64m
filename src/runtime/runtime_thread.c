@@ -857,6 +857,8 @@ static bool runtime_reset_machine(runtime *rt) {
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_RESET;
     rt->breakpoint_hit_pending = false;
+    rt->temp_bp_active = false;
+    rt->temp_bp_skip_current = false;
     rt->next_frame_cycle = 0;
     rt->pace_initialized = false;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RESET_COMPLETE);
@@ -1412,6 +1414,7 @@ static void runtime_pause_for_breakpoint(runtime *rt) {
     rt->breakpoint_hit_pending = false;
     rt->suppress_execute_bp = true;
     rt->temp_bp_active = false;
+    rt->temp_bp_skip_current = false;
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_BREAKPOINT;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
@@ -1439,6 +1442,7 @@ static void runtime_pause_for_brk(runtime *rt) {
     rt->breakpoint_hit_pending = false;
     rt->suppress_execute_bp = true;
     rt->temp_bp_active = false;
+    rt->temp_bp_skip_current = false;
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_BRK;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
@@ -2260,6 +2264,7 @@ static bool runtime_flow_abort_requested(runtime *rt, bool *alive) {
                 return true;
             case RUNTIME_COMMAND_RUN:
                 rt->temp_bp_active = false;
+                rt->temp_bp_skip_current = false;
                 rt->exec_state = RUNTIME_EXEC_RUNNING;
                 runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
                 return true;
@@ -2924,6 +2929,8 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_RUN_TO_CURSOR:
             rt->temp_bp_active = true;
             rt->temp_bp_address = command->data.run_to_cursor.address;
+            rt->temp_bp_skip_current =
+                rt->machine.cpu.cpu.pc == command->data.run_to_cursor.address;
             rt->exec_state = RUNTIME_EXEC_RUNNING;
             runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
             break;
@@ -3517,13 +3524,20 @@ int runtime_thread_main(void *userdata) {
                     runtime_pause_for_brk(rt);
                     break;
                 }
-                if (rt->temp_bp_active &&
-                    rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
-                    rt->temp_bp_active = false;
-                    rt->suppress_execute_bp = false;
-                    rt->exec_state = RUNTIME_EXEC_PAUSED;
-                    runtime_publish_step_complete(rt);
-                    break;
+                if (rt->temp_bp_active) {
+                    if (rt->temp_bp_skip_current &&
+                        rt->machine.cpu.cpu.pc != rt->temp_bp_address) {
+                        rt->temp_bp_skip_current = false;
+                    }
+                    if (!rt->temp_bp_skip_current &&
+                        rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
+                        rt->temp_bp_active = false;
+                        rt->temp_bp_skip_current = false;
+                        rt->suppress_execute_bp = false;
+                        rt->exec_state = RUNTIME_EXEC_PAUSED;
+                        runtime_publish_step_complete(rt);
+                        break;
+                    }
                 }
                 if (rt->pending_prg_path != NULL &&
                     rt->machine.cpu.cpu.pc == 0xE38Bu) {

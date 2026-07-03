@@ -142,6 +142,7 @@ struct runtime {
     bool suppress_execute_bp;
     bool temp_bp_active;
     uint16_t temp_bp_address;
+    bool temp_bp_skip_current;
     uint64_t next_frame_cycle;
     uint64_t next_frame_counter;
     uint64_t frame_counter_step;

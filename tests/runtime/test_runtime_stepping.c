@@ -300,6 +300,22 @@ static uint16_t step_out_expect_running(runtime_client *client,
     return pc;
 }
 
+static uint16_t run_to_cursor_expect_complete(runtime_client *client,
+                                              runtime_event *event,
+                                              uint16_t address,
+                                              const char *tag) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s: run_to_cursor command", tag);
+    expect_true(msg, runtime_client_run_to_cursor(client, address));
+    snprintf(msg, sizeof(msg), "%s: RUNNING after run_to_cursor", tag);
+    if (!poll_event(client, event, RUNTIME_EVENT_RUNNING)) { fail(msg); }
+    snprintf(msg, sizeof(msg), "%s: STEP_COMPLETE after run_to_cursor", tag);
+    if (!poll_event(client, event, RUNTIME_EVENT_STEP_COMPLETE)) { fail(msg); }
+    snprintf(msg, sizeof(msg), "%s: CPU_STATE_RESPONSE after run_to_cursor", tag);
+    if (!poll_event(client, event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) { fail(msg); }
+    return event->data.cpu_state.pc;
+}
+
 static void write_ram_byte(runtime_client *client, runtime_event *event,
                            uint16_t addr, uint8_t value, const char *tag) {
     char msg[128];
@@ -544,6 +560,51 @@ static void test_step_out_fallback_to_running_when_no_rts(void) {
     printf("PASS: test_step_out_fallback_to_running_when_no_rts\n");
 }
 
+static void test_run_to_cursor_at_current_pc_waits_for_next_hit(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    uint16_t pc;
+
+    rt = start_stepping_runtime(&client);
+
+    /* $2000: LDX #$02
+       $2002: DEX
+       $2003: BNE $2002
+       Stand on the BNE with X=1, then run-to-cursor $2003. It must execute
+       the branch and DEX once, then stop when PC returns to the BNE. */
+    write_ram_byte(client, &event, 0x2000, 0xa2, "run-to loop");
+    write_ram_byte(client, &event, 0x2001, 0x02, "run-to loop");
+    write_ram_byte(client, &event, 0x2002, 0xca, "run-to loop");
+    write_ram_byte(client, &event, 0x2003, 0xd0, "run-to loop");
+    write_ram_byte(client, &event, 0x2004, 0xfd, "run-to loop");
+    write_ram_byte(client, &event, 0x2005, 0xea, "run-to loop");
+
+    expect_true("set PC to run-to loop", runtime_client_set_pc(client, 0x2000));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU_STATE_RESPONSE after set PC to run-to loop");
+    }
+    drain_events(client);
+
+    pc = step_once(client, &event, "run-to loop LDX");
+    expect_u16("run-to loop after LDX", 0x2002, pc);
+    pc = step_once(client, &event, "run-to loop DEX");
+    expect_u16("run-to loop standing on BNE", 0x2003, pc);
+    expect_u16("run-to loop X before run-to", 0x0001, event.data.cpu_state.x);
+
+    pc = run_to_cursor_expect_complete(
+        client,
+        &event,
+        0x2003,
+        "run-to current BNE waits for next hit");
+
+    expect_u16("run-to current BNE stops on next hit", 0x2003, pc);
+    expect_u16("run-to current BNE executed loop body", 0x0000, event.data.cpu_state.x);
+
+    stop_stepping_runtime(rt, client);
+    printf("PASS: test_run_to_cursor_at_current_pc_waits_for_next_hit\n");
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -558,6 +619,7 @@ int main(void) {
     test_step_out_inside_routine_on_jsr_with_bp();
     test_step_out_inside_routine_on_non_jsr();
     test_step_out_fallback_to_running_when_no_rts();
+    test_run_to_cursor_at_current_pc_waits_for_next_hit();
 
     remove("stepping_64c.bin");
     remove("stepping_character.bin");

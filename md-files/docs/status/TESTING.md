@@ -13,6 +13,7 @@
 - Cartridge detach on program load and reset: `tests/runtime/test_runtime_crt.c` loads a CRT, confirms ROML/ROMH map at `$8000`/`$A000`, then loads a PRG and confirms `$8000` no longer reads cartridge ROM (the program boots instead). It then re-attaches the CRT and checks that `runtime_client_reset_ex(client, false)` keeps the cartridge mapped while `runtime_client_reset_ex(client, true)` detaches it.
 - Runtime BRK auto-stop: `test_runtime_brk_pauses_without_executing` in `tests/runtime/test_runtime_scheduler.c` confirms a fetched BRK opcode pauses the runtime with `RUNTIME_STOP_REASON_BRK`, PC unchanged, and SP untouched (no stack push). The synthetic ROM builder in the same file (`write_runtime_roms`) now places `JMP $E000` at `$FFF0` so cycle-counted free-run tests loop inside ROM instead of running off the end into zero-filled RAM, which would now trip the same BRK auto-stop.
 - Runtime frame publication: `test_step_instruction_publishes_updated_frame` and `test_step_instruction_publishes_updated_hires_frame` in `tests/runtime/test_runtime_frame.c` first create a completed live frame, then pause and confirm single-step completion publishes a current-state frame snapshot after text screen RAM (`STA $0400`) and high-res bitmap RAM (`STA $2000`) writes.
+- Runtime run-to-cursor stepping: `test_run_to_cursor_at_current_pc_waits_for_next_hit` in `tests/runtime/test_runtime_stepping.c` confirms run-to-cursor on the current PC ignores the immediate match and stops on the next PC hit, matching loop-branch debugger use.
 
 ## Known test gaps
 

@@ -1423,10 +1423,16 @@ static bool handle_step_key_event(
     return false;
 }
 
-static void send_run_to_cursor_command(runtime_client *client, frontend *ui) {
+static void send_run_to_cursor_command(
+    runtime_client *client,
+    frontend *ui,
+    const frontend_debug_state *debug_state) {
     uint16_t addr;
     if (!frontend_get_disassembly_cursor(ui, &addr)) {
-        return;
+        if (debug_state == NULL || !debug_state->has_cpu) {
+            return;
+        }
+        addr = debug_state->cpu.pc;
     }
     SDL_Log("RUN TO CURSOR requested: $%04X", addr);
     if (runtime_client_run_to_cursor(client, addr)) {
@@ -3023,7 +3029,7 @@ static bool run_main_loop(
                            frontend_input_has_shift_modifier(&event.key)) {
                     debug_state.step_cycle_start = debug_state.machine_cycle;
                     debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                    send_run_to_cursor_command(client, ui);
+                    send_run_to_cursor_command(client, ui, &debug_state);
                 } else if (event.key.keysym.sym == SDLK_t &&
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
