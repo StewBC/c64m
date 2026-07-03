@@ -689,7 +689,7 @@ static void test_sprite_hires_appears_at_position(void) {
     /* sprite 0 pointer at $07F8: value 13 → data at 13×64=$0340 */
     machine.bus.ram[0x07F8] = 13;
 
-    /* sprite 0: X=100, Y=100 displays its first visible row at raster 100. */
+    /* sprite 0: X=100, Y=100 displays its first visible row at raster 101. */
     c64_bus_write(&machine.bus, 0xD000, 100);
     c64_bus_write(&machine.bus, 0xD001, 100);
     c64_bus_write(&machine.bus, 0xD027, 7);
@@ -697,17 +697,17 @@ static void test_sprite_hires_appears_at_position(void) {
 
     make_live_frame(&machine, &frame, "sprite hires live frame");
 
-    px = frame.pixels[100 * C64_FRAME_WIDTH + 100];
+    px = frame.pixels[101 * C64_FRAME_WIDTH + 100];
     if (px != sprite_color) {
         fprintf(stderr,
-            "sprite at (100,100): got 0x%08x, expected 0x%08x\n",
+            "sprite at (100,101): got 0x%08x, expected 0x%08x\n",
             px, sprite_color);
         exit(1);
     }
-    px = frame.pixels[100 * C64_FRAME_WIDTH + 123];
+    px = frame.pixels[101 * C64_FRAME_WIDTH + 123];
     if (px != sprite_color) {
         fprintf(stderr,
-            "sprite at (123,100): got 0x%08x, expected 0x%08x\n",
+            "sprite at (123,101): got 0x%08x, expected 0x%08x\n",
             px, sprite_color);
         exit(1);
     }
@@ -722,7 +722,7 @@ static void test_sprite_line_state_stable_after_midline_x_write(void) {
     setup_solid_sprite(&machine, 5, 0x0340, 100, 100, 7);
 
     abs = 0;
-    while (!(machine.vic.timing.raster_line == 100u &&
+    while (!(machine.vic.timing.raster_line == 101u &&
              machine.vic.timing.cycle_in_line == 25u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
@@ -739,12 +739,12 @@ static void test_sprite_line_state_stable_after_midline_x_write(void) {
     expect_true("midline sprite x write frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("sprite keeps original x for active line", TEST_PALETTE_7,
-               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
     expect_not_u32("midline x write does not redraw current line at new x", TEST_PALETTE_7,
-                   frame.pixels[100 * C64_FRAME_WIDTH + 200]);
+                   frame.pixels[101 * C64_FRAME_WIDTH + 200]);
 }
 
-static void test_sprite_y51_touches_top_border_fully_revealed(void) {
+static void test_sprite_y50_touches_top_border_fully_revealed(void) {
     c64_t     machine;
     c64_frame frame;
 
@@ -753,15 +753,15 @@ static void test_sprite_y51_touches_top_border_fully_revealed(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    setup_solid_sprite(&machine, 0, 0x0340, 46, 51, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 50, 7);
 
-    make_live_frame(&machine, &frame, "sprite y51 top border frame");
+    make_live_frame(&machine, &frame, "sprite y50 top border frame");
 
-    expect_u32("sprite y51 does not draw in top border", TEST_PALETTE_2,
+    expect_u32("sprite y50 does not draw in top border", TEST_PALETTE_2,
                frame.pixels[50 * C64_FRAME_WIDTH + 46]);
-    expect_u32("sprite y51 first visible row touches display top", TEST_PALETTE_7,
+    expect_u32("sprite y50 first visible row touches display top", TEST_PALETTE_7,
                frame.pixels[51 * C64_FRAME_WIDTH + 46]);
-    expect_u32("sprite y51 last row fully visible", TEST_PALETTE_7,
+    expect_u32("sprite y50 last row fully visible", TEST_PALETTE_7,
                frame.pixels[71 * C64_FRAME_WIDTH + 46]);
 
     reset_machine(&machine);
@@ -769,12 +769,12 @@ static void test_sprite_y51_touches_top_border_fully_revealed(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    setup_solid_sprite(&machine, 0, 0x0340, 46, 52, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 51, 7);
 
-    make_live_frame(&machine, &frame, "sprite y52 one-line gap frame");
-    expect_u32("sprite y52 leaves one display line above", TEST_PALETTE_6,
+    make_live_frame(&machine, &frame, "sprite y51 one-line gap frame");
+    expect_u32("sprite y51 leaves one display line above", TEST_PALETTE_6,
                frame.pixels[51 * C64_FRAME_WIDTH + 46]);
-    expect_u32("sprite y52 starts on following line", TEST_PALETTE_7,
+    expect_u32("sprite y51 starts on following line", TEST_PALETTE_7,
                frame.pixels[52 * C64_FRAME_WIDTH + 46]);
 }
 
@@ -790,7 +790,7 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
     make_live_frame(&machine, &frame, "sprite-sprite collision frame");
 
     expect_u32("sprite 0 wins visual priority", TEST_PALETTE_7,
-               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
     expect_u8("immc irq pending", 0xf5, vicii_read_register(&machine.vic, 0xd019));
 
     /* Clearing $D019 while $D01E remains latched must allow a later collision IRQ. */
@@ -814,7 +814,7 @@ static void test_sprite_background_priority_and_collision(void) {
     c64_bus_write(&machine.bus, 0xd01a, 0x02); /* enable IMBC */
     machine.bus.ram[0x0400] = 1;
     machine.bus.color_ram[0] = 5;
-    setup_solid_sprite(&machine, 0, 0x0340, 24, 51, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
 
     make_live_frame(&machine, &frame, "front sprite over text frame");
     expect_u32("front sprite hides foreground text", TEST_PALETTE_7,
@@ -828,7 +828,7 @@ static void test_sprite_background_priority_and_collision(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400] = 1;
     machine.bus.color_ram[0] = 5;
-    setup_solid_sprite(&machine, 0, 0x0340, 24, 51, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
     c64_bus_write(&machine.bus, 0xd01b, 0x01); /* sprite 0 behind foreground graphics */
 
     make_live_frame(&machine, &frame, "behind sprite over text frame");
@@ -845,7 +845,7 @@ static void test_sprite_background_priority_and_collision(void) {
 
     make_live_frame(&machine, &frame, "behind sprite over background frame");
     expect_u32("behind sprite visible over background", TEST_PALETTE_7,
-               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
     expect_u8("no sprite-background collision on background pixel", 0x00, vicii_read_register(&machine.vic, 0xd01f));
 }
 
@@ -862,7 +862,7 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     make_live_frame(&machine, &frame, "border sprite collision frame");
 
     expect_u32("border hides sprite pixel", TEST_PALETTE_2,
-               frame.pixels[10 * C64_FRAME_WIDTH + 10]);
+               frame.pixels[11 * C64_FRAME_WIDTH + 10]);
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
@@ -876,7 +876,7 @@ static void test_live_bottom_border_can_be_opened_for_sprites(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
-    setup_solid_sprite(&machine, 0, 0x0340, 46, 251, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 250, 7);
 
     make_live_frame(&machine, &frame, "closed bottom border frame");
     expect_u32("closed bottom border hides sprite", TEST_PALETTE_2,
@@ -887,7 +887,7 @@ static void test_live_bottom_border_can_be_opened_for_sprites(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    setup_solid_sprite(&machine, 0, 0x0340, 46, 251, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 250, 7);
 
     abs = 0;
     while (!(machine.vic.timing.raster_line == 248u &&
@@ -948,7 +948,7 @@ static void test_den_clear_keeps_sprite_visible(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    setup_solid_sprite(&machine, 0, 0x0340, 24, 51, 7);
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
 
     make_live_frame(&machine, &frame, "den clear sprite visible frame");
     expect_u32("den clear live border blanks to d021", TEST_PALETTE_6,
@@ -973,8 +973,8 @@ static void test_den_clear_keeps_sprite_collisions(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x0400] = 1;
     machine.bus.color_ram[0] = 5;
-    setup_solid_sprite(&machine, 0, 0x0340, 24, 51, 7);
-    setup_solid_sprite(&machine, 1, 0x0380, 24, 51, 10);
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+    setup_solid_sprite(&machine, 1, 0x0380, 24, 50, 10);
 
     make_live_frame(&machine, &frame, "den clear collision frame");
     expect_u8("den clear sprite-background collision", 0x03, vicii_read_register(&machine.vic, 0xd01f));
@@ -1304,7 +1304,7 @@ static void test_ntsc_sprite4_cross_line_ba(void) {
     vicii_write_register(&v, 0xd011, 0x03u);
     v.timing.raster_line = 70u;
     vicii_write_register(&v, 0xd015, 0x10u); /* sprite 4 enabled */
-    vicii_write_register(&v, 0xd009, 71u);   /* sprite 4 Y=71 -> display_y=71 */
+    vicii_write_register(&v, 0xd009, 70u);   /* sprite 4 Y=70 -> first visible row 71 */
 
     abs = 0;
     abs = step_vicii(&v, abs); /* cycle 0: sprite 4 not active on line 70 */
@@ -1352,17 +1352,17 @@ static void test_sprite3_cross_line_ba(void) {
     uint64_t abs;
     uint32_t i;
 
-    /* Sprite 3 will start on raster line 50: spr_y=50 → display_y=50.
+    /* Sprite 3 will start on raster line 50: spr_y=49 → first visible row 50.
        Set raster_line=49 (line N-1); sprite 3 not yet active this line. */
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x03u);
     v.timing.raster_line = 49u;
     vicii_write_register(&v, 0xd015, 0x08u); /* sprite 3 enabled */
-    vicii_write_register(&v, 0xd007, 50u);   /* sprite 3 Y=50 → display_y=50 */
+    vicii_write_register(&v, 0xd007, 49u);   /* sprite 3 Y=49 → first visible row 50 */
 
     abs = 0;
-    /* Cycle 0 of line 49: fetch — sprite 3 NOT active (raster=49 ≠ spr_y=50). */
+    /* Cycle 0 of line 49: fetch — sprite 3 NOT active until raster 50. */
     abs = step_vicii(&v, abs);
 
     /* Advance to cycle 60 without triggering BA. */
@@ -1397,7 +1397,7 @@ static void test_sprite4_cross_line_ba(void) {
     vicii_write_register(&v, 0xd011, 0x03u);
     v.timing.raster_line = 70u;
     vicii_write_register(&v, 0xd015, 0x10u); /* sprite 4 enabled */
-    vicii_write_register(&v, 0xd009, 71u);   /* sprite 4 Y=71 → display_y=71 */
+    vicii_write_register(&v, 0xd009, 70u);   /* sprite 4 Y=70 → first visible row 71 */
 
     abs = 0;
     abs = step_vicii(&v, abs); /* cycle 0: fetch, sprite 4 not active on line 70 */
@@ -1567,7 +1567,7 @@ int main(void) {
     test_live_raster_border_change_and_text();
     test_sprite_hires_appears_at_position();
     test_sprite_line_state_stable_after_midline_x_write();
-    test_sprite_y51_touches_top_border_fully_revealed();
+    test_sprite_y50_touches_top_border_fully_revealed();
     test_sprite_sprite_collision_priority_and_irq();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();

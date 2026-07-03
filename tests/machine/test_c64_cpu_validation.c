@@ -559,6 +559,31 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_true("lda trace still pending", machine.pending_cpu_trace_active);
 }
 
+static void test_sei_cancels_cli_irq_defer(void) {
+    static const uint8_t program[] = {
+        0x58,       /* CLI */
+        0x78,       /* SEI */
+        0xa9, 0x42  /* LDA #$42 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    roms.kernal[0x1ffe] = 0x00;
+    roms.kernal[0x1fff] = 0xe1;
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+
+    machine.vic.irq_status = 0x01;
+    machine.vic.irq_enable = 0x01;
+
+    step_machine(&machine, 3);
+
+    expect_u16("sei blocks pending irq after cli defer", (uint16_t)(TEST_RESET_VECTOR + sizeof(program)), snapshot(&machine).pc);
+    expect_u8("instruction after sei executes", 0x42, snapshot(&machine).a);
+    expect_u64("no irq entered after sei", 0, machine.cpu.cpu.irq_entries);
+}
+
 static void write_runtime_roms(void) {
     FILE *system = fopen("cpu_validation_64c.bin", "wb");
     FILE *character = fopen("cpu_validation_character.bin", "wb");
@@ -674,6 +699,7 @@ int main(void) {
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
     test_ba_stalls_pending_read_cycle();
+    test_sei_cancels_cli_irq_defer();
     test_runtime_run_instructions();
     return 0;
 }

@@ -1137,7 +1137,7 @@ static inline void sed(C6510 *m) {
 
 static inline void sei(C6510 *m) {
     read_pc(m);
-    m->cpu.irq_defer = 1;
+    m->cpu.irq_defer = 0;
     m->cpu.irq_defer_i = 0;
     m->cpu.I = 1;
 }

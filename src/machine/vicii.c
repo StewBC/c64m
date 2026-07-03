@@ -295,7 +295,7 @@ static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
         bool     y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
 
         if ((enable >> n) & 1u) {
-            if (raster_y == (uint32_t)spr_y) {
+            if (raster_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
                 v->sprite_mc[n]       = 0;
                 v->sprite_active[n]   = true;
                 v->sprite_y_exp_ff[n] = false;
@@ -787,7 +787,7 @@ static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
         return true;
     }
     if ((enable >> n) & 1u) {
-        if (next_y == (uint32_t)spr_y) {
+        if (next_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
             return true;
         }
     }
