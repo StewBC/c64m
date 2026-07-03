@@ -253,6 +253,24 @@ target_link_libraries(test_frontend_input PRIVATE
 
 add_test(NAME frontend_input COMMAND test_frontend_input)
 
+add_executable(test_frontend_joystick
+    tests/frontend/test_frontend_joystick.c
+)
+
+target_compile_features(test_frontend_joystick PRIVATE c_std_99)
+
+target_compile_definitions(test_frontend_joystick PRIVATE SDL_MAIN_HANDLED)
+
+target_include_directories(test_frontend_joystick PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+)
+
+target_link_libraries(test_frontend_joystick PRIVATE
+    frontend
+)
+
+add_test(NAME frontend_joystick COMMAND test_frontend_joystick)
+
 add_executable(test_c64_cpu_validation
     tests/machine/test_c64_cpu_validation.c
 )

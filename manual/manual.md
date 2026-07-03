@@ -31,6 +31,8 @@ Useful flags:
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
+| `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
+| `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file records
@@ -1061,7 +1063,12 @@ The Configure dialog (opened from **[Configure...]** in the Machine tab) has two
 | Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
 | Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
 | Symbol Files         | Comma-separated paths to symbol files loaded at startup |
+| Keyboard Joystick    | Tri-state port selector (Off / Port 1 / Port 2) and Numpad / WASD layout |
 | Auto-save INI on Quit| Save `c64m.ini` automatically when quitting     |
+
+The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
+**Shift+Opt+2** assignment; either place can change the active port. The layout can
+only be changed here. Applying the dialog takes effect immediately.
 
 ### INI File
 
@@ -1101,6 +1108,16 @@ emulator removes comments.
 | `integer_scale`  | `1` -- use integer-only scaling                          |
 | `aspect_correct` | `1` -- preserve pixel aspect ratio (default on)          |
 | `filter`         | `nearest` or `linear` (default `nearest`)               |
+
+### [input]
+
+| Key                        | Value                                               |
+|----------------------------|-----------------------------------------------------|
+| `keyboard_joystick_layout` | `numpad` or `wasd` (default `numpad`)               |
+| `keyboard_joystick_port`   | `0` (disabled), `1`, or `2` (default `0`)           |
+
+The port can also be set for one launch with `--kbdjoy <0|1|2>`, and the layout with
+`--kbdjoy-layout <numpad|wasd>`.
 
 ### [Window]
 
@@ -1245,6 +1262,8 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Shift+Opt+Tab** | Cycle active view in reverse                            |
 | **Opt+1**       | Map gamepad to joystick port 1                             |
 | **Opt+2**       | Map gamepad to joystick port 2 (default)                   |
+| **Shift+Opt+1** | Assign the keyboard joystick to port 1 (press again to disable) |
+| **Shift+Opt+2** | Assign the keyboard joystick to port 2 (press again to disable) |
 | **Cmd+Q**       | Quit (macOS)                                               |
 
 ### Paste and Clipboard
@@ -1794,6 +1813,25 @@ channel, and unvalidated fast-loader mechanics out of scope.
 
 Port 1 is emulated via CIA #1 Port B bits 0-4. Port 2 via CIA #1 Port A bits 0-4. A
 connected gamepad defaults to port 2; Opt+1 and Opt+2 reassign it.
+
+The host keyboard can also act as a joystick. It is disabled by default; assign it to a
+port with **Shift+Opt+1** / **Shift+Opt+2**, the Keyboard Joystick control in the
+Configure dialog, or `--kbdjoy`. A gamepad and the keyboard may share the same port,
+in which case their directions and fire are combined.
+
+Two layouts are available:
+
+| Layout   | Directions             | Diagonals            | Fire   |
+|----------|------------------------|----------------------|--------|
+| `numpad` | Keypad 8 / 2 / 4 / 6   | Keypad 7 / 9 / 1 / 3 | Keypad 0 |
+| `wasd`   | W / S / A / D          | (hold two keys)      | Space  |
+
+The numpad keys are not C64 keys, so the `numpad` layout never interferes with typing.
+The `wasd` keys are C64 keys, so while the keyboard joystick is assigned to a port those
+keys drive the joystick instead of reaching the C64; they type normally when the keyboard
+joystick is disabled or when a debugger view has keyboard focus. The `numpad` layout
+follows the keypad key codes, so it requires Num Lock to be on. The port and layout are
+saved in the `[input]` INI section.
 
 ### Display and Scaling
 

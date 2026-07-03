@@ -23,6 +23,7 @@
 #define C64M_DEFAULT_INI "c64m.ini"
 #define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
 #define C64M_DEFAULT_VIDEO_FILTER "nearest"
+#define C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT "numpad"
 #define C64M_DEFAULT_SCROLL_WHEEL_LINES 3
 #define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
 #define C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM 0.58f
@@ -929,6 +930,16 @@ static void apply_config(app_options *options, config *cfg)
         replace_string(&options->video_filter, value);
     }
 
+    value = config_get(cfg, "input", "keyboard_joystick_layout");
+    if (value != NULL) {
+        replace_string(&options->keyboard_joystick_layout, value);
+    }
+    options->keyboard_joystick_port = config_get_int(
+        cfg, "input", "keyboard_joystick_port", options->keyboard_joystick_port);
+    if (options->keyboard_joystick_port < 0 || options->keyboard_joystick_port > 2) {
+        options->keyboard_joystick_port = 0;
+    }
+
     options->window_width = config_get_int(
         cfg, "Window", "width", options->window_width);
     options->window_height = config_get_int(
@@ -1118,6 +1129,8 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     int headless = 0;
     int video_pal = 0;
     int video_ntsc = 0;
+    int kbdjoy_port = -1;
+    const char *kbdjoy_layout = NULL;
     float audio_record_start = 0.0f;
     float audio_record_duration = 0.0f;
     const char *basic_path = NULL;
@@ -1154,6 +1167,8 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('P', "pal", &video_pal, "use PAL video timing", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('N', "ntsc", &video_ntsc, "use NTSC video timing", NULL, 0, OPT_NONEG),
         OPT_STRING('\0', "video", &video_standard, "video standard: PAL or NTSC", NULL, 0, 0),
+        OPT_INTEGER('\0', "kbdjoy", &kbdjoy_port, "drive keyboard joystick on C64 port: 0 off, 1 or 2", NULL, 0, 0),
+        OPT_STRING('\0', "kbdjoy-layout", &kbdjoy_layout, "keyboard joystick layout: numpad or wasd", NULL, 0, 0),
         OPT_BOOLEAN('r', "remember", &remember, "add save at quit to ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('v', "saveini", &save_ini, "save to ini file at quit", NULL, 0, OPT_NONEG),
         OPT_STRING('t', "turbo", &turbo, "comma separated set of turbo multipliers", NULL, 0, 0),
@@ -1201,6 +1216,20 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (video_ntsc && !apply_video_standard_arg(options, "NTSC")) {
         return false;
+    }
+    if (kbdjoy_port >= 0) {
+        if (kbdjoy_port > 2) {
+            fprintf(stderr, "--kbdjoy expects 0, 1, or 2\n");
+            return false;
+        }
+        options->keyboard_joystick_port = kbdjoy_port;
+    }
+    if (kbdjoy_layout != NULL) {
+        if (strcmp(kbdjoy_layout, "numpad") != 0 && strcmp(kbdjoy_layout, "wasd") != 0) {
+            fprintf(stderr, "--kbdjoy-layout expects 'numpad' or 'wasd'\n");
+            return false;
+        }
+        replace_string(&options->keyboard_joystick_layout, kbdjoy_layout);
     }
 
     if (remember) {
@@ -1259,6 +1288,9 @@ void app_options_init(app_options *options)
     options->integer_scale = true;
     options->aspect_correct = true;
     replace_string(&options->video_filter, C64M_DEFAULT_VIDEO_FILTER);
+    replace_string(&options->keyboard_joystick_layout,
+                   C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT);
+    options->keyboard_joystick_port = 0;
     options->window_width = 0;
     options->window_height = 0;
     options->layout_split_display_right = C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT;
@@ -1328,8 +1360,10 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
     dest->control_port = src->control_port;
     dest->headless = src->headless;
+    dest->keyboard_joystick_port = src->keyboard_joystick_port;
 
-    if (!replace_string(&dest->ini_path, src->ini_path) ||
+    if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
+        !replace_string(&dest->ini_path, src->ini_path) ||
         !replace_string(&dest->breakpoint, src->breakpoint) ||
         !replace_string(&dest->turbo_multipliers, src->turbo_multipliers) ||
         !replace_string(&dest->symbol_files, src->symbol_files) ||
@@ -1425,6 +1459,13 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "Video", "filter", options->video_filter);
     }
 
+    if (options->keyboard_joystick_layout != NULL) {
+        config_set(cfg, "input", "keyboard_joystick_layout",
+                   options->keyboard_joystick_layout);
+    }
+    config_set_int(cfg, "input", "keyboard_joystick_port",
+                   options->keyboard_joystick_port);
+
     config_remove_prefix(cfg, "runtime", "turbo");
     if (options->turbo_multipliers != NULL) {
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
@@ -1517,6 +1558,7 @@ void app_options_destroy(app_options *options)
     free(options->symbol_files);
     free(options->video_standard);
     free(options->video_filter);
+    free(options->keyboard_joystick_layout);
     free(options->basic_rom_path);
     free(options->char_rom_path);
     free(options->kernal_rom_path);

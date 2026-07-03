@@ -19,6 +19,7 @@
 - CIA #2 drives the CPU NMI edge latch.
 - RESTORE remains a separate one-shot NMI source.
 - CIA #1 handles bidirectional keyboard matrix and joystick ports.
+- Joystick port state has two host input sources: SDL game controllers and the host keyboard (see `docs/status/FRONTEND_DEBUGGER.md`). Both are combined in the frontend and delivered through `c64_set_joystick`; the CIA side is unchanged.
 - CIA #2 handles VIC bank selection and IEC ATN/CLK/DATA open-collector line modeling.
 - TOD uses BCD tenths/seconds/minutes/hours, 12-hour AM/PM, 50/60 Hz source policy, coherent read latch, and alarm ICR source.
 

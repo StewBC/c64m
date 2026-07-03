@@ -25,6 +25,8 @@ add_library(frontend STATIC
     frontend.h
     frontend_input.c
     frontend_input.h
+    frontend_joystick_input.c
+    frontend_joystick_input.h
     help_view.c
     help_view.h
     "${C64M_HELP_CONTENT}"

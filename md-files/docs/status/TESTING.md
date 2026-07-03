@@ -9,6 +9,7 @@
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path.
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
+- Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.
 - Runtime BRK auto-stop: `test_runtime_brk_pauses_without_executing` in `tests/runtime/test_runtime_scheduler.c` confirms a fetched BRK opcode pauses the runtime with `RUNTIME_STOP_REASON_BRK`, PC unchanged, and SP untouched (no stack push). The synthetic ROM builder in the same file (`write_runtime_roms`) now places `JMP $E000` at `$FFF0` so cycle-counted free-run tests loop inside ROM instead of running off the end into zero-filled RAM, which would now trip the same BRK auto-stop.
 
 ## Known test gaps
@@ -27,6 +28,11 @@
   - `--basic foo.bas --autorun` should boot and immediately run.
   - `--disk 8=game.d64 --autorun` should type `LOAD"*",8` and `RUN` automatically.
   - With 1541 emulation enabled, disk autorun should still be validated by loaded BASIC memory or visible program start, not by the host "RUN command received" log alone.
+- Keyboard joystick:
+  - `--kbdjoy 2` (or `Alt+Shift+2` at runtime) then verify numpad 8/2/4/6/diagonals + KP_0 fire drive a joystick game on port 2.
+  - Switch to `--kbdjoy-layout wasd` and confirm W/A/S/D + Space drive the joystick while the C64 has keyboard focus, and that those letters do NOT reach the C64 keyboard while assigned; confirm they type normally when the joystick is disabled (`Alt+Shift+2` again) or when the debugger UI has focus.
+  - Confirm `Alt+1`/`Alt+2` still map real game controllers independently.
+  - Config dialog (Misc → Machine → Emulator → Configure... → Emulator tab): set the port tri-state (Off/Port 1/Port 2) and Numpad/WASD layout, Apply, and confirm the change takes effect live; confirm assigning a port via `Alt+Shift+2` first and then opening the dialog shows Port 2 (not Off).
 - Assembler tab:
   - Assemble with Reset on.
   - Assemble with Reset off.

@@ -67,6 +67,10 @@ typedef struct app_options {
     bool assembler_rearm_oneshots;
     int control_port;
     bool headless;
+    /* Host-keyboard joystick: layout name ("numpad" or "wasd") and the C64 port
+       it drives (0 = disabled, 1 or 2 = active). */
+    char *keyboard_joystick_layout;
+    int keyboard_joystick_port;
 } app_options;
 
 void app_options_init(app_options *options);

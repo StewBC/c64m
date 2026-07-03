@@ -3,6 +3,7 @@
 #include "control_server.h"
 #include "frontend.h"
 #include "frontend_input.h"
+#include "frontend_joystick_input.h"
 #include "paste_parser.h"
 #include "platform.h"
 #include "platform_audio.h"
@@ -36,6 +37,9 @@ typedef struct sdl_c64_controller_state {
     sdl_c64_controller controllers[C64M_CONTROLLER_MAX];
     unsigned single_controller_port;
     bool swapped;
+    /* Optional host-keyboard joystick source, OR'd into its assigned C64 port
+       when the port states are published. NULL when not wired. */
+    const frontend_joystick_input *kbd_joystick;
 } sdl_c64_controller_state;
 
 typedef struct deferred_control_response {
@@ -1544,6 +1548,13 @@ static void sdl_c64_controller_send_ports(
         }
     }
 
+    /* The keyboard joystick is just another source assigned to a port; OR it in
+       so it coexists with any real controller mapped to the same port. */
+    if (state->kbd_joystick != NULL &&
+        state->kbd_joystick->port >= 1u && state->kbd_joystick->port <= 2u) {
+        ports[state->kbd_joystick->port] |= state->kbd_joystick->inputs;
+    }
+
     runtime_client_set_joystick(client, 1u, ports[1]);
     runtime_client_set_joystick(client, 2u, ports[2]);
 }
@@ -1767,7 +1778,12 @@ static void sdl_c64_controllers_close(sdl_c64_controller_state *state, runtime_c
     sdl_c64_controller_send_ports(state, client);
 }
 
-static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_options *options) {
+static void dispatch_debugger_intents(
+    runtime_client *client,
+    frontend *ui,
+    app_options *options,
+    sdl_c64_controller_state *controller_state,
+    frontend_joystick_input *kbd_joystick) {
     frontend_debugger_intent intent;
 
     if (client == NULL || ui == NULL) {
@@ -1993,6 +2009,18 @@ static void dispatch_debugger_intents(runtime_client *client, frontend *ui, app_
                     frontend_set_config_state(ui, options);
                     frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
                     frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
+                    /* Apply keyboard-joystick config to the live input source. */
+                    if (kbd_joystick != NULL) {
+                        frontend_joystick_set_layout(
+                            kbd_joystick,
+                            frontend_joystick_layout_from_string(
+                                options->keyboard_joystick_layout));
+                        frontend_joystick_set_port(
+                            kbd_joystick, (unsigned)options->keyboard_joystick_port);
+                        if (controller_state != NULL) {
+                            sdl_c64_controller_send_ports(controller_state, client);
+                        }
+                    }
                     if (intent.config_result.symbols_changed) {
                         runtime_client_request_memory(client, 0, 1, RUNTIME_MEMORY_MODE_CPU_MAP);
                     }
@@ -2911,6 +2939,7 @@ static bool run_main_loop(
     runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
+    frontend_joystick_input kbd_joystick;
     deferred_control_response deferred_control = {0};
     control_cached_state control_cache = {0};
     frontend_debug_state debug_state = {
@@ -2919,7 +2948,14 @@ static bool run_main_loop(
 
     frontend_input_mapper_reset(&input_mapper);
     sdl_c64_controllers_reset(&controller_state);
+    frontend_joystick_reset(&kbd_joystick);
+    frontend_joystick_set_layout(
+        &kbd_joystick,
+        frontend_joystick_layout_from_string(options->keyboard_joystick_layout));
+    frontend_joystick_set_port(&kbd_joystick, (unsigned)options->keyboard_joystick_port);
+    controller_state.kbd_joystick = &kbd_joystick;
     sdl_c64_controllers_open_existing(&controller_state, client);
+    sdl_c64_controller_send_ports(&controller_state, client);
     request_debug_state(client);
     runtime_client_request_frame(client);
 
@@ -2991,6 +3027,24 @@ static bool run_main_loop(
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
                 } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
+                           frontend_input_has_option_modifier(&event.key) &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    unsigned requested = event.key.keysym.sym == SDLK_1 ? 1u : 2u;
+                    /* Toggle: re-pressing the assigned port disables it. */
+                    unsigned next = kbd_joystick.port == requested ? 0u : requested;
+                    frontend_joystick_set_port(&kbd_joystick, next);
+                    options->keyboard_joystick_port = (int)next;
+                    sdl_c64_controller_send_ports(&controller_state, client);
+                    /* Keep the (closed) config dialog seed consistent with the
+                       live port so it does not later overwrite this choice. */
+                    if (!frontend_config_dialog_is_open(ui)) {
+                        frontend_set_config_state(ui, options);
+                    }
+                    SDL_Log("keyboard joystick %s port %u (%s)",
+                            next == 0u ? "disabled on" : "assigned to",
+                            requested,
+                            frontend_joystick_layout_to_string(kbd_joystick.layout));
+                } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
                            frontend_input_has_option_modifier(&event.key)) {
                     sdl_c64_controller_switch_mapping(
                         &controller_state,
@@ -3024,13 +3078,25 @@ static bool run_main_loop(
                 } else if (ui_visible && frontend_handle_view_cycle_key(ui, &event.key)) {
                     send_event_to_frontend = false;
                 } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {
-                    handle_keyboard_input(&input_mapper, client, &event.key);
+                    if (frontend_joystick_consumes(&kbd_joystick, event.key.keysym.sym)) {
+                        if (frontend_joystick_handle_key(&kbd_joystick, &event.key)) {
+                            sdl_c64_controller_send_ports(&controller_state, client);
+                        }
+                    } else {
+                        handle_keyboard_input(&input_mapper, client, &event.key);
+                    }
                     send_event_to_frontend = false;
                 }
             } else if (event.type == SDL_KEYUP &&
                        !frontend_help_is_open(ui) &&
                        (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
-                handle_keyboard_input(&input_mapper, client, &event.key);
+                if (frontend_joystick_consumes(&kbd_joystick, event.key.keysym.sym)) {
+                    if (frontend_joystick_handle_key(&kbd_joystick, &event.key)) {
+                        sdl_c64_controller_send_ports(&controller_state, client);
+                    }
+                } else {
+                    handle_keyboard_input(&input_mapper, client, &event.key);
+                }
                 send_event_to_frontend = false;
             } else if (event.type == SDL_DROPFILE) {
                 handle_drop_file(client, event.drop.file);
@@ -3072,7 +3138,7 @@ static bool run_main_loop(
             return false;
         }
         frontend_render(ui, ui_visible, &debug_state);
-        dispatch_debugger_intents(client, ui, options);
+        dispatch_debugger_intents(client, ui, options, &controller_state, &kbd_joystick);
         platform_window_present(window);
     }
     sdl_c64_controllers_close(&controller_state, client);

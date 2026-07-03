@@ -942,6 +942,65 @@ static void test_crt_path_with_spaces(void) {
     app_options_destroy(&options);
 }
 
+static void test_keyboard_joystick_defaults_and_overrides(void) {
+    app_options options;
+    char *default_argv[] = {"test_app_options", "--noini"};
+    char *cli_argv[] = {
+        "test_app_options", "--noini", "--kbdjoy", "1", "--kbdjoy-layout", "wasd",
+    };
+
+    if (!app_options_load_startup(&options, 2, default_argv)) {
+        fprintf(stderr, "kbdjoy default load failed\n");
+        exit(1);
+    }
+    expect_string("kbdjoy default layout", "numpad", options.keyboard_joystick_layout);
+    expect_int("kbdjoy default port", 0, options.keyboard_joystick_port);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 6, cli_argv)) {
+        fprintf(stderr, "kbdjoy cli load failed\n");
+        exit(1);
+    }
+    expect_string("kbdjoy cli layout", "wasd", options.keyboard_joystick_layout);
+    expect_int("kbdjoy cli port", 1, options.keyboard_joystick_port);
+    app_options_destroy(&options);
+}
+
+static void test_keyboard_joystick_saved_to_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options", "--inifile", "test_kbdjoy_save.ini",
+    };
+
+    remove("test_kbdjoy_save.ini");
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "kbdjoy save load failed\n");
+        exit(1);
+    }
+
+    options.keyboard_joystick_port = 2;
+    if (!app_options_set_string(&options.keyboard_joystick_layout, "wasd")) {
+        fprintf(stderr, "kbdjoy set layout failed\n");
+        exit(1);
+    }
+
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "kbdjoy save_shutdown failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "kbdjoy reload failed\n");
+        exit(1);
+    }
+    expect_string("saved kbdjoy layout", "wasd", options.keyboard_joystick_layout);
+    expect_int("saved kbdjoy port", 2, options.keyboard_joystick_port);
+
+    app_options_destroy(&options);
+    remove("test_kbdjoy_save.ini");
+}
+
 int main(void) {
     test_rom_paths_from_ini();
     test_rom_paths_empty_without_ini();
@@ -965,5 +1024,7 @@ int main(void) {
     test_disk_saved_relative_to_ini();
     test_disk_slot_set_and_clear();
     test_disk_slot_copy();
+    test_keyboard_joystick_defaults_and_overrides();
+    test_keyboard_joystick_saved_to_ini();
     return 0;
 }

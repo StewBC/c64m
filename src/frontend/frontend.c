@@ -930,7 +930,8 @@ static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *d
         frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
         frontend_config_reserve_string(&dialog->edited.video_filter, 64) &&
         frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
-        frontend_config_reserve_string(&dialog->edited.symbol_files, 1024);
+        frontend_config_reserve_string(&dialog->edited.symbol_files, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16);
 }
 
 static void frontend_config_dialog_reset(frontend_config_dialog_state *dialog)
@@ -1431,6 +1432,31 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     } else {
         nk_layout_row_dynamic(ctx, 20.0f, 1);
         frontend_checkbox_bool(ctx, "Auto-save INI on Quit", &dialog->edited.remember);
+    }
+
+    if (dialog->edited.keyboard_joystick_layout == NULL) {
+        app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
+    }
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Keyboard Joystick", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 20.0f, 3);
+    if (nk_option_label(ctx, "Off", dialog->edited.keyboard_joystick_port == 0)) {
+        dialog->edited.keyboard_joystick_port = 0;
+    }
+    if (nk_option_label(ctx, "Port 1", dialog->edited.keyboard_joystick_port == 1)) {
+        dialog->edited.keyboard_joystick_port = 1;
+    }
+    if (nk_option_label(ctx, "Port 2", dialog->edited.keyboard_joystick_port == 2)) {
+        dialog->edited.keyboard_joystick_port = 2;
+    }
+    nk_layout_row_dynamic(ctx, 20.0f, 2);
+    if (nk_option_label(ctx, "Numpad",
+                        frontend_string_equal(dialog->edited.keyboard_joystick_layout, "numpad"))) {
+        app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
+    }
+    if (nk_option_label(ctx, "WASD",
+                        frontend_string_equal(dialog->edited.keyboard_joystick_layout, "wasd"))) {
+        app_options_set_string(&dialog->edited.keyboard_joystick_layout, "wasd");
     }
 
     nk_layout_row_dynamic(ctx, 18.0f, 1);
@@ -6580,6 +6606,11 @@ void frontend_set_config_state(frontend *ui, const app_options *options)
     }
 
     ui->config_dialog.initialized = true;
+}
+
+bool frontend_config_dialog_is_open(const frontend *ui)
+{
+    return ui != NULL && ui->config_dialog.open;
 }
 
 void frontend_set_disk_queue(frontend *ui, uint8_t device, const app_disk_slot *slot)

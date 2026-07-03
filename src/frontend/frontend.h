@@ -226,6 +226,7 @@ void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state)
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);
 void frontend_debug_min_window_size(const frontend *ui, int *out_min_w, int *out_min_h);
 void frontend_set_config_state(frontend *ui, const app_options *options);
+bool frontend_config_dialog_is_open(const frontend *ui);
 void frontend_set_disk_queue(frontend *ui, uint8_t device, const app_disk_slot *slot);
 bool frontend_apply_selected_ini(frontend *ui, const app_options *options);
 bool frontend_get_disassembly_cursor(const frontend *ui, uint16_t *out_address);

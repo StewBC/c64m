@@ -29,6 +29,46 @@
 - Debugger input focus is explicit: C64 display versus debugger views.
 - Symbol table is tools/frontend/debug-session-owned, separate from emulator machine and assembler internals.
 
+## Host input: keyboard and joystick
+
+- Host keyboard events map to the C64 keyboard matrix through `frontend_input`
+  (`src/frontend/frontend_input.{c,h}`), dispatched from `handle_keyboard_input`
+  in `src/main.c`.
+- C64 joystick ports have two host sources, combined in the frontend and pushed
+  through the single `runtime_client_set_joystick` choke point
+  (`sdl_c64_controller_send_ports` in `src/main.c`):
+  1. SDL game controllers. `Alt+1` / `Alt+2` assign/swap a connected controller
+     to C64 port 1 / 2.
+  2. The host keyboard, via `src/frontend/frontend_joystick_input.{c,h}`.
+     `Alt+Shift+1` / `Alt+Shift+2` assign or toggle-off the keyboard joystick on
+     port 1 / 2. A real controller and the keyboard can share a port (their
+     masks are OR'd).
+- Two config-selectable layouts:
+  - `numpad`: `KP_8/2/4/6` cardinal, `KP_7/9/1/3` diagonal, `KP_0` fire. These
+    keypad digits are not C64 keys, so they are consumed without stealing any
+    C64 keystroke and need no mode toggle.
+  - `wasd`: `W/A/S/D` + `Space` fire. These are C64 letter keys, so while the
+    keyboard joystick is assigned to a port they are stolen from the C64
+    keyboard; when unassigned (or when the debugger UI holds keyboard focus)
+    they type normally.
+- The joystick only consumes keys under the same focus condition as the C64
+  keyboard (`!ui_visible || frontend_routes_keyboard_to_c64(ui)`).
+- Both settings are also editable in the config dialog (Misc → Machine →
+  Emulator → Configure... → Emulator tab): a tri-state port selector
+  (Off / Port 1 / Port 2) and a Numpad/WASD layout selector. Applying the dialog
+  updates the live keyboard-joystick source immediately (`dispatch_debugger_intents`
+  re-runs `frontend_joystick_set_layout`/`set_port`). The layout can only be
+  changed here; the port can be changed here or at runtime via `Alt+Shift+1/2`.
+- Persistence: `[input]` INI section keys `keyboard_joystick_layout`
+  (`numpad`|`wasd`) and `keyboard_joystick_port` (`0`|`1`|`2`), plus CLI
+  `--kbdjoy <0|1|2>` and `--kbdjoy-layout <numpad|wasd>`. Runtime port changes
+  via `Alt+Shift+1/2` update the option (and re-seed the closed config dialog so
+  it cannot later overwrite the choice) so they persist on quit. Dialog changes
+  persist through the normal config-apply + INI-save path.
+- Known limitation: numpad matching uses `keysym.sym`, so numpad directions
+  depend on NumLock being on (consistent with how the rest of keyboard input is
+  matched). WASD is unaffected.
+
 ## Disassembly effective-address column
 
 - Each disassembly row can carry a trailing annotation showing the resolved

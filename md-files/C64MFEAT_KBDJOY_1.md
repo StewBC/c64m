@@ -2,6 +2,27 @@
 
 ## Status of this document
 
+**IMPLEMENTED (2026-07-03).** See `docs/status/FRONTEND_DEBUGGER.md` for the
+shipped behavior and `STATUS.md` for the handoff summary. Resolved decisions:
+
+- Both layouts shipped, config-selectable: `numpad` (default, conflict-free) and
+  `wasd` (steals W/A/S/D/Space while assigned). Fire = `KP_0` (numpad) / `Space`
+  (wasd).
+- Integrated with the existing controller port model rather than a parallel
+  toggle: `Alt+Shift+1`/`Alt+Shift+2` assign/toggle the keyboard on port 1/2;
+  `Alt+1`/`Alt+2` still map real controllers. (The guide's original `F11`
+  suggestion was dropped — F9–F12 are already bound.)
+- Core + persistence: `[input]` INI section + `--kbdjoy` / `--kbdjoy-layout`.
+- New module `src/frontend/frontend_joystick_input.{c,h}` (bit values duplicated
+  from `c64.h` to avoid a frontend→machine dependency). Combined with controller
+  input at the `sdl_c64_controller_send_ports` choke point in `src/main.c`; no
+  runtime/machine changes. Tests: `tests/frontend/test_frontend_joystick.c` and
+  `[input]` coverage in `tests/test_app_options.c`.
+
+The original guide text below is retained for context.
+
+---
+
 Implementation guide. Agent-ready. Feature #1 of the "next features" list.
 
 **Milestone scope:** In scope. `AGENTS.md` lists "keyboard and joystick input
