@@ -959,6 +959,10 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->turbo_multipliers, value);
     }
+    value = config_get(cfg, "state", "quicksave_folder");
+    if (value != NULL && value[0] != '\0') {
+        replace_string(&options->quicksave_folder, value);
+    }
 
     value = config_get(cfg, "rom", "basic");
     if (value == NULL) {
@@ -1281,6 +1285,7 @@ void app_options_init(app_options *options)
     memset(options, 0, sizeof(*options));
     options->use_ini = true;
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
+    replace_string(&options->quicksave_folder, ".");
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
     options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
@@ -1364,6 +1369,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
 
     if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
         !replace_string(&dest->ini_path, src->ini_path) ||
+        !replace_string(&dest->quicksave_folder, src->quicksave_folder) ||
         !replace_string(&dest->breakpoint, src->breakpoint) ||
         !replace_string(&dest->turbo_multipliers, src->turbo_multipliers) ||
         !replace_string(&dest->symbol_files, src->symbol_files) ||
@@ -1471,6 +1477,9 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
+    if (options->quicksave_folder != NULL && options->quicksave_folder[0] != '\0') {
+        config_set(cfg, "state", "quicksave_folder", options->quicksave_folder);
+    }
     if (options->symbol_files != NULL &&
         transform_symbol_files(options, options->symbol_files, false, relative_symbol_files, sizeof(relative_symbol_files))) {
         config_set(cfg, "config", "symbol_files", relative_symbol_files);
@@ -1553,6 +1562,7 @@ void app_options_destroy(app_options *options)
     }
 
     free(options->ini_path);
+    free(options->quicksave_folder);
     free(options->breakpoint);
     free(options->turbo_multipliers);
     free(options->symbol_files);

@@ -20,6 +20,9 @@
   `runtime_client_save_state` / `runtime_client_load_state`, runtime-thread
   snapshot file I/O, completion/error events, successful restore, bad snapshot
   rejection preserving live RAM, and ROM hash mismatch rejection.
+- Save-state frontend/config hooks: `tests/test_app_options.c` covers
+  `[state] quicksave_folder` save/reload persistence. Hotkeys, native Save As /
+  Load dialogs, and `.c64state` drag/drop remain manual smoke coverage.
 - Runtime BRK auto-stop: `test_runtime_brk_pauses_without_executing` in `tests/runtime/test_runtime_scheduler.c` confirms a fetched BRK opcode pauses the runtime with `RUNTIME_STOP_REASON_BRK`, PC unchanged, and SP untouched (no stack push). The synthetic ROM builder in the same file (`write_runtime_roms`) now places `JMP $E000` at `$FFF0` so cycle-counted free-run tests loop inside ROM instead of running off the end into zero-filled RAM, which would now trip the same BRK auto-stop.
 - Runtime frame publication: `test_step_instruction_publishes_updated_frame` and `test_step_instruction_publishes_updated_hires_frame` in `tests/runtime/test_runtime_frame.c` first create a completed live frame, then pause and confirm single-step completion publishes a current-state frame snapshot after text screen RAM (`STA $0400`) and high-res bitmap RAM (`STA $2000`) writes.
 - Runtime run-to-cursor stepping: `test_run_to_cursor_at_current_pc_waits_for_next_hit` in `tests/runtime/test_runtime_stepping.c` confirms run-to-cursor on the current PC ignores the immediate match and stops on the next PC hit, matching loop-branch debugger use.
@@ -48,6 +51,15 @@
   - Config dialog (Misc → Machine → Emulator → Configure... → Emulator tab): set the port tri-state (Off/Port 1/Port 2) and Numpad/WASD layout, Apply, and confirm the change takes effect live; confirm assigning a port via `Alt+Shift+2` first and then opening the dialog shows Port 2 (not Off).
 - Assembler tab:
   - Assemble with Reset on.
+- Save-state UI:
+  - Configure Misc -> Machine -> Emulator -> Configure... -> Emulator tab ->
+    Quicksave Folder, Apply, quit, and confirm `[state] quicksave_folder` is
+    persisted.
+  - Press `Cmd+>` twice and confirm timestamped `.c64state` files are created in
+    the quicksave folder without overwriting.
+  - Press `Cmd+<` and confirm the newest `.c64state` in that folder loads.
+  - Use Misc -> Machine -> State -> Save As... / Load... and drag/drop a
+    `.c64state` file to confirm both named paths load/save.
   - Assemble with Reset off.
   - Test live inject plus auto-run.
   - Verify error dialog.

@@ -12,13 +12,20 @@
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #if defined(_WIN32)
 #include <direct.h>
+#include <io.h>
+#include <windows.h>
+#define access _access
 #else
+#include <dirent.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -129,6 +136,10 @@ static bool choose_symbol_path(char *out_path, size_t out_size) {
     return choose_file_path(out_path, out_size, "Select Symbol File", NULL);
 }
 
+static bool choose_state_load_path(char *out_path, size_t out_size) {
+    return choose_file_path(out_path, out_size, "Load State", " of type {\"c64state\"}");
+}
+
 static bool path_has_extension(const char *path, const char *extension) {
     const char *dot;
 
@@ -182,6 +193,10 @@ static bool choose_save_path(char *out_path, size_t out_size, const char *prompt
 #endif
 }
 
+static bool choose_state_save_path(char *out_path, size_t out_size) {
+    return choose_save_path(out_path, out_size, "Save State");
+}
+
 static void make_relative_path(const char *abs_path, char *out, size_t out_size) {
     char cwd[1024];
     size_t cwd_len;
@@ -209,6 +224,384 @@ static void make_relative_path(const char *abs_path, char *out, size_t out_size)
     } else {
         snprintf(out, out_size, "%s", abs_path);
     }
+}
+
+static bool path_is_absolute_local(const char *path) {
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+#if defined(_WIN32)
+    return path[0] == '/' || path[0] == '\\' ||
+        (isalpha((unsigned char)path[0]) && path[1] == ':');
+#else
+    return path[0] == '/';
+#endif
+}
+
+static bool join_path_local(char *out, size_t out_size, const char *dir, const char *name) {
+    const char *separator = "/";
+    size_t dir_len;
+
+    if (out == NULL || out_size == 0 || name == NULL) {
+        return false;
+    }
+    if (dir == NULL || dir[0] == '\0') {
+        return snprintf(out, out_size, "%s", name) < (int)out_size;
+    }
+    dir_len = strlen(dir);
+    if (dir_len > 0 && (dir[dir_len - 1] == '/' || dir[dir_len - 1] == '\\')) {
+        separator = "";
+    }
+    return snprintf(out, out_size, "%s%s%s", dir, separator, name) < (int)out_size;
+}
+
+static bool options_ini_dir(const app_options *options, char *out, size_t out_size) {
+    char cwd[1024];
+    const char *ini_path;
+    const char *slash;
+    size_t len;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    if (
+#if defined(_WIN32)
+        _getcwd(cwd, sizeof(cwd))
+#else
+        getcwd(cwd, sizeof(cwd))
+#endif
+        == NULL) {
+        return false;
+    }
+
+    ini_path = (options != NULL && options->ini_path != NULL && options->ini_path[0] != '\0') ?
+        options->ini_path : ".";
+    slash = strrchr(ini_path, '/');
+#if defined(_WIN32)
+    {
+        const char *backslash = strrchr(ini_path, '\\');
+        if (backslash != NULL && (slash == NULL || backslash > slash)) {
+            slash = backslash;
+        }
+    }
+#endif
+    if (slash == NULL) {
+        return snprintf(out, out_size, "%s", cwd) < (int)out_size;
+    }
+    len = (size_t)(slash - ini_path);
+    if (len == 0) {
+        return snprintf(out, out_size, "%c", ini_path[0]) < (int)out_size;
+    }
+    if (path_is_absolute_local(ini_path)) {
+        if (len >= out_size) {
+            return false;
+        }
+        memcpy(out, ini_path, len);
+        out[len] = '\0';
+        return true;
+    }
+    if (len >= sizeof(cwd)) {
+        return false;
+    }
+    {
+        char rel_dir[1024];
+        memcpy(rel_dir, ini_path, len);
+        rel_dir[len] = '\0';
+        return join_path_local(out, out_size, cwd, rel_dir);
+    }
+}
+
+static bool quicksave_folder_absolute(
+    const app_options *options,
+    char *out,
+    size_t out_size) {
+    const char *folder;
+    char ini_dir[1024];
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    folder = (options != NULL && options->quicksave_folder != NULL &&
+              options->quicksave_folder[0] != '\0') ?
+        options->quicksave_folder : ".";
+    if (path_is_absolute_local(folder)) {
+        return snprintf(out, out_size, "%s", folder) < (int)out_size;
+    }
+    if (!options_ini_dir(options, ini_dir, sizeof(ini_dir))) {
+        return snprintf(out, out_size, "%s", folder) < (int)out_size;
+    }
+    return join_path_local(out, out_size, ini_dir, folder);
+}
+
+static const char *path_basename_local(const char *path) {
+    const char *slash;
+
+    if (path == NULL) {
+        return "";
+    }
+    slash = strrchr(path, '/');
+#if defined(_WIN32)
+    {
+        const char *backslash = strrchr(path, '\\');
+        if (backslash != NULL && (slash == NULL || backslash > slash)) {
+            slash = backslash;
+        }
+    }
+#endif
+    return slash != NULL ? slash + 1 : path;
+}
+
+static void sanitize_snapshot_stem(const char *input, char *out, size_t out_size) {
+    const char *base = path_basename_local(input);
+    size_t i = 0;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if (base == NULL || base[0] == '\0') {
+        base = "c64m";
+    }
+    while (base[i] != '\0' && i + 1 < out_size) {
+        if (base[i] == '.') {
+            break;
+        }
+        out[i] = (isalnum((unsigned char)base[i]) || base[i] == '-' || base[i] == '_') ?
+            base[i] : '_';
+        ++i;
+    }
+    if (i == 0) {
+        snprintf(out, out_size, "c64m");
+    } else {
+        out[i] = '\0';
+    }
+}
+
+static const char *active_content_path(const app_options *options) {
+    const app_disk_slot *slot;
+
+    if (options == NULL) {
+        return NULL;
+    }
+    if (options->crt_path != NULL && options->crt_path[0] != '\0') {
+        return options->crt_path;
+    }
+    slot = &options->disk_slots[8];
+    if (slot->count > 0 && slot->current >= 0 && slot->current < slot->count) {
+        return slot->paths[slot->current];
+    }
+    if (options->prg_path != NULL && options->prg_path[0] != '\0') {
+        return options->prg_path;
+    }
+    if (options->basic_path != NULL && options->basic_path[0] != '\0') {
+        return options->basic_path;
+    }
+    return NULL;
+}
+
+static void remember_loaded_content(app_options *options, const char *path, const char *kind) {
+    if (options == NULL || path == NULL || kind == NULL) {
+        return;
+    }
+    app_options_set_string(&options->crt_path, "");
+    app_options_set_string(&options->prg_path, "");
+    app_options_set_string(&options->basic_path, "");
+    if (strcmp(kind, "crt") == 0) {
+        app_options_set_string(&options->crt_path, path);
+    } else if (strcmp(kind, "basic") == 0) {
+        app_options_set_string(&options->basic_path, path);
+    } else {
+        app_options_set_string(&options->prg_path, path);
+    }
+}
+
+static bool append_state_extension(char *path, size_t path_size) {
+    size_t len;
+
+    if (path == NULL || path_size == 0 || path[0] == '\0') {
+        return false;
+    }
+    if (path_has_extension(path, "c64state")) {
+        return true;
+    }
+    len = strlen(path);
+    if (len + strlen(".c64state") + 1 > path_size) {
+        return false;
+    }
+    strcat(path, ".c64state");
+    return true;
+}
+
+static bool make_quicksave_path(const app_options *options, char *out, size_t out_size) {
+    char folder[1024];
+    char stem[256];
+    char filename[512];
+    time_t now;
+    struct tm tm_value;
+    int suffix;
+
+    if (!quicksave_folder_absolute(options, folder, sizeof(folder))) {
+        return false;
+    }
+    sanitize_snapshot_stem(active_content_path(options), stem, sizeof(stem));
+    now = time(NULL);
+#if defined(_WIN32)
+    localtime_s(&tm_value, &now);
+#else
+    {
+        struct tm *tmp = localtime(&now);
+        if (tmp == NULL) {
+            return false;
+        }
+        tm_value = *tmp;
+    }
+#endif
+    for (suffix = 0; suffix < 1000; ++suffix) {
+        int written;
+        if (suffix == 0) {
+            written = snprintf(
+                filename,
+                sizeof(filename),
+                "%s-%04d%02d%02d-%02d%02d%02d.c64state",
+                stem,
+                tm_value.tm_year + 1900,
+                tm_value.tm_mon + 1,
+                tm_value.tm_mday,
+                tm_value.tm_hour,
+                tm_value.tm_min,
+                tm_value.tm_sec);
+        } else {
+            written = snprintf(
+                filename,
+                sizeof(filename),
+                "%s-%04d%02d%02d-%02d%02d%02d-%d.c64state",
+                stem,
+                tm_value.tm_year + 1900,
+                tm_value.tm_mon + 1,
+                tm_value.tm_mday,
+                tm_value.tm_hour,
+                tm_value.tm_min,
+                tm_value.tm_sec,
+                suffix);
+        }
+        if (written < 0 || (size_t)written >= sizeof(filename)) {
+            return false;
+        }
+        if (!join_path_local(out, out_size, folder, filename)) {
+            return false;
+        }
+        if (access(out, 0) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool find_newest_state_file(const app_options *options, char *out, size_t out_size) {
+    char folder[1024];
+    bool found = false;
+
+    if (!quicksave_folder_absolute(options, folder, sizeof(folder))) {
+        return false;
+    }
+#if defined(_WIN32)
+    {
+        char pattern[1200];
+        HANDLE handle;
+        WIN32_FIND_DATAA data;
+        FILETIME newest_time = {0, 0};
+
+        if (!join_path_local(pattern, sizeof(pattern), folder, "*.c64state")) {
+            return false;
+        }
+        handle = FindFirstFileA(pattern, &data);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        do {
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+                (!found || CompareFileTime(&data.ftLastWriteTime, &newest_time) > 0)) {
+                if (join_path_local(out, out_size, folder, data.cFileName)) {
+                    newest_time = data.ftLastWriteTime;
+                    found = true;
+                }
+            }
+        } while (FindNextFileA(handle, &data));
+        FindClose(handle);
+    }
+#else
+    {
+        DIR *dir = opendir(folder);
+        struct dirent *entry;
+        time_t newest_mtime = 0;
+
+        if (dir == NULL) {
+            return false;
+        }
+        while ((entry = readdir(dir)) != NULL) {
+            char candidate[1200];
+            struct stat st;
+            if (!path_has_extension(entry->d_name, "c64state")) {
+                continue;
+            }
+            if (!join_path_local(candidate, sizeof(candidate), folder, entry->d_name)) {
+                continue;
+            }
+            if (stat(candidate, &st) != 0 || !S_ISREG(st.st_mode)) {
+                continue;
+            }
+            if (!found || st.st_mtime > newest_mtime ||
+                (st.st_mtime == newest_mtime && strcmp(candidate, out) > 0)) {
+                snprintf(out, out_size, "%s", candidate);
+                newest_mtime = st.st_mtime;
+                found = true;
+            }
+        }
+        closedir(dir);
+    }
+#endif
+    return found;
+}
+
+static bool key_has_command_modifier(const SDL_KeyboardEvent *key) {
+    return key != NULL && (key->keysym.mod & KMOD_GUI) != 0;
+}
+
+static bool key_is_quicksave_shortcut(const SDL_KeyboardEvent *key) {
+    if (!key_has_command_modifier(key) ||
+        !frontend_input_has_shift_modifier(key)) {
+        return false;
+    }
+    return key->keysym.sym == SDLK_GREATER || key->keysym.sym == SDLK_PERIOD;
+}
+
+static bool key_is_quickload_shortcut(const SDL_KeyboardEvent *key) {
+    if (!key_has_command_modifier(key) ||
+        !frontend_input_has_shift_modifier(key)) {
+        return false;
+    }
+    return key->keysym.sym == SDLK_LESS || key->keysym.sym == SDLK_COMMA;
+}
+
+static bool send_quicksave(runtime_client *client, const app_options *options) {
+    char path[1200];
+
+    if (!make_quicksave_path(options, path, sizeof(path))) {
+        SDL_Log("quicksave: failed to build snapshot path");
+        return false;
+    }
+    SDL_Log("quicksave: %s", path);
+    return runtime_client_save_state(client, path);
+}
+
+static bool send_quickload(runtime_client *client, const app_options *options) {
+    char path[1200];
+
+    if (!find_newest_state_file(options, path, sizeof(path))) {
+        SDL_Log("quickload: no .c64state files found");
+        return false;
+    }
+    SDL_Log("quickload: %s", path);
+    return runtime_client_load_state(client, path);
 }
 
 static c64_config machine_config_from_options(const app_options *options) {
@@ -472,6 +865,10 @@ static const char *control_runtime_event_name(runtime_event_type type)
             return "disk-swap";
         case RUNTIME_EVENT_DEBUG_MEMORY_READY:
             return "debug-memory";
+        case RUNTIME_EVENT_SAVE_STATE_COMPLETE:
+            return "save-state-complete";
+        case RUNTIME_EVENT_LOAD_STATE_COMPLETE:
+            return "load-state-complete";
         case RUNTIME_EVENT_NONE:
         default:
             return "none";
@@ -1258,6 +1655,10 @@ static void poll_runtime_events(
                 }
                 frontend_invalidate_disassembly_cache(ui);
             }
+        } else if (event.type == RUNTIME_EVENT_SAVE_STATE_COMPLETE) {
+            SDL_Log("save state complete: %s", event.data.state_file.path);
+        } else if (event.type == RUNTIME_EVENT_LOAD_STATE_COMPLETE) {
+            SDL_Log("load state complete: %s", event.data.state_file.path);
         } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
                    debug_state != NULL &&
                    debug_state->has_cpu) {
@@ -1887,8 +2288,14 @@ static void dispatch_debugger_intents(
                     if (choose_prg_path(path, sizeof(path))) {
                         if (path_has_extension(path, "crt")) {
                             sent = runtime_client_load_crt(client, path);
+                            if (sent) {
+                                remember_loaded_content(options, path, "crt");
+                            }
                         } else {
                             sent = runtime_client_load_prg(client, path);
+                            if (sent) {
+                                remember_loaded_content(options, path, "prg");
+                            }
                         }
                     }
                 }
@@ -2070,8 +2477,14 @@ static void dispatch_debugger_intents(
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
                 if (path_has_extension(intent.load_bin_path, "crt")) {
                     sent = runtime_client_load_crt(client, intent.load_bin_path);
+                    if (sent) {
+                        remember_loaded_content(options, intent.load_bin_path, "crt");
+                    }
                 } else if (path_has_extension(intent.load_bin_path, "t64")) {
                     sent = runtime_client_load_prg(client, intent.load_bin_path);
+                    if (sent) {
+                        remember_loaded_content(options, intent.load_bin_path, "prg");
+                    }
                 } else {
                     sent = runtime_client_load_bin(
                         client,
@@ -2080,6 +2493,12 @@ static void dispatch_debugger_intents(
                         intent.load_bin_use_file_address,
                         intent.load_bin_reset_first,
                         intent.load_bin_is_basic);
+                    if (sent) {
+                        remember_loaded_content(
+                            options,
+                            intent.load_bin_path,
+                            intent.load_bin_is_basic ? "basic" : "prg");
+                    }
                 }
                 break;
 
@@ -2102,6 +2521,25 @@ static void dispatch_debugger_intents(
                     intent.save_bin_end,
                     intent.save_bin_write_file_address,
                     intent.save_bin_is_basic);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
+                {
+                    char path[1024];
+                    if (choose_state_save_path(path, sizeof(path)) &&
+                        append_state_extension(path, sizeof(path))) {
+                        sent = runtime_client_save_state(client, path);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG:
+                {
+                    char path[1024];
+                    if (choose_state_load_path(path, sizeof(path))) {
+                        sent = runtime_client_load_state(client, path);
+                    }
+                }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK:
@@ -2131,15 +2569,25 @@ static void handle_keyboard_input(
     dispatch_input_actions(client, actions, count);
 }
 
-static void handle_drop_file(runtime_client *client, char *path) {
+static void handle_drop_file(runtime_client *client, app_options *options, char *path) {
     if (path_has_extension(path, "d64")) {
-        runtime_client_mount_d64(client, 8, path);
+        if (runtime_client_mount_d64(client, 8, path) && options != NULL) {
+            app_disk_slot_set(&options->disk_slots[8], path);
+        }
+    } else if (path_has_extension(path, "c64state")) {
+        runtime_client_load_state(client, path);
     } else if (path_has_extension(path, "crt")) {
-        runtime_client_load_crt(client, path);
+        if (runtime_client_load_crt(client, path)) {
+            remember_loaded_content(options, path, "crt");
+        }
     } else if (path_has_extension(path, "bas")) {
-        runtime_client_load_bin(client, path, 0, true, true, true);
+        if (runtime_client_load_bin(client, path, 0, true, true, true)) {
+            remember_loaded_content(options, path, "basic");
+        }
     } else {
-        runtime_client_load_prg(client, path);
+        if (runtime_client_load_prg(client, path)) {
+            remember_loaded_content(options, path, "prg");
+        }
     }
 
     SDL_free(path);
@@ -3033,6 +3481,12 @@ static bool run_main_loop(
                 } else if (event.key.keysym.sym == SDLK_t &&
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
+                } else if (key_is_quicksave_shortcut(&event.key)) {
+                    send_quicksave(client, options);
+                    send_event_to_frontend = false;
+                } else if (key_is_quickload_shortcut(&event.key)) {
+                    send_quickload(client, options);
+                    send_event_to_frontend = false;
                 } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
                            frontend_input_has_option_modifier(&event.key) &&
                            frontend_input_has_shift_modifier(&event.key)) {
@@ -3106,7 +3560,7 @@ static bool run_main_loop(
                 }
                 send_event_to_frontend = false;
             } else if (event.type == SDL_DROPFILE) {
-                handle_drop_file(client, event.drop.file);
+                handle_drop_file(client, options, event.drop.file);
                 send_event_to_frontend = false;
             }
 

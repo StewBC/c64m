@@ -33,9 +33,11 @@ The emulator currently includes:
 - Control port Phases 1 through 7 are implemented as an opt-in localhost-only service with main-loop-owned runtime dispatch, execution/state commands, binary frame/memory/debug-memory responses, input injection, paste payloads, file/disk commands, breakpoint management, wait commands, and a `--headless --control-port PORT` mode. See `docs/status/CONTROL.md`.
 - Disk images are now persisted in the `[disk]` INI section on quit; paths are stored relative to the INI file and each drive holds an ordered queue (comma-separated). The disk UI shows `[N][Add][Eject] <combo>` per device; Shift+Eject clears the whole queue. See `docs/status/DISK_IO.md` for full semantics.
 - Generic CRT support covers normal hardware type 0 8K/16K ROM cartridges only. Writes under cartridge ROM update shadow RAM, resets preserve the attached cartridge, and broader mappers/INI persistence are deferred. See `docs/status/CPU_MACHINE.md`, `docs/status/DISK_IO.md`, and `c64mcrt.md`.
-- Save-state foundation now includes a chunked machine serializer plus runtime-thread
-  save/load commands and client APIs. No frontend UI, hotkeys, CLI option,
-  self-contained embedding mode, or full 1541 state capture exists yet. See
+- Save-state support now includes a chunked machine serializer, runtime-thread
+  save/load commands, client APIs, `.c64state` drag/drop, Machine tab State
+  Save As/Load dialogs, `Cmd+>` quicksave, `Cmd+<` quickload, and a persisted
+  Emulator-tab quicksave folder option. CLI state loading, self-contained
+  embedding mode, and full 1541 state capture remain deferred. See
   `docs/status/CPU_MACHINE.md`.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
 - VIC-II sprite BA timing now uses per-standard PAL 6569 and NTSC 6567R8 tables selected from machine video configuration.

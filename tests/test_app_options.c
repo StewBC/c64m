@@ -549,6 +549,7 @@ static void test_phase14_config_saved_to_ini(void) {
     options.remember = true;
     options.scroll_wheel_lines = 9;
     app_options_set_string(&options.turbo_multipliers, "5,10");
+    app_options_set_string(&options.quicksave_folder, "states");
     app_options_set_string(&options.symbol_files, "symbols/main.sym");
 
     if (!app_options_save_shutdown(&options)) {
@@ -576,6 +577,7 @@ static void test_phase14_config_saved_to_ini(void) {
     expect_bool("saved remember", 1, options.remember);
     expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
     expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);
+    expect_string("saved quicksave folder", "states", options.quicksave_folder);
     expect_string("saved symbol files", "symbols/main.sym", options.symbol_files);
 
     app_options_destroy(&options);

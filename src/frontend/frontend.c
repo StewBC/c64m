@@ -934,6 +934,7 @@ static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *d
         frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
         frontend_config_reserve_string(&dialog->edited.video_filter, 64) &&
         frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
+        frontend_config_reserve_string(&dialog->edited.quicksave_folder, 1024) &&
         frontend_config_reserve_string(&dialog->edited.symbol_files, 1024) &&
         frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16);
 }
@@ -1326,6 +1327,10 @@ static bool frontend_config_validate(frontend_config_dialog_state *dialog)
         snprintf(dialog->error, sizeof(dialog->error), "INI file path is required");
         return false;
     }
+    if (dialog->edited.quicksave_folder == NULL || dialog->edited.quicksave_folder[0] == '\0') {
+        snprintf(dialog->error, sizeof(dialog->error), "Quicksave folder is required");
+        return false;
+    }
     dialog->error[0] = '\0';
     return true;
 }
@@ -1413,6 +1418,9 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     if (dialog->edited.symbol_files == NULL) {
         app_options_set_string(&dialog->edited.symbol_files, "");
     }
+    if (dialog->edited.quicksave_folder == NULL) {
+        app_options_set_string(&dialog->edited.quicksave_folder, ".");
+    }
 
     nk_layout_row_dynamic(ctx, 22.0f, 2);
     nk_label(ctx, "Scroll Wheel Speed", NK_TEXT_LEFT);
@@ -1427,6 +1435,18 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         NK_EDIT_FIELD,
         dialog->edited.turbo_multipliers,
         256,
+        nk_filter_default);
+    nk_layout_row_end(ctx);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+    nk_layout_row_push(ctx, 0.30f);
+    nk_label(ctx, "Quicksave Folder", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.70f);
+    frontend_edit_replace(
+        ctx,
+        NK_EDIT_FIELD,
+        dialog->edited.quicksave_folder,
+        1024,
         nk_filter_default);
     nk_layout_row_end(ctx);
 
@@ -5547,6 +5567,17 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
             dlg->initialized = true;
         }
         dlg->open = true;
+    }
+
+    /* State */
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "State", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 24.0f, 2);
+    if (nk_button_label(ctx, "Save As...")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG);
+    }
+    if (nk_button_label(ctx, "Load...")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG);
     }
 
     /* Emulator */

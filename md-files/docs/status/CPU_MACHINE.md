@@ -128,8 +128,11 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Phase 1 of save-state support is implemented in `src/machine/c64_snapshot.{c,h}`.
   Phase 2 adds runtime-thread `RUNTIME_COMMAND_SAVE_STATE` /
   `RUNTIME_COMMAND_LOAD_STATE` dispatch plus `runtime_client_save_state()` /
-  `runtime_client_load_state()`. No frontend UI, hotkey, or CLI load-state path
-  exists yet.
+  `runtime_client_load_state()`. Phase 3 adds frontend hooks: `Cmd+>` quicksave,
+  `Cmd+<` quickload, `.c64state` drag/drop load, and Machine tab `State`
+  `Save As...` / `Load...` dialogs. The Emulator config tab now exposes
+  `Quicksave Folder`, persisted as `[state] quicksave_folder` with default `.`.
+  No CLI load-state path exists yet.
 - The format is versioned and chunked: header plus tagged chunks for metadata,
   RAM/color RAM, bus banking/counters, CPU, VIC-II, CIA #1/#2, SID, machine
   controls, cartridge, and drive slots.
@@ -208,8 +211,8 @@ Do not serialize:
 - Cartridge mappers beyond generic 8K/16K normal cartridges are deferred.
 - Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
   freezer buttons are deferred.
-- Save-state frontend UI/hotkeys/CLI, self-contained snapshot mode, runtime
-  path/hash manifests, and full 1541 state capture are deferred.
+- Save-state CLI, self-contained snapshot mode, and full 1541 state capture are
+  deferred.
 - The debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present in the repository.
 

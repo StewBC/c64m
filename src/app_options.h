@@ -22,6 +22,7 @@ typedef struct app_options {
     bool no_save_ini;
     int scroll_wheel_lines;
     char *ini_path;
+    char *quicksave_folder;
     app_disk_slot disk_slots[C64M_DRIVE_COUNT];
     char *breakpoint;
     char *turbo_multipliers;
