@@ -21,7 +21,6 @@
 
 enum {
     RUNTIME_RUN_BATCH_CYCLES = 1024,
-    RUNTIME_TARGET_FPS = 60,
     PASTE_HOLD_CYCLES        =  39400,  /* ~40ms  at PAL 985248 Hz */
     PASTE_GAP_CYCLES         =  19704,  /* ~20ms  at PAL 985248 Hz — must exceed one KERNAL scan period */
     PASTE_RETURN_GAP_CYCLES  = 246312,  /* ~250ms at PAL 985248 Hz */
@@ -41,10 +40,20 @@ enum {
 static void runtime_reset_pacer(runtime *rt) {
     uint64_t frequency;
     uint32_t multiplier;
+    uint32_t cpu_clock_hz;
+    uint32_t cycles_per_frame;
 
     frequency = SDL_GetPerformanceFrequency();
     multiplier = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
-    rt->frame_counter_step = frequency / ((uint64_t)RUNTIME_TARGET_FPS * multiplier);
+    /* Pace one emulated video frame to its real duration for the active video
+       standard: frame_period = cycles_per_frame / cpu_clock_hz, so wall-clock
+       ticks per frame = perf_freq * cycles_per_frame / cpu_clock_hz. This tracks
+       emulated time to real time (PAL ~50.12 fps, NTSC ~59.83 fps). A fixed 60
+       fps ran PAL ~20% fast, over-running the audio buffer and distorting output. */
+    cpu_clock_hz = c64_config_clock_hz(&rt->machine_config);
+    cycles_per_frame = c64_config_cycles_per_frame(&rt->machine_config);
+    rt->frame_counter_step = (frequency * (uint64_t)cycles_per_frame) /
+        ((uint64_t)cpu_clock_hz * (uint64_t)multiplier);
     if (rt->frame_counter_step == 0) {
         rt->frame_counter_step = 1;
     }

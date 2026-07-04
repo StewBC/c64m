@@ -12,6 +12,7 @@ This file covers the audio transport and scheduling path. SID chip behavior belo
 - Internal mono is expanded to actual output channels in the callback.
 - Runtime audio scheduling advances after each completed C64 cycle.
 - PAL and NTSC machine cycles are converted to host sample deadlines with a fractional cycle accumulator.
+- The runtime frame pacer sleeps emulated time to wall-clock at the active standard's real frame rate (PAL ~50.12 fps, NTSC ~59.83 fps), derived from `c64_config_cycles_per_frame()` / `c64_config_clock_hz()` in `runtime_reset_pacer()`. This keeps sample production balanced against the fixed-rate output device on both standards.
 - SID mode averages per-cycle `sid_sample()` values that fall within each host-sample interval.
 - Recording uses the same emitted samples as playback.
 - `--audio-smoke` emits a 440 Hz square wave to validate the transport before SID is involved.
@@ -34,6 +35,17 @@ This file covers the audio transport and scheduling path. SID chip behavior belo
 
 ## Recent changes
 
+- Fixed PAL-only live-audio distortion. The frame pacer (`runtime_reset_pacer()`)
+  was hardcoded to 60 fps (`RUNTIME_TARGET_FPS`), so PAL — which runs ~50.12 fps —
+  emulated ~20% faster than wall-clock and produced ~57k samples/sec into the
+  48 kHz device. That saturated the SPSC ring buffer, so `audio_buffer_write`
+  dropped samples (overrun counter) and the output crackled. NTSC (~59.83 fps)
+  matched the fixed 60 and was unaffected. The pacer now derives per-frame wall
+  duration from the active standard's real frame period via
+  `c64_config_cycles_per_frame()` / `c64_config_clock_hz()`. Verified with a
+  fixed-wall-interval production-rate probe: PAL 56.2k → 47.7k samples/sec, NTSC
+  48.1k → 47.9k (device 48k). Side effect: PAL also no longer runs ~20% fast in
+  wall-clock. Files: `src/runtime/runtime_thread.c`, `src/machine/c64.{c,h}`.
 - C64SID_IMP_9 removed `runtime_audio_produce()` and `audio_last_cycle`.
 - Runtime audio now advances from the cycle-stepping path through `runtime_audio_advance_cycle()`.
 - Host samples are emitted at fractional PAL/NTSC sample deadlines.
@@ -62,6 +74,7 @@ SID Phase 10 then further improved the audio baseline through SID output conditi
 
 - Runtime scheduler tests verify sample-count accounting.
 - Runtime scheduler tests verify programmed SID output no longer forms batch-sized identical-sample runs.
+- `test_c64_vicii` (`test_config_frame_timing`) locks the per-standard clock and cycles-per-frame constants that drive the pacer, so a regression to a fixed frame rate fails a test.
 - `--audio-smoke` remains useful for transport validation independent of SID correctness.
 - Recording paths should be checked when changing playback scheduling because they share emitted samples.
 

@@ -44,6 +44,7 @@ The emulator currently includes:
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
 - VIC-II sprite BA timing now uses per-standard PAL 6569 and NTSC 6567R8 tables selected from machine video configuration.
 - Runtime audio production now advances from the cycle-stepping path, not from 1024-cycle batches.
+- Fixed PAL live-audio distortion: the runtime frame pacer was hardcoded to 60 fps, so PAL (~50 fps) emulated ~20% faster than wall-clock and over-ran the audio ring buffer, dropping samples. The pacer now paces to the active standard's real frame rate via `c64_config_cycles_per_frame()`. NTSC (~60 fps) was already correct and is unchanged. This also fixes PAL previously running ~20% fast in wall-clock. See `docs/status/AUDIO.md`.
 - SID Phase 10 is the current audio fidelity baseline: score 1.2838 against `x64sc-20s.mp3`, with 16-22 kHz excess reduced but not eliminated.
 - The CPU has explicit dispatch for all 256 opcode slots and practical undocumented opcode implementations, but not perfect analog/chip-revision behavior.
 

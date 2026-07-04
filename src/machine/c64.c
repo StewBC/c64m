@@ -50,6 +50,13 @@ uint32_t c64_config_clock_hz(const c64_config *config) {
     return 985248u;
 }
 
+uint32_t c64_config_cycles_per_frame(const c64_config *config) {
+    if (config != NULL && config->video_standard == C64_VIDEO_STANDARD_NTSC) {
+        return (uint32_t)VICII_NTSC_CYCLES_PER_LINE * VICII_NTSC_LINES_PER_FRAME;
+    }
+    return (uint32_t)VICII_PAL_CYCLES_PER_LINE * VICII_PAL_LINES_PER_FRAME;
+}
+
 static void c64_set_error(char *error, size_t error_size, const char *message) {
     if (!error || error_size == 0) {
         return;

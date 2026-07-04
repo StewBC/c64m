@@ -1545,7 +1545,31 @@ static void test_vicii_debug_read_forced_high_bits(void) {
     expect_u8("d02e debug bits 7:4 forced high", 0xf3, vicii_debug_read_register(&v, 0xd02e));
 }
 
+/* Locks the per-standard clock and frame-length constants that drive the
+   runtime audio pacer.  A regression here (e.g. reverting to a fixed frame
+   rate) mis-paces PAL and over-runs the audio buffer. */
+static void test_config_frame_timing(void) {
+    c64_config pal  = { 0 };
+    c64_config ntsc = { 0 };
+    pal.video_standard  = C64_VIDEO_STANDARD_PAL;
+    ntsc.video_standard = C64_VIDEO_STANDARD_NTSC;
+
+    expect_u32("PAL clock hz", 985248u, c64_config_clock_hz(&pal));
+    expect_u32("NTSC clock hz", 1022727u, c64_config_clock_hz(&ntsc));
+
+    expect_u32("PAL cycles/frame", 63u * 312u, c64_config_cycles_per_frame(&pal));
+    expect_u32("NTSC cycles/frame", 65u * 263u, c64_config_cycles_per_frame(&ntsc));
+
+    /* Derived frame rate must match the real standards (PAL ~50, NTSC ~60),
+       not a shared constant. */
+    expect_true("PAL ~50 fps",
+        (int)(c64_config_clock_hz(&pal) / c64_config_cycles_per_frame(&pal)) == 50);
+    expect_true("NTSC ~60 fps",
+        (int)(c64_config_clock_hz(&ntsc) / c64_config_cycles_per_frame(&ntsc)) == 59);
+}
+
 int main(void) {
+    test_config_frame_timing();
     test_vicii_reset_state();
     test_raster_progression();
     test_irq_status_high_bit_reports_enabled_pending_irq();

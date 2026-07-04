@@ -86,6 +86,12 @@ typedef struct c64_config {
    PAL: 985248 Hz.  NTSC: 1022727 Hz. */
 uint32_t c64_config_clock_hz(const c64_config *config);
 
+/* Returns the number of CPU cycles in one video frame for the given config.
+   PAL: 19656 (63 x 312).  NTSC: 17095 (65 x 263).
+   Dividing by c64_config_clock_hz gives the frame period, hence the frame rate
+   (PAL ~50.12 fps, NTSC ~59.83 fps). */
+uint32_t c64_config_cycles_per_frame(const c64_config *config);
+
 typedef enum c64_drive_image_kind {
     C64_DRIVE_IMAGE_NONE = 0,
     C64_DRIVE_IMAGE_D64
