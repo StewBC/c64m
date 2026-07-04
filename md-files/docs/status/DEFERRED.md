@@ -29,6 +29,9 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - Cartridge mappers beyond generic 8K/16K normal CRT cartridges are deferred.
 - Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
   freezer buttons are deferred.
+- Save-state runtime commands, frontend UI/hotkeys/CLI, runtime path/hash
+  manifests, self-contained snapshot embedding, cross-version migration, and
+  full 1541 CPU/VIA/drive-side state capture are deferred.
 - Debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present.
 

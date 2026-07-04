@@ -6,6 +6,7 @@ add_library(machine STATIC
     c64.c
     c64_bus.c
     c64_rom.c
+    c64_snapshot.c
     c6510.c
     keyboard.c
     sid.c

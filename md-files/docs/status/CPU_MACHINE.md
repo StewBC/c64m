@@ -123,6 +123,77 @@ This is expected when the CPU interrupt-disable flag remains set.
 - `--video PAL|NTSC`, `-P` / `--pal`, and `-N` / `--ntsc` apply after INI loading and override `[Video] standard` for the current launch.
 - Invalid `--video` values fail startup with a clear error.
 
+## Save-state serializer foundation
+
+- Phase 1 of save-state support is implemented in `src/machine/c64_snapshot.{c,h}`.
+  It is a machine-level serializer only; no runtime command, frontend UI, hotkey,
+  or CLI load-state path exists yet.
+- The format is versioned and chunked: header plus tagged chunks for metadata,
+  RAM/color RAM, bus banking/counters, CPU, VIC-II, CIA #1/#2, SID, machine
+  controls, cartridge, and drive slots.
+- The header records `C64_SNAPSHOT_CONTENT_REFERENCED` and external-object flags.
+  v1 validates loaded BASIC/KERNAL/character ROM contents by hash instead of
+  embedding ROM bytes. This leaves room for a later UI/runtime "self-contained"
+  mode that embeds ROM/media/cart bytes and records
+  `C64_SNAPSHOT_CONTENT_SELF_CONTAINED`.
+- `c64_snapshot_load` is all-or-nothing: it parses into a temporary machine,
+  validates magic/version/chunks/ROM hashes, and only then applies loaded state.
+  Failed loads leave the target machine unchanged.
+- Snapshot save currently rejects mid-instruction cycle-stepping state
+  (`pending_cpu_trace_active`) because runtime save/load must happen at an
+  instruction boundary. CPU bus trace buffers and write-history are debugger
+  scratch and are cleared/rebuilt rather than serialized.
+
+### Save-state inventory
+
+Serialize as mutable live state:
+
+```text
+- CPU core scalar state: PC/opcode PC, A/X/Y/SP/P, address/scratch registers,
+  IRQ deferral bits, opcode-active/class, cycle/IRQ/NMI counters.
+- RAM and color RAM, including RAM underneath I/O and cartridge ROM.
+- Bus banking state: 6510 port direction/data, VIC bank cache, write counters,
+  cartridge mapping flags/lines/mode, and generic ROML/ROMH bytes.
+- VIC-II registers, timing, raster compare, BA expiry, display/bad-line state,
+  VC/VCBASE/RC, video/color line latches, IRQ state, sprite sequencer/latches,
+  vertical border state, and live/completed frame buffers.
+- CIA #1/#2 registers, timer latches/counters/underflow/output pulse state,
+  ICR flags/mask/counters, TOD/alarm/latch/coherent-read state, TOD cycle
+  accumulators, CNT pulse, and configured TOD rates.
+- SID register mirror, per-voice decoded registers, phase, 23-bit noise LFSR,
+  ADSR envelope/state/fractional counter, filter/DC/output state, read-back
+  shadows, last sample, and sample-output enable.
+- Keyboard matrix rows, joystick ports, IEC pull-line mirrors, master clock,
+  keyboard/RESTORE counters, RESTORE/NMI latch state, ready/config flags,
+  instruction-complete and remaining-cycle bookkeeping.
+- Mounted drive slot metadata, copied D64 image bytes, directory entries, disk
+  title/id/type/free-block fields, and last mount result.
+```
+
+Reconstruct, reference, or validate externally:
+
+```text
+- BASIC, KERNAL, and character ROM bytes are not embedded in v1 snapshots.
+  The loader requires the existing machine to have matching ROM hashes.
+- Runtime-owned source paths and future path/hash manifests are not available
+  in `machine/` yet; they belong in the later runtime command phase.
+- Full self-contained snapshots are intentionally reserved for a later UI/runtime
+  option and should use the existing content-mode/flags structure.
+```
+
+Do not serialize:
+
+```text
+- SDL/window/audio-device/frontend state.
+- Runtime/frontend copied debugger snapshots and UI memory views.
+- Live callbacks/pointers: CPU bus callbacks, bus device pointers, CIA input
+  callbacks, memory-access callback, and 1541 back-pointers are rebound or
+  preserved during load.
+- CPU bus trace scratch (`last_cpu_trace`, `pending_cpu_trace`) and write-history.
+- Full 1541 CPU/VIA/RAM/ROM state in v1; if 1541 emulation is active, load resets
+  the drive-side emulator and documents that exact drive-side resume is deferred.
+```
+
 ## Known limitations / deferred
 
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
@@ -131,6 +202,8 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Cartridge mappers beyond generic 8K/16K normal cartridges are deferred.
 - Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
   freezer buttons are deferred.
+- Save-state runtime commands, frontend UI/hotkeys/CLI, self-contained snapshot
+  mode, runtime path/hash manifests, and full 1541 state capture are deferred.
 - The debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present in the repository.
 
@@ -139,6 +212,10 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Local tests cover documented CPU execution, bus integration, trace timing, IRQ/NMI entry, banking, and BA read/write stalling.
 - Local bus tests cover generic 8K/16K cartridge mapping, shadow-RAM writes,
   debugger Map visibility, detach, and reset persistence.
+- `tests/machine/test_c64_snapshot.c` covers machine snapshot size/write,
+  representative round-trip restore, byte-identical re-save, bad magic rejection,
+  ROM hash mismatch rejection, failed-load all-or-nothing behavior, and
+  mid-instruction save rejection.
 - Local tests do not provide per-opcode undocumented Harte-style semantic coverage.
 - Practical undocumented opcode coverage is sufficient for the current milestone.
 
