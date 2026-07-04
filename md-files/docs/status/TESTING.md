@@ -2,7 +2,7 @@
 
 ## Automated coverage called out by status
 
-- SID: 60 tests in `tests/machine/test_sid.c` covering registers, voice behavior, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, and audio-flow smoke.
+- SID: 63 tests in `tests/machine/test_sid.c` covering registers, voice behavior, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, audio-flow smoke, and per-standard rate tables (PAL bit-identical lock, NTSC clock-scaling, envelope absolute-time preservation).
 - Runtime audio scheduler: tests verify sample-count accounting and absence of batch-sized identical-sample SID runs.
 - CPU: local tests cover documented CPU execution, bus integration, trace timing, IRQ/NMI entry, banking, I/O-under-RAM preservation, and BA read/write stalling.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.

@@ -983,7 +983,7 @@ void c64_init(c64_t *machine) {
     c64_keyboard_reset(&machine->keyboard);
     cia_attach_port_input(&machine->cia1, c64_cia1_port_inputs, machine);
     cia_attach_port_input(&machine->cia2, c64_cia2_port_inputs, machine);
-    sid_init(&machine->sid);
+    sid_init(&machine->sid, c64_config_clock_hz(&machine->config));
     c64_bus_attach_vicii(&machine->bus, &machine->vic);
     c64_bus_attach_cias(&machine->bus, &machine->cia1, &machine->cia2);
     c64_bus_attach_sid(&machine->bus, &machine->sid);
@@ -1056,7 +1056,10 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     }
 
     c64_bus_reset(&machine->bus);
-    sid_reset(&machine->sid);
+    /* Re-select the SID clock from the current config so a video-standard change
+       (applied via config + reset) switches the envelope/filter rate tables,
+       mirroring vicii_set_video_standard below. */
+    sid_init(&machine->sid, c64_config_clock_hz(&machine->config));
     vicii_reset(&machine->vic);
     vicii_set_video_standard(
         &machine->vic,

@@ -19,7 +19,6 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 - Exact 6581/8580 analog combined-waveform blending is deferred.
 - Paddle/potentiometer behavior is not connected; `$D419/$D41A` return 0xFF.
-- NTSC SID rate tables are deferred; current ADSR tables are PAL 985248 Hz only.
 - Further high-frequency audio work should be a new measured SID/audio fidelity phase.
 
 ## CPU / machine

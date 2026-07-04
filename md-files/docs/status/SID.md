@@ -14,6 +14,7 @@
 - Functional combined-waveform approximation is implemented.
 - Oscillator sync and ring modulation are implemented.
 - ADSR envelope is implemented, including pseudo-exponential decay/release behavior.
+- Envelope rate tables, filter cutoff LUT, and output HF-rolloff coefficient are parameterized by the active CPU (Ø2) clock, so PAL and NTSC run at correct absolute timing.
 - Chamberlin state-variable filter is implemented.
 - Three-voice mixer is implemented.
 - Per-voice filter routing is implemented.
@@ -43,6 +44,7 @@
 - `$D41C` reads current voice 3 envelope byte.
 - Paddle reads `$D419` and `$D41A` return 0xFF until connected input is emulated.
 - `sid_sample()` is a const read of `last_sample`.
+- `sid_init(sid *, uint32_t cpu_clock_hz)` selects the per-standard rate tables. PAL 985248 Hz is bit-identical to the pre-parameterization baseline; NTSC 1022727 Hz uses the PAL ADSR tables scaled by the clock ratio (round-to-nearest) and the cutoff LUT / rolloff regenerated from the same closed forms at the NTSC clock. `sid_reset` preserves the selected clock; `c64_reset` re-selects it from the video standard, so a standard change re-tables the SID.
 
 ## Current fidelity baseline
 
@@ -81,13 +83,12 @@ SID Phase 10 is the current measured baseline:
 
 - Exact 6581/8580 analog waveform blending is deferred.
 - Paddle/potentiometer behavior is not connected; current policy is 0xFF.
-- NTSC SID rate tables are deferred; current ADSR tables are PAL 985248 Hz only.
 - Remaining high-frequency excess likely comes from SID waveform harmonic/alias content and the intentionally gentle output rolloff.
 - Further high-frequency work should be a new measured SID/audio fidelity phase.
 
 ## Tests / smoke checks
 
-- `tests/machine/test_sid.c` currently contains 60 tests covering registers, voices, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, and audio-flow smoke.
+- `tests/machine/test_sid.c` currently contains 63 tests covering registers, voices, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, audio-flow smoke, and the per-standard rate tables (PAL bit-identical lock, NTSC clock-scaling, envelope absolute-time preservation).
 - Keep measured audio changes tied to `tools/capture_sid_audio.py` and `tools/compare_sid_audio.py`.
 - Avoid claiming fidelity improvement unless the metrics support it.
 

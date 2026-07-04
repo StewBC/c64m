@@ -46,6 +46,7 @@ The emulator currently includes:
 - Runtime audio production now advances from the cycle-stepping path, not from 1024-cycle batches.
 - Fixed PAL live-audio distortion: the runtime frame pacer was hardcoded to 60 fps, so PAL (~50 fps) emulated ~20% faster than wall-clock and over-ran the audio ring buffer, dropping samples. The pacer now paces to the active standard's real frame rate via `c64_config_cycles_per_frame()`. NTSC (~60 fps) was already correct and is unchanged. This also fixes PAL previously running ~20% fast in wall-clock. See `docs/status/AUDIO.md`.
 - SID Phase 10 is the current audio fidelity baseline: score 1.2838 against `x64sc-20s.mp3`, with 16-22 kHz excess reduced but not eliminated.
+- SID rate tables are now clock-parameterized. `sid_init(sid *, uint32_t cpu_clock_hz)` selects per-standard envelope tables, filter cutoff LUT, and HF-rolloff coefficient. PAL is bit-identical to the prior baseline (verified: identical PAL capture bytes); NTSC now uses NTSC-timed constants instead of PAL ones. See `docs/status/SID.md`.
 - The CPU has explicit dispatch for all 256 opcode slots and practical undocumented opcode implementations, but not perfect analog/chip-revision behavior.
 
 ## Component files

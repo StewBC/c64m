@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+
+/* CPU clocks for the two video standards (see sid.c). Existing behavioural
+   tests were written against PAL constants, so they init at the PAL clock. */
+#define SID_CLK_PAL   985248u
+#define SID_CLK_NTSC  1022727u
 
 static void fail(const char *msg) {
     fprintf(stderr, "FAIL: %s\n", msg);
@@ -52,8 +58,8 @@ static void expect_nonzero_float(const char *name, float actual) {
 static void test_reset_deterministic(void) {
     sid a, b;
 
-    sid_init(&a);
-    sid_init(&b);
+    sid_init(&a, SID_CLK_PAL);
+    sid_init(&b, SID_CLK_PAL);
 
     /* Two freshly initialised SIDs must be identical */
     if (memcmp(&a, &b, sizeof(sid)) != 0) {
@@ -71,7 +77,7 @@ static void test_reset_deterministic(void) {
 
 static void test_writes_reach_sid(void) {
     sid s;
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     sid_write(&s, 0xD400, 0xAB);
     expect_eq_u8("writes_reach_sid: reg[0]", 0xAB, s.regs[0]);
@@ -82,7 +88,7 @@ static void test_writes_reach_sid(void) {
 
 static void test_frequency_decode(void) {
     sid s;
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     /* Voice 1 freq: write LO=0x34, HI=0x12 -> freq = 0x1234 */
     sid_write(&s, 0xD400, 0x34);
@@ -102,7 +108,7 @@ static void test_frequency_decode(void) {
 
 static void test_pulse_width_12bit(void) {
     sid s;
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     /* PW_LO=0xFF, PW_HI=0xFF -> effective 12-bit = 0xFFF */
     sid_write(&s, 0xD402, 0xFF);
@@ -117,7 +123,7 @@ static void test_pulse_width_12bit(void) {
 
 static void test_gate_transitions(void) {
     sid s;
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     /* Gate rising edge: envelope state should become ATTACK */
     sid_write(&s, 0xD404, 0x01); /* gate on, triangle */
@@ -137,7 +143,7 @@ static void test_voice3_osc_changes(void) {
     uint8_t first_osc;
     uint32_t i;
 
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     /* Set voice 3 to sawtooth at a mid-range frequency */
     sid_write(&s, 0xD40E, 0x00);
@@ -162,7 +168,7 @@ static void test_voice3_env_changes(void) {
     uint8_t first_env;
     uint32_t i;
 
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     /* Voice 3 sawtooth, fast attack (attack nibble = 0), gate on */
     sid_write(&s, 0xD40E, 0x00);
@@ -189,7 +195,7 @@ static void test_disabled_sample_output_preserves_readback(void) {
     uint8_t first_env;
     uint32_t i;
 
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
     sid_write(&s, 0xD40E, 0x00);
     sid_write(&s, 0xD40F, 0x10);
     sid_write(&s, 0xD413, 0x00);
@@ -216,7 +222,7 @@ static void test_disabled_sample_output_preserves_readback(void) {
 
 static void test_paddle_unused_reads(void) {
     sid s;
-    sid_init(&s);
+    sid_init(&s, SID_CLK_PAL);
 
     expect_eq_u8("POTX_0xFF", 0xFF, sid_read(&s, 0xD419));
     expect_eq_u8("POTY_0xFF", 0xFF, sid_read(&s, 0xD41A));
@@ -1646,10 +1652,80 @@ static void test_audio_flow_smoke(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* NTSC rate tables (feature: clock-parameterized SID)                 */
+/* ------------------------------------------------------------------ */
+
+/* Committed PAL baseline. These must never change without a deliberate,
+   measured PAL re-tune; the test below locks them. */
+static const uint32_t k_pal_attack[16] = {
+      8,   31,   62,   93,  147,  216,  263,  309,
+    386,  966, 1932, 3091, 3864, 11592, 19320, 30911 };
+static const uint32_t k_pal_decay[16] = {
+     23,   93,  185,  278,  440,  649,  788,  927,
+   1159, 2897, 5794, 9271, 11592, 34775, 57959, 92734 };
+
+/* PAL selection must be bit-identical to the committed baseline. */
+static void test_pal_rate_tables_bit_identical(void) {
+    sid s;
+    int i;
+    sid_init(&s, SID_CLK_PAL);
+    if (s.cpu_clock_hz != SID_CLK_PAL) fail("pal invariant: clock not stored");
+    for (i = 0; i < 16; i++) {
+        if (s.attack_cycles[i] != k_pal_attack[i]) fail("pal invariant: attack table drifted");
+        if (s.decay_cycles[i]  != k_pal_decay[i])  fail("pal invariant: decay table drifted");
+    }
+    if (s.hfroll_coeff != 0.940f)       fail("pal invariant: hfroll coeff drifted");
+    if (s.cutoff_lut[0]  != 0.00127545f) fail("pal invariant: cutoff[0] drifted");
+    if (s.cutoff_lut[31] != 0.11472771f) fail("pal invariant: cutoff[31] drifted");
+    /* The public helper stays PAL-backed and matches the PAL LUT. */
+    if (sid_filter_cutoff_factor(0) != s.cutoff_lut[0]) fail("pal invariant: helper != pal lut");
+}
+
+/* NTSC selection must be the clock-scaled / regenerated variant. */
+static void test_ntsc_rate_tables_scaled(void) {
+    sid p, n;
+    int i;
+    double ratio = (double)SID_CLK_NTSC / (double)SID_CLK_PAL;
+    sid_init(&p, SID_CLK_PAL);
+    sid_init(&n, SID_CLK_NTSC);
+    if (n.cpu_clock_hz != SID_CLK_NTSC) fail("ntsc: clock not stored");
+    for (i = 0; i < 16; i++) {
+        uint32_t exp_a = (uint32_t)floor((double)k_pal_attack[i] * ratio + 0.5);
+        uint32_t exp_d = (uint32_t)floor((double)k_pal_decay[i]  * ratio + 0.5);
+        if (n.attack_cycles[i] != exp_a) fail("ntsc: attack != round(pal*ratio)");
+        if (n.decay_cycles[i]  != exp_d) fail("ntsc: decay != round(pal*ratio)");
+    }
+    if (n.hfroll_coeff != 0.942f) fail("ntsc: hfroll coeff wrong");
+    /* Higher clock -> smaller SVF cutoff coefficient at every anchor. */
+    for (i = 1; i < 32; i++) {
+        if (!(n.cutoff_lut[i] < p.cutoff_lut[i])) fail("ntsc: cutoff not below pal");
+    }
+}
+
+/* The point of the feature: the same musical envelope time in absolute seconds
+   on both standards, differing only by integer-cycle rounding (<= 1 CPU cycle). */
+static void test_envelope_absolute_time_preserved(void) {
+    sid p, n;
+    int i;
+    sid_init(&p, SID_CLK_PAL);
+    sid_init(&n, SID_CLK_NTSC);
+    for (i = 0; i < 16; i++) {
+        double pal_t   = (double)p.attack_cycles[i] / (double)SID_CLK_PAL;
+        double ntsc_t  = (double)n.attack_cycles[i] / (double)SID_CLK_NTSC;
+        double one_cyc = 1.0 / (double)SID_CLK_NTSC;
+        if (fabs(pal_t - ntsc_t) > one_cyc) fail("envelope: PAL/NTSC absolute time off by >1 cycle");
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
 int main(void) {
+    test_pal_rate_tables_bit_identical();
+    test_ntsc_rate_tables_scaled();
+    test_envelope_absolute_time_preserved();
+
     /* Register tests */
     test_reset_deterministic();
     test_writes_reach_sid();

@@ -49,12 +49,23 @@ typedef struct sid {
 
     uint8_t    voice3_osc_read;     /* $D41B shadow (top byte of voice 3 phase) */
     uint8_t    voice3_env_read;     /* $D41C shadow (voice 3 envelope) */
+
+    /* Active CPU (Ø2) clock and the per-standard rate tables/coefficients it
+       selects. Derived from the clock at init; not serialized (they follow the
+       host machine's video standard, not a save-state). PAL selects the tables
+       that keep output bit-identical to the pre-clock-parameterization baseline. */
+    uint32_t         cpu_clock_hz;
+    const uint32_t  *attack_cycles;   /* [16] cycles per envelope +1 step */
+    const uint32_t  *decay_cycles;    /* [16] cycles per envelope -1 step */
+    const float     *cutoff_lut;      /* [32] Chamberlin SVF cutoff anchors */
+    float            hfroll_coeff;    /* output HF-rolloff one-pole coefficient */
 } sid;
 
-/* Initialise SID to power-on state. */
-void    sid_init(sid *s);
+/* Initialise SID to power-on state for the given CPU clock (PAL 985248 Hz /
+   NTSC 1022727 Hz). The clock selects the envelope/filter rate tables. */
+void    sid_init(sid *s, uint32_t cpu_clock_hz);
 
-/* Reset SID to power-on state (same as init for deterministic reset). */
+/* Reset SID to power-on state, preserving the currently selected CPU clock. */
 void    sid_reset(sid *s);
 
 /* CPU write: addr is the raw C64 address ($D400-$D41F); masked internally. */

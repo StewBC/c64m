@@ -2,22 +2,41 @@
 
 #include <string.h>
 
+/* Envelope rate tables are cycles-per-step counts derived from the SID's real
+ * (absolute-time) step periods, so they scale with the CPU (Ø2) clock. The PAL
+ * tables are the committed baseline and must stay verbatim (PAL is bit-identical
+ * to the pre-clock-parameterization output). The NTSC tables are the PAL values
+ * scaled by the clock ratio 1022727/985248 (round-to-nearest). sid_init selects
+ * one pair by the active clock. */
+#define SID_CPU_CLOCK_PAL   985248u
+#define SID_CPU_CLOCK_NTSC  1022727u
+
 /*
  * Attack time at PAL 985248 Hz: cycles per envelope +1 step (255 steps, 0->255).
  * Times (ms): 2, 8, 16, 24, 38, 56, 68, 80, 100, 250, 500, 800, 1000, 3000, 5000, 8000
  */
-static const uint32_t s_attack_cycles[16] = {
+static const uint32_t s_attack_cycles_pal[16] = {
       8,   31,   62,   93,  147,  216,  263,  309,
     386,  966, 1932, 3091, 3864, 11592, 19320, 30911
+};
+/* NTSC 1022727 Hz: round(pal * 1022727/985248). */
+static const uint32_t s_attack_cycles_ntsc[16] = {
+      8,   32,   64,   97,  153,  224,  273,  321,
+    401, 1003, 2005, 3209, 4011, 12033, 20055, 32087
 };
 
 /*
  * Decay/release at PAL 985248 Hz: cycles per envelope -1 step (255 steps, 255->0).
  * Times (ms): 6, 24, 48, 72, 114, 168, 204, 240, 300, 750, 1500, 2400, 3000, 9000, 15000, 24000
  */
-static const uint32_t s_decay_cycles[16] = {
+static const uint32_t s_decay_cycles_pal[16] = {
      23,   93,  185,  278,  440,  649,  788,  927,
    1159, 2897, 5794, 9271, 11592, 34775, 57959, 92734
+};
+/* NTSC 1022727 Hz: round(pal * 1022727/985248). */
+static const uint32_t s_decay_cycles_ntsc[16] = {
+     24,   97,  192,  289,  457,  674,  818,  962,
+   1203, 3007, 6014, 9624, 12033, 36098, 60164, 96262
 };
 
 enum {
@@ -26,14 +45,16 @@ enum {
 
 static const float SID_DC_BLOCK_R   = 0.99987f;
 /* One-pole IIR LP: models 6581 output-path rolloff (~9.4 kHz combined chip+board).
- * a = 1 - 2π × 9400 / 985248 ≈ 0.940. Applied after DC blocker, before gain. */
-static const float SID_HFROLL_COEFF = 0.940f;
+ * a = 1 - 2π × 9400 / clock. Applied after DC blocker, before gain.
+ * PAL (985248) ≈ 0.940; NTSC (1022727) ≈ 0.942. Selected by the active clock. */
+#define SID_HFROLL_COEFF_PAL   0.940f
+#define SID_HFROLL_COEFF_NTSC  0.942f
 
 /* Exponential cutoff LUT: maps 11-bit register [0..2047] to Chamberlin SVF
  * coefficient f = 2*sin(pi*fc/985248), where fc spans 200 Hz to 18000 Hz.
  * 32 anchor points with linear interpolation gives ~66-register resolution.
  * fc[i] = 200 * (90)^(i/31); real 6581 range is approximately 200-18000 Hz. */
-static const float s_cutoff_lut[32] = {
+static const float s_cutoff_lut_pal[32] = {
     /* i= 0  fc=   200.0 Hz */  0.00127545f,
     /* i= 1  fc=   231.2 Hz */  0.00147470f,
     /* i= 2  fc=   267.4 Hz */  0.00170508f,
@@ -68,6 +89,44 @@ static const float s_cutoff_lut[32] = {
     /* i=31  fc= 18000.0 Hz */  0.11472771f
 };
 
+/* NTSC 1022727 Hz: same anchors fc[i]=200*90^(i/31), coeff = 2*sin(pi*fc/clock).
+ * Generated from the identical closed form as PAL (which reproduces the PAL
+ * values above exactly at 985248), only the clock denominator differs. */
+static const float s_cutoff_lut_ntsc[32] = {
+    /* i= 0  fc=   200.0 Hz */  0.00122871f,
+    /* i= 1  fc=   231.2 Hz */  0.00142066f,
+    /* i= 2  fc=   267.4 Hz */  0.00164259f,
+    /* i= 3  fc=   309.1 Hz */  0.00189920f,
+    /* i= 4  fc=   357.4 Hz */  0.00219589f,
+    /* i= 5  fc=   413.3 Hz */  0.00253893f,
+    /* i= 6  fc=   477.8 Hz */  0.00293556f,
+    /* i= 7  fc=   552.5 Hz */  0.00339415f,
+    /* i= 8  fc=   638.8 Hz */  0.00392438f,
+    /* i= 9  fc=   738.6 Hz */  0.00453744f,
+    /* i=10  fc=   853.9 Hz */  0.00524627f,
+    /* i=11  fc=   987.3 Hz */  0.00606583f,
+    /* i=12  fc=  1141.6 Hz */  0.00701343f,
+    /* i=13  fc=  1319.9 Hz */  0.00810905f,
+    /* i=14  fc=  1526.1 Hz */  0.00937583f,
+    /* i=15  fc=  1764.5 Hz */  0.01084050f,
+    /* i=16  fc=  2040.2 Hz */  0.01253397f,
+    /* i=17  fc=  2358.9 Hz */  0.01449198f,
+    /* i=18  fc=  2727.4 Hz */  0.01675585f,
+    /* i=19  fc=  3153.5 Hz */  0.01937336f,
+    /* i=20  fc=  3646.1 Hz */  0.02239972f,
+    /* i=21  fc=  4215.7 Hz */  0.02589880f,
+    /* i=22  fc=  4874.3 Hz */  0.02994441f,
+    /* i=23  fc=  5635.8 Hz */  0.03462185f,
+    /* i=24  fc=  6516.2 Hz */  0.04002977f,
+    /* i=25  fc=  7534.1 Hz */  0.04628214f,
+    /* i=26  fc=  8711.1 Hz */  0.05351067f,
+    /* i=27  fc= 10071.9 Hz */  0.06186757f,
+    /* i=28  fc= 11645.3 Hz */  0.07152861f,
+    /* i=29  fc= 13464.6 Hz */  0.08269679f,
+    /* i=30  fc= 15568.0 Hz */  0.09560641f,
+    /* i=31  fc= 18000.0 Hz */  0.11052775f
+};
+
 static float sid_clampf(float v) {
     if (v < -1.0f) return -1.0f;
     if (v >  1.0f) return  1.0f;
@@ -86,10 +145,28 @@ static void sid_voice_init(sid_voice *v) {
     v->env_state  = SID_ENV_RELEASE;
 }
 
-void sid_init(sid *s) {
+/* Select the per-standard rate tables/coefficients for the given clock. Any
+   clock other than NTSC selects the PAL baseline (bit-identical output). */
+static void sid_select_clock(sid *s, uint32_t cpu_clock_hz) {
+    s->cpu_clock_hz = cpu_clock_hz;
+    if (cpu_clock_hz == SID_CPU_CLOCK_NTSC) {
+        s->attack_cycles = s_attack_cycles_ntsc;
+        s->decay_cycles  = s_decay_cycles_ntsc;
+        s->cutoff_lut    = s_cutoff_lut_ntsc;
+        s->hfroll_coeff  = SID_HFROLL_COEFF_NTSC;
+    } else {
+        s->attack_cycles = s_attack_cycles_pal;
+        s->decay_cycles  = s_decay_cycles_pal;
+        s->cutoff_lut    = s_cutoff_lut_pal;
+        s->hfroll_coeff  = SID_HFROLL_COEFF_PAL;
+    }
+}
+
+void sid_init(sid *s, uint32_t cpu_clock_hz) {
     int i;
     if (!s) return;
     memset(s, 0, sizeof(*s));
+    sid_select_clock(s, cpu_clock_hz);
     s->sample_output_enabled = true;
     for (i = 0; i < 3; i++) {
         sid_voice_init(&s->voices[i]);
@@ -97,7 +174,8 @@ void sid_init(sid *s) {
 }
 
 void sid_reset(sid *s) {
-    sid_init(s);
+    if (!s) return;
+    sid_init(s, s->cpu_clock_hz ? s->cpu_clock_hz : SID_CPU_CLOCK_PAL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -309,7 +387,9 @@ static uint32_t sid_exp_period(uint8_t env) {
     return 30u;
 }
 
-static void sid_voice_advance_env(sid_voice *v) {
+static void sid_voice_advance_env(sid_voice *v,
+                                  const uint32_t *attack_cycles,
+                                  const uint32_t *decay_cycles) {
     uint8_t attack_rate  = (v->attack_decay  >> 4) & 0x0Fu;
     uint8_t decay_rate   =  v->attack_decay         & 0x0Fu;
     uint8_t sustain_lvl  = (v->sustain_release >> 4) & 0x0Fu;
@@ -318,7 +398,7 @@ static void sid_voice_advance_env(sid_voice *v) {
 
     switch (v->env_state) {
         case SID_ENV_ATTACK:
-            v->env_counter += 1.0 / (double)s_attack_cycles[attack_rate];
+            v->env_counter += 1.0 / (double)attack_cycles[attack_rate];
             if (v->env_counter >= 1.0) {
                 v->env_counter -= 1.0;
                 if (v->envelope < 255u) v->envelope++;
@@ -331,7 +411,7 @@ static void sid_voice_advance_env(sid_voice *v) {
             break;
 
         case SID_ENV_DECAY:
-            v->env_counter += 1.0 / ((double)s_decay_cycles[decay_rate] *
+            v->env_counter += 1.0 / ((double)decay_cycles[decay_rate] *
                                      (double)sid_exp_period(v->envelope));
             if (v->env_counter >= 1.0) {
                 v->env_counter -= 1.0;
@@ -348,7 +428,7 @@ static void sid_voice_advance_env(sid_voice *v) {
             break;
 
         case SID_ENV_RELEASE:
-            v->env_counter += 1.0 / ((double)s_decay_cycles[release_rate] *
+            v->env_counter += 1.0 / ((double)decay_cycles[release_rate] *
                                      (double)sid_exp_period(v->envelope));
             if (v->env_counter >= 1.0) {
                 v->env_counter -= 1.0;
@@ -365,19 +445,26 @@ static float sid_condition_output(sid *s, float raw) {
     s->dc_block_prev_input  = raw;
     s->dc_block_prev_output = blocked;
 
-    s->hfroll_state = (1.0f - SID_HFROLL_COEFF) * blocked
-                    +          SID_HFROLL_COEFF  * s->hfroll_state;
+    s->hfroll_state = (1.0f - s->hfroll_coeff) * blocked
+                    +          s->hfroll_coeff  * s->hfroll_state;
 
     return sid_clampf(s->hfroll_state * ((float)SID_OUTPUT_GAIN_PERCENT / 100.0f));
 }
 
-float sid_filter_cutoff_factor(uint16_t cutoff) {
+/* Interpolate the 11-bit cutoff register against a 32-anchor LUT. */
+static float sid_cutoff_from_lut(const float *lut, uint16_t cutoff) {
     float pos  = (float)cutoff * (31.0f / 2047.0f);
     int   idx  = (int)pos;
     float frac;
-    if (idx >= 31) return s_cutoff_lut[31];
+    if (idx >= 31) return lut[31];
     frac = pos - (float)idx;
-    return s_cutoff_lut[idx] + frac * (s_cutoff_lut[idx + 1] - s_cutoff_lut[idx]);
+    return lut[idx] + frac * (lut[idx + 1] - lut[idx]);
+}
+
+/* Public test/PAL helper: kept clockless and PAL-backed for legacy unit tests.
+   The emulator hot path uses the per-instance s->cutoff_lut instead. */
+float sid_filter_cutoff_factor(uint16_t cutoff) {
+    return sid_cutoff_from_lut(s_cutoff_lut_pal, cutoff);
 }
 
 /* ------------------------------------------------------------------ */
@@ -426,7 +513,7 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
                     prev_phase[i],
                     s->voices[source_voice[i]].phase);
             }
-            sid_voice_advance_env(v);
+            sid_voice_advance_env(v, s->attack_cycles, s->decay_cycles);
         }
 
         /* --- Voice 3 read-back registers --- */
@@ -463,7 +550,7 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
          * f: cutoff factor, capped below 0.5 for stability and to avoid the
          * overly bright top-end produced by the earlier linear 0..0.5 mapping.
          * q: resonance damping 0.1..1.0. */
-        f = sid_filter_cutoff_factor(s->filter_cutoff);
+        f = sid_cutoff_from_lut(s->cutoff_lut, s->filter_cutoff);
 
         res_nibble = (s->filter_res_route >> 4) & 0x0Fu;
         q = 1.0f - (float)res_nibble / 20.0f;
