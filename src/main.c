@@ -1,5 +1,6 @@
 #include "app_options.h"
 #include "audio_buffer.h"
+#include "c64_snapshot.h"
 #include "control_server.h"
 #include "frontend.h"
 #include "frontend_input.h"
@@ -31,7 +32,18 @@
 
 enum {
     C64M_CONTROLLER_MAX = 2,
-    C64M_CONTROLLER_AXIS_THRESHOLD = 16000
+    C64M_CONTROLLER_AXIS_THRESHOLD = 16000,
+    C64M_STATE_CHUNK_HEADER_SIZE = 8,
+    C64M_STATE_HOST_CHUNK_SIZE = 8
+};
+
+#define C64M_STATE_TAG(a, b, c, d) \
+    ((uint32_t)(uint8_t)(a) | ((uint32_t)(uint8_t)(b) << 8) | \
+     ((uint32_t)(uint8_t)(c) << 16) | ((uint32_t)(uint8_t)(d) << 24))
+
+enum {
+    C64M_STATE_HOST_TAG = C64M_STATE_TAG('H', 'O', 'S', 'T'),
+    C64M_STATE_HOST_VERSION = 1u
 };
 
 typedef struct sdl_c64_controller {
@@ -75,6 +87,10 @@ typedef struct control_cached_state {
     bool has_frame;
     c64_frame frame;
 } control_cached_state;
+
+static void sdl_c64_controller_send_ports(
+    const sdl_c64_controller_state *state,
+    runtime_client *client);
 
 static bool choose_file_path(char *out_path, size_t out_size, const char *prompt, const char *types) {
 #if defined(__APPLE__)
@@ -562,12 +578,8 @@ static bool find_newest_state_file(const app_options *options, char *out, size_t
     return found;
 }
 
-static bool key_has_command_modifier(const SDL_KeyboardEvent *key) {
-    return key != NULL && (key->keysym.mod & KMOD_GUI) != 0;
-}
-
 static bool key_is_quicksave_shortcut(const SDL_KeyboardEvent *key) {
-    if (!key_has_command_modifier(key) ||
+    if (!frontend_input_has_option_modifier(key) ||
         !frontend_input_has_shift_modifier(key)) {
         return false;
     }
@@ -575,7 +587,7 @@ static bool key_is_quicksave_shortcut(const SDL_KeyboardEvent *key) {
 }
 
 static bool key_is_quickload_shortcut(const SDL_KeyboardEvent *key) {
-    if (!key_has_command_modifier(key) ||
+    if (!frontend_input_has_option_modifier(key) ||
         !frontend_input_has_shift_modifier(key)) {
         return false;
     }
@@ -602,6 +614,169 @@ static bool send_quickload(runtime_client *client, const app_options *options) {
     }
     SDL_Log("quickload: %s", path);
     return runtime_client_load_state(client, path);
+}
+
+static uint32_t read_le32_local(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] |
+        ((uint32_t)bytes[1] << 8) |
+        ((uint32_t)bytes[2] << 16) |
+        ((uint32_t)bytes[3] << 24);
+}
+
+static void write_le32_local(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)(value & 0xffu);
+    bytes[1] = (uint8_t)((value >> 8) & 0xffu);
+    bytes[2] = (uint8_t)((value >> 16) & 0xffu);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static bool append_host_state_chunk(
+    const char *path,
+    const app_options *options,
+    const frontend_joystick_input *kbd_joystick) {
+    FILE *file;
+    uint8_t bytes[C64M_STATE_CHUNK_HEADER_SIZE + C64M_STATE_HOST_CHUNK_SIZE];
+    uint8_t port;
+    uint8_t layout;
+
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+    port = kbd_joystick != NULL ? (uint8_t)kbd_joystick->port :
+        (uint8_t)(options != NULL ? options->keyboard_joystick_port : 0);
+    if (port > 2u) {
+        port = 0;
+    }
+    layout = kbd_joystick != NULL ? (uint8_t)kbd_joystick->layout :
+        (uint8_t)frontend_joystick_layout_from_string(
+            options != NULL ? options->keyboard_joystick_layout : NULL);
+    if (layout > (uint8_t)FRONTEND_JOYSTICK_LAYOUT_WASD) {
+        layout = (uint8_t)FRONTEND_JOYSTICK_LAYOUT_NUMPAD;
+    }
+
+    write_le32_local(bytes, C64M_STATE_HOST_TAG);
+    write_le32_local(bytes + 4, C64M_STATE_HOST_CHUNK_SIZE);
+    write_le32_local(bytes + 8, C64M_STATE_HOST_VERSION);
+    bytes[12] = port;
+    bytes[13] = layout;
+    bytes[14] = 0;
+    bytes[15] = 0;
+
+    file = fopen(path, "ab");
+    if (file == NULL) {
+        return false;
+    }
+    if (fwrite(bytes, 1, sizeof(bytes), file) != sizeof(bytes)) {
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+    return true;
+}
+
+static bool read_host_state_chunk(
+    const char *path,
+    uint8_t *out_port,
+    frontend_joystick_layout *out_layout) {
+    FILE *file;
+    uint8_t *bytes = NULL;
+    long length;
+    size_t pos;
+    bool found = false;
+
+    if (path == NULL || out_port == NULL || out_layout == NULL) {
+        return false;
+    }
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return false;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return false;
+    }
+    length = ftell(file);
+    if (length < 32 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return false;
+    }
+    bytes = (uint8_t *)malloc((size_t)length);
+    if (bytes == NULL) {
+        fclose(file);
+        return false;
+    }
+    if (fread(bytes, 1, (size_t)length, file) != (size_t)length) {
+        free(bytes);
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+
+    if (read_le32_local(bytes) != C64_SNAPSHOT_MAGIC ||
+        read_le32_local(bytes + 4) != C64_SNAPSHOT_VERSION) {
+        free(bytes);
+        return false;
+    }
+    pos = read_le32_local(bytes + 8);
+    while (pos + C64M_STATE_CHUNK_HEADER_SIZE <= (size_t)length) {
+        uint32_t tag = read_le32_local(bytes + pos);
+        uint32_t chunk_len = read_le32_local(bytes + pos + 4);
+        const uint8_t *payload;
+
+        pos += C64M_STATE_CHUNK_HEADER_SIZE;
+        if (chunk_len > (uint32_t)((size_t)length - pos)) {
+            break;
+        }
+        payload = bytes + pos;
+        if (tag == C64M_STATE_HOST_TAG &&
+            chunk_len >= C64M_STATE_HOST_CHUNK_SIZE &&
+            read_le32_local(payload) == C64M_STATE_HOST_VERSION) {
+            uint8_t port = payload[4];
+            uint8_t layout = payload[5];
+            if (port <= 2u && layout <= (uint8_t)FRONTEND_JOYSTICK_LAYOUT_WASD) {
+                *out_port = port;
+                *out_layout = (frontend_joystick_layout)layout;
+                found = true;
+            }
+        }
+        pos += chunk_len;
+    }
+    free(bytes);
+    return found;
+}
+
+static void apply_loaded_host_state(
+    const char *path,
+    app_options *options,
+    frontend *ui,
+    runtime_client *client,
+    sdl_c64_controller_state *controller_state,
+    frontend_joystick_input *kbd_joystick) {
+    uint8_t port = 0;
+    frontend_joystick_layout layout = FRONTEND_JOYSTICK_LAYOUT_NUMPAD;
+
+    if (kbd_joystick == NULL ||
+        !read_host_state_chunk(path, &port, &layout)) {
+        return;
+    }
+    frontend_joystick_set_layout(kbd_joystick, layout);
+    frontend_joystick_set_port(kbd_joystick, port);
+    if (options != NULL) {
+        options->keyboard_joystick_port = (int)port;
+        app_options_set_string(
+            &options->keyboard_joystick_layout,
+            frontend_joystick_layout_to_string(layout));
+    }
+    if (controller_state != NULL) {
+        sdl_c64_controller_send_ports(controller_state, client);
+    }
+    if (ui != NULL && options != NULL && !frontend_config_dialog_is_open(ui)) {
+        frontend_set_config_state(ui, options);
+    }
+    SDL_Log(
+        "loaded host keyboard joystick: port %u (%s)",
+        (unsigned)port,
+        frontend_joystick_layout_to_string(layout));
 }
 
 static c64_config machine_config_from_options(const app_options *options) {
@@ -1623,6 +1798,8 @@ static void poll_runtime_events(
     frontend *ui,
     frontend_debug_state *debug_state,
     app_options *options,
+    sdl_c64_controller_state *controller_state,
+    frontend_joystick_input *kbd_joystick,
     control_server *control,
     deferred_control_response *deferred,
     control_cached_state *control_cache) {
@@ -1656,8 +1833,18 @@ static void poll_runtime_events(
                 frontend_invalidate_disassembly_cache(ui);
             }
         } else if (event.type == RUNTIME_EVENT_SAVE_STATE_COMPLETE) {
+            if (!append_host_state_chunk(event.data.state_file.path, options, kbd_joystick)) {
+                SDL_Log("save state host settings append failed: %s", event.data.state_file.path);
+            }
             SDL_Log("save state complete: %s", event.data.state_file.path);
         } else if (event.type == RUNTIME_EVENT_LOAD_STATE_COMPLETE) {
+            apply_loaded_host_state(
+                event.data.state_file.path,
+                options,
+                ui,
+                client,
+                controller_state,
+                kbd_joystick);
             SDL_Log("load state complete: %s", event.data.state_file.path);
         } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
                    debug_state != NULL &&
@@ -3575,6 +3762,8 @@ static bool run_main_loop(
             ui,
             &debug_state,
             options,
+            &controller_state,
+            &kbd_joystick,
             control,
             &deferred_control,
             &control_cache);
@@ -3636,6 +3825,8 @@ static bool run_headless_loop(
             NULL,
             &debug_state,
             options,
+            NULL,
+            NULL,
             control,
             &deferred_control,
             &control_cache);
@@ -3810,7 +4001,7 @@ int main(int argc, char **argv) {
         control_server_stop(control);
         runtime_client_quit(client);
         runtime_stop(rt);
-        poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL);
+        poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         if (!runtime_save_debug_ini(rt)) {
             SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
         }
@@ -3928,7 +4119,7 @@ int main(int argc, char **argv) {
     control_server_stop(control);
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL);
+    poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (!runtime_save_debug_ini(rt)) {
         SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
     }

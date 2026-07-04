@@ -113,6 +113,7 @@ The file extension determines how the file is handled:
 | Extension | Action                                                         |
 |-----------|----------------------------------------------------------------|
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
+| `.c64state` | Load a saved machine state snapshot                         |
 | `.crt`    | Attach a generic 8K/16K cartridge and reset with it running |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B–$2E`) |
 | `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
@@ -125,6 +126,9 @@ dropping — there is no way to override it by name alone.
 Dropping a program (`.prg`, `.t64`, or `.bas`) while a cartridge is attached automatically
 detaches the cartridge, so the dropped program boots instead of the cartridge. Dropping
 another `.crt` replaces the current cartridge. See **Cartridges**.
+
+Dropping a `.c64state` file restores the saved machine state. The snapshot must match
+the currently loaded ROMs.
 
 ### Audio
 
@@ -567,6 +571,22 @@ apply to `.T64` files.
 | Basic Program        | Read start and end from `$2B-$2E`; forces header on    |
 | Write address header | Prefix the saved file with the two-byte load address   |
 | Start / End          | Hex address range for a raw memory save                |
+
+### State
+
+**[Load...]** opens a file browser for a `.c64state` snapshot and restores it.
+
+**[Save As...]** opens a save dialog and writes a named `.c64state` snapshot.
+
+State snapshots preserve the emulated machine state, RAM, color RAM, CPU, VIC-II, CIA,
+SID, attached generic cartridge, mounted D64 references, and the frontend keyboard
+joystick layout/port. The current v1 format stores references and hashes for external
+content rather than embedding every ROM or media byte, so a snapshot is expected to be
+loaded with the same ROM files available.
+
+**Shift+Opt+>** quicksaves to the configured quicksave folder. Each quicksave creates a
+new timestamped `.c64state` file; existing quicksaves are not overwritten. **Shift+Opt+<**
+quickloads the newest `.c64state` in that folder.
 
 ### Emulator Controls
 
@@ -1086,6 +1106,7 @@ The Configure dialog (opened from **[Configure...]** in the Machine tab) has two
 |----------------------|-------------------------------------------------|
 | Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
 | Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
+| Quicksave Folder     | Folder used by Shift+Opt+> and Shift+Opt+< state shortcuts |
 | Symbol Files         | Comma-separated paths to symbol files loaded at startup |
 | Keyboard Joystick    | Tri-state port selector (Off / Port 1 / Port 2) and Numpad / WASD layout |
 | Auto-save INI on Quit| Save `c64m.ini` automatically when quitting     |
@@ -1142,6 +1163,12 @@ emulator removes comments.
 
 The port can also be set for one launch with `--kbdjoy <0|1|2>`, and the layout with
 `--kbdjoy-layout <numpad|wasd>`.
+
+### [state]
+
+| Key                | Value                                      |
+|--------------------|--------------------------------------------|
+| `quicksave_folder` | Folder used for quicksave/quickload (`.` by default) |
 
 ### [Window]
 
@@ -1288,6 +1315,8 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Opt+2**       | Map gamepad to joystick port 2 (default)                   |
 | **Shift+Opt+1** | Assign the keyboard joystick to port 1 (press again to disable) |
 | **Shift+Opt+2** | Assign the keyboard joystick to port 2 (press again to disable) |
+| **Shift+Opt+>** | Quicksave state to the configured quicksave folder              |
+| **Shift+Opt+<** | Quickload the newest state from the configured quicksave folder |
 | **Cmd+Q**       | Quit (macOS)                                               |
 
 ### Paste and Clipboard
@@ -1842,6 +1871,9 @@ The host keyboard can also act as a joystick. It is disabled by default; assign 
 port with **Shift+Opt+1** / **Shift+Opt+2**, the Keyboard Joystick control in the
 Configure dialog, or `--kbdjoy`. A gamepad and the keyboard may share the same port,
 in which case their directions and fire are combined.
+
+When a `.c64state` snapshot is saved, the active keyboard joystick port and layout are
+stored with it and restored when the snapshot is loaded.
 
 Two layouts are available:
 

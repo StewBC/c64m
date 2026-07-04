@@ -2753,11 +2753,34 @@ static void runtime_clear_host_transients_after_state_load(runtime *rt) {
     runtime_update_sid_sample_output(rt);
 }
 
+static bool runtime_finish_pending_state_snapshot_instruction(runtime *rt) {
+    size_t guard = 0;
+
+    while (rt->machine.pending_cpu_trace_active) {
+        if (guard++ >= 4096u) {
+            runtime_publish_error(rt, "failed to reach snapshot instruction boundary");
+            return false;
+        }
+        if (!runtime_step_cycle(rt)) {
+            return false;
+        }
+        if (c64_consume_frame_complete(&rt->machine)) {
+            runtime_publish_completed_frame(rt);
+            rt->next_frame_cycle = rt->machine.clock.cycle;
+        }
+    }
+    return true;
+}
+
 static void runtime_save_state(runtime *rt, const runtime_command *command) {
     const char *path = command->data.state_file.path;
     uint8_t *bytes;
     size_t size;
     size_t written;
+
+    if (!runtime_finish_pending_state_snapshot_instruction(rt)) {
+        return;
+    }
 
     size = c64_snapshot_size(&rt->machine);
     if (size == 0) {

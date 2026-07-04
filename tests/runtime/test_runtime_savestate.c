@@ -181,6 +181,30 @@ static void test_runtime_save_load_roundtrip(void) {
     remove("runtime_roundtrip.c64state");
 }
 
+static void test_runtime_save_finishes_pending_instruction(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    int result;
+
+    write_savestate_roms(0);
+    rt = start_runtime(&client);
+
+    expect_true("run one cycle", runtime_client_run_cycles(client, 1));
+    if (!poll_event_timeout(client, &event, RUNTIME_EVENT_RUN_COMPLETE)) {
+        fail("RUN_COMPLETE after one cycle not received");
+    }
+    expect_true("save mid-instruction state",
+                runtime_client_save_state(client, "runtime_mid_instruction.c64state"));
+    result = poll_event_or_error(client, &event, RUNTIME_EVENT_SAVE_STATE_COMPLETE);
+    if (result <= 0) {
+        fail("mid-instruction save-state completion not received");
+    }
+
+    stop_runtime(rt, client);
+    remove("runtime_mid_instruction.c64state");
+}
+
 static void test_runtime_load_rejects_bad_snapshot_and_preserves_machine(void) {
     runtime *rt;
     runtime_client *client;
@@ -241,6 +265,7 @@ static void test_runtime_load_rejects_rom_mismatch(void) {
 
 int main(void) {
     test_runtime_save_load_roundtrip();
+    test_runtime_save_finishes_pending_instruction();
     test_runtime_load_rejects_bad_snapshot_and_preserves_machine();
     test_runtime_load_rejects_rom_mismatch();
     remove("savestate_64c.bin");

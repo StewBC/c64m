@@ -35,9 +35,11 @@ The emulator currently includes:
 - Generic CRT support covers normal hardware type 0 8K/16K ROM cartridges only. Writes under cartridge ROM update shadow RAM, resets preserve the attached cartridge, and broader mappers/INI persistence are deferred. See `docs/status/CPU_MACHINE.md`, `docs/status/DISK_IO.md`, and `c64mcrt.md`.
 - Save-state support now includes a chunked machine serializer, runtime-thread
   save/load commands, client APIs, `.c64state` drag/drop, Machine tab State
-  Save As/Load dialogs, `Cmd+>` quicksave, `Cmd+<` quickload, and a persisted
-  Emulator-tab quicksave folder option. CLI state loading, self-contained
-  embedding mode, and full 1541 state capture remain deferred. See
+  Save As/Load dialogs, `Opt+Shift+>` quicksave, `Opt+Shift+<` quickload, and a
+  persisted Emulator-tab quicksave folder option. Save-state files also carry
+  the frontend keyboard-joystick layout/port as optional host metadata. CLI
+  state loading, self-contained embedding mode, and full 1541 state capture
+  remain deferred. See
   `docs/status/CPU_MACHINE.md`.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
 - VIC-II sprite BA timing now uses per-standard PAL 6569 and NTSC 6567R8 tables selected from machine video configuration.

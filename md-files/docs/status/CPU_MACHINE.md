@@ -128,11 +128,12 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Phase 1 of save-state support is implemented in `src/machine/c64_snapshot.{c,h}`.
   Phase 2 adds runtime-thread `RUNTIME_COMMAND_SAVE_STATE` /
   `RUNTIME_COMMAND_LOAD_STATE` dispatch plus `runtime_client_save_state()` /
-  `runtime_client_load_state()`. Phase 3 adds frontend hooks: `Cmd+>` quicksave,
-  `Cmd+<` quickload, `.c64state` drag/drop load, and Machine tab `State`
-  `Save As...` / `Load...` dialogs. The Emulator config tab now exposes
-  `Quicksave Folder`, persisted as `[state] quicksave_folder` with default `.`.
-  No CLI load-state path exists yet.
+  `runtime_client_load_state()`. Phase 3 adds frontend hooks:
+  `Opt+Shift+>` quicksave, `Opt+Shift+<` quickload, `.c64state` drag/drop load,
+  and Machine tab `State` `Save As...` / `Load...` dialogs. The Emulator config
+  tab now exposes `Quicksave Folder`, persisted as `[state] quicksave_folder`
+  with default `.`. Save-state files include optional frontend host metadata for
+  keyboard-joystick layout/port. No CLI load-state path exists yet.
 - The format is versioned and chunked: header plus tagged chunks for metadata,
   RAM/color RAM, bus banking/counters, CPU, VIC-II, CIA #1/#2, SID, machine
   controls, cartridge, and drive slots.
@@ -147,11 +148,12 @@ This is expected when the CPU interrupt-disable flag remains set.
 - Runtime save/load performs file I/O on the runtime thread, emits
   `RUNTIME_EVENT_SAVE_STATE_COMPLETE` / `RUNTIME_EVENT_LOAD_STATE_COMPLETE` on
   success, and uses normal `RUNTIME_EVENT_ERROR` messages on failure. Successful
-  load publishes refreshed CPU, machine, and debug-frame state.
-- Snapshot save currently rejects mid-instruction cycle-stepping state
-  (`pending_cpu_trace_active`) because runtime save/load must happen at an
-  instruction boundary. CPU bus trace buffers and write-history are debugger
-  scratch and are cleared/rebuilt rather than serialized.
+  load publishes refreshed CPU, machine, and debug-frame state. Runtime save
+  finishes any active deferred CPU trace first, so UI/runtime save requests land
+  on an instruction boundary even if the command arrived mid-instruction.
+- The raw machine serializer still rejects mid-instruction cycle-stepping state
+  (`pending_cpu_trace_active`). CPU bus trace buffers and write-history are
+  debugger scratch and are cleared/rebuilt rather than serialized.
 
 ### Save-state inventory
 
@@ -228,7 +230,8 @@ Do not serialize:
 - `tests/runtime/test_runtime_savestate.c` covers runtime client save/load
   commands, runtime-thread snapshot file I/O, successful restore through the
   public runtime event API, bad snapshot rejection, failed-load preservation of
-  live machine state, and ROM hash mismatch rejection.
+  live machine state, ROM hash mismatch rejection, and runtime save after a
+  one-cycle mid-instruction run.
 - Local tests do not provide per-opcode undocumented Harte-style semantic coverage.
 - Practical undocumented opcode coverage is sufficient for the current milestone.
 

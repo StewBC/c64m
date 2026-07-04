@@ -1,6 +1,7 @@
 .DS_Store
 .vscode/
 .cache/
+snapshots/
 assets/
 build/
 disks/

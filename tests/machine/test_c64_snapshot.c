@@ -311,6 +311,13 @@ static uint8_t *save_snapshot(const c64_t *machine, size_t *out_size) {
     return bytes;
 }
 
+static void write_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)(value & 0xffu);
+    bytes[1] = (uint8_t)((value >> 8) & 0xffu);
+    bytes[2] = (uint8_t)((value >> 16) & 0xffu);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
 static void mutate_machine(c64_t *machine) {
     char error[256];
 
@@ -375,6 +382,39 @@ static void test_round_trip(void) {
     c64_unmount_all_drives(&target);
 }
 
+static void test_ignores_unknown_chunk(void) {
+    c64_t source;
+    c64_t target;
+    uint8_t *snapshot;
+    uint8_t *extended;
+    size_t snapshot_size;
+    const uint8_t payload[4] = {1, 2, 3, 4};
+
+    init_ready_machine(&source);
+    init_ready_machine(&target);
+    prepare_interesting_state(&source);
+    snapshot = save_snapshot(&source, &snapshot_size);
+
+    extended = (uint8_t *)malloc(snapshot_size + 12);
+    if (extended == NULL) {
+        fail("alloc extended snapshot");
+    }
+    memcpy(extended, snapshot, snapshot_size);
+    write_le32(extended + snapshot_size, 0x54534554u); /* TEST */
+    write_le32(extended + snapshot_size + 4, sizeof(payload));
+    memcpy(extended + snapshot_size + 8, payload, sizeof(payload));
+
+    mutate_machine(&target);
+    expect_true("load snapshot with unknown chunk",
+                c64_snapshot_load(&target, extended, snapshot_size + 12));
+    assert_restored_state(&target);
+
+    free(snapshot);
+    free(extended);
+    c64_unmount_all_drives(&source);
+    c64_unmount_all_drives(&target);
+}
+
 static void test_reject_and_leave_unchanged(void) {
     c64_t source;
     c64_t target;
@@ -435,6 +475,7 @@ static void test_reject_mid_instruction_state(void) {
 
 int main(void) {
     test_round_trip();
+    test_ignores_unknown_chunk();
     test_reject_and_leave_unchanged();
     test_reject_rom_hash_mismatch();
     test_reject_mid_instruction_state();

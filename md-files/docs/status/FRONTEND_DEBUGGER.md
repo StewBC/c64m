@@ -186,8 +186,10 @@ UI behavior:
 - Basic Program save reads `$2B/$2C` as start and `$2D/$2E` as exclusive end, and forces Write address header.
 - State has Save As... and Load... buttons wired to runtime save/load state
   commands. Dropping a `.c64state` file loads it.
-- `Cmd+>` quicksaves to the configured quicksave folder using a
-  content/timestamp filename; `Cmd+<` quickloads the newest `.c64state` there.
+- `Opt+Shift+>` quicksaves to the configured quicksave folder using a
+  content/timestamp filename; `Opt+Shift+<` quickloads the newest `.c64state`
+  there. Saved state files also restore the frontend keyboard-joystick
+  layout/port when the optional host metadata chunk is present.
 
 ## Help UI
 
@@ -247,8 +249,9 @@ UI behavior:
 - Verify host load/save paths, especially Basic Program TXTTAB/VARTAB behavior.
 - Verify drag/drop and Machine Load for generic `.CRT`, including paths with
   spaces and parentheses.
-- Verify `Cmd+>` / `Cmd+<`, Machine State Save As/Load, and `.c64state`
-  drag/drop.
+- Verify `Opt+Shift+>` / `Opt+Shift+<`, Machine State Save As/Load,
+  `.c64state` drag/drop, and keyboard-joystick layout/port restore after
+  loading a saved state from a fresh launch.
 - Verify symbol lookup opens from both Disassembly and Memory views (Opt+S).
 - Verify search filters symbols with regex patterns; verify column header sorting.
 - Verify DASM selection jumps cursor; verify Memory selection row-aligns view and places cursor.

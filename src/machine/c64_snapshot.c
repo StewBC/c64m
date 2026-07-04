@@ -1141,6 +1141,7 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
             seen.drv9 = chunk.ok;
             break;
         default:
+            chunk.pos = chunk.len;
             break;
         }
 

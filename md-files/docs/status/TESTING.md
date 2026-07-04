@@ -14,12 +14,13 @@
 - Machine save-state foundation: `tests/machine/test_c64_snapshot.c` covers
   `c64_snapshot_size/save/load`, representative CPU/RAM/bus/VIC/CIA/SID/cart/D64
   drive-slot restore, byte-identical re-save after load, bad magic rejection,
-  ROM hash mismatch rejection, failed-load all-or-nothing behavior, and
-  mid-instruction save rejection.
+  ROM hash mismatch rejection, failed-load all-or-nothing behavior,
+  mid-instruction save rejection, and ignoring unknown optional chunks.
 - Runtime save-state commands: `tests/runtime/test_runtime_savestate.c` covers
   `runtime_client_save_state` / `runtime_client_load_state`, runtime-thread
   snapshot file I/O, completion/error events, successful restore, bad snapshot
-  rejection preserving live RAM, and ROM hash mismatch rejection.
+  rejection preserving live RAM, ROM hash mismatch rejection, and save after a
+  one-cycle mid-instruction run.
 - Save-state frontend/config hooks: `tests/test_app_options.c` covers
   `[state] quicksave_folder` save/reload persistence. Hotkeys, native Save As /
   Load dialogs, and `.c64state` drag/drop remain manual smoke coverage.
@@ -55,11 +56,14 @@
   - Configure Misc -> Machine -> Emulator -> Configure... -> Emulator tab ->
     Quicksave Folder, Apply, quit, and confirm `[state] quicksave_folder` is
     persisted.
-  - Press `Cmd+>` twice and confirm timestamped `.c64state` files are created in
-    the quicksave folder without overwriting.
-  - Press `Cmd+<` and confirm the newest `.c64state` in that folder loads.
+  - Press `Opt+Shift+>` twice and confirm timestamped `.c64state` files are
+    created in the quicksave folder without overwriting.
+  - Press `Opt+Shift+<` and confirm the newest `.c64state` in that folder loads.
   - Use Misc -> Machine -> State -> Save As... / Load... and drag/drop a
     `.c64state` file to confirm both named paths load/save.
+  - Enable keyboard joystick with `Alt+Shift+2`, set WASD layout, save state,
+    relaunch with defaults, then load that state and confirm keyboard joystick
+    is restored to port 2/WASD.
   - Assemble with Reset off.
   - Test live inject plus auto-run.
   - Verify error dialog.

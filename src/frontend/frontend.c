@@ -5573,11 +5573,11 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "State", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 24.0f, 2);
-    if (nk_button_label(ctx, "Save As...")) {
-        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG);
-    }
     if (nk_button_label(ctx, "Load...")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG);
+    }
+    if (nk_button_label(ctx, "Save As...")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG);
     }
 
     /* Emulator */
