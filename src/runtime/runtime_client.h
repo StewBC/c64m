@@ -84,6 +84,8 @@ bool runtime_client_rearm_oneshot_breakpoints(runtime_client *client);
 bool runtime_client_request_breakpoints(runtime_client *client);
 bool runtime_client_load_prg(runtime_client *client, const char *path);
 bool runtime_client_load_crt(runtime_client *client, const char *path);
+bool runtime_client_save_state(runtime_client *client, const char *path);
+bool runtime_client_load_state(runtime_client *client, const char *path);
 bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path);
 bool runtime_client_unmount_disk(runtime_client *client, uint8_t device);
 bool runtime_client_request_disk_status(runtime_client *client, uint8_t device);

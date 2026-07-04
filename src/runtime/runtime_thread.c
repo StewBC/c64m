@@ -2,6 +2,7 @@
 
 #include "audio_buffer.h"
 #include "c64.h"
+#include "c64_snapshot.h"
 #include "message_queue.h"
 #include "runtime_breakpoint_ini.h"
 #include "runtime_command.h"
@@ -566,6 +567,18 @@ static void runtime_publish_drive_status(runtime *rt, uint8_t device) {
     runtime_publish_event(rt, &event);
 }
 
+static void runtime_publish_state_file_complete(
+    runtime *rt,
+    runtime_event_type type,
+    const char *path) {
+    runtime_event event = {
+        .type = type,
+    };
+
+    snprintf(event.data.state_file.path, sizeof(event.data.state_file.path), "%s", path ? path : "");
+    runtime_publish_event(rt, &event);
+}
+
 static c64_drive_status_result runtime_drive_status_from_d64_result(d64_result result) {
     switch (result) {
     case D64_OK:
@@ -637,6 +650,29 @@ static bool runtime_read_file_bytes(const char *path, uint8_t **out_bytes, size_
 
     *out_bytes = bytes;
     *out_size = (size_t)size;
+    return true;
+}
+
+static bool runtime_write_file_bytes(const char *path, const uint8_t *bytes, size_t size) {
+    FILE *file;
+
+    if (path == NULL || bytes == NULL) {
+        return false;
+    }
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        return false;
+    }
+    if (size > 0 && fwrite(bytes, 1, size, file) != size) {
+        fclose(file);
+        return false;
+    }
+    if (ferror(file) != 0) {
+        fclose(file);
+        return false;
+    }
+    fclose(file);
     return true;
 }
 
@@ -2692,6 +2728,100 @@ static void runtime_save_bin(runtime *rt, const runtime_command *command) {
     fclose(file);
 }
 
+static void runtime_clear_host_transients_after_state_load(runtime *rt) {
+    free(rt->pending_prg_path);
+    rt->pending_prg_path = NULL;
+    rt->pending_prg_resume_running = false;
+    free(rt->pending_asm_path);
+    rt->pending_asm_path = NULL;
+    free(rt->pending_bin_path);
+    rt->pending_bin_path = NULL;
+    rt->paste_active = false;
+    rt->autorun_d64_phase = 0;
+    rt->breakpoint_hit_pending = false;
+    rt->suppress_execute_bp = false;
+    rt->temp_bp_active = false;
+    rt->temp_bp_skip_current = false;
+    rt->next_frame_cycle = 0;
+    rt->pace_initialized = false;
+    rt->audio_cycle_accum = 0.0;
+    rt->audio_sample_accum = 0.0;
+    rt->audio_sample_count = 0;
+    if (rt->audio_out != NULL) {
+        audio_buffer_reset(rt->audio_out);
+    }
+    runtime_update_sid_sample_output(rt);
+}
+
+static void runtime_save_state(runtime *rt, const runtime_command *command) {
+    const char *path = command->data.state_file.path;
+    uint8_t *bytes;
+    size_t size;
+    size_t written;
+
+    size = c64_snapshot_size(&rt->machine);
+    if (size == 0) {
+        runtime_publish_error(rt, "failed to size machine state snapshot");
+        return;
+    }
+
+    bytes = (uint8_t *)malloc(size);
+    if (bytes == NULL) {
+        runtime_publish_error(rt, "failed to allocate machine state snapshot");
+        return;
+    }
+
+    written = c64_snapshot_save(&rt->machine, bytes, size);
+    if (written != size) {
+        free(bytes);
+        runtime_publish_error(rt, "failed to serialize machine state snapshot");
+        return;
+    }
+
+    if (!runtime_write_file_bytes(path, bytes, written)) {
+        free(bytes);
+        runtime_publish_error(rt, "failed to write machine state snapshot");
+        return;
+    }
+
+    free(bytes);
+    runtime_publish_state_file_complete(rt, RUNTIME_EVENT_SAVE_STATE_COMPLETE, path);
+}
+
+static void runtime_load_state(runtime *rt, const runtime_command *command) {
+    const char *path = command->data.state_file.path;
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+    runtime_stop_reason previous_stop_reason = rt->last_stop_reason;
+
+    if (!runtime_read_file_bytes(path, &bytes, &size)) {
+        runtime_publish_error(rt, "failed to read machine state snapshot");
+        return;
+    }
+
+    if (!c64_snapshot_load(&rt->machine, bytes, size)) {
+        free(bytes);
+        runtime_publish_error(rt, "failed to load machine state snapshot");
+        return;
+    }
+    free(bytes);
+
+    runtime_clear_host_transients_after_state_load(rt);
+    rt->exec_state = was_running ? RUNTIME_EXEC_RUNNING : RUNTIME_EXEC_PAUSED;
+    rt->last_stop_reason = was_running ? RUNTIME_STOP_REASON_NONE : previous_stop_reason;
+    if (was_running) {
+        runtime_reset_pacer(rt);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    } else {
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+    }
+    runtime_publish_state_file_complete(rt, RUNTIME_EVENT_LOAD_STATE_COMPLETE, path);
+    runtime_publish_cpu_state(rt);
+    runtime_publish_machine_state(rt);
+    runtime_publish_debug_frame(rt);
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
@@ -2941,6 +3071,14 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_SAVE_BIN:
             runtime_save_bin(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_SAVE_STATE:
+            runtime_save_state(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_LOAD_STATE:
+            runtime_load_state(rt, command);
             break;
 
         case RUNTIME_COMMAND_REQUEST_CALL_STACK: {

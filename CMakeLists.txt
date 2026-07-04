@@ -565,6 +565,18 @@ target_link_libraries(test_runtime_fileio PRIVATE
 
 add_test(NAME runtime_fileio COMMAND test_runtime_fileio)
 
+add_executable(test_runtime_savestate
+    tests/runtime/test_runtime_savestate.c
+)
+
+target_compile_features(test_runtime_savestate PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_savestate PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_savestate COMMAND test_runtime_savestate)
+
 add_executable(test_runtime_stepping
     tests/runtime/test_runtime_stepping.c
 )

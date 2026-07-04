@@ -126,8 +126,10 @@ This is expected when the CPU interrupt-disable flag remains set.
 ## Save-state serializer foundation
 
 - Phase 1 of save-state support is implemented in `src/machine/c64_snapshot.{c,h}`.
-  It is a machine-level serializer only; no runtime command, frontend UI, hotkey,
-  or CLI load-state path exists yet.
+  Phase 2 adds runtime-thread `RUNTIME_COMMAND_SAVE_STATE` /
+  `RUNTIME_COMMAND_LOAD_STATE` dispatch plus `runtime_client_save_state()` /
+  `runtime_client_load_state()`. No frontend UI, hotkey, or CLI load-state path
+  exists yet.
 - The format is versioned and chunked: header plus tagged chunks for metadata,
   RAM/color RAM, bus banking/counters, CPU, VIC-II, CIA #1/#2, SID, machine
   controls, cartridge, and drive slots.
@@ -139,6 +141,10 @@ This is expected when the CPU interrupt-disable flag remains set.
 - `c64_snapshot_load` is all-or-nothing: it parses into a temporary machine,
   validates magic/version/chunks/ROM hashes, and only then applies loaded state.
   Failed loads leave the target machine unchanged.
+- Runtime save/load performs file I/O on the runtime thread, emits
+  `RUNTIME_EVENT_SAVE_STATE_COMPLETE` / `RUNTIME_EVENT_LOAD_STATE_COMPLETE` on
+  success, and uses normal `RUNTIME_EVENT_ERROR` messages on failure. Successful
+  load publishes refreshed CPU, machine, and debug-frame state.
 - Snapshot save currently rejects mid-instruction cycle-stepping state
   (`pending_cpu_trace_active`) because runtime save/load must happen at an
   instruction boundary. CPU bus trace buffers and write-history are debugger
@@ -202,8 +208,8 @@ Do not serialize:
 - Cartridge mappers beyond generic 8K/16K normal cartridges are deferred.
 - Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
   freezer buttons are deferred.
-- Save-state runtime commands, frontend UI/hotkeys/CLI, self-contained snapshot
-  mode, runtime path/hash manifests, and full 1541 state capture are deferred.
+- Save-state frontend UI/hotkeys/CLI, self-contained snapshot mode, runtime
+  path/hash manifests, and full 1541 state capture are deferred.
 - The debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present in the repository.
 
@@ -216,6 +222,10 @@ Do not serialize:
   representative round-trip restore, byte-identical re-save, bad magic rejection,
   ROM hash mismatch rejection, failed-load all-or-nothing behavior, and
   mid-instruction save rejection.
+- `tests/runtime/test_runtime_savestate.c` covers runtime client save/load
+  commands, runtime-thread snapshot file I/O, successful restore through the
+  public runtime event API, bad snapshot rejection, failed-load preservation of
+  live machine state, and ROM hash mismatch rejection.
 - Local tests do not provide per-opcode undocumented Harte-style semantic coverage.
 - Practical undocumented opcode coverage is sufficient for the current milestone.
 

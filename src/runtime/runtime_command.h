@@ -54,7 +54,9 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_PASTE_EVENTS,
     RUNTIME_COMMAND_REARM_ONESHOT_BREAKPOINTS,
     RUNTIME_COMMAND_REQUEST_DEBUG_MEMORY,
-    RUNTIME_COMMAND_LOAD_CRT
+    RUNTIME_COMMAND_LOAD_CRT,
+    RUNTIME_COMMAND_SAVE_STATE,
+    RUNTIME_COMMAND_LOAD_STATE
 } runtime_command_type;
 
 enum {
@@ -142,6 +144,10 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
         } load_crt;
+
+        struct {
+            char path[RUNTIME_COMMAND_PATH_MAX];
+        } state_file;
 
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];

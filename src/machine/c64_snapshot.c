@@ -1184,21 +1184,27 @@ size_t c64_snapshot_save(const c64_t *m, uint8_t *out, size_t out_cap) {
 }
 
 bool c64_snapshot_load(c64_t *m, const uint8_t *in, size_t in_len) {
-    c64_t temp;
+    c64_t *temp;
     bool ok;
 
     if (m == NULL || in == NULL) {
         return false;
     }
 
-    memset(&temp, 0, sizeof(temp));
-    ok = read_snapshot_into_temp(&temp, m, in, in_len);
-    if (!ok) {
-        c64_unmount_all_drives(&temp);
+    temp = (c64_t *)calloc(1, sizeof(*temp));
+    if (temp == NULL) {
         return false;
     }
 
-    apply_loaded_machine(m, &temp);
-    c64_unmount_all_drives(&temp);
+    ok = read_snapshot_into_temp(temp, m, in, in_len);
+    if (!ok) {
+        c64_unmount_all_drives(temp);
+        free(temp);
+        return false;
+    }
+
+    apply_loaded_machine(m, temp);
+    c64_unmount_all_drives(temp);
+    free(temp);
     return true;
 }

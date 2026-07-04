@@ -26,7 +26,9 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_FRAME_READY,
     RUNTIME_EVENT_CALL_STACK_RESPONSE,
     RUNTIME_EVENT_DISK_SWAP,
-    RUNTIME_EVENT_DEBUG_MEMORY_READY
+    RUNTIME_EVENT_DEBUG_MEMORY_READY,
+    RUNTIME_EVENT_SAVE_STATE_COMPLETE,
+    RUNTIME_EVENT_LOAD_STATE_COMPLETE
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -257,6 +259,10 @@ typedef struct runtime_event {
             uint16_t address;
             char path[1024];
         } assemble;
+
+        struct {
+            char path[1024];
+        } state_file;
 
         struct {
             int32_t swap_param;
