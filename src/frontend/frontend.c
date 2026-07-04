@@ -7029,6 +7029,27 @@ bool frontend_routes_keyboard_to_c64(const frontend *ui)
         && !frontend_any_dialog_open(ui);
 }
 
+bool frontend_wants_text_input(const frontend *ui)
+{
+    const struct nk_window *win;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return false;
+    }
+
+    /* Nuklear keeps at most one active text editor at a time, spread across its
+       window list. Walk every window and report whether any edit widget
+       currently holds focus. The main loop uses this to keep SDL text input
+       (and thus the macOS press-and-hold accent popup) enabled only while the
+       user is actually typing into a UI field. */
+    for (win = ui->ctx->begin; win != NULL; win = win->next) {
+        if (win->edit.active) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key)
 {
     bool reverse;

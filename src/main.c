@@ -3577,6 +3577,11 @@ static bool run_main_loop(
     bool running = true;
     bool ui_visible = false;
     bool title_set = false;
+    /* Keep SDL text input off unless a UI text field is focused, so holding a
+       key for joystick/keyboard emulation never triggers the macOS
+       press-and-hold accent popup. Seed from SDL's current state so the first
+       frame only calls SDL when the desired state actually differs. */
+    bool text_input_active = SDL_IsTextInputActive() == SDL_TRUE;
     frontend_runtime_state last_title_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
     runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
     frontend_input_mapper input_mapper;
@@ -3788,6 +3793,19 @@ static bool run_main_loop(
             return false;
         }
         frontend_render(ui, ui_visible, &debug_state);
+        {
+            /* frontend_render has just built this frame's UI, so the edit-focus
+               state is now current. Sync SDL text input to it. */
+            bool want_text_input = frontend_wants_text_input(ui);
+            if (want_text_input != text_input_active) {
+                if (want_text_input) {
+                    SDL_StartTextInput();
+                } else {
+                    SDL_StopTextInput();
+                }
+                text_input_active = want_text_input;
+            }
+        }
         dispatch_debugger_intents(client, ui, options, &controller_state, &kbd_joystick);
         platform_window_present(window);
     }

@@ -70,6 +70,16 @@
 - Known limitation: numpad matching uses `keysym.sym`, so numpad directions
   depend on NumLock being on (consistent with how the rest of keyboard input is
   matched). WASD is unaffected.
+- SDL text input is only enabled while a Nuklear text field actually holds
+  focus. Each frame, after `frontend_render` builds the UI, `src/main.c`'s main
+  loop calls `frontend_wants_text_input(ui)` (walks `ctx->begin` checking each
+  window's `edit.active`) and toggles `SDL_StartTextInput`/`SDL_StopTextInput`
+  only on change. Rationale: SDL enables text input by default, and on macOS an
+  active text-input context turns a held key into the "press and hold" accent
+  popup instead of key repeat — which fired when holding e.g. `s` for WASD
+  joystick emulation. With text input off during normal gameplay/typing to the
+  C64, the popup no longer appears; it re-enables automatically when a debugger
+  dialog, assembler field, or help search box gains focus.
 
 ## Disassembly effective-address column
 
