@@ -8,7 +8,7 @@
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.
-- Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
+- Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing, `assemble`/`find-symbol` parsing, plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
 - Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.
 - Cartridge detach on program load and reset: `tests/runtime/test_runtime_crt.c` loads a CRT, confirms ROML/ROMH map at `$8000`/`$A000`, then loads a PRG and confirms `$8000` no longer reads cartridge ROM (the program boots instead). It then re-attaches the CRT and checks that `runtime_client_reset_ex(client, false)` keeps the cartridge mapped while `runtime_client_reset_ex(client, true)` detaches it.
 - Machine save-state foundation: `tests/machine/test_c64_snapshot.c` covers
@@ -94,6 +94,7 @@
   - Verify Phase 5 breakpoint commands: `break-exec`, `break-enable`, `break-list`, `break-clear`, `break-clear-all`, `break-create`, `break-update`, and `rearm-oneshots`.
   - Verify Phase 6 wait commands: `wait-paused`, `wait-running`, `wait-frame`, and `wait-event`, including timeout behavior.
   - Verify Phase 7 with `./build/c64m --headless --control-port 6511`; connect to localhost and confirm `wait-running`, `wait-frame`, `get-frame`, `pause`, and `wait-paused`.
+  - Verify `assemble`/`find-symbol`: `assemble reset=0 address=$c000 samples/test1.asm` returns `ok address=$C000`, then `find-symbol loop` returns `ok address=$C004 name=loop`. A bad source returns `error assemble-error <message>`; a missing/absent label returns `error not-found`.
   - Verify normal SDL UI still runs without `--control-port`.
   - Verify quitting the emulator joins the control socket thread cleanly with no connected client and with an idle connected client.
 

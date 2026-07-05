@@ -451,6 +451,12 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 10 && strncmp(name, "wait-event", length) == 0) {
         return CONTROL_COMMAND_WAIT_EVENT;
     }
+    if (length == 8 && strncmp(name, "assemble", length) == 0) {
+        return CONTROL_COMMAND_ASSEMBLE;
+    }
+    if (length == 11 && strncmp(name, "find-symbol", length) == 0) {
+        return CONTROL_COMMAND_FIND_SYMBOL;
+    }
     return CONTROL_COMMAND_NONE;
 }
 
@@ -469,6 +475,45 @@ static bool command_allows_optional_args(control_command_type type)
 {
     return type == CONTROL_COMMAND_GET_FRAME ||
         type == CONTROL_COMMAND_GET_DEBUG_MEMORY;
+}
+
+/* Parse one leading "key=value" assembler option token. Returns:
+     1  a recognized option was consumed (cursor advanced past the token),
+     0  the token is not a recognized option (cursor unchanged; path begins here),
+    -1  a recognized option key carried a malformed value. */
+static int parse_assemble_option(const char **cursor, control_args *args)
+{
+    const char *start;
+    const char *end;
+    const char *value_end;
+    size_t length;
+
+    if (!token_bounds(*cursor, &start, &end)) {
+        return 0;
+    }
+    length = (size_t)(end - start);
+    if (length > 8 && strncmp(start, "address=", 8) == 0) {
+        if (!parse_u16_token(start + 8, &value_end, &args->address) || value_end != end) {
+            return -1;
+        }
+    } else if (length > 12 && strncmp(start, "run-address=", 12) == 0) {
+        if (!parse_u16_token(start + 12, &value_end, &args->run_address) || value_end != end) {
+            return -1;
+        }
+        args->has_run_address = true;
+    } else if (length > 9 && strncmp(start, "auto-run=", 9) == 0) {
+        if (!parse_bool_token(start + 9, &value_end, &args->auto_run) || value_end != end) {
+            return -1;
+        }
+    } else if (length > 6 && strncmp(start, "reset=", 6) == 0) {
+        if (!parse_bool_token(start + 6, &value_end, &args->reset_first) || value_end != end) {
+            return -1;
+        }
+    } else {
+        return 0;
+    }
+    *cursor = end;
+    return 1;
 }
 
 static bool parse_optional_timeout_ms(
@@ -842,6 +887,37 @@ bool control_protocol_parse_request(
             set_parse_error(out_error, id, "bad-args", "expected timeout_ms 1..600000");
             return false;
         }
+    } else if (type == CONTROL_COMMAND_ASSEMBLE) {
+        /* Optional key=value settings precede the source path. Defaults mirror
+           the Misc->Assembler tab: address $8000, run address = address,
+           auto-run off, reset on. */
+        args.address = 0x8000u;
+        args.run_address = 0x8000u;
+        args.reset_first = true;
+        for (;;) {
+            int opt = parse_assemble_option(&cursor, &args);
+            if (opt < 0) {
+                set_parse_error(out_error, id, "bad-args", "invalid assembler option");
+                return false;
+            }
+            if (opt == 0) {
+                break;
+            }
+        }
+        if (!args.has_run_address) {
+            args.run_address = args.address;
+        }
+        if (!copy_rest_argument(cursor, &cursor, args.text, sizeof(args.text))) {
+            set_parse_error(out_error, id, "bad-args", "expected source path");
+            return false;
+        }
+        skip_spaces(&cursor);
+    } else if (type == CONTROL_COMMAND_FIND_SYMBOL) {
+        if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
+            set_parse_error(out_error, id, "bad-args", "expected symbol name");
+            return false;
+        }
+        skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_WAIT_EVENT) {
         if (!copy_token(cursor, &cursor, args.text, sizeof(args.text))) {
             set_parse_error(out_error, id, "bad-args", "expected event name");

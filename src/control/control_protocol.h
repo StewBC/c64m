@@ -57,7 +57,9 @@ typedef enum control_command_type {
     CONTROL_COMMAND_WAIT_PAUSED,
     CONTROL_COMMAND_WAIT_RUNNING,
     CONTROL_COMMAND_WAIT_FRAME,
-    CONTROL_COMMAND_WAIT_EVENT
+    CONTROL_COMMAND_WAIT_EVENT,
+    CONTROL_COMMAND_ASSEMBLE,
+    CONTROL_COMMAND_FIND_SYMBOL
 } control_command_type;
 
 typedef struct control_args {
@@ -68,6 +70,7 @@ typedef struct control_args {
     uint16_t length;
     uint16_t start_address;
     uint16_t end_address;
+    uint16_t run_address;
     uint8_t memory_mode;
     uint8_t device;
     uint8_t port;
@@ -78,6 +81,8 @@ typedef struct control_args {
     bool is_basic;
     bool write_file_address;
     bool include_write_history;
+    bool auto_run;
+    bool has_run_address;
     char text[1024];
 } control_args;
 

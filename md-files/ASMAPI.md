@@ -61,9 +61,20 @@ bool runtime_client_assemble_file(
     uint16_t address);
 ```
 
-This queues `RUNTIME_COMMAND_ASSEMBLE_FILE`. The runtime thread currently
-requires the machine to be paused before assembling. If the runtime is not
-paused, it publishes a `RUNTIME_EVENT_ERROR`.
+This queues `RUNTIME_COMMAND_ASSEMBLE_FILE`. The no-reset path assembles
+directly into live RAM and works in any exec state. The `reset_first` path
+resets the machine, runs to BASIC ($E38B), then assembles. There is a fuller
+helper that also carries the run address, auto-run, and reset-first settings:
+
+```c
+bool runtime_client_assemble_file_full(
+    runtime_client *client,
+    const char *path,
+    uint16_t address,
+    uint16_t run_address,
+    bool auto_run,
+    bool reset_first);
+```
 
 Expected events:
 
@@ -93,19 +104,22 @@ Outer::Inner::label
 
 Macro-local generated symbols are skipped.
 
-Current caveat: the queued runtime command path calls `runtime_assemble_file`
-with `symbols == NULL`, so it assembles bytes into RAM but does not yet import
-symbols through that path. A future UI/debugger integration should either pass
-the debugger symbol table through the runtime command path or use the direct
-helper where symbol-table ownership is clear.
+The queued runtime command path is not symbol-free. The runtime thread owns a
+persistent `symbol_table` (`rt->symbols`) and passes it into
+`runtime_assemble_file()` during `RUNTIME_COMMAND_ASSEMBLE_FILE`. After a
+successful assembly it calls `runtime_publish_symbols()`, which copies the
+resolved labels into the single-consumer symbol slot. Consumers (the frontend
+debugger, and the control port's `find-symbol` cache) receive symbols by polling
+that slot; the caller never passes a symbol table down through the command.
 
 ## Practical UI Checklist
 
 - Provide a source file picker.
 - Provide an address field with hex input.
-- Pause the runtime before sending `runtime_client_assemble_file()`.
+- Pausing first is optional but recommended so the result lands in a defined
+  machine state; the runtime accepts assembly in any exec state.
 - Disable or show a busy state until an assemble-complete or error event arrives.
-- On `RUNTIME_EVENT_ERROR`, show `event.data.error.message`.
+- On `RUNTIME_EVENT_ASSEMBLE_ERROR`, show `event.data.error.message`.
 - On `RUNTIME_EVENT_ASSEMBLE_COMPLETE`, refresh memory/disassembly around the
   requested address.
 - If symbols are wired in, refresh any disassembly label resolver after a

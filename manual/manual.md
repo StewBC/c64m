@@ -1682,6 +1682,72 @@ id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_co
 The payload is text even though it uses `data` framing, so clients should still honor
 the byte count.
 
+### Assembler and Symbols
+
+The control port can assemble a source file into the running machine and look up the
+labels that result. This drives the same assembler and settings as the Misc -> Assembler
+tab, so a script can build code, find where a routine landed, and set a breakpoint on it.
+
+| Command | Meaning |
+|---------|---------|
+| `assemble [address=<hex>] [run-address=<hex>] [auto-run=0\|1] [reset=0\|1] <source-path>` | Assemble a source file into the machine |
+| `find-symbol <name>` | Resolve a label from the most recent assembly |
+
+The optional `key=value` settings precede the source path and may appear in any order.
+Any token that is not a recognized option begins the source path, which runs to the end
+of the line and may contain spaces. The settings mirror the Assembler tab, and their
+defaults are the same:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `address` | `$8000` | Address the code is assembled to |
+| `run-address` | same as `address` | PC used when `auto-run` is on |
+| `auto-run` | `0` | Run the assembled code after a successful build |
+| `reset` | `1` | Reset the machine and return to BASIC before assembling |
+
+Before assembling, the control port pauses the machine so the result lands in a defined
+state. The assembler's own reset and auto-run handling then applies: a `reset=1` assemble
+resets, runs to BASIC, assembles, and resumes; `auto-run=1` sets the PC to `run-address`
+and resumes.
+
+`assemble` is a deferred (asynchronous) command. On success the reply carries the
+assembly address:
+
+```text
+1 assemble reset=0 address=$c000 samples/test1.asm
+1 ok address=$C000
+```
+
+On failure the reply is an error whose message is the assembler diagnostic:
+
+```text
+2 assemble reset=0 badsource.asm
+2 error assemble-error File: badsource.asm L:00001 C:012: Unexpected token after expression
+```
+
+A successful assembly publishes the resolved symbol table. `find-symbol` resolves a label
+from that table by exact name:
+
+```text
+3 find-symbol loop
+3 ok address=$C004 name=loop
+```
+
+If the name is not present the reply is `error not-found`. If no assembly (or symbol file)
+has published symbols yet, the reply is `error not-ready`. Symbols are also published when
+a symbol file is loaded, and in the GUI a successful remote assembly refreshes the
+debugger's Disasm and Symbol Lookup views just as the Assembler tab does.
+
+A typical automation sequence assembles, locates a routine, breakpoints it, and runs:
+
+```text
+1 assemble address=$c000 samples/test1.asm
+2 find-symbol loop
+3 break-exec $C004
+4 run
+5 wait-paused 5000
+```
+
 ### Example Python Client
 
 This small client sends a command and handles both text and binary responses:

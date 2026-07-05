@@ -288,6 +288,43 @@ static void test_parse_command_arguments(void)
     expect_u32("wait-event timeout", 1000u, request.args.timeout_ms);
 }
 
+static void test_parse_assemble_and_symbol(void)
+{
+    control_request request;
+    control_response error;
+
+    /* Bare form: path only, tab defaults applied. */
+    expect_true("parse assemble bare", control_protocol_parse_request("60 assemble prog.asm", &request, &error));
+    expect_int("assemble type", CONTROL_COMMAND_ASSEMBLE, request.type);
+    expect_string("assemble path", "prog.asm", request.args.text);
+    expect_u32("assemble default address", 0x8000u, request.args.address);
+    expect_u32("assemble default run-address", 0x8000u, request.args.run_address);
+    expect_false("assemble default auto-run", request.args.auto_run);
+    expect_true("assemble default reset", request.args.reset_first);
+
+    /* All options set; run-address defaults from address when omitted. */
+    expect_true("parse assemble options", control_protocol_parse_request("61 assemble address=$C000 auto-run=1 reset=0 prog.asm", &request, &error));
+    expect_u32("assemble opt address", 0xc000u, request.args.address);
+    expect_u32("assemble opt run-address default", 0xc000u, request.args.run_address);
+    expect_true("assemble opt auto-run", request.args.auto_run);
+    expect_false("assemble opt reset", request.args.reset_first);
+    expect_string("assemble opt path", "prog.asm", request.args.text);
+
+    /* Explicit run-address overrides the address default. */
+    expect_true("parse assemble run-address", control_protocol_parse_request("62 assemble address=$0801 run-address=$080D prog.asm", &request, &error));
+    expect_u32("assemble explicit address", 0x0801u, request.args.address);
+    expect_u32("assemble explicit run-address", 0x080du, request.args.run_address);
+
+    /* Path with spaces is the rest of the line after the options. */
+    expect_true("parse assemble spaced path", control_protocol_parse_request("63 assemble auto-run=1 assets/src/My Demo.asm", &request, &error));
+    expect_string("assemble spaced path", "assets/src/My Demo.asm", request.args.text);
+    expect_true("assemble spaced auto-run", request.args.auto_run);
+
+    expect_true("parse find-symbol", control_protocol_parse_request("64 find-symbol init", &request, &error));
+    expect_int("find-symbol type", CONTROL_COMMAND_FIND_SYMBOL, request.type);
+    expect_string("find-symbol name", "init", request.args.text);
+}
+
 static void test_parse_rejects_invalid_input(void)
 {
     control_request request;
@@ -352,6 +389,18 @@ static void test_parse_rejects_invalid_input(void)
 
     expect_false("reject wait-event missing", control_protocol_parse_request("24 wait-event\n", &request, &error));
     expect_u32("bad wait-event response id", 24, error.id);
+
+    expect_false("reject assemble missing path", control_protocol_parse_request("25 assemble\n", &request, &error));
+    expect_u32("bad assemble response id", 25, error.id);
+
+    expect_false("reject assemble option only", control_protocol_parse_request("26 assemble address=$8000\n", &request, &error));
+    expect_u32("bad assemble option response id", 26, error.id);
+
+    expect_false("reject assemble bad option", control_protocol_parse_request("27 assemble auto-run=maybe prog.asm\n", &request, &error));
+    expect_u32("bad assemble option value response id", 27, error.id);
+
+    expect_false("reject find-symbol missing", control_protocol_parse_request("28 find-symbol\n", &request, &error));
+    expect_u32("bad find-symbol response id", 28, error.id);
 }
 
 static void test_response_formatting(void)
@@ -381,6 +430,7 @@ int main(void)
 {
     test_parse_known_commands();
     test_parse_command_arguments();
+    test_parse_assemble_and_symbol();
     test_parse_rejects_invalid_input();
     test_response_formatting();
     return 0;

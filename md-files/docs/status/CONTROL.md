@@ -29,7 +29,8 @@
   - `break-exec`, `break-clear`, `break-enable`, `break-list`,
     `get-breakpoints`, `break-clear-all`, `break-create`, `break-update`,
     `rearm-oneshots`;
-  - `wait-paused`, `wait-running`, `wait-frame`, `wait-event`.
+  - `wait-paused`, `wait-running`, `wait-frame`, `wait-event`;
+  - `assemble`, `find-symbol`.
 - Binary responses use:
   - `<id> data <type> <byte_count> <metadata...>`;
   - `<byte_count>` raw bytes;
@@ -137,6 +138,37 @@ Implementation files:
 - Waits use the same single active deferred-response slot as fresh CPU,
   memory, disk, call-stack, and breakpoint responses.
 
+## Assembler control syntax
+
+- `assemble [address=<hex>] [run-address=<hex>] [auto-run=0|1] [reset=0|1] <source-path>`
+  assembles a source file into the running machine through the same
+  `runtime_client_assemble_file_full()` path the Misc->Assembler tab uses.
+  - Optional `key=value` settings precede the source path and may appear in any
+    order. Any token that is not a recognized option starts the source path,
+    which runs to the end of the line and may contain spaces.
+  - Defaults mirror the Misc->Assembler tab: `address=$8000`,
+    `run-address` = `address` when omitted, `auto-run=0`, `reset=1`.
+  - The control server auto-pauses before assembling so the result lands in a
+    defined machine state. The runtime's own reset/auto-run handling then
+    applies (a `reset=1` assemble resets, runs to BASIC, assembles, and resumes;
+    `auto-run=1` sets PC to `run-address` and resumes).
+  - The response is deferred (async). On success the reply is
+    `ok address=$XXXX`; on failure it is `error assemble-error <message>` with
+    the assembler diagnostic text. The deferred deadline is 10s.
+  - A successful assemble publishes the resolved symbol table, which is cached
+    for `find-symbol` and, in SDL mode, also refreshes the debugger's symbol and
+    disassembly views.
+- `find-symbol <name>` resolves a label from the most recently published symbol
+  snapshot (from an assemble or a loaded symbol file). It answers immediately
+  from a main-loop-owned cache, so the socket thread never polls the
+  single-consumer runtime symbol slot.
+  - Success: `ok address=$XXXX name=<name>` (exact name match).
+  - `error not-found` when the name is absent; `error not-ready` when no symbol
+    snapshot has been published yet.
+  - The cached snapshot holds up to `RUNTIME_SYMBOL_SNAPSHOT_MAX` (4096) labels;
+    beyond that, truncated labels are not resolvable. Bulk enumeration
+    (`get-symbols`) is a possible follow-on and is not implemented.
+
 ## Headless mode
 
 - `--headless` requires `--control-port PORT`.
@@ -173,5 +205,9 @@ Implementation files:
     enabled=0 actions=break`, and `break-clear-all`.
   - issue wait commands such as `run`, `wait-running 2000`,
     `wait-frame 10 5000`, `pause`, and `wait-paused 2000`.
+  - issue `assemble reset=0 address=$c000 samples/test1.asm`; verify an
+    `ok address=$C000` reply, then `find-symbol loop` and verify
+    `ok address=$C004 name=loop`. Confirm a bad source reports
+    `error assemble-error <message>`.
   - launch `c64m --headless --control-port 6511`; verify `wait-frame` and
     `get-frame` work without creating a visible window.

@@ -86,6 +86,8 @@ typedef struct deferred_control_response {
 typedef struct control_cached_state {
     bool has_frame;
     c64_frame frame;
+    bool has_symbols;
+    runtime_symbol_snapshot symbols;
 } control_cached_state;
 
 static void sdl_c64_controller_send_ports(
@@ -1593,6 +1595,33 @@ static void complete_deferred_control_response(
             control_response_release(&response);
             SDL_Log("control: response queue full");
         }
+    } else if (deferred->command_type == CONTROL_COMMAND_ASSEMBLE &&
+               (event->type == RUNTIME_EVENT_ASSEMBLE_COMPLETE ||
+                event->type == RUNTIME_EVENT_ASSEMBLE_ERROR)) {
+        if (event->type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
+            char metadata[CONTROL_RESPONSE_TEXT_MAX];
+            snprintf(
+                metadata,
+                sizeof(metadata),
+                "address=$%04X",
+                (unsigned)event->data.assemble.address);
+            control_protocol_format_ok(&response, deferred->request_id, metadata, false);
+        } else {
+            control_protocol_format_error(
+                &response,
+                deferred->request_id,
+                "assemble-error",
+                event->data.error.message[0] != '\0'
+                    ? event->data.error.message
+                    : "assembly failed",
+                false);
+        }
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
     }
 }
 
@@ -1795,6 +1824,31 @@ static bool control_parse_and_send_paste_events(
     return runtime_client_paste_events(client, events, count);
 }
 
+/* Consume any freshly published symbol snapshot once and distribute it to the
+   frontend (for the debugger views) and/or the control cache (so a control
+   client can resolve labels via find-symbol). The runtime symbol slot is a
+   single-consumer handoff, so this must be the only poll site. */
+static void poll_symbols_into(
+    runtime_client *client,
+    frontend *ui,
+    control_cached_state *control_cache) {
+    runtime_symbol_snapshot *symbols = malloc(sizeof(*symbols));
+
+    if (symbols == NULL) {
+        return;
+    }
+    if (runtime_client_poll_symbols(client, symbols)) {
+        if (ui != NULL) {
+            frontend_update_symbols(ui, symbols);
+        }
+        if (control_cache != NULL) {
+            control_cache->symbols = *symbols;
+            control_cache->has_symbols = true;
+        }
+    }
+    free(symbols);
+}
+
 static void poll_runtime_events(
     runtime_client *client,
     frontend *ui,
@@ -1824,14 +1878,8 @@ static void poll_runtime_events(
                 frontend_show_assembler_errors(ui, event.data.error.message);
             }
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
+            poll_symbols_into(client, ui, control_cache);
             if (ui != NULL) {
-                runtime_symbol_snapshot *symbols = malloc(sizeof(*symbols));
-                if (symbols) {
-                    if (runtime_client_poll_symbols(client, symbols)) {
-                        frontend_update_symbols(ui, symbols);
-                    }
-                    free(symbols);
-                }
                 frontend_invalidate_disassembly_cache(ui);
             }
         } else if (event.type == RUNTIME_EVENT_SAVE_STATE_COMPLETE) {
@@ -1894,14 +1942,8 @@ static void poll_runtime_events(
         }
     }
 
-    if (ui != NULL) {
-        runtime_symbol_snapshot *symbols = malloc(sizeof(*symbols));
-        if (symbols) {
-            if (runtime_client_poll_symbols(client, symbols)) {
-                frontend_update_symbols(ui, symbols);
-            }
-            free(symbols);
-        }
+    if (ui != NULL || control_cache != NULL) {
+        poll_symbols_into(client, ui, control_cache);
     }
 
     while ((ui != NULL || control != NULL) && runtime_client_poll_frame(client, &frame)) {
@@ -2859,7 +2901,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait",
+                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols",
                 false);
             break;
 
@@ -3494,6 +3536,68 @@ static void dispatch_control_request(
                 return;
             } else {
                 control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+            }
+            break;
+
+        case CONTROL_COMMAND_ASSEMBLE:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if (request->args.text[0] == '\0') {
+                control_protocol_format_error(&response, request->id, "bad-args", "expected source path", false);
+            } else {
+                /* Auto-pause so assembly lands in a defined machine state. The
+                   runtime's own reset/auto-run handling then applies. */
+                runtime_client_pause(client);
+                if (runtime_client_assemble_file_full(
+                        client,
+                        request->args.text,
+                        request->args.address,
+                        request->args.run_address,
+                        request->args.auto_run,
+                        request->args.reset_first)) {
+                    if (deferred != NULL) {
+                        deferred->active = true;
+                        deferred->request_id = request->id;
+                        deferred->command_type = request->type;
+                        deferred->deadline_ms = SDL_GetTicks64() + 10000u;
+                        return;
+                    }
+                    control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
+                } else {
+                    control_protocol_format_error(&response, request->id, "runtime", "command rejected", false);
+                }
+            }
+            break;
+
+        case CONTROL_COMMAND_FIND_SYMBOL:
+            if (control_cache == NULL || !control_cache->has_symbols) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "not-ready",
+                    "no symbols available; assemble or load symbols first",
+                    false);
+            } else {
+                const runtime_symbol_snapshot *syms = &control_cache->symbols;
+                bool found = false;
+                size_t i;
+                for (i = 0; i < syms->count; i++) {
+                    if (strncmp(syms->entries[i].name, request->args.text, RUNTIME_SYMBOL_NAME_MAX) == 0) {
+                        char text[CONTROL_RESPONSE_TEXT_MAX];
+                        snprintf(
+                            text,
+                            sizeof(text),
+                            "address=$%04X name=%s",
+                            (unsigned)syms->entries[i].address,
+                            syms->entries[i].name);
+                        control_protocol_format_ok(&response, request->id, text, false);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    control_protocol_format_error(&response, request->id, "not-found", "symbol not found", false);
+                }
             }
             break;
 
