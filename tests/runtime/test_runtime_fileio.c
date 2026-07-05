@@ -157,7 +157,7 @@ static void test_load_bin_with_file_address(void) {
     rt = start_runtime(&client);
 
     expect_true("load bin file-address",
-        runtime_client_load_bin(client, "fileio_test.bin", 0x0000, true, false, false));
+        runtime_client_load_bin(client, "fileio_test.bin", 0x0000, true, false, false, false));
 
     result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
     if (result < 0) {
@@ -195,7 +195,7 @@ static void test_load_bin_without_file_address(void) {
     rt = start_runtime(&client);
 
     expect_true("load bin manual address",
-        runtime_client_load_bin(client, "fileio_test.bin", 0xC000, false, false, false));
+        runtime_client_load_bin(client, "fileio_test.bin", 0xC000, false, false, false, false));
 
     result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
     if (result < 0) {
@@ -230,7 +230,7 @@ static void test_load_bin_rejects_short_file_address_mode(void) {
     rt = start_runtime(&client);
 
     expect_true("send load_bin short",
-        runtime_client_load_bin(client, "fileio_short.bin", 0x0000, true, false, false));
+        runtime_client_load_bin(client, "fileio_short.bin", 0x0000, true, false, false, false));
 
     result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
     if (result >= 0) {
@@ -255,7 +255,7 @@ static void test_load_bin_rejects_zero_byte_file(void) {
     rt = start_runtime(&client);
 
     expect_true("send load_bin empty",
-        runtime_client_load_bin(client, "fileio_empty.bin", 0x0000, false, false, false));
+        runtime_client_load_bin(client, "fileio_empty.bin", 0x0000, false, false, false, false));
 
     result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
     if (result >= 0) {
@@ -291,7 +291,7 @@ static void test_save_basic_writes_prg_header(void) {
     write_paused_byte(client, 0x0804, 0x0D);
     write_paused_byte(client, 0x0805, 0x0E);
 
-    expect_true("save basic", runtime_client_save_bin(client, "fileio_basic.prg", 0, 0, true, true));
+    expect_true("save basic", runtime_client_save_bin(client, "fileio_basic.prg", 0, 0, true, true, false));
 
     /* No dedicated event for save; poll for any error to detect failure */
     {
@@ -329,6 +329,70 @@ static void test_save_basic_writes_prg_header(void) {
     remove("fileio_basic.prg");
 }
 
+static void test_load_and_save_basic_text(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    FILE *f;
+    char text[128];
+    size_t n;
+    int result;
+    const char *src = "10 PRINT \"HI\"\n20 GOTO 10\n";
+
+    f = fopen("fileio_basic.txt", "wb");
+    if (!f) { fail("failed to create basic text file"); }
+    fwrite(src, 1, strlen(src), f);
+    fclose(f);
+
+    rt = start_runtime(&client);
+
+    /* Load as ASCII BASIC text: it should tokenize and land at $0801. */
+    expect_true("load basic text",
+        runtime_client_load_bin(client, "fileio_basic.txt", 0x0000, false, false, false, true));
+
+    result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
+    if (result < 0) { fail("load basic text produced error"); }
+    if (result == 0) { fail("load basic text memory response not received"); }
+
+    expect_true("basic text load address", event.data.memory.address == 0x0801);
+    /* First line "10 PRINT \"HI\"" is an 11-byte record -> link $080C. */
+    expect_u8("link lo", 0x0C, event.data.memory.bytes[0]);
+    expect_u8("link hi", 0x08, event.data.memory.bytes[1]);
+    expect_u8("line# lo", 0x0A, event.data.memory.bytes[2]);
+    expect_u8("line# hi", 0x00, event.data.memory.bytes[3]);
+    expect_u8("PRINT token", 0x99, event.data.memory.bytes[4]);
+
+    /* Save it back out as ASCII text and confirm the round-trip. */
+    expect_true("save basic text",
+        runtime_client_save_bin(client, "fileio_basic_out.txt", 0, 0, false, false, true));
+    {
+        clock_t start = clock();
+        while ((double)(clock() - start) / CLOCKS_PER_SEC < 0.5) {
+            while (runtime_client_poll_event(client, &event)) {
+                if (event.type == RUNTIME_EVENT_ERROR) {
+                    fail("save basic text produced error event");
+                }
+            }
+        }
+    }
+
+    stop_runtime(rt, client);
+
+    f = fopen("fileio_basic_out.txt", "rb");
+    if (!f) { fail("save basic text output file not found"); }
+    n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = '\0';
+
+    if (strcmp(text, src) != 0) {
+        fprintf(stderr, "basic text round-trip: expected [%s], got [%s]\n", src, text);
+        exit(1);
+    }
+
+    remove("fileio_basic.txt");
+    remove("fileio_basic_out.txt");
+}
+
 static void test_save_bin_with_file_address(void) {
     runtime *rt;
     runtime_client *client;
@@ -345,7 +409,7 @@ static void test_save_bin_with_file_address(void) {
     write_paused_byte(client, 0xC002, 0x33);
 
     expect_true("save bin with header",
-        runtime_client_save_bin(client, "fileio_out.bin", 0xC000, 0xC002, true, false));
+        runtime_client_save_bin(client, "fileio_out.bin", 0xC000, 0xC002, true, false, false));
 
     {
         clock_t start = clock();
@@ -392,7 +456,7 @@ static void test_save_bin_without_file_address(void) {
     write_paused_byte(client, 0xD001, 0xBB);
 
     expect_true("save bin without header",
-        runtime_client_save_bin(client, "fileio_noheader.bin", 0xD000, 0xD001, false, false));
+        runtime_client_save_bin(client, "fileio_noheader.bin", 0xD000, 0xD001, false, false, false));
 
     {
         clock_t start = clock();
@@ -435,7 +499,7 @@ static void test_save_bin_single_byte(void) {
     write_paused_byte(client, 0x1000, 0x42);
 
     expect_true("save bin single byte",
-        runtime_client_save_bin(client, "fileio_single.bin", 0x1000, 0x1000, false, false));
+        runtime_client_save_bin(client, "fileio_single.bin", 0x1000, 0x1000, false, false, false));
 
     {
         clock_t start = clock();
@@ -473,7 +537,7 @@ static void test_save_bin_rejects_start_greater_than_end(void) {
     rt = start_runtime(&client);
 
     expect_true("save bin start > end send",
-        runtime_client_save_bin(client, "fileio_bad.bin", 0x8000, 0x7FFF, false, false));
+        runtime_client_save_bin(client, "fileio_bad.bin", 0x8000, 0x7FFF, false, false, false));
 
     result = poll_event_or_error(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE);
     if (result >= 0) {
@@ -491,6 +555,7 @@ int main(void) {
     test_load_bin_rejects_short_file_address_mode();
     test_load_bin_rejects_zero_byte_file();
     test_save_basic_writes_prg_header();
+    test_load_and_save_basic_text();
     test_save_bin_with_file_address();
     test_save_bin_without_file_address();
     test_save_bin_single_byte();

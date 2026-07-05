@@ -559,10 +559,20 @@ launch the first image in the saved list is mounted.
 | Address field   | Manual load address in hex, active when From File is off   |
 | Reset           | Reset the machine and wait for BASIC (`$E38B`) before injecting |
 | Basic Program   | Update TXTTAB (`$2B/$2C`) and VARTAB (`$2D/$2E`) after load |
+| Basic Text      | Treat the file as ASCII BASIC listing, tokenize it, and load it at `$0801` |
 
 Selecting a `.T64` file extracts the first loadable tape-container entry and loads it
 through the PRG-style reset/inject path. The raw binary options in this dialog do not
 apply to `.T64` files.
+
+**Basic Text** loads a plain-text BASIC listing — the kind you get from a `LIST`,
+or an ASCII `.bas` file — rather than a tokenized PRG. c64m tokenizes the source on
+the host exactly as the C64 would, writes the program to memory at `$0801`, and sets
+the BASIC pointers so the result is ready to `LIST` or `RUN`. Each line must begin with
+a line number, and lines are expected in ascending order. Only stock BASIC V2 keywords
+are recognized; extension dialects such as Simon's BASIC are not supported. When Basic
+Text is selected the From File and Address controls do not apply, and it is mutually
+exclusive with Basic Program.
 
 **[Save]** opens the Save dialog:
 
@@ -570,8 +580,15 @@ apply to `.T64` files.
 |----------------------|---------------------------------------------------------|
 | Name + Browse        | Choose the output filename                              |
 | Basic Program        | Read start and end from `$2B-$2E`; forces header on    |
+| Basic Text           | Detokenize the live BASIC program and save it as an ASCII listing |
 | Write address header | Prefix the saved file with the two-byte load address   |
 | Start / End          | Hex address range for a raw memory save                |
+
+**Basic Text** saves the BASIC program currently in memory as a plain-text listing,
+the same text you would see from a `LIST`, instead of a tokenized PRG. The program is
+read from the live BASIC pointers (`$2B-$2E`) and written with no load-address header.
+As with loading, only stock BASIC V2 keywords are handled. When Basic Text is selected
+the Start / End fields do not apply, and it is mutually exclusive with Basic Program.
 
 ### State
 

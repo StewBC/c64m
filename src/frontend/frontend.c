@@ -7169,7 +7169,8 @@ static bool frontend_push_load_bin_execute_intent(
     uint16_t address,
     bool use_file_address,
     bool reset_first,
-    bool is_basic)
+    bool is_basic,
+    bool is_basic_text)
 {
     size_t next;
 
@@ -7192,6 +7193,7 @@ static bool frontend_push_load_bin_execute_intent(
     ui->intents[ui->intent_write].load_bin_use_file_address = use_file_address;
     ui->intents[ui->intent_write].load_bin_reset_first = reset_first;
     ui->intents[ui->intent_write].load_bin_is_basic = is_basic;
+    ui->intents[ui->intent_write].load_bin_is_basic_text = is_basic_text;
     ui->intent_write = next;
     return true;
 }
@@ -7202,7 +7204,8 @@ static bool frontend_push_save_bin_execute_intent(
     uint16_t start,
     uint16_t end,
     bool write_file_address,
-    bool is_basic)
+    bool is_basic,
+    bool is_basic_text)
 {
     size_t next;
 
@@ -7225,6 +7228,7 @@ static bool frontend_push_save_bin_execute_intent(
     ui->intents[ui->intent_write].save_bin_end = end;
     ui->intents[ui->intent_write].save_bin_write_file_address = write_file_address;
     ui->intents[ui->intent_write].save_bin_is_basic = is_basic;
+    ui->intents[ui->intent_write].save_bin_is_basic_text = is_basic_text;
     ui->intent_write = next;
     return true;
 }
@@ -7627,7 +7631,7 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
 
     ctx = ui->ctx;
     dlg = &ui->load_bin_dialog;
-    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 240) * 0.5f, 420.0f, 240.0f);
+    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 264) * 0.5f, 420.0f, 264.0f);
     if (bounds.x < 8.0f) bounds.x = 8.0f;
     if (bounds.y < 8.0f) bounds.y = 8.0f;
 
@@ -7654,15 +7658,31 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
             frontend_checkbox_bool(ctx, "From file", &dlg->use_file_address);
             nk_layout_row_push(ctx, 0.44f);
             frontend_edit_replace(
-                ctx, dlg->use_file_address ? (edit_flags | NK_EDIT_READ_ONLY) : edit_flags,
+                ctx, (dlg->use_file_address || dlg->basic_text) ? (edit_flags | NK_EDIT_READ_ONLY) : edit_flags,
                 dlg->address_buf, (int)sizeof(dlg->address_buf), nk_filter_hex);
             nk_layout_row_end(ctx);
 
-            /* Reset and Basic Program checkboxes */
+            /* Reset and Basic Program / Basic Text checkboxes */
             nk_layout_row_dynamic(ctx, 24.0f, 1);
             frontend_checkbox_bool(ctx, "Reset before load", &dlg->reset_first);
-            nk_layout_row_dynamic(ctx, 24.0f, 1);
-            frontend_checkbox_bool(ctx, "Basic Program (fix BASIC pointers)", &dlg->basic_program);
+            {
+                bool prev_program = dlg->basic_program;
+                bool prev_text    = dlg->basic_text;
+                nk_layout_row_dynamic(ctx, 24.0f, 1);
+                frontend_checkbox_bool(ctx, "Basic Program (fix BASIC pointers)", &dlg->basic_program);
+                nk_layout_row_dynamic(ctx, 24.0f, 1);
+                frontend_checkbox_bool(ctx, "Basic Text (tokenize ASCII, loads at $0801)", &dlg->basic_text);
+                /* Mutually exclusive: whichever the user just turned on wins. */
+                if (dlg->basic_program && dlg->basic_text) {
+                    if (dlg->basic_text && !prev_text) {
+                        dlg->basic_program = false;
+                    } else if (dlg->basic_program && !prev_program) {
+                        dlg->basic_text = false;
+                    } else {
+                        dlg->basic_text = false;
+                    }
+                }
+            }
 
             /* Error / spacer */
             if (dlg->error[0] != '\0') {
@@ -7681,16 +7701,17 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
             if (nk_button_label(ctx, "OK")) {
                 if (dlg->path[0] == '\0') {
                     snprintf(dlg->error, sizeof(dlg->error), "No file selected");
-                } else if (!dlg->use_file_address &&
+                } else if (!dlg->use_file_address && !dlg->basic_text &&
                            !frontend_parse_hex16_text(dlg->address_buf, &address)) {
                     snprintf(dlg->error, sizeof(dlg->error), "Invalid address (XXXX hex required)");
                 } else {
-                    if (dlg->use_file_address) {
+                    if (dlg->use_file_address || dlg->basic_text) {
                         address = 0;
                     }
                     frontend_push_load_bin_execute_intent(
                         ui, dlg->path, address,
-                        dlg->use_file_address, dlg->reset_first, dlg->basic_program);
+                        dlg->use_file_address, dlg->reset_first,
+                        dlg->basic_program, dlg->basic_text);
                     dlg->open = false;
                 }
             }
@@ -7719,7 +7740,7 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
 
     ctx = ui->ctx;
     dlg = &ui->save_bin_dialog;
-    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 260) * 0.5f, 420.0f, 260.0f);
+    bounds = nk_rect((float)(width - 420) * 0.5f, (float)(height - 284) * 0.5f, 420.0f, 284.0f);
     if (bounds.x < 8.0f) bounds.x = 8.0f;
     if (bounds.y < 8.0f) bounds.y = 8.0f;
 
@@ -7738,34 +7759,54 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
             }
             nk_layout_row_end(ctx);
 
-            /* Basic Program checkbox — when on, forces header and disables Start/End */
-            nk_layout_row_dynamic(ctx, 24.0f, 1);
-            frontend_checkbox_bool(ctx, "Basic Program (use BASIC pointers)", &dlg->basic_program);
+            /* Basic Program / Basic Text checkboxes — both use the live BASIC
+               pointers and disable the Start/End range. */
+            {
+                bool prev_program = dlg->basic_program;
+                bool prev_text    = dlg->basic_text;
+                nk_layout_row_dynamic(ctx, 24.0f, 1);
+                frontend_checkbox_bool(ctx, "Basic Program (use BASIC pointers)", &dlg->basic_program);
+                nk_layout_row_dynamic(ctx, 24.0f, 1);
+                frontend_checkbox_bool(ctx, "Basic Text (detokenize to ASCII)", &dlg->basic_text);
+                /* Mutually exclusive: whichever the user just turned on wins. */
+                if (dlg->basic_program && dlg->basic_text) {
+                    if (dlg->basic_text && !prev_text) {
+                        dlg->basic_program = false;
+                    } else if (dlg->basic_program && !prev_program) {
+                        dlg->basic_text = false;
+                    } else {
+                        dlg->basic_text = false;
+                    }
+                }
+            }
             if (dlg->basic_program) {
                 dlg->write_file_address = true;
             }
 
-            /* Write address header checkbox (locked on when basic_program) */
+            /* Write address header checkbox (locked on for basic_program,
+               not applicable for basic_text). */
             nk_layout_row_dynamic(ctx, 24.0f, 1);
             if (dlg->basic_program) {
                 nk_label(ctx, "  Write address header (on)", NK_TEXT_LEFT);
+            } else if (dlg->basic_text) {
+                nk_label(ctx, "  Saves as ASCII text (no header)", NK_TEXT_LEFT);
             } else {
                 frontend_checkbox_bool(ctx, "Write address header", &dlg->write_file_address);
             }
 
-            /* Start / End address row (read-only when basic_program) */
+            /* Start / End address row (read-only for basic_program/basic_text) */
             nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 4);
             nk_layout_row_push(ctx, 0.22f);
             nk_label(ctx, "Start", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.28f);
             frontend_edit_replace(
-                ctx, dlg->basic_program ? ro_flags : edit_flags,
+                ctx, (dlg->basic_program || dlg->basic_text) ? ro_flags : edit_flags,
                 dlg->start_address_buf, (int)sizeof(dlg->start_address_buf), nk_filter_hex);
             nk_layout_row_push(ctx, 0.22f);
             nk_label(ctx, "End", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.28f);
             frontend_edit_replace(
-                ctx, dlg->basic_program ? ro_flags : edit_flags,
+                ctx, (dlg->basic_program || dlg->basic_text) ? ro_flags : edit_flags,
                 dlg->end_address_buf, (int)sizeof(dlg->end_address_buf), nk_filter_hex);
             nk_layout_row_end(ctx);
 
@@ -7784,24 +7825,25 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
                 dlg->open = false;
             }
             if (nk_button_label(ctx, "OK")) {
+                bool use_pointers = dlg->basic_program || dlg->basic_text;
                 if (dlg->path[0] == '\0') {
                     snprintf(dlg->error, sizeof(dlg->error), "No file selected");
-                } else if (!dlg->basic_program &&
+                } else if (!use_pointers &&
                            !frontend_parse_hex16_text(dlg->start_address_buf, &start_addr)) {
                     snprintf(dlg->error, sizeof(dlg->error), "Invalid start address (XXXX hex required)");
-                } else if (!dlg->basic_program &&
+                } else if (!use_pointers &&
                            !frontend_parse_hex16_text(dlg->end_address_buf, &end_addr)) {
                     snprintf(dlg->error, sizeof(dlg->error), "Invalid end address (XXXX hex required)");
-                } else if (!dlg->basic_program && start_addr > end_addr) {
+                } else if (!use_pointers && start_addr > end_addr) {
                     snprintf(dlg->error, sizeof(dlg->error), "Start must be <= end");
                 } else {
-                    if (dlg->basic_program) {
+                    if (use_pointers) {
                         start_addr = 0;
                         end_addr   = 0;
                     }
                     frontend_push_save_bin_execute_intent(
                         ui, dlg->path, start_addr, end_addr,
-                        dlg->write_file_address, dlg->basic_program);
+                        dlg->write_file_address, dlg->basic_program, dlg->basic_text);
                     dlg->open = false;
                 }
             }

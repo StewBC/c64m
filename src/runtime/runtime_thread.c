@@ -1,6 +1,7 @@
 #include "runtime_internal.h"
 
 #include "audio_buffer.h"
+#include "basic_v2.h"
 #include "c64.h"
 #include "c64_snapshot.h"
 #include "message_queue.h"
@@ -2571,18 +2572,108 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
     }
 }
 
+/* Load address for a fresh BASIC program (stock BASIC V2 start of text). */
+#define RUNTIME_BASIC_LOAD_ADDR 0x0801u
+
+/* Read an ASCII BASIC V2 source file, tokenize it, write the tokenized image
+   into RAM at $0801, and fix up the BASIC text/variable pointers so the machine
+   is left in a clean post-CLR state ready to LIST or RUN. */
+static bool runtime_load_basic_text(runtime *rt, const char *path) {
+    FILE *file;
+    long fsize;
+    char *text;
+    uint8_t *image;
+    size_t read_len;
+    size_t image_len = 0;
+    uint16_t load_addr = RUNTIME_BASIC_LOAD_ADDR;
+    uint16_t vartab;
+    char errbuf[128];
+    size_t i;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        runtime_publish_error(rt, "failed to open basic text file");
+        return false;
+    }
+    if (fseek(file, 0, SEEK_END) != 0 || (fsize = ftell(file)) < 0 ||
+        fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to inspect basic text file");
+        return false;
+    }
+
+    text = malloc((size_t)fsize + 1u);
+    if (text == NULL) {
+        fclose(file);
+        runtime_publish_error(rt, "failed to allocate basic text buffer");
+        return false;
+    }
+    read_len = fread(text, 1, (size_t)fsize, file);
+    fclose(file);
+    if (read_len != (size_t)fsize) {
+        free(text);
+        runtime_publish_error(rt, "failed to read basic text file");
+        return false;
+    }
+    text[read_len] = '\0';
+
+    image = malloc(0x10000u);
+    if (image == NULL) {
+        free(text);
+        runtime_publish_error(rt, "failed to allocate tokenize buffer");
+        return false;
+    }
+
+    if (!basic_v2_tokenize(text, read_len, load_addr, image,
+                           (size_t)(0x10000u - load_addr), &image_len,
+                           errbuf, sizeof(errbuf))) {
+        free(text);
+        free(image);
+        runtime_publish_error(rt, errbuf);
+        return false;
+    }
+    free(text);
+
+    for (i = 0; i < image_len; ++i) {
+        c64_debug_write_ram(&rt->machine, (uint16_t)(load_addr + i), image[i]);
+    }
+    free(image);
+
+    /* VARTAB/ARYTAB/STREND all point one past the tokenized image. */
+    vartab = (uint16_t)(load_addr + image_len);
+    c64_debug_write_ram(&rt->machine, 0x2Bu, (uint8_t)(load_addr & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Cu, (uint8_t)((load_addr >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Du, (uint8_t)(vartab & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Eu, (uint8_t)((vartab >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Fu, (uint8_t)(vartab & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x30u, (uint8_t)((vartab >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x31u, (uint8_t)(vartab & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x32u, (uint8_t)((vartab >> 8) & 0xFFu));
+
+    runtime_publish_memory(
+        rt, load_addr,
+        image_len > RUNTIME_MEMORY_SNAPSHOT_MAX ? RUNTIME_MEMORY_SNAPSHOT_MAX : (uint16_t)image_len,
+        RUNTIME_MEMORY_MODE_RAM);
+    return true;
+}
+
 static bool runtime_load_bin_bytes(
     runtime *rt,
     const char *path,
     uint16_t address,
     bool use_file_address,
-    bool is_basic) {
+    bool is_basic,
+    bool is_basic_text) {
     FILE *file;
     uint8_t *bytes;
     size_t length;
     size_t payload_length;
     uint16_t load_address;
     size_t i;
+
+    if (is_basic_text) {
+        return runtime_load_basic_text(rt, path);
+    }
 
     file = fopen(path, "rb");
     if (file == NULL) {
@@ -2685,10 +2776,11 @@ static bool runtime_load_bin_bytes(
 
 static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
     bool is_basic = rt->pending_bin_is_basic != 0;
+    bool is_basic_text = rt->pending_bin_is_basic_text != 0;
     bool loaded = runtime_load_bin_bytes(
         rt, path, rt->pending_bin_address,
         rt->pending_bin_use_file_address != 0,
-        is_basic);
+        is_basic, is_basic_text);
 
     free(path);
 
@@ -2703,7 +2795,7 @@ static void runtime_complete_pending_bin_load(runtime *rt, char *path) {
     rt->exec_state = RUNTIME_EXEC_RUNNING;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     runtime_reset_pacer(rt);
-    if (rt->autorun && is_basic) {
+    if (rt->autorun && (is_basic || is_basic_text)) {
         rt->autorun_d64_phase = 0;
         runtime_autorun_paste(rt, "RUN\r");
     }
@@ -2728,6 +2820,7 @@ static void runtime_load_bin(runtime *rt, const runtime_command *command) {
         rt->pending_bin_address = command->data.load_bin.address;
         rt->pending_bin_use_file_address = command->data.load_bin.use_file_address;
         rt->pending_bin_is_basic = command->data.load_bin.is_basic;
+        rt->pending_bin_is_basic_text = command->data.load_bin.is_basic_text;
         rt->exec_state = RUNTIME_EXEC_RUNNING;
         rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
         runtime_reset_pacer(rt);
@@ -2739,7 +2832,8 @@ static void runtime_load_bin(runtime *rt, const runtime_command *command) {
         command->data.load_bin.path,
         command->data.load_bin.address,
         command->data.load_bin.use_file_address != 0,
-        command->data.load_bin.is_basic != 0);
+        command->data.load_bin.is_basic != 0,
+        command->data.load_bin.is_basic_text != 0);
 }
 
 static void runtime_save_bin(runtime *rt, const runtime_command *command) {
@@ -2750,6 +2844,66 @@ static void runtime_save_bin(runtime *rt, const runtime_command *command) {
     uint32_t length;
     FILE *file;
     uint32_t i;
+
+    if (command->data.save_bin.is_basic_text) {
+        /* Detokenize the live BASIC program (TXTTAB..VARTAB) to ASCII text. */
+        uint16_t txttab = (uint16_t)c64_debug_read_ram(&rt->machine, 0x2Bu) |
+                          (uint16_t)((uint16_t)c64_debug_read_ram(&rt->machine, 0x2Cu) << 8);
+        uint16_t vartab = (uint16_t)c64_debug_read_ram(&rt->machine, 0x2Du) |
+                          (uint16_t)((uint16_t)c64_debug_read_ram(&rt->machine, 0x2Eu) << 8);
+        uint8_t *image;
+        char *out;
+        size_t image_len;
+        size_t out_len = 0;
+        char errbuf[128];
+
+        if (vartab <= txttab) {
+            runtime_publish_error(rt, "BASIC program appears empty");
+            return;
+        }
+        image_len = (size_t)(vartab - txttab);
+        image = malloc(image_len);
+        if (image == NULL) {
+            runtime_publish_error(rt, "failed to allocate detokenize buffer");
+            return;
+        }
+        for (i = 0; i < image_len; ++i) {
+            image[i] = c64_debug_read_ram(&rt->machine, (uint16_t)(txttab + i));
+        }
+
+        /* A detokenized line is never longer than its token form times the
+           longest keyword expansion; 8x plus slack is safely generous. */
+        out = malloc(image_len * 8u + 64u);
+        if (out == NULL) {
+            free(image);
+            runtime_publish_error(rt, "failed to allocate text buffer");
+            return;
+        }
+        if (!basic_v2_detokenize(image, image_len, txttab, out,
+                                 image_len * 8u + 64u, &out_len, errbuf, sizeof(errbuf))) {
+            free(image);
+            free(out);
+            runtime_publish_error(rt, errbuf);
+            return;
+        }
+        free(image);
+
+        file = fopen(path, "wb");
+        if (file == NULL) {
+            free(out);
+            runtime_publish_error(rt, "failed to open basic text save file");
+            return;
+        }
+        if (out_len > 0 && fwrite(out, 1, out_len, file) != out_len) {
+            free(out);
+            fclose(file);
+            runtime_publish_error(rt, "failed to write basic text save file");
+            return;
+        }
+        free(out);
+        fclose(file);
+        return;
+    }
 
     if (command->data.save_bin.is_basic) {
         start_addr = (uint16_t)c64_debug_read_ram(&rt->machine, 0x2Bu) |

@@ -189,11 +189,22 @@ UI behavior:
 
 - Machine tab layout is Disks, Programs, State, Emulator.
 - Unified Load and Save buttons are on Machine tab.
-- Load dialog has Name + Browse, From File address, Reset, and Basic Program checkboxes.
+- Load dialog has Name + Browse, From File address, Reset, Basic Program, and
+  Basic Text checkboxes.
 - Load dialog auto-detects `.CRT` paths and sends them through the runtime CRT
   cartridge load command instead of the raw binary loader.
-- Save dialog has Name + Browse, Basic Program, Write address header, and Start/End range fields.
+- Save dialog has Name + Browse, Basic Program, Basic Text, Write address
+  header, and Start/End range fields.
 - Basic Program save reads `$2B/$2C` as start and `$2D/$2E` as exclusive end, and forces Write address header.
+- Basic Text (Load) treats the file as ASCII stock BASIC V2 source, tokenizes it
+  host-side via `util/basic_v2`, writes the tokenized image at `$0801`, and sets
+  TXTTAB/VARTAB/ARYTAB/STREND (`$2B`-`$32`) to leave a clean post-CLR program.
+  The From-File/Address controls are disabled in this mode.
+- Basic Text (Save) detokenizes the live BASIC program (`$2B/$2C`..`$2D/$2E`)
+  back to ASCII source via `util/basic_v2` and writes it with no PRG header;
+  Start/End are disabled. Only stock BASIC V2 tokens are handled (extension
+  dialects such as Simon's BASIC are out of scope). Basic Program and Basic Text
+  are mutually exclusive in both dialogs. Detokenized `π` is written as `{PI}`.
 - State has Save As... and Load... buttons wired to runtime save/load state
   commands. Dropping a `.c64state` file loads it.
 - `Opt+Shift+>` quicksaves to the configured quicksave folder using a
@@ -257,6 +268,10 @@ UI behavior:
 - Verify modal dialogs prevent base view focus changes from outside clicks.
 - Verify assembler reset-on and reset-off flows.
 - Verify host load/save paths, especially Basic Program TXTTAB/VARTAB behavior.
+- Verify Basic Text load tokenizes ASCII source to `$0801` and Basic Text save
+  detokenizes the live program back to ASCII (`basic_v2` unit test and the
+  `runtime_fileio` round-trip test), and that Basic Program / Basic Text are
+  mutually exclusive in both dialogs.
 - Verify drag/drop and Machine Load for generic `.CRT`, including paths with
   spaces and parentheses.
 - Verify `Opt+Shift+>` / `Opt+Shift+<`, Machine State Save As/Load,

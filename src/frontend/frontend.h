@@ -164,12 +164,14 @@ typedef struct frontend_debugger_intent {
     bool load_bin_use_file_address;
     bool load_bin_reset_first;
     bool load_bin_is_basic;
+    bool load_bin_is_basic_text;
     /* Save */
     char save_bin_path[1024];
     uint16_t save_bin_start;
     uint16_t save_bin_end;
     bool save_bin_write_file_address;
     bool save_bin_is_basic;
+    bool save_bin_is_basic_text;
     /* Machine reset */
     bool machine_reset_detach_cartridge;
 } frontend_debugger_intent;
@@ -182,6 +184,7 @@ typedef struct frontend_load_bin_dialog_state {
     char address_buf[5];
     bool reset_first;
     bool basic_program;
+    bool basic_text;
     char error[128];
 } frontend_load_bin_dialog_state;
 
@@ -190,6 +193,7 @@ typedef struct frontend_save_bin_dialog_state {
     bool initialized;
     char path[1024];
     bool basic_program;
+    bool basic_text;
     bool write_file_address;
     char start_address_buf[5];
     char end_address_buf[5];

@@ -201,6 +201,7 @@ typedef struct runtime_command {
             uint8_t use_file_address;
             uint8_t reset_first;
             uint8_t is_basic;
+            uint8_t is_basic_text;
         } load_bin;
 
         struct {
@@ -209,6 +210,7 @@ typedef struct runtime_command {
             uint16_t end_address;
             uint8_t write_file_address;
             uint8_t is_basic;
+            uint8_t is_basic_text;
         } save_bin;
 
         struct {

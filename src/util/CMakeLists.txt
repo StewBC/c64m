@@ -2,6 +2,7 @@
 
 add_library(util STATIC
     audio_buffer.c
+    basic_v2.c
     config.c
     cond.c
     message_queue.c

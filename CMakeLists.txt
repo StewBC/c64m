@@ -76,6 +76,18 @@ target_link_libraries(test_paste_parser PRIVATE
 
 add_test(NAME paste_parser COMMAND test_paste_parser)
 
+add_executable(test_basic_v2
+    tests/util/test_basic_v2.c
+)
+
+target_compile_features(test_basic_v2 PRIVATE c_std_99)
+
+target_link_libraries(test_basic_v2 PRIVATE
+    util
+)
+
+add_test(NAME basic_v2 COMMAND test_basic_v2)
+
 add_executable(test_c64_bus
     tests/machine/test_c64_bus.c
 )

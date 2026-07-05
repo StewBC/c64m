@@ -55,6 +55,13 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 ## Debugger / UI
 
 - Phase 13 deferred breakpoint actions: Type, Swap, and trace output/details.
+- Basic Text load/save (`util/basic_v2`) handles stock BASIC V2 only. Extension
+  dialects (Simon's BASIC and other cartridge/extension token sets) are not
+  tokenized or detokenized. Source is normalized to the uppercase/graphics
+  character set, so lowercase-mode and embedded graphics/high-PETSCII characters
+  do not round-trip; the `π` constant is written as the literal text `{PI}` on
+  save and is not re-tokenized on load. Load assumes a `$0801` start with lines
+  in ascending order (no insertion-sort/renumber).
 
 ## Timing
 

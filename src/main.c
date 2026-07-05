@@ -2751,12 +2751,14 @@ static void dispatch_debugger_intents(
                         intent.load_bin_address,
                         intent.load_bin_use_file_address,
                         intent.load_bin_reset_first,
-                        intent.load_bin_is_basic);
+                        intent.load_bin_is_basic,
+                        intent.load_bin_is_basic_text);
                     if (sent) {
                         remember_loaded_content(
                             options,
                             intent.load_bin_path,
-                            intent.load_bin_is_basic ? "basic" : "prg");
+                            (intent.load_bin_is_basic || intent.load_bin_is_basic_text)
+                                ? "basic" : "prg");
                     }
                 }
                 break;
@@ -2779,7 +2781,8 @@ static void dispatch_debugger_intents(
                     intent.save_bin_start,
                     intent.save_bin_end,
                     intent.save_bin_write_file_address,
-                    intent.save_bin_is_basic);
+                    intent.save_bin_is_basic,
+                    intent.save_bin_is_basic_text);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
@@ -2840,7 +2843,7 @@ static void handle_drop_file(runtime_client *client, app_options *options, char 
             remember_loaded_content(options, path, "crt");
         }
     } else if (path_has_extension(path, "bas")) {
-        if (runtime_client_load_bin(client, path, 0, true, true, true)) {
+        if (runtime_client_load_bin(client, path, 0, true, true, true, false)) {
             remember_loaded_content(options, path, "basic");
         }
     } else {
@@ -3228,7 +3231,8 @@ static void dispatch_control_request(
                 request->args.address,
                 request->args.use_file_address,
                 request->args.reset_first,
-                request->args.is_basic);
+                request->args.is_basic,
+                false);
             break;
 
         case CONTROL_COMMAND_SAVE_BIN:
@@ -3238,7 +3242,8 @@ static void dispatch_control_request(
                 request->args.start_address,
                 request->args.end_address,
                 request->args.write_file_address,
-                request->args.is_basic);
+                request->args.is_basic,
+                false);
             break;
 
         case CONTROL_COMMAND_MOUNT_D64:
@@ -4147,7 +4152,7 @@ int main(int argc, char **argv) {
         } else if (options.prg_path != NULL) {
             runtime_client_load_prg(client, options.prg_path);
         } else if (options.basic_path != NULL) {
-            runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
+            runtime_client_load_bin(client, options.basic_path, 0, true, true, true, false);
         }
 
         if (!run_headless_loop(client, &options, control)) {
@@ -4265,7 +4270,7 @@ int main(int argc, char **argv) {
     } else if (options.prg_path != NULL) {
         runtime_client_load_prg(client, options.prg_path);
     } else if (options.basic_path != NULL) {
-        runtime_client_load_bin(client, options.basic_path, 0, true, true, true);
+        runtime_client_load_bin(client, options.basic_path, 0, true, true, true, false);
     }
 
     if (!run_main_loop(window, client, ui, &options, control)) {

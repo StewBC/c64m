@@ -130,14 +130,16 @@ bool runtime_client_load_bin(
     uint16_t address,
     bool use_file_address,
     bool reset_first,
-    bool is_basic);
+    bool is_basic,
+    bool is_basic_text);
 bool runtime_client_save_bin(
     runtime_client *client,
     const char *path,
     uint16_t start_address,
     uint16_t end_address,
     bool write_file_address,
-    bool is_basic);
+    bool is_basic,
+    bool is_basic_text);
 
 bool runtime_client_poll_event(
     runtime_client *client,

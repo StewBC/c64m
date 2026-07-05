@@ -656,7 +656,8 @@ bool runtime_client_load_bin(
     uint16_t address,
     bool use_file_address,
     bool reset_first,
-    bool is_basic) {
+    bool is_basic,
+    bool is_basic_text) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_LOAD_BIN,
     };
@@ -670,6 +671,7 @@ bool runtime_client_load_bin(
     command.data.load_bin.use_file_address = use_file_address ? 1u : 0u;
     command.data.load_bin.reset_first = reset_first ? 1u : 0u;
     command.data.load_bin.is_basic = is_basic ? 1u : 0u;
+    command.data.load_bin.is_basic_text = is_basic_text ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 
@@ -679,7 +681,8 @@ bool runtime_client_save_bin(
     uint16_t start_address,
     uint16_t end_address,
     bool write_file_address,
-    bool is_basic) {
+    bool is_basic,
+    bool is_basic_text) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_SAVE_BIN,
     };
@@ -693,6 +696,7 @@ bool runtime_client_save_bin(
     command.data.save_bin.end_address = end_address;
     command.data.save_bin.write_file_address = write_file_address ? 1u : 0u;
     command.data.save_bin.is_basic = is_basic ? 1u : 0u;
+    command.data.save_bin.is_basic_text = is_basic_text ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 

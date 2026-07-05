@@ -178,6 +178,7 @@ struct runtime {
     uint16_t pending_bin_address;
     uint8_t pending_bin_use_file_address;
     uint8_t pending_bin_is_basic;
+    uint8_t pending_bin_is_basic_text;
     bool autorun;
     /* 0 = inactive; 1 = inject LOAD"*",8 on next $E38B; 2 = inject RUN on next $E38B */
     int autorun_d64_phase;

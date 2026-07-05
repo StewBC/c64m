@@ -80,6 +80,10 @@
   - Load with file-address header.
   - Load with Basic Program and verify `$2B-$2E`.
   - Save as Basic Program and reload.
+  - Load a `.bas`/`.txt` ASCII listing with Basic Text and verify it LISTs and
+    RUNs; save it back with Basic Text and diff against the source (stock BASIC
+    V2 only). Covered automatically by the `basic_v2` and `runtime_fileio`
+    (`test_load_and_save_basic_text`) tests.
   - Save raw range with and without header.
   - Verify Eject button and Machine tab section order.
 - UI/debugger:
