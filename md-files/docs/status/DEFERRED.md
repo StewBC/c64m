@@ -41,8 +41,12 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   is additionally supported through the compatibility KERNAL SAVE trap when the
   1541 ROM is absent. Still deferred: track-level operations (format) and
   media-level write fidelity (VIA #1 head / GCR / rotation) and G64.
-- Error channel is not implemented (see C64IEC1541PHASE_5, planned).
-- DOS command channel scratch/rename/format/validate is not implemented.
+- DOS command channel (scratch/rename/format/validate/initialize) and the
+  error/status channel work via the real 1541 ROM when `emulate_1541=1`
+  (C64IEC1541PHASE_5). Format is handled by a FORMT EXECUTE-job intercept.
+  Still deferred: media-level format fidelity, cross-drive copy (`C`), and
+  block/memory-execute commands (`B-*`/`M-*`). In the KERNAL-trap world
+  (`emulate_1541=0`) there is no command/error channel — SAVE trap only.
 - Fast loaders are not broadly validated; loaders that require unmodeled
   disk-controller VIA motor/SYNC/head behavior or nonstandard drive ROM behavior may fail.
 - Devices beyond 8/9 are not implemented.

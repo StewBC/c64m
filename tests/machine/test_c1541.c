@@ -746,6 +746,102 @@ static void test_queued_write_job_out_of_range(void) {
     printf("PASS: test_queued_write_job_out_of_range\n");
 }
 
+/* ------------------------------------------------------------------ */
+/* Phase 5: Format (EXECUTE job) intercept                             */
+/* ------------------------------------------------------------------ */
+
+/* The DOS "NEW" command formats each track via an EXECUTE job ($E0). The
+   intercept erases the target track's sectors in a writable image and reports
+   success, so the ROM can then write a fresh BAM/directory via WRITE jobs. */
+static void test_queued_format_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    const c64_drive_slot *slot;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x5A); /* track 1 sector 0 pre-filled with 0x5A */
+    result = c64_mount_d64_ex(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664, true /* writable */);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_format_job_success: c64_mount_d64_ex failed");
+
+    /* EXECUTE (FORMT) job in buffer 3, track 1. */
+    drive.ram[0x03] = 0xE0u; /* EXECUTE job */
+    drive.ram[0x0C] = 1;     /* hdrs[3] track  */
+    drive.ram[0x0D] = 0;     /* hdrs[3] sector */
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("queued format job result", 0x01u, drive.ram[0x03]);
+
+    slot = c64_get_drive_slot(&c64, 8);
+    if (!slot || !slot->image_bytes)
+        fail("test_queued_format_job_success: no slot image");
+    if (!slot->dirty)
+        fail("test_queued_format_job_success: slot not marked dirty");
+    /* Track 1 (21 sectors) must be erased to zero. */
+    for (i = 0; i < 21 * 256; i++) {
+        if (slot->image_bytes[i] != 0x00)
+            fail("test_queued_format_job_success: track 1 not erased");
+    }
+
+    printf("PASS: test_queued_format_job_success\n");
+}
+
+/* Format (EXECUTE job) on a read-only image erases nothing and stays clean. */
+static void test_queued_format_job_write_protect(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    const c64_drive_slot *slot;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x5A);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664); /* read-only */
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_format_job_write_protect: c64_mount_d64 failed");
+
+    drive.ram[0x03] = 0xE0u; /* EXECUTE job */
+    drive.ram[0x0C] = 1;
+    drive.ram[0x0D] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("format write-protect result", 0x08u, drive.ram[0x03]);
+
+    slot = c64_get_drive_slot(&c64, 8);
+    if (!slot || !slot->image_bytes)
+        fail("test_queued_format_job_write_protect: no slot image");
+    if (slot->dirty)
+        fail("test_queued_format_job_write_protect: slot marked dirty on read-only");
+    for (i = 0; i < 256; i++) {
+        if (slot->image_bytes[i] != 0x5A)
+            fail("test_queued_format_job_write_protect: image erased on read-only");
+    }
+
+    printf("PASS: test_queued_format_job_write_protect\n");
+}
+
 int main(void) {
     /* Phase 2 */
     test_ram_read_write();
@@ -774,6 +870,8 @@ int main(void) {
     test_queued_write_job_success();
     test_queued_write_job_write_protect();
     test_queued_write_job_out_of_range();
+    test_queued_format_job_success();
+    test_queued_format_job_write_protect();
 
     printf("All c1541 tests passed.\n");
     return 0;

@@ -32,6 +32,7 @@
 #define C1541_JOB_CMD_WRITE  0x10u    /* WRITE job ($90 & MASK); dos.lbl "WRITE" */
 #define C1541_JOB_CMD_VERIFY 0x20u
 #define C1541_JOB_CMD_SEARCH 0x30u
+#define C1541_JOB_CMD_EXECUTE 0x60u   /* EXECUTE job ($E0 & MASK); used by FORMT */
 
 #define C1541_JOB_OK         0x01u    /* job result: success */
 #define C1541_JOB_ERROR      0x02u    /* job result: generic error */
@@ -64,6 +65,15 @@ static int d64_sector_offset(uint8_t track, uint8_t sector) {
     for (t = 1; t < (int)track; t++) offset += (int)spt[t] * 256;
     offset += (int)sector * 256;
     return offset;
+}
+
+/* Number of sectors on a standard 35-track D64 track, or -1 if out of range. */
+static int d64_sectors_per_track(uint8_t track) {
+    if (track < 1 || track > 35) return -1;
+    if (track <= 17) return 21;
+    if (track <= 24) return 19;
+    if (track <= 30) return 18;
+    return 17;
 }
 
 /* ------------------------------------------------------------------ */
@@ -238,6 +248,38 @@ static uint8_t c1541_copy_job_buffer_to_sector(c1541 *drive, uint8_t n) {
     return C1541_JOB_OK;
 }
 
+/* Handles the FORMT EXECUTE job for job n by erasing the target track's sectors
+   in the mounted image.  The DOS "NEW" command formats every track this way and
+   then writes a fresh BAM + directory through ordinary WRITE jobs, so erasing the
+   sector data here is sufficient to produce a clean formatted D64.
+   Returns C1541_JOB_OK, C1541_JOB_WRITE_PROT (read-only), or C1541_JOB_ERROR. */
+static uint8_t c1541_format_track(c1541 *drive, uint8_t n) {
+    c64_drive_slot *slot;
+    uint8_t track;
+    int off0, sectors;
+
+    track = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+    sectors = d64_sectors_per_track(track);
+    off0 = d64_sector_offset(track, 0);
+    if (sectors <= 0 || off0 < 0) {
+        return C1541_JOB_ERROR;
+    }
+    slot = c64_get_drive_slot_mut(drive->c64, drive->device_number);
+    if (!slot || !slot->mounted || !slot->image_bytes) {
+        return C1541_JOB_ERROR;
+    }
+    if (!slot->writable) {
+        return C1541_JOB_WRITE_PROT;
+    }
+    if ((size_t)(off0 + sectors * 256) > slot->image_size) {
+        return C1541_JOB_ERROR;
+    }
+
+    memset(slot->image_bytes + off0, 0, (size_t)sectors * 256);
+    slot->dirty = true;
+    return C1541_JOB_OK;
+}
+
 static void c1541_complete_queued_job(c1541 *drive, uint8_t n, uint8_t result) {
     drive->ram[C1541_ZP_JOBS + n] = result;
 }
@@ -281,6 +323,16 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                 drive->ram[0x0013u] = sector;
                 c1541_complete_queued_job(drive, n, C1541_JOB_OK);
             }
+            return 1;
+
+        case C1541_JOB_CMD_EXECUTE:
+            /* The DOS "NEW" command formats each track via an EXECUTE job that
+               runs the ROM's GCR FORMT routine against the (unmodelled) disk
+               mechanics.  We cannot GCR-format a D64 (it stores decoded sectors,
+               not tracks), so complete the job successfully and let the ROM's own
+               DOS code write the fresh BAM + directory through normal WRITE jobs.
+               The disk is marked dirty so the formatted result is persisted. */
+            c1541_complete_queued_job(drive, n, c1541_format_track(drive, n));
             return 1;
 
         default:
