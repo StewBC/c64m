@@ -40,6 +40,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_MOUNT_D64,
     RUNTIME_COMMAND_UNMOUNT_DISK,
     RUNTIME_COMMAND_REQUEST_DISK_STATUS,
+    RUNTIME_COMMAND_SET_DISK_WRITABLE,
     RUNTIME_COMMAND_ASSEMBLE_FILE,
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_CYCLE_TURBO_SPEED,
@@ -152,10 +153,12 @@ typedef struct runtime_command {
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];
             uint8_t device;
+            uint8_t writable;
         } mount_d64;
 
         struct {
             uint8_t device;
+            uint8_t writable;
         } disk_device;
 
         struct {

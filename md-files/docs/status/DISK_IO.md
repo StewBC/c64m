@@ -2,15 +2,18 @@
 
 ## D64 current implementation
 
-- D64 disk support is complete through Phase G plus disk-queue and INI-persistence additions.
-- Read-only tools parser is implemented.
+- D64 disk support is complete through Phase G plus disk-queue, INI-persistence,
+  and opt-in KERNAL SAVE additions.
+- Tools parser and PRG writer are implemented for standard D64 images.
 - Runtime mount/unmount supports devices 8 and 9.
 - KERNAL LOAD traps for PRG loads are implemented.
+- KERNAL SAVE traps for PRG writes are implemented when the mounted image is writable.
 - Optional real 1541 ROM/IEC LOAD path is implemented when `[disk] emulate_1541=1`
   and a standard 1541 DOS 2.6 ROM is loaded.
 - `LOAD "$"` directory loads are implemented.
 - Exact and wildcard filename matching are implemented.
 - Machine-tab disk UI is implemented with per-drive disk queues.
+- Machine-tab disk UI includes a per-current-image `Write` checkbox.
 - Generic 8K/16K `.CRT` host loading is implemented as cartridge attachment,
   not as PRG/BASIC memory injection.
 
@@ -22,10 +25,18 @@
 - Directory chain is parsed.
 - Raw PETSCII names and ASCII debug names are parsed.
 - PRG file chains and PRG load address are parsed.
+- PRG writes allocate sectors, update the BAM, write file-sector chains, and add
+  PRG directory entries. `@:` replacement is supported for PRG SAVE replacement.
 
 ## Runtime behavior
 
-- Devices 8 and 9 can mount independent read-only images.
+- Devices 8 and 9 can mount independent images. Images are read-only by default.
+- Writable images accept standard KERNAL `SAVE "NAME",8` / `SAVE "NAME",9`
+  through the `$FFD8` trap. The trap writes a PRG with the two-byte load address
+  header and marks the mounted image dirty.
+- Runtime flushes dirty writable images to the host `.d64` file after successful
+  SAVE, and also before replacing/ejecting/quit. Failed host flushes leave the
+  image dirty and publish an error.
 - Runtime/frontend exchange copied disk status only.
 - LOAD supports device 8/9 PRG exact names.
 - LOAD supports `*`, prefix wildcards, `?`, and directory synthesis.
@@ -60,6 +71,8 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 - CONFIG_APPLY replaces `options` with the Configure-dialog snapshot; the live
   `disk_slots` are merged back in before options is destroyed so GUI-mounted disks
   survive a Configure → OK round-trip.
+- Writable state is serialized as a parallel comma-separated list:
+  `8_writable=0,1`. Missing writable lists default all images to read-only.
 - `frontend_set_disk_queue` must be called from main.c after any disk-slot change to
   keep the frontend's `disk_queue[2]` mirror in sync.
 
@@ -83,7 +96,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 ## Host file load/save UI
 
 - Machine tab has Disks, Programs, and Emulator sections.
-- Disks section: each device row shows `[N][Add][Eject] <selector>`.
+- Disks section: each device row shows `[N][Add][Eject] <selector> [Write]`.
   - `[8]` / `[9]` — open file dialog; replaces the entire queue with one new image.
   - `[Add]` — open file dialog; inserts a new image after the current entry.
   - `[Eject]` — ejects the current disk and advances to the next (round-robin); if the
@@ -92,6 +105,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   - The selector is a combo box while the queue has entries: it shows the current
     disk basename and opens a drop-down with all queued images; clicking one mounts it.
     When the queue is empty it degrades to a plain status label.
+  - `Write` toggles whether the current queued image may be modified by KERNAL SAVE.
 - Programs section has Load and Save buttons.
 - Emulator section has Configure and Reset.
 - Load dialog has Name + Browse, From File, Reset, and Basic Program options.
@@ -108,8 +122,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 ## Known limitations / deferred
 
-- D64 writes are not implemented.
-- SAVE to disk is not implemented.
+- Real 1541 DOS writes are not implemented; `[disk] emulate_1541=1` still uses
+  the real 1541 path only for LOAD. The compatibility SAVE trap bails when a
+  real 1541 ROM is handling the device.
 - Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps
   for T64 are not implemented. Current T64 support extracts the first loadable
   entry only through host load/drop paths.
@@ -117,6 +132,7 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   INI persistence, detach UI/status, cartridge RAM/flash writes, and freezer
   buttons are not implemented.
 - Error channel is not implemented beyond generic 1541 ROM intercept errors.
+- DOS command channel scratch/rename/format/validate is not implemented.
 - Fast loaders are not broadly validated; loaders that depend on unmodeled
   disk-controller VIA motor/SYNC/head mechanics may still fail.
 - Devices beyond 8/9 are not implemented.
@@ -125,6 +141,8 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 ## Tests / smoke checks
 
 - GUI D64 picker: mount a D64, type BASIC LOAD commands, confirm directory and PRG loads.
+- Writable D64 SAVE: mount a scratch D64, enable `Write`, `SAVE "TEST",8`,
+  restart with the same image, and confirm `LOAD "TEST",8` reloads the PRG.
 - Reset/PRG loader: verify reset-before-load and autostart collection PRGs.
 - Autorun:
   - `--prg foo.prg --autorun` should boot and immediately run.

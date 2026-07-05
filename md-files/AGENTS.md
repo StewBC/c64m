@@ -42,6 +42,7 @@ In scope for the current milestone:
   coverage used by ordinary C64 software.
 - CIA #2 NMI verification if documentation or tests disagree about current
   behavior.
+- Opt-in D64 PRG writes through the KERNAL SAVE trap.
 - Selected diagnostics only where they validate in-scope behavior.
 ```
 
@@ -51,8 +52,8 @@ Explicitly out of scope for the current milestone:
 - IEC serial bus protocol implementation beyond the current CIA #2 pin model.
 - 1541 CPU, ROM, firmware, or drive-side emulation.
 - Fast loaders.
-- D64 writes, SAVE to disk, directory modification, DOS command channel, or
-  disk error channel.
+- Directory modification beyond SAVE-created PRG entries, DOS command channel,
+  disk error channel, or the real 1541 DOS write path.
 - Full CIA cycle-level accuracy and sub-Phi2 timing.
 - CIA FLAG, PC pulse, and handshake lines unless needed by a specific accepted
   in-scope test.
@@ -98,7 +99,7 @@ docs/status/SID.md                SID register behavior, voices, ADSR, filter, t
 docs/status/AUDIO.md              Runtime/platform audio output, buffering, recording
 docs/status/CPU_MACHINE.md        6510, memory, banking, reset/boot, IRQ/NMI, loaders
 docs/status/FRONTEND_DEBUGGER.md  UI, debugger, dialogs, memory views, help, assembler
-docs/status/DISK_IO.md            D64 parser, mount/unmount, KERNAL LOAD traps
+docs/status/DISK_IO.md            D64 parser, mount/unmount, KERNAL LOAD/SAVE traps
 docs/status/TESTING.md            Tests and human smoke checks
 docs/status/DEFERRED.md           Known limitations and future work
 docs/status/OPTIMIZATIONS.md      Accepted and rejected performance changes
@@ -121,7 +122,7 @@ Allowed dependency direction:
 ```text
 frontend -> runtime_client + platform + tools + util
 runtime  -> machine + util
-machine  -> util
+machine  -> tools + util
 tools    -> util
 platform -> util + SDL2
 ```

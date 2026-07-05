@@ -568,6 +568,8 @@ static void runtime_publish_drive_status(runtime *rt, uint8_t device) {
     c64_copy_drive_status(&rt->machine, device, &status);
     event.data.disk_status.device = status.device;
     event.data.disk_status.mounted = status.mounted ? 1u : 0u;
+    event.data.disk_status.writable = status.writable ? 1u : 0u;
+    event.data.disk_status.dirty = status.dirty ? 1u : 0u;
     event.data.disk_status.image_kind = status.image_kind;
     event.data.disk_status.last_result = status.last_result;
     snprintf(event.data.disk_status.display_name, sizeof(event.data.disk_status.display_name), "%s", status.display_name);
@@ -685,6 +687,46 @@ static bool runtime_write_file_bytes(const char *path, const uint8_t *bytes, siz
     return true;
 }
 
+static bool runtime_flush_disk_slot(runtime *rt, uint8_t device, bool publish_clean_status) {
+    int slot_index;
+    c64_drive_slot *slot;
+    const char *path;
+    char message[1200];
+
+    if (rt == NULL || !c64_drive_device_supported(device)) {
+        return false;
+    }
+    slot_index = (int)(device - C64_DRIVE_MIN_DEVICE);
+    slot = &rt->machine.drives[slot_index];
+    if (!slot->mounted || !slot->dirty) {
+        return true;
+    }
+    path = rt->mounted_disk_paths[slot_index];
+    if (path[0] == '\0' ||
+        !runtime_write_file_bytes(path, slot->image_bytes, slot->image_size)) {
+        slot->last_result = C64_DRIVE_STATUS_IO_ERROR;
+        snprintf(message, sizeof(message), "failed to flush writable D64 `%s`", path);
+        runtime_publish_error(rt, message);
+        runtime_publish_drive_status(rt, device);
+        return false;
+    }
+
+    slot->dirty = false;
+    slot->last_result = C64_DRIVE_STATUS_OK;
+    if (publish_clean_status) {
+        runtime_publish_drive_status(rt, device);
+    }
+    return true;
+}
+
+static void runtime_flush_dirty_disks(runtime *rt) {
+    uint8_t device;
+
+    for (device = C64_DRIVE_MIN_DEVICE; device <= C64_DRIVE_MAX_DEVICE; ++device) {
+        (void)runtime_flush_disk_slot(rt, device, true);
+    }
+}
+
 static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
     uint8_t *bytes = NULL;
     size_t size = 0;
@@ -701,6 +743,10 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
     char disk_id[3];
     char dos_type[3];
     uint16_t free_blocks = 0;
+
+    if (!runtime_flush_disk_slot(rt, command->data.mount_d64.device, true)) {
+        return;
+    }
 
     if (!runtime_read_file_bytes(command->data.mount_d64.path, &bytes, &size)) {
         int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
@@ -769,7 +815,7 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         }
     }
 
-    status_result = c64_mount_d64(
+    status_result = c64_mount_d64_ex(
         &rt->machine,
         command->data.mount_d64.device,
         bytes,
@@ -780,7 +826,16 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         disk_title,
         disk_id,
         dos_type,
-        free_blocks);
+        free_blocks,
+        command->data.mount_d64.writable != 0);
+    if (status_result == C64_DRIVE_STATUS_OK) {
+        int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+        snprintf(
+            rt->mounted_disk_paths[slot_index],
+            sizeof(rt->mounted_disk_paths[slot_index]),
+            "%s",
+            command->data.mount_d64.path);
+    }
     if (status_result != C64_DRIVE_STATUS_OK) {
         int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
         if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
@@ -1504,6 +1559,7 @@ static bool runtime_step_cycle(runtime *rt) {
     }
 
     runtime_audio_advance_cycle(rt);
+    runtime_flush_dirty_disks(rt);
     return true;
 }
 
@@ -1536,6 +1592,7 @@ static bool runtime_step_instruction(runtime *rt) {
         runtime_publish_error(rt, error);
         return false;
     }
+    runtime_flush_dirty_disks(rt);
 
     rt->breakpoint_hit_pending = false;
     c64_copy_cpu_snapshot(&rt->machine, &snapshot);
@@ -1566,6 +1623,7 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
             runtime_publish_error(rt, error);
             return false;
         }
+        runtime_flush_dirty_disks(rt);
 
         if (runtime_pause_if_breakpoint_pending(rt)) {
             return true;
@@ -2362,6 +2420,7 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
             runtime_publish_error(rt, error);
             return false;
         }
+        runtime_flush_dirty_disks(rt);
 
         rt->suppress_execute_bp = false;
 
@@ -2413,6 +2472,7 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             runtime_publish_error(rt, error);
             return false;
         }
+        runtime_flush_dirty_disks(rt);
         rt->breakpoint_hit_pending = false;
         return runtime_publish_step_complete(rt);
     }
@@ -2451,6 +2511,7 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
                 runtime_publish_error(rt, error);
                 return false;
             }
+            runtime_flush_dirty_disks(rt);
 
             rt->suppress_execute_bp = false;
 
@@ -3041,7 +3102,27 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_UNMOUNT_DISK:
+            if (!runtime_flush_disk_slot(rt, command->data.disk_device.device, true)) {
+                break;
+            }
             c64_unmount_drive(&rt->machine, command->data.disk_device.device);
+            if (c64_drive_device_supported(command->data.disk_device.device)) {
+                rt->mounted_disk_paths[
+                    command->data.disk_device.device - C64_DRIVE_MIN_DEVICE][0] = '\0';
+            }
+            runtime_publish_drive_status(rt, command->data.disk_device.device);
+            break;
+
+        case RUNTIME_COMMAND_SET_DISK_WRITABLE:
+            if (command->data.disk_device.writable == 0) {
+                if (!runtime_flush_disk_slot(rt, command->data.disk_device.device, true)) {
+                    break;
+                }
+            }
+            (void)c64_set_drive_writable(
+                &rt->machine,
+                command->data.disk_device.device,
+                command->data.disk_device.writable != 0);
             runtime_publish_drive_status(rt, command->data.disk_device.device);
             break;
 
@@ -3781,6 +3862,7 @@ int runtime_thread_main(void *userdata) {
     rt->pending_asm_path = NULL;
     free(rt->pending_bin_path);
     rt->pending_bin_path = NULL;
+    runtime_flush_dirty_disks(rt);
     if (rt->trace_file != NULL) {
         fprintf(rt->trace_file, "--- STOP  CYC=%08llX ---\n",
             (unsigned long long)rt->machine.clock.cycle);

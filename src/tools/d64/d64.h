@@ -24,7 +24,10 @@ typedef enum d64_result {
     D64_MALFORMED_FILE,
     D64_UNSUPPORTED_FILE_TYPE,
     D64_FILE_NOT_FOUND,
+    D64_FILE_EXISTS,
     D64_PRG_TOO_SHORT,
+    D64_DISK_FULL,
+    D64_DIRECTORY_FULL,
     D64_OUT_OF_MEMORY
 } d64_result;
 
@@ -92,5 +95,14 @@ d64_result d64_image_extract_prg(
     const d64_image *image,
     const d64_directory_entry *entry,
     d64_file_data *out_file);
+
+const uint8_t *d64_image_bytes(const d64_image *image, size_t *out_size);
+d64_result d64_image_write_prg(
+    d64_image *image,
+    const uint8_t *name,
+    size_t name_len,
+    const uint8_t *data,
+    size_t data_len,
+    bool replace);
 
 void d64_file_data_free(d64_file_data *file);

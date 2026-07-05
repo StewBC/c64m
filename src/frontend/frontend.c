@@ -1080,6 +1080,27 @@ static bool frontend_push_disk_select_intent(frontend *ui, uint8_t device, int i
     return true;
 }
 
+static bool frontend_push_disk_writable_intent(frontend *ui, uint8_t device, bool writable)
+{
+    size_t next;
+
+    if (ui == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_DISK_SET_WRITABLE;
+    ui->intents[ui->intent_write].disk_device = device;
+    ui->intents[ui->intent_write].disk_writable = writable;
+    ui->intent_write = next;
+    return true;
+}
+
 static const char *path_basename(const char *path)
 {
     const char *base = path;
@@ -5403,6 +5424,15 @@ static const char *frontend_disk_label(const frontend_debug_state *debug_state, 
         if (status->last_result == C64_DRIVE_STATUS_IO_ERROR) {
             return "Mount failed";
         }
+        if (status->last_result == C64_DRIVE_STATUS_WRITE_PROTECTED) {
+            return "Read-only disk";
+        }
+        if (status->last_result == C64_DRIVE_STATUS_DISK_FULL) {
+            return "Disk full";
+        }
+        if (status->last_result == C64_DRIVE_STATUS_FILE_EXISTS) {
+            return "File exists";
+        }
         if (status->last_result == C64_DRIVE_STATUS_PARSE_ERROR ||
             status->last_result == C64_DRIVE_STATUS_UNSUPPORTED_IMAGE) {
             return "Unsupported disk";
@@ -5495,7 +5525,7 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
 
             snprintf(dev_label, sizeof(dev_label), "%d", (int)device);
 
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 4);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
 
             /* [8]/[9] — replace queue with a freshly chosen disk */
             nk_layout_row_push(ctx, 0.10f);
@@ -5520,7 +5550,7 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
             }
 
             /* Disk name selector: combo when queue has entries, plain label otherwise */
-            nk_layout_row_push(ctx, 0.58f);
+            nk_layout_row_push(ctx, 0.44f);
             if (slot->count > 0) {
                 const char *labels[C64M_DRIVE_COUNT];
                 int label_count = slot->count < C64M_DRIVE_COUNT ? slot->count : C64M_DRIVE_COUNT;
@@ -5537,6 +5567,19 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
                 }
             } else {
                 nk_label(ctx, frontend_disk_label(debug_state, device), NK_TEXT_LEFT);
+            }
+
+            nk_layout_row_push(ctx, 0.14f);
+            if (slot->count > 0) {
+                bool writable = app_disk_slot_current_writable(slot);
+                bool before = writable;
+
+                frontend_checkbox_bool(ctx, "Write", &writable);
+                if (writable != before) {
+                    frontend_push_disk_writable_intent(ui, device, writable);
+                }
+            } else {
+                nk_label(ctx, "", NK_TEXT_LEFT);
             }
 
             nk_layout_row_end(ctx);

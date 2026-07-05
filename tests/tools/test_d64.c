@@ -104,6 +104,39 @@ static void fill_name(uint8_t *target, const char *name)
     }
 }
 
+static uint8_t sectors_on_track(uint8_t track)
+{
+    if (track <= 17) {
+        return 21;
+    }
+    if (track <= 24) {
+        return 19;
+    }
+    if (track <= 30) {
+        return 18;
+    }
+    return 17;
+}
+
+static void set_bam_sector(uint8_t *bam, uint8_t track, uint8_t sector, bool free_sector)
+{
+    uint8_t *entry = &bam[4u + ((track - 1u) * 4u)];
+    uint8_t mask = (uint8_t)(1u << (sector & 7u));
+    uint8_t *byte = &entry[1u + (sector >> 3u)];
+    bool was_free = (*byte & mask) != 0;
+
+    if (was_free == free_sector) {
+        return;
+    }
+    if (free_sector) {
+        *byte |= mask;
+        entry[0]++;
+    } else {
+        *byte &= (uint8_t)~mask;
+        entry[0]--;
+    }
+}
+
 static uint8_t *make_empty_image(void)
 {
     uint8_t *image;
@@ -117,10 +150,25 @@ static uint8_t *make_empty_image(void)
     }
 
     if (d64_track_sector_offset(18, 0, &offset) == D64_OK) {
+        uint8_t track;
+
         bam = &image[offset];
         bam[0] = 18;
         bam[1] = 1;
         bam[2] = 0x41;
+        for (track = 1; track <= D64_TRACK_COUNT; ++track) {
+            uint8_t sectors = sectors_on_track(track);
+            uint8_t *entry = &bam[4u + ((track - 1u) * 4u)];
+            uint8_t sector;
+
+            entry[0] = sectors;
+            entry[1] = entry[2] = entry[3] = 0;
+            for (sector = 0; sector < sectors; ++sector) {
+                entry[1u + (sector >> 3u)] |= (uint8_t)(1u << (sector & 7u));
+            }
+        }
+        set_bam_sector(bam, 18, 0, false);
+        set_bam_sector(bam, 18, 1, false);
         fill_name(&bam[0x90], "TEST DISK");
         bam[0xa2] = 'I';
         bam[0xa3] = 'D';
@@ -179,6 +227,101 @@ static void put_final_file_sector(
     sector[0] = 0;
     sector[1] = (uint8_t)(data_size + 1u);
     memcpy(&sector[2], data, data_size);
+}
+
+static int test_write_prg_round_trip(void)
+{
+    int failures = 0;
+    uint8_t *bytes;
+    d64_result result;
+    d64_image *image;
+    d64_directory_entry entry;
+    d64_file_data file;
+    const d64_disk_info *info;
+    uint8_t prg[600];
+    size_t i;
+
+    bytes = make_empty_image();
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = d64_image_create(bytes, D64_STANDARD_IMAGE_SIZE, &result);
+    failures += expect_result(result, D64_OK, "write image parse");
+    if (image != NULL) {
+        for (i = 0; i < sizeof(prg); ++i) {
+            prg[i] = (uint8_t)(i & 0xffu);
+        }
+        prg[0] = 0x01;
+        prg[1] = 0x08;
+
+        failures += expect_result(
+            d64_image_write_prg(image, (const uint8_t *)"SAVEFILE", 8, prg, sizeof(prg), false),
+            D64_OK,
+            "write PRG");
+        failures += expect_result(
+            d64_image_find_entry_ascii(image, "SAVEFILE", &entry),
+            D64_OK,
+            "find written PRG");
+        failures += expect_size(entry.block_count, 3, "written block count");
+        memset(&file, 0, sizeof(file));
+        failures += expect_result(d64_image_extract_prg(image, &entry, &file), D64_OK, "extract written PRG");
+        failures += expect_size(file.size, sizeof(prg), "written PRG size");
+        if (file.size == sizeof(prg) && memcmp(file.bytes, prg, sizeof(prg)) != 0) {
+            fprintf(stderr, "written PRG bytes mismatch\n");
+            failures++;
+        }
+        d64_file_data_free(&file);
+        info = d64_image_disk_info(image);
+        failures += expect_true(info != NULL && info->free_blocks == 661u, "free blocks decremented");
+    }
+    d64_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
+static int test_write_prg_replace_and_duplicate(void)
+{
+    int failures = 0;
+    uint8_t *bytes;
+    d64_result result;
+    d64_image *image;
+    d64_directory_entry entry;
+    d64_file_data file;
+    uint8_t first[] = {0x01, 0x08, 0xaa};
+    uint8_t second[] = {0x01, 0x08, 0xbb, 0xcc};
+
+    bytes = make_empty_image();
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = d64_image_create(bytes, D64_STANDARD_IMAGE_SIZE, &result);
+    failures += expect_result(result, D64_OK, "replace image parse");
+    if (image != NULL) {
+        failures += expect_result(
+            d64_image_write_prg(image, (const uint8_t *)"DUP", 3, first, sizeof(first), false),
+            D64_OK,
+            "write first duplicate");
+        failures += expect_result(
+            d64_image_write_prg(image, (const uint8_t *)"DUP", 3, second, sizeof(second), false),
+            D64_FILE_EXISTS,
+            "reject duplicate");
+        failures += expect_result(
+            d64_image_write_prg(image, (const uint8_t *)"@:DUP", 5, second, sizeof(second), false),
+            D64_OK,
+            "replace duplicate");
+        failures += expect_result(d64_image_find_entry_ascii(image, "DUP", &entry), D64_OK, "find replaced");
+        memset(&file, 0, sizeof(file));
+        failures += expect_result(d64_image_extract_prg(image, &entry, &file), D64_OK, "extract replaced");
+        failures += expect_size(file.size, sizeof(second), "replaced size");
+        if (file.size == sizeof(second) && memcmp(file.bytes, second, sizeof(second)) != 0) {
+            fprintf(stderr, "replaced bytes mismatch\n");
+            failures++;
+        }
+        d64_file_data_free(&file);
+    }
+    d64_image_destroy(image);
+    free(bytes);
+    return failures;
 }
 
 static int test_geometry_and_size(void)
@@ -514,6 +657,8 @@ int main(void)
     failures += test_directory_loop();
     failures += test_file_chain_loop_and_bad_sector();
     failures += test_short_prg();
+    failures += test_write_prg_round_trip();
+    failures += test_write_prg_replace_and_duplicate();
 
     return failures == 0 ? 0 : 1;
 }

@@ -164,6 +164,37 @@ static void expect_disk_status(
     }
 }
 
+static void expect_disk_status_writable(
+    runtime_client *client,
+    uint8_t device,
+    uint8_t mounted,
+    uint8_t writable,
+    c64_drive_status_result result,
+    const char *display_name,
+    const char *disk_title) {
+    runtime_event event;
+
+    if (!poll_event(client, &event, RUNTIME_EVENT_DISK_STATUS_RESPONSE)) {
+        fail("disk status event not received");
+    }
+    expect_u8("disk status device", device, event.data.disk_status.device);
+    expect_u8("disk status mounted", mounted, event.data.disk_status.mounted);
+    expect_u8("disk status writable", writable, event.data.disk_status.writable);
+    if (event.data.disk_status.last_result != result) {
+        fprintf(stderr,
+            "disk status result: expected %d, got %d\n",
+            result,
+            event.data.disk_status.last_result);
+        exit(1);
+    }
+    if (display_name != NULL) {
+        expect_string("disk display name", display_name, event.data.disk_status.display_name);
+    }
+    if (disk_title != NULL) {
+        expect_string("disk title", disk_title, event.data.disk_status.disk_title);
+    }
+}
+
 static void test_mount_replace_unmount_and_failure(void) {
     runtime *rt;
     runtime_client *client;
@@ -182,6 +213,12 @@ static void test_mount_replace_unmount_and_failure(void) {
 
     expect_true("mount blank d64", runtime_client_mount_d64(client, 8, blank_path));
     expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+
+    expect_true("mount blank d64 writable", runtime_client_mount_d64_ex(client, 8, blank_path, true));
+    expect_disk_status_writable(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+
+    expect_true("clear writable", runtime_client_set_disk_writable(client, 8, false));
+    expect_disk_status_writable(client, 8, 1, 0, C64_DRIVE_STATUS_OK, "blank.d64", "");
 
     expect_true("mount odell d64", runtime_client_mount_d64(client, 8, odell_path));
     expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");

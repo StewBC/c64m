@@ -203,6 +203,36 @@ static void setup_load_call(c64_t *machine, const char *name, uint8_t device, ui
     machine->bus.ram[0x2c] = 0x08;
 }
 
+static void setup_save_call(
+    c64_t *machine,
+    const char *name,
+    uint8_t device,
+    uint16_t start,
+    uint16_t end) {
+    size_t length = strlen(name);
+    size_t i;
+
+    machine->cpu.cpu.pc = 0xffd8;
+    machine->cpu.cpu.sp = 0x01fd;
+    machine->bus.ram[0x01fe] = (uint8_t)(TEST_RETURN_ADDRESS & 0xff);
+    machine->bus.ram[0x01ff] = (uint8_t)(TEST_RETURN_ADDRESS >> 8);
+    machine->cpu.cpu.A = 0xc1;
+    machine->cpu.cpu.X = (uint8_t)(end & 0xffu);
+    machine->cpu.cpu.Y = (uint8_t)(end >> 8);
+    machine->cpu.cpu.flags |= 0x01;
+
+    machine->bus.ram[0xc1] = (uint8_t)(start & 0xffu);
+    machine->bus.ram[0xc2] = (uint8_t)(start >> 8);
+    machine->bus.ram[0xba] = device;
+    machine->bus.ram[0xb9] = 0;
+    machine->bus.ram[0xb7] = (uint8_t)length;
+    machine->bus.ram[0xbb] = (uint8_t)(TEST_FILENAME_BUFFER & 0xff);
+    machine->bus.ram[0xbc] = (uint8_t)(TEST_FILENAME_BUFFER >> 8);
+    for (i = 0; i < length; ++i) {
+        machine->bus.ram[TEST_FILENAME_BUFFER + i] = (uint8_t)name[i];
+    }
+}
+
 static void expect_success_return(const c64_t *machine) {
     expect_u16("trap return PC", (uint16_t)(TEST_RETURN_ADDRESS + 1), machine->cpu.cpu.pc);
     expect_true("carry clear", (machine->cpu.cpu.flags & 0x01u) == 0);
@@ -573,6 +603,51 @@ static void test_device_9_loads_and_independent_slots(void) {
     c64_unmount_all_drives(&machine);
 }
 
+static void test_kernal_save_trap_writes_prg(void) {
+    c64_t machine;
+    d64_image *mounted_image = NULL;
+    uint8_t *mounted_bytes = NULL;
+    d64_image *saved_image;
+    d64_directory_entry entry;
+    d64_file_data file;
+    d64_result result;
+    char error[256];
+    uint8_t expected[] = {0x01, 0x08, 0x11, 0x22, 0x33, 0x44};
+    size_t i;
+
+    reset_machine(&machine);
+    mount_fixture(&machine, "blank.d64", &mounted_image, &mounted_bytes);
+    expect_true("enable writable disk", c64_set_drive_writable(&machine, 8, true));
+    for (i = 2; i < sizeof(expected); ++i) {
+        machine.bus.ram[0x0801u + (uint16_t)(i - 2u)] = expected[i];
+    }
+
+    setup_save_call(&machine, "SAVED", 8, 0x0801, 0x0805);
+    expect_true("SAVE trap step", c64_step_instruction(&machine, error, sizeof(error)));
+    expect_success_return(&machine);
+    expect_true("disk marked dirty", machine.drives[0].dirty);
+    expect_true("disk still writable", machine.drives[0].writable);
+
+    saved_image = d64_image_create(
+        machine.drives[0].image_bytes,
+        machine.drives[0].image_size,
+        &result);
+    expect_true("saved image parses", saved_image != NULL && result == D64_OK);
+    expect_true("find saved file", d64_image_find_entry_ascii(saved_image, "SAVED", &entry) == D64_OK);
+    memset(&file, 0, sizeof(file));
+    expect_true("extract saved file", d64_image_extract_prg(saved_image, &entry, &file) == D64_OK);
+    expect_u16("saved file size", (uint16_t)sizeof(expected), (uint16_t)file.size);
+    if (file.size != sizeof(expected) || memcmp(file.bytes, expected, sizeof(expected)) != 0) {
+        fail("saved PRG bytes mismatch");
+    }
+
+    d64_file_data_free(&file);
+    d64_image_destroy(saved_image);
+    d64_image_destroy(mounted_image);
+    free(mounted_bytes);
+    c64_unmount_all_drives(&machine);
+}
+
 int main(void) {
     test_load_prg_secondary_one();
     test_load_prg_basic_semantics();
@@ -581,5 +656,6 @@ int main(void) {
     test_wildcard_and_case_matching();
     test_malformed_mounted_chains_fail_safely();
     test_device_9_loads_and_independent_slots();
+    test_kernal_save_trap_writes_prg();
     return 0;
 }

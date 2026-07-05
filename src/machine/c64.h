@@ -104,7 +104,10 @@ typedef enum c64_drive_status_result {
     C64_DRIVE_STATUS_UNSUPPORTED_IMAGE,
     C64_DRIVE_STATUS_PARSE_ERROR,
     C64_DRIVE_STATUS_IO_ERROR,
-    C64_DRIVE_STATUS_OUT_OF_MEMORY
+    C64_DRIVE_STATUS_OUT_OF_MEMORY,
+    C64_DRIVE_STATUS_WRITE_PROTECTED,
+    C64_DRIVE_STATUS_DISK_FULL,
+    C64_DRIVE_STATUS_FILE_EXISTS
 } c64_drive_status_result;
 
 enum {
@@ -119,6 +122,8 @@ enum {
 typedef struct c64_drive_status {
     uint8_t device;
     bool mounted;
+    bool writable;
+    bool dirty;
     c64_drive_image_kind image_kind;
     c64_drive_status_result last_result;
     char display_name[C64_DRIVE_DISPLAY_NAME_MAX];
@@ -146,6 +151,8 @@ typedef struct c64_drive_directory_entry {
 
 typedef struct c64_drive_slot {
     bool mounted;
+    bool writable;
+    bool dirty;
     c64_drive_image_kind image_kind;
     c64_drive_status_result last_result;
     char display_name[C64_DRIVE_DISPLAY_NAME_MAX];
@@ -405,6 +412,20 @@ c64_drive_status_result c64_mount_d64(
     const char *disk_id,
     const char *dos_type,
     uint16_t free_blocks);
+c64_drive_status_result c64_mount_d64_ex(
+    c64_t *machine,
+    uint8_t device,
+    const uint8_t *standard_image_bytes,
+    size_t standard_image_size,
+    const c64_drive_directory_entry *entries,
+    size_t entry_count,
+    const char *display_name,
+    const char *disk_title,
+    const char *disk_id,
+    const char *dos_type,
+    uint16_t free_blocks,
+    bool writable);
+bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable);
 void c64_unmount_drive(c64_t *machine, uint8_t device);
 void c64_unmount_all_drives(c64_t *machine);
 bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status);

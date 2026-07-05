@@ -429,7 +429,7 @@ Allowed dependency direction:
 ```text
 frontend -> runtime_client + platform + tools + util
 runtime  -> machine + util
-machine  -> util
+machine  -> tools + util
 tools    -> util
 platform -> util + SDL2
 ```
@@ -501,7 +501,7 @@ scope:
 IEC protocol
 1541 CPU/ROM emulation
 fast loaders
-D64 writes
+real 1541 DOS writes and broad disk mutation
 full Commodore DOS behavior
 advanced cartridge banking
 bit-perfect SID analog modeling

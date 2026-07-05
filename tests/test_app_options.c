@@ -666,6 +666,21 @@ static void write_disk_multi_ini(const char *path, const char *disk_list) {
     fclose(file);
 }
 
+static void write_disk_multi_writable_ini(
+    const char *path,
+    const char *disk_list,
+    const char *writable_list) {
+    FILE *file = fopen(path, "w");
+
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", path);
+        exit(1);
+    }
+
+    fprintf(file, "[disk]\n8=%s\n8_writable=%s\n", disk_list, writable_list);
+    fclose(file);
+}
+
 static void test_disk_single_from_ini(void) {
     app_options options;
     char *argv[] = {
@@ -709,9 +724,37 @@ static void test_disk_multi_from_ini(void) {
     expect_string("disk slot 8 path 0", "/games/disk1.d64", options.disk_slots[8].paths[0]);
     expect_string("disk slot 8 path 1", "/games/disk2.d64", options.disk_slots[8].paths[1]);
     expect_string("disk slot 8 path 2", "/games/disk3.d64", options.disk_slots[8].paths[2]);
+    expect_bool("disk slot 8 writable default", 0, app_disk_slot_current_writable(&options.disk_slots[8]));
 
     app_options_destroy(&options);
     remove("test_disk_multi.ini");
+}
+
+static void test_disk_writable_from_ini(void) {
+    app_options options;
+    char *argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_disk_writable.ini",
+    };
+
+    write_disk_multi_writable_ini(
+        "test_disk_writable.ini",
+        "/games/disk1.d64,/games/disk2.d64",
+        "0,1");
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "app_options_load_startup failed\n");
+        exit(1);
+    }
+
+    expect_int("disk writable count", 2, options.disk_slots[8].count);
+    expect_bool("disk 0 read-only", 0, app_disk_slot_current_writable(&options.disk_slots[8]));
+    app_disk_slot_select(&options.disk_slots[8], 1);
+    expect_bool("disk 1 writable", 1, app_disk_slot_current_writable(&options.disk_slots[8]));
+
+    app_options_destroy(&options);
+    remove("test_disk_writable.ini");
 }
 
 static void test_disk_relative_path_from_ini(void) {
@@ -791,6 +834,7 @@ static void test_disk_saved_relative_to_ini(void) {
     }
 
     app_disk_slot_set(&options.disk_slots[8], disk_path);
+    app_disk_slot_set_current_writable(&options.disk_slots[8], true);
     app_disk_slot_set(&options.disk_slots[9], disk_path);
 
     if (!app_options_save_shutdown(&options)) {
@@ -800,6 +844,10 @@ static void test_disk_saved_relative_to_ini(void) {
 
     if (!file_contains(ini_path, "../disks/game.d64")) {
         fprintf(stderr, "saved disk path was not relative to ini\n");
+        exit(1);
+    }
+    if (!file_contains(ini_path, "8_writable=1")) {
+        fprintf(stderr, "saved disk writable state was not persisted\n");
         exit(1);
     }
 
@@ -1022,6 +1070,7 @@ int main(void) {
     test_crt_path_with_spaces();
     test_disk_single_from_ini();
     test_disk_multi_from_ini();
+    test_disk_writable_from_ini();
     test_disk_relative_path_from_ini();
     test_disk_saved_relative_to_ini();
     test_disk_slot_set_and_clear();

@@ -49,12 +49,13 @@ choice is applied after the INI file is loaded.
 
 ### Disk Images
 
-c64m supports read-only D64 images on device 8 and device 9. `LOAD "NAME",8`,
-`LOAD "NAME",8,1`, wildcard loads, and `LOAD "$",8` work through a compatibility
-KERNAL trap by default. If a 1541 ROM is available and `[disk] emulate_1541=1` is set,
+c64m supports D64 images on device 8 and device 9. Images mount read-only by default.
+`LOAD "NAME",8`, `LOAD "NAME",8,1`, wildcard loads, and `LOAD "$",8` work through a
+compatibility KERNAL trap by default. When an image is marked writable, standard
+`SAVE "NAME",8` writes a PRG back into the mounted D64 and flushes the host `.d64`
+file after the save. If a 1541 ROM is available and `[disk] emulate_1541=1` is set,
 standard disk LOADs for devices 8/9 run through the real C64 KERNAL IEC routines and
-the emulated 1541 DOS ROM instead. D64 write operations and SAVE to disk are not
-implemented.
+the emulated 1541 DOS ROM instead.
 
 ### PRG and BASIC Files
 
@@ -1207,6 +1208,8 @@ Paths may be absolute or relative to the directory containing the INI file.
 |-----|------------------------------------------------------------------|
 | `8` | D64 image or comma-separated list of images for device 8        |
 | `9` | D64 image or comma-separated list of images for device 9        |
+| `8_writable` | Parallel `0`/`1` list for device 8 images; omitted means read-only |
+| `9_writable` | Parallel `0`/`1` list for device 9 images; omitted means read-only |
 | `emulate_1541` | `true`/`false`; when true and a 1541 ROM is loaded, route disk LOADs through real IEC/1541 emulation |
 
 Example — single disk:
@@ -1225,6 +1228,14 @@ Example — multi-disk queue for a multi-part game:
 
 The first image in the list is mounted at startup. The current position within the queue
 is not saved; launching the emulator always starts from the first image.
+
+Example — writable scratch disk:
+
+```
+[disk]
+8=./disks/scratch.d64
+8_writable=1
+```
 
 ### [assembler]
 
@@ -1859,8 +1870,9 @@ emulated IEC bus. The 1541 model runs the drive 6502, two VIA 6522s, the standar
 ROM-level D64 sector reads. The disk-controller VIA mechanics are intentionally
 abstracted: ROM READ/SEARCH jobs are satisfied from the mounted D64 image rather than
 from a simulated stepper motor, GCR stream, or SYNC signal. This supports standard
-KERNAL disk loads and disk autorun while keeping D64 writes, SAVE to disk, the error
-channel, and unvalidated fast-loader mechanics out of scope.
+KERNAL disk loads and disk autorun. SAVE to D64 uses the compatibility KERNAL trap,
+not the real 1541 DOS write path; the error channel and unvalidated fast-loader
+mechanics remain out of scope.
 
 ### Joystick
 

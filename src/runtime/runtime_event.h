@@ -225,6 +225,8 @@ typedef struct runtime_call_stack_snapshot {
 typedef struct runtime_disk_status_snapshot {
     uint8_t device;
     uint8_t mounted;
+    uint8_t writable;
+    uint8_t dirty;
     c64_drive_image_kind image_kind;
     c64_drive_status_result last_result;
     char display_name[C64_DRIVE_DISPLAY_NAME_MAX];

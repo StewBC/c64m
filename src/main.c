@@ -1246,9 +1246,11 @@ static void control_format_disk_status_response(
     snprintf(
         text,
         sizeof(text),
-        "device=%u mounted=%u kind=%u result=%u name=%s title=%s",
+        "device=%u mounted=%u writable=%u dirty=%u kind=%u result=%u name=%s title=%s",
         disk_status->device,
         disk_status->mounted,
+        disk_status->writable,
+        disk_status->dirty,
         (unsigned)disk_status->image_kind,
         (unsigned)disk_status->last_result,
         disk_status->display_name,
@@ -1871,7 +1873,11 @@ static void poll_runtime_events(
                 path = app_disk_slot_select(slot, new_index);
             }
             if (path != NULL) {
-                runtime_client_mount_d64(client, device, path);
+                runtime_client_mount_d64_ex(
+                    client,
+                    device,
+                    path,
+                    app_disk_slot_current_writable(slot));
                 if (ui != NULL) {
                     frontend_set_disk_queue(ui, device, slot);
                 }
@@ -2493,7 +2499,7 @@ static void dispatch_debugger_intents(
                     char path[1024];
                     if ((intent.disk_device == 8 || intent.disk_device == 9) &&
                         choose_disk_path(path, sizeof(path))) {
-                        sent = runtime_client_mount_d64(client, intent.disk_device, path);
+                        sent = runtime_client_mount_d64_ex(client, intent.disk_device, path, false);
                         if (sent) {
                             app_disk_slot_set(&options->disk_slots[intent.disk_device], path);
                             frontend_set_disk_queue(ui, intent.disk_device,
@@ -2511,8 +2517,11 @@ static void dispatch_debugger_intents(
                         bool was_empty = slot->count == 0;
                         if (app_disk_slot_add_after_current(slot, path)) {
                             if (was_empty) {
-                                sent = runtime_client_mount_d64(
-                                    client, intent.disk_device, slot->paths[0]);
+                                sent = runtime_client_mount_d64_ex(
+                                    client,
+                                    intent.disk_device,
+                                    slot->paths[0],
+                                    app_disk_slot_current_writable(slot));
                             } else {
                                 sent = true;
                             }
@@ -2527,7 +2536,11 @@ static void dispatch_debugger_intents(
                     app_disk_slot *slot = &options->disk_slots[intent.disk_device];
                     const char *next_path = app_disk_slot_eject_current(slot);
                     if (next_path != NULL) {
-                        sent = runtime_client_mount_d64(client, intent.disk_device, next_path);
+                        sent = runtime_client_mount_d64_ex(
+                            client,
+                            intent.disk_device,
+                            next_path,
+                            app_disk_slot_current_writable(slot));
                     } else {
                         sent = runtime_client_unmount_disk(client, intent.disk_device);
                     }
@@ -2551,7 +2564,24 @@ static void dispatch_debugger_intents(
                     app_disk_slot *slot = &options->disk_slots[intent.disk_device];
                     const char *path = app_disk_slot_select(slot, intent.disk_queue_index);
                     if (path != NULL) {
-                        sent = runtime_client_mount_d64(client, intent.disk_device, path);
+                        sent = runtime_client_mount_d64_ex(
+                            client,
+                            intent.disk_device,
+                            path,
+                            app_disk_slot_current_writable(slot));
+                        frontend_set_disk_queue(ui, intent.disk_device, slot);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_SET_WRITABLE:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    app_disk_slot *slot = &options->disk_slots[intent.disk_device];
+                    if (app_disk_slot_set_current_writable(slot, intent.disk_writable)) {
+                        sent = runtime_client_set_disk_writable(
+                            client,
+                            intent.disk_device,
+                            intent.disk_writable);
                         frontend_set_disk_queue(ui, intent.disk_device, slot);
                     }
                 }
@@ -2758,7 +2788,7 @@ static void handle_keyboard_input(
 
 static void handle_drop_file(runtime_client *client, app_options *options, char *path) {
     if (path_has_extension(path, "d64")) {
-        if (runtime_client_mount_d64(client, 8, path) && options != NULL) {
+        if (runtime_client_mount_d64_ex(client, 8, path, false) && options != NULL) {
             app_disk_slot_set(&options->disk_slots[8], path);
         }
     } else if (path_has_extension(path, "c64state")) {
@@ -3982,7 +4012,11 @@ int main(int argc, char **argv) {
         int i;
         for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
             if (options.disk_slots[i].count > 0) {
-                runtime_client_mount_d64(client, (uint8_t)i, options.disk_slots[i].paths[0]);
+                runtime_client_mount_d64_ex(
+                    client,
+                    (uint8_t)i,
+                    options.disk_slots[i].paths[0],
+                    app_disk_slot_current_writable(&options.disk_slots[i]));
             }
         }
     }

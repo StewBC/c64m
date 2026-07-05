@@ -113,6 +113,7 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT,
     FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL,
     FRONTEND_DEBUGGER_INTENT_DISK_SELECT,
+    FRONTEND_DEBUGGER_INTENT_DISK_SET_WRITABLE,
     FRONTEND_DEBUGGER_INTENT_MACHINE_RESET,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
@@ -156,6 +157,7 @@ typedef struct frontend_debugger_intent {
     bool assemble_rearm_oneshots;
     uint8_t disk_device;
     int disk_queue_index;
+    bool disk_writable;
     /* Load */
     char load_bin_path[1024];
     uint16_t load_bin_address;

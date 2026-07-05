@@ -631,13 +631,17 @@ static void disk_slot_free(app_disk_slot *slot)
         free(slot->paths[i]);
     }
     free(slot->paths);
+    free(slot->writable);
     slot->paths = NULL;
+    slot->writable = NULL;
     slot->count = 0;
+    slot->current = 0;
 }
 
 static bool disk_slot_append(app_disk_slot *slot, const char *path)
 {
     char **grown;
+    bool *grown_writable;
     char *copy;
 
     copy = copy_string(path);
@@ -650,10 +654,82 @@ static bool disk_slot_append(app_disk_slot *slot, const char *path)
         free(copy);
         return false;
     }
+    slot->paths = grown;
+
+    grown_writable = (bool *)realloc(slot->writable, (size_t)(slot->count + 1) * sizeof(bool));
+    if (grown_writable == NULL) {
+        free(copy);
+        return false;
+    }
 
     grown[slot->count] = copy;
-    slot->paths = grown;
+    slot->writable = grown_writable;
+    slot->writable[slot->count] = false;
     slot->count++;
+    return true;
+}
+
+static void disk_slot_parse_writable_list(app_disk_slot *slot, const char *spec)
+{
+    const char *cursor = spec;
+    int index = 0;
+
+    if (slot == NULL || spec == NULL) {
+        return;
+    }
+
+    while (*cursor != '\0' && index < slot->count) {
+        const char *start;
+        const char *end;
+        size_t len;
+
+        while (*cursor == ' ') {
+            cursor++;
+        }
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        end = cursor;
+        while (end > start && end[-1] == ' ') {
+            end--;
+        }
+        len = (size_t)(end - start);
+        slot->writable[index] =
+            (len == 1 && start[0] == '1') ||
+            (len == 4 && strncmp(start, "true", 4) == 0) ||
+            (len == 2 && strncmp(start, "rw", 2) == 0);
+        index++;
+        if (*cursor == ',') {
+            cursor++;
+        }
+    }
+}
+
+static bool disk_slot_format_writable_list(
+    const app_disk_slot *slot,
+    char *out,
+    size_t out_size)
+{
+    size_t used = 0;
+    int j;
+
+    if (slot == NULL || out == NULL || out_size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    for (j = 0; j < slot->count; ++j) {
+        int written = snprintf(
+            out + used,
+            out_size - used,
+            "%s%d",
+            used > 0 ? "," : "",
+            slot->writable[j] ? 1 : 0);
+        if (written < 0 || (size_t)written >= out_size - used) {
+            return false;
+        }
+        used += (size_t)written;
+    }
     return true;
 }
 
@@ -795,6 +871,7 @@ bool app_disk_slot_copy(app_disk_slot *dest, const app_disk_slot *src)
             disk_slot_free(dest);
             return false;
         }
+        dest->writable[i] = src->writable != NULL && src->writable[i];
     }
     dest->current = src->current;
     return true;
@@ -811,13 +888,16 @@ const char *app_disk_slot_eject_current(app_disk_slot *slot)
     free(slot->paths[slot->current]);
     for (i = slot->current; i < slot->count - 1; ++i) {
         slot->paths[i] = slot->paths[i + 1];
+        slot->writable[i] = slot->writable[i + 1];
     }
     slot->paths[slot->count - 1] = NULL;
     slot->count--;
 
     if (slot->count == 0) {
         free(slot->paths);
+        free(slot->writable);
         slot->paths = NULL;
+        slot->writable = NULL;
         slot->current = 0;
         return NULL;
     }
@@ -831,6 +911,7 @@ const char *app_disk_slot_eject_current(app_disk_slot *slot)
 bool app_disk_slot_add_after_current(app_disk_slot *slot, const char *path)
 {
     char **grown;
+    bool *grown_writable;
     char *copy;
     int insert_at;
     int i;
@@ -851,11 +932,20 @@ bool app_disk_slot_add_after_current(app_disk_slot *slot, const char *path)
     }
     slot->paths = grown;
 
+    grown_writable = (bool *)realloc(slot->writable, (size_t)(slot->count + 1) * sizeof(bool));
+    if (grown_writable == NULL) {
+        free(copy);
+        return false;
+    }
+    slot->writable = grown_writable;
+
     insert_at = slot->count == 0 ? 0 : slot->current + 1;
     for (i = slot->count; i > insert_at; --i) {
         slot->paths[i] = slot->paths[i - 1];
+        slot->writable[i] = slot->writable[i - 1];
     }
     slot->paths[insert_at] = copy;
+    slot->writable[insert_at] = false;
     slot->count++;
     return true;
 }
@@ -867,6 +957,25 @@ const char *app_disk_slot_select(app_disk_slot *slot, int index)
     }
     slot->current = index;
     return slot->paths[index];
+}
+
+bool app_disk_slot_current_writable(const app_disk_slot *slot)
+{
+    if (slot == NULL || slot->count == 0 || slot->current < 0 || slot->current >= slot->count ||
+        slot->writable == NULL) {
+        return false;
+    }
+    return slot->writable[slot->current];
+}
+
+bool app_disk_slot_set_current_writable(app_disk_slot *slot, bool writable)
+{
+    if (slot == NULL || slot->count == 0 || slot->current < 0 || slot->current >= slot->count ||
+        slot->writable == NULL) {
+        return false;
+    }
+    slot->writable[slot->current] = writable;
+    return true;
 }
 
 /* --- disk spec parsing for --disk CLI arg --------------------------------- */
@@ -896,7 +1005,7 @@ static bool apply_disk_spec(app_options *options, const char *spec)
 static void apply_config(app_options *options, config *cfg)
 {
     const char *value;
-    char key[8];
+    char key[32];
     int drive;
 
     if (cfg == NULL) {
@@ -1037,6 +1146,11 @@ static void apply_config(app_options *options, config *cfg)
         value = config_get(cfg, "disk", key);
         if (value != NULL) {
             disk_slot_parse_list(&options->disk_slots[drive], options, value);
+        }
+        snprintf(key, sizeof(key), "%d_writable", drive);
+        value = config_get(cfg, "disk", key);
+        if (value != NULL) {
+            disk_slot_parse_writable_list(&options->disk_slots[drive], value);
         }
     }
 }
@@ -1439,7 +1553,7 @@ bool app_options_save_shutdown(const app_options *options)
     config *cfg;
     bool ok;
     int drive;
-    char key[8];
+    char key[32];
     char relative_symbol_files[1024];
 
     if (options == NULL || options->no_save_ini || options->ini_path == NULL) {
@@ -1524,6 +1638,10 @@ bool app_options_save_shutdown(const app_options *options)
             char joined[4096];
             if (disk_slot_format_list(slot, options, joined, sizeof(joined))) {
                 snprintf(key, sizeof(key), "%d", drive);
+                config_set(cfg, "disk", key, joined);
+            }
+            if (disk_slot_format_writable_list(slot, joined, sizeof(joined))) {
+                snprintf(key, sizeof(key), "%d_writable", drive);
                 config_set(cfg, "disk", key, joined);
             }
         }

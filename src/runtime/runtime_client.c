@@ -395,6 +395,14 @@ bool runtime_client_load_state(runtime_client *client, const char *path) {
 }
 
 bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path) {
+    return runtime_client_mount_d64_ex(client, device, path, false);
+}
+
+bool runtime_client_mount_d64_ex(
+    runtime_client *client,
+    uint8_t device,
+    const char *path,
+    bool writable) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_MOUNT_D64,
     };
@@ -404,7 +412,22 @@ bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char
     }
 
     command.data.mount_d64.device = device;
+    command.data.mount_d64.writable = writable ? 1u : 0u;
     snprintf(command.data.mount_d64.path, sizeof(command.data.mount_d64.path), "%s", path);
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_set_disk_writable(runtime_client *client, uint8_t device, bool writable) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_DISK_WRITABLE,
+    };
+
+    if (!client || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.disk_device.device = device;
+    command.data.disk_device.writable = writable ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 

@@ -10,6 +10,7 @@
 /* Ordered list of disk image paths for one drive slot. */
 typedef struct {
     char **paths;
+    bool  *writable;
     int    count;
     int    current; /* index of the disk currently (or last) mounted; 0 by default */
 } app_disk_slot;
@@ -117,3 +118,5 @@ bool app_disk_slot_add_after_current(app_disk_slot *slot, const char *path);
  * slot->paths.
  */
 const char *app_disk_slot_select(app_disk_slot *slot, int index);
+bool app_disk_slot_current_writable(const app_disk_slot *slot);
+bool app_disk_slot_set_current_writable(app_disk_slot *slot, bool writable);

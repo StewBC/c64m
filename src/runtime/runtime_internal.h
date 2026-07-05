@@ -116,6 +116,7 @@ struct runtime {
     runtime_symbol_slot symbol_slot;
     symbol_table *symbols;
     c64_t machine;
+    char mounted_disk_paths[C64_DRIVE_SLOT_COUNT][RUNTIME_COMMAND_PATH_MAX];
     c64_rom_set roms;
     char *basic_rom_path;
     char *char_rom_path;

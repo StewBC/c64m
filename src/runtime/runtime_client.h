@@ -87,6 +87,12 @@ bool runtime_client_load_crt(runtime_client *client, const char *path);
 bool runtime_client_save_state(runtime_client *client, const char *path);
 bool runtime_client_load_state(runtime_client *client, const char *path);
 bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path);
+bool runtime_client_mount_d64_ex(
+    runtime_client *client,
+    uint8_t device,
+    const char *path,
+    bool writable);
+bool runtime_client_set_disk_writable(runtime_client *client, uint8_t device, bool writable);
 bool runtime_client_unmount_disk(runtime_client *client, uint8_t device);
 bool runtime_client_request_disk_status(runtime_client *client, uint8_t device);
 bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address);

@@ -35,9 +35,10 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 ## Disk / IEC
 
-- D64 writes are not implemented.
-- SAVE to disk is not implemented.
+- Real 1541 DOS writes are not implemented; D64 PRG SAVE is supported only
+  through the compatibility KERNAL SAVE trap on writable images.
 - Error channel is not implemented.
+- DOS command channel scratch/rename/format/validate is not implemented.
 - Fast loaders are not broadly validated; loaders that require unmodeled
   disk-controller VIA motor/SYNC/head behavior or nonstandard drive ROM behavior may fail.
 - Devices beyond 8/9 are not implemented.
