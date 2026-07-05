@@ -29,11 +29,13 @@
 
 #define C1541_JOB_CMD_MASK   0x78u
 #define C1541_JOB_CMD_READ   0x00u
+#define C1541_JOB_CMD_WRITE  0x10u    /* WRITE job ($90 & MASK); dos.lbl "WRITE" */
 #define C1541_JOB_CMD_VERIFY 0x20u
 #define C1541_JOB_CMD_SEARCH 0x30u
 
 #define C1541_JOB_OK         0x01u    /* job result: success */
 #define C1541_JOB_ERROR      0x02u    /* job result: generic error */
+#define C1541_JOB_WRITE_PROT 0x08u    /* job result: write protect on (DOS 26) */
 
 /* Maximum valid job index (jobs 0–4 have dedicated buffers at $0300–$0700).
    Job 5 shares page $07 with job 4 and is never a READ job (command channel). */
@@ -208,6 +210,34 @@ static int c1541_copy_sector_to_job_buffer(c1541 *drive, uint8_t n) {
     return 1;
 }
 
+/* Writes the active job's buffer back into the mounted D64 image.
+   DOS fills the buffer before queuing the WRITE job, so at the job-dispatch
+   window the buffer already holds the 256 bytes to persist.
+   Returns C1541_JOB_OK on success, C1541_JOB_WRITE_PROT if the image is mounted
+   read-only, or C1541_JOB_ERROR if the sector is out of range / not mounted.
+   Marks the slot dirty on success; the runtime flushes it to the host .d64. */
+static uint8_t c1541_copy_job_buffer_to_sector(c1541 *drive, uint8_t n) {
+    c64_drive_slot *slot;
+    int offset;
+    uint16_t buf_addr;
+
+    if (!c1541_job_sector_offset(drive, n, &offset)) {
+        return C1541_JOB_ERROR;
+    }
+    slot = c64_get_drive_slot_mut(drive->c64, drive->device_number);
+    if (!slot) {
+        return C1541_JOB_ERROR;
+    }
+    if (!slot->writable) {
+        return C1541_JOB_WRITE_PROT;
+    }
+
+    buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
+    memcpy(slot->image_bytes + offset, &drive->ram[buf_addr], 256);
+    slot->dirty = true;
+    return C1541_JOB_OK;
+}
+
 static void c1541_complete_queued_job(c1541 *drive, uint8_t n, uint8_t result) {
     drive->ram[C1541_ZP_JOBS + n] = result;
 }
@@ -228,6 +258,10 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                 drive,
                 n,
                 c1541_copy_sector_to_job_buffer(drive, n) ? C1541_JOB_OK : C1541_JOB_ERROR);
+            return 1;
+
+        case C1541_JOB_CMD_WRITE:
+            c1541_complete_queued_job(drive, n, c1541_copy_job_buffer_to_sector(drive, n));
             return 1;
 
         case C1541_JOB_CMD_VERIFY:
@@ -282,6 +316,10 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
             } else {
                 c1541_complete_job(drive, C1541_JOB_OK);
             }
+            return 1;
+
+        case C1541_JOB_CMD_WRITE:
+            c1541_complete_job(drive, c1541_copy_job_buffer_to_sector(drive, n));
             return 1;
 
         case C1541_JOB_CMD_VERIFY:

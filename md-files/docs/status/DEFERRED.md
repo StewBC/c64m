@@ -35,9 +35,13 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 ## Disk / IEC
 
-- Real 1541 DOS writes are not implemented; D64 PRG SAVE is supported only
-  through the compatibility KERNAL SAVE trap on writable images.
-- Error channel is not implemented.
+- Real 1541 DOS sector writes are supported via the job-level WRITE intercept
+  (C64IEC1541PHASE_4): SAVE, sequential/relative file writes, and BAM/directory
+  updates persist to writable images while the drive ROM is active. D64 PRG SAVE
+  is additionally supported through the compatibility KERNAL SAVE trap when the
+  1541 ROM is absent. Still deferred: track-level operations (format) and
+  media-level write fidelity (VIA #1 head / GCR / rotation) and G64.
+- Error channel is not implemented (see C64IEC1541PHASE_5, planned).
 - DOS command channel scratch/rename/format/validate is not implemented.
 - Fast loaders are not broadly validated; loaders that require unmodeled
   disk-controller VIA motor/SYNC/head behavior or nonstandard drive ROM behavior may fail.

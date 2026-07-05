@@ -1503,6 +1503,10 @@ uint8_t c64_get_iec_c64_pull(c64_t *machine) {
 }
 
 const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number) {
+    return c64_get_drive_slot_mut(machine, device_number);
+}
+
+c64_drive_slot *c64_get_drive_slot_mut(c64_t *machine, int device_number) {
     int idx;
 
     if (!machine) return NULL;

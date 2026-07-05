@@ -383,6 +383,9 @@ uint8_t c64_get_iec_external_pull(c64_t *machine);
 uint8_t c64_get_iec_c64_pull(c64_t *machine);
 /* Returns a pointer to the drive slot for device_number (8 or 9), or NULL. */
 const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number);
+/* Mutable variant, used by the 1541 job intercept to write sector data back
+   into a mounted, writable D64 image. */
+c64_drive_slot *c64_get_drive_slot_mut(c64_t *machine, int device_number);
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);

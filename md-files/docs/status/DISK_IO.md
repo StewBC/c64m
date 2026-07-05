@@ -122,9 +122,12 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
 
 ## Known limitations / deferred
 
-- Real 1541 DOS writes are not implemented; `[disk] emulate_1541=1` still uses
-  the real 1541 path only for LOAD. The compatibility SAVE trap bails when a
-  real 1541 ROM is handling the device.
+- Real 1541 DOS sector writes are implemented (Phase 4, job-level WRITE
+  intercept): with `[disk] emulate_1541=1`, SAVE and sequential/relative file
+  writes to a writable image persist via the real 1541 path. The compatibility
+  KERNAL SAVE trap still handles PRG SAVE when no 1541 ROM is handling the device.
+  Read-only mounts return write-protect (DOS 26). Still deferred: track-level
+  format (Phase 5) and media-level write fidelity / G64.
 - Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps
   for T64 are not implemented. Current T64 support extracts the first loadable
   entry only through host load/drop paths.

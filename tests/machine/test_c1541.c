@@ -593,6 +593,159 @@ static void test_sector_read_jobn_out_of_range(void) {
 /* main                                                                 */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Phase 4: Job-level write intercept                                  */
+/* ------------------------------------------------------------------ */
+
+/* WRITE job on a writable image: buffer is persisted into image_bytes, the
+   slot is marked dirty, and Phase 3 read returns the freshly written bytes. */
+static void test_queued_write_job_success(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    const c64_drive_slot *slot;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x11);
+    result = c64_mount_d64_ex(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664, true /* writable */);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_write_job_success: c64_mount_d64_ex failed");
+
+    /* WRITE job in buffer 2, track 1 sector 0 (D64 offset 0). */
+    for (i = 0; i < 256; i++) drive.ram[0x0500 + i] = 0x7E;
+    drive.ram[0x02] = 0x90u; /* WRITE job */
+    drive.ram[0x0A] = 1;     /* hdrs[2] track  */
+    drive.ram[0x0B] = 0;     /* hdrs[2] sector */
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("queued write job result", 0x01u, drive.ram[0x02]);
+
+    slot = c64_get_drive_slot(&c64, 8);
+    if (!slot || !slot->image_bytes)
+        fail("test_queued_write_job_success: no slot image");
+    if (!slot->dirty)
+        fail("test_queued_write_job_success: slot not marked dirty");
+    for (i = 0; i < 256; i++) {
+        if (slot->image_bytes[i] != 0x7E)
+            fail("test_queued_write_job_success: image not updated");
+    }
+
+    /* Phase 3 read is the oracle: read the same sector into buffer 3.
+       Clear the pending-cycle counter so the next advance re-enters the
+       job-scan window instead of draining the prior instruction's cycles. */
+    drive.ram[0x03] = 0x80u; /* READ job */
+    drive.ram[0x0C] = 1;
+    drive.ram[0x0D] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu;
+    drive.cpu_cycles_remaining = 0;
+    c1541_advance_one_cycle(&drive);
+    expect_eq_u8("write read-back job result", 0x01u, drive.ram[0x03]);
+    for (i = 0; i < 256; i++) {
+        if (drive.ram[0x0600 + i] != 0x7E)
+            fail("test_queued_write_job_success: read-back mismatch");
+    }
+
+    printf("PASS: test_queued_write_job_success\n");
+}
+
+/* WRITE job on a read-only image: nothing is written, the slot stays clean,
+   and the job reports the write-protect status (DOS error 26). */
+static void test_queued_write_job_write_protect(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    const c64_drive_slot *slot;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x22);
+    result = c64_mount_d64(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664); /* read-only */
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_write_job_write_protect: c64_mount_d64 failed");
+
+    for (i = 0; i < 256; i++) drive.ram[0x0500 + i] = 0x7E;
+    drive.ram[0x02] = 0x90u; /* WRITE job */
+    drive.ram[0x0A] = 1;
+    drive.ram[0x0B] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("write-protect job result", 0x08u, drive.ram[0x02]);
+
+    slot = c64_get_drive_slot(&c64, 8);
+    if (!slot || !slot->image_bytes)
+        fail("test_queued_write_job_write_protect: no slot image");
+    if (slot->dirty)
+        fail("test_queued_write_job_write_protect: slot marked dirty on read-only");
+    for (i = 0; i < 256; i++) {
+        if (slot->image_bytes[i] != 0x22)
+            fail("test_queued_write_job_write_protect: image mutated on read-only");
+    }
+
+    printf("PASS: test_queued_write_job_write_protect\n");
+}
+
+/* WRITE job to an out-of-range sector leaves the image untouched and errors. */
+static void test_queued_write_job_out_of_range(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t *img;
+    const c64_drive_slot *slot;
+    c64_drive_status_result result;
+    int i;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    img = make_test_d64(0x33);
+    result = c64_mount_d64_ex(
+        &c64, 8, img, C64_DRIVE_D64_STANDARD_SIZE,
+        NULL, 0, "test", "TEST", "AA", "2A", 664, true);
+    free(img);
+    if (result != C64_DRIVE_STATUS_OK)
+        fail("test_queued_write_job_out_of_range: c64_mount_d64_ex failed");
+
+    for (i = 0; i < 256; i++) drive.ram[0x0500 + i] = 0x7E;
+    drive.ram[0x02] = 0x90u; /* WRITE job */
+    drive.ram[0x0A] = 40;    /* track 40 does not exist on a 35-track D64 */
+    drive.ram[0x0B] = 0;
+    drive.cpu.cpu.pc = 0xF2BEu;
+
+    c1541_advance_one_cycle(&drive);
+
+    expect_eq_u8("out-of-range write job result", 0x02u, drive.ram[0x02]);
+
+    slot = c64_get_drive_slot(&c64, 8);
+    if (!slot || !slot->image_bytes)
+        fail("test_queued_write_job_out_of_range: no slot image");
+    if (slot->dirty)
+        fail("test_queued_write_job_out_of_range: slot marked dirty on failed write");
+
+    printf("PASS: test_queued_write_job_out_of_range\n");
+}
+
 int main(void) {
     /* Phase 2 */
     test_ram_read_write();
@@ -618,6 +771,9 @@ int main(void) {
     test_queued_search_job_low_bit_success();
     test_sector_read_no_disk();
     test_sector_read_jobn_out_of_range();
+    test_queued_write_job_success();
+    test_queued_write_job_write_protect();
+    test_queued_write_job_out_of_range();
 
     printf("All c1541 tests passed.\n");
     return 0;
