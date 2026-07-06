@@ -409,24 +409,33 @@ C123: 48 65 6C 6C 6F 20 57 6F 72 6C 64 21 00 00 00 00  Hello World!....
 
 ### Display Modes
 
-The memory view has three source modes that control which bytes are displayed:
+The memory view has source modes that control which address space is displayed:
 
 | Mode    | Mode border | Bytes shown                                              |
 |---------|-------------|----------------------------------------------------------|
-| **Map** | none        | CPU-visible address space (current bank configuration)   |
-| **ROM** | amber       | Physical ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
-| **RAM** | blue        | Raw RAM at every address, regardless of any ROM overlay  |
+| **Map** | none        | C64 CPU-visible address space (current bank configuration) |
+| **ROM** | amber       | Physical C64 ROM bytes at ROM addresses, regardless of mapping; RAM elsewhere |
+| **RAM** | blue        | Raw C64 RAM at every address, regardless of any ROM overlay |
+| **1541 Map 8** | gray | Device 8's 1541 address map, read-only                  |
+| **1541 Map 9** | gray | Device 9's 1541 address map, read-only                  |
 
-ROM and RAM draw a colored source-mode border inside the content area. Map has no
-source-mode color; if the view is active, the separate neutral active-view border is
-still shown.
+The 1541 map modes are inspection views for the selected drive. They show drive RAM at
+`$0000-$07FF`, the RAM mirror at `$0800-$0FFF`, the serial VIA at `$1800-$1BFF`, the
+disk-controller VIA at `$1C00-$1FFF`, and the 1541 ROM at `$C000-$FFFF` when a ROM is
+loaded for that drive. Addresses outside the available 1541 map are shown as `--` in the
+hex column and blank in the ASCII column.
+
+ROM, RAM, and 1541 map modes draw a colored source-mode border inside the content area.
+Map has no source-mode color; if the view is active, the separate neutral active-view
+border is still shown.
 
 Switch modes with **right-click** anywhere in the view (the **Source** group lists all
-three with an asterisk next to the active choice), or with **Opt+M** from the keyboard.
+choices with an asterisk next to the active choice), or with **Opt+M** from the keyboard.
 
 The memory and disassembly view modes are independent of each other -- for example, you
 can watch raw RAM in the memory view while the disassembler follows the CPU map
-simultaneously.
+simultaneously. The disassembly view remains a C64 view; selecting a 1541 map in memory
+does not change the CPU register panel, stepping behavior, breakpoints, or disassembly.
 
 ### Status Row
 
@@ -437,8 +446,8 @@ is currently `editable` or `read-only`.
 ### Virtual Views
 
 The memory panel can be split into up to 16 independent virtual views stacked vertically.
-Each virtual view maintains its own cursor, scroll position, source mode (Map/ROM/RAM),
-and edit state. A thin separator line marks the boundary between adjacent views.
+Each virtual view maintains its own cursor, scroll position, source mode, and edit state.
+A thin separator line marks the boundary between adjacent views.
 
 **Splitting** inserts a new view directly below the active view. The new view inherits the
 active view's source mode and starts with its cursor at the split address. Row height is
@@ -455,7 +464,7 @@ split.
 Click anywhere in a view to make it active. The mouse wheel scrolls the view under the
 pointer regardless of which view is currently active.
 
-ROM/RAM source-mode borders are drawn inside each view's own region. The neutral
+ROM/RAM/1541 source-mode borders are drawn inside each view's own region. The neutral
 active-panel selection border still wraps the entire memory panel regardless of how many
 views are present.
 
@@ -463,8 +472,8 @@ The scrollbar on the right represents the active view's position in the 64 K spa
 Switching the active view moves the thumb without scrolling the memory itself.
 
 Right-clicking a memory view opens a popup for the view under the pointer. The
-**Source** group changes that view's Map/ROM/RAM mode. The **View** group can **Split**
-the clicked view at the clicked address; when more than one virtual view exists it also
+**Source** group changes that view's source mode. The **View** group can **Split** the
+clicked view at the clicked address; when more than one virtual view exists it also
 offers **Join** to dissolve the clicked view.
 
 When the emulator is paused, the popup also shows an **Access** group for the clicked
@@ -484,7 +493,7 @@ writer PC.
 | Key               | Action                                                       |
 |-------------------|--------------------------------------------------------------|
 | `Opt+A`           | Toggle address-entry mode; type four hex digits to jump      |
-| `Opt+M`           | Cycle source mode: Map -> ROM -> RAM -> Map                  |
+| `Opt+M`           | Cycle source mode: Map -> ROM -> RAM -> 1541 Map 8 -> 1541 Map 9 -> Map |
 | `Opt+S`           | Open the Symbol Lookup dialog                                |
 | `Opt+X`           | Toggle between hex and ASCII edit modes                      |
 | `Opt+V`           | Split active view at cursor                                  |
@@ -508,7 +517,7 @@ the exact byte. See **Symbol Lookup** under **Disasm** for full dialog reference
 
 Memory editing is only possible while the CPU is paused. In hex mode, typing hex digits
 overwrites the nibble at the cursor. In ASCII mode, printable characters overwrite the
-byte at the cursor.
+byte at the cursor. The 1541 map modes are read-only; edit keystrokes are ignored there.
 
 ## Machine
 
@@ -1849,6 +1858,12 @@ Debugger-safe read functions (`c64_debug_read_cpu_map`, `c64_debug_read_ram`,
 `c64_debug_read_rom`) let the UI inspect memory without triggering CIA ICR
 clear-on-read, TOD latching, or other bus side effects. The memory and disassembly views
 use these safe reads exclusively.
+
+The memory view's `1541 Map 8` and `1541 Map 9` modes use the same rule for the drive:
+drive RAM, ROM, and VIA registers are copied through side-effect-safe debug reads. Reading
+the memory view does not acknowledge VIA interrupt flags or otherwise act like a live
+drive CPU bus read. Unmapped drive addresses are marked unavailable rather than treated
+as writable C64 memory.
 
 For debugging writes, the machine also keeps a 64 K write-history table, one 64-bit value
 per C64 address. Normal CPU opcode writes update the addressed entry by shifting the old
