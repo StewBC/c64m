@@ -442,6 +442,7 @@ void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address);
+bool c64_debug_read_drive_map(const c64_t *machine, uint8_t device, uint16_t address, uint8_t *out_value);
 uint64_t c64_debug_read_write_history(const c64_t *machine, uint16_t address);
 void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);

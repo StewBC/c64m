@@ -536,3 +536,33 @@ void c1541_advance_one_cycle(c1541 *drive) {
 
     drive->cpu_cycles_remaining--;
 }
+
+int c1541_debug_read_map(const c1541 *drive, uint16_t address, uint8_t *out_value) {
+    if (drive == NULL || out_value == NULL) {
+        return 0;
+    }
+
+    if (address < 0x0800u) {
+        *out_value = drive->ram[address];
+        return 1;
+    }
+    if (address < 0x1000u) {
+        *out_value = drive->ram[address & 0x07FFu];
+        return 1;
+    }
+    if (address >= 0x1C00u && address < 0x2000u) {
+        *out_value = via6522_debug_read_register(&drive->via2, (uint8_t)(address & 0x0Fu));
+        return 1;
+    }
+    if (address >= 0x1800u && address < 0x2000u) {
+        *out_value = via6522_debug_read_register(&drive->via1, (uint8_t)(address & 0x0Fu));
+        return 1;
+    }
+    if (address >= 0xC000u && drive->rom_loaded) {
+        *out_value = drive->rom[address - 0xC000u];
+        return 1;
+    }
+
+    *out_value = 0;
+    return 0;
+}

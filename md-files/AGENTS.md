@@ -22,13 +22,15 @@ For this milestone, acceptable fidelity means:
 - video output is correct enough for normal PAL and NTSC software;
 - SID audio is present and recognizable;
 - keyboard and joystick input are usable through the real C64 input paths;
-- host PRG files and read-only D64 images can load through the supported
-  loader paths;
+- host PRG files and D64 images can load through the supported loader paths,
+  including the compatibility KERNAL trap and the optional real 1541 ROM/IEC
+  path where enabled;
 - generic 8K/16K `.crt` cartridges can load through host convenience paths.
 ```
 
 This is not a promise of full demo-scene compatibility, bit-perfect analog
-SID behavior, full drive emulation, or cycle-perfect hardware recreation.
+SID behavior, complete media-level drive emulation, broad fast-loader
+compatibility, or cycle-perfect hardware recreation.
 
 ## Scope Limits
 
@@ -42,18 +44,27 @@ In scope for the current milestone:
   coverage used by ordinary C64 software.
 - CIA #2 NMI verification if documentation or tests disagree about current
   behavior.
-- Opt-in D64 PRG writes through the KERNAL SAVE trap.
+- D64 load/save support for devices 8 and 9 through the compatibility KERNAL
+  traps.
+- Optional real 1541 ROM/IEC execution for devices 8 and 9 when
+  `[disk] emulate_1541=1` and a supported 16 KB 1541 DOS 2.6 ROM is loaded,
+  including ROM-level LOAD, job-intercepted sector READ/WRITE, and the currently
+  implemented DOS command/error-channel behavior.
 - Selected diagnostics only where they validate in-scope behavior.
 ```
 
 Explicitly out of scope for the current milestone:
 
 ```text
-- IEC serial bus protocol implementation beyond the current CIA #2 pin model.
-- 1541 CPU, ROM, firmware, or drive-side emulation.
-- Fast loaders.
-- Directory modification beyond SAVE-created PRG entries, DOS command channel,
-  disk error channel, or the real 1541 DOS write path.
+- Full IEC/drive fidelity beyond the currently documented 1541 ROM/IEC path.
+- Media-level 1541 mechanics such as GCR tracks, rotation, SYNC, motor/head
+  behavior, G64 support, and exact physical format fidelity.
+- Broad fast-loader support; loaders depending on unmodeled drive mechanics or
+  nonstandard drive ROM behavior are not validated.
+- Devices beyond 8 and 9.
+- 1541-family variants such as 1571.
+- Cross-drive copy and Commodore DOS block/memory commands not covered by the
+  current ROM/job-intercept implementation.
 - Full CIA cycle-level accuracy and sub-Phi2 timing.
 - CIA FLAG, PC pulse, and handshake lines unless needed by a specific accepted
   in-scope test.
@@ -100,6 +111,7 @@ docs/status/AUDIO.md              Runtime/platform audio output, buffering, reco
 docs/status/CPU_MACHINE.md        6510, memory, banking, reset/boot, IRQ/NMI, loaders
 docs/status/FRONTEND_DEBUGGER.md  UI, debugger, dialogs, memory views, help, assembler
 docs/status/DISK_IO.md            D64 parser, mount/unmount, KERNAL LOAD/SAVE traps
+docs/status/IEC1541.md            1541 CPU/ROM/IEC, VIA 6522, job intercepts, limits
 docs/status/TESTING.md            Tests and human smoke checks
 docs/status/DEFERRED.md           Known limitations and future work
 docs/status/OPTIMIZATIONS.md      Accepted and rejected performance changes

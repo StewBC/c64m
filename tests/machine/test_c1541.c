@@ -95,6 +95,49 @@ static void test_destroy_zeroes(void) {
     printf("PASS: test_destroy_zeroes\n");
 }
 
+static void test_debug_read_map(void) {
+    static c64_t c64;
+    static c1541 drive;
+    uint8_t value;
+
+    c64_init(&c64);
+    c1541_init(&drive, &c64, 8);
+    load_nop_rom(&drive);
+    c1541_reset(&drive);
+
+    drive.ram[0x0010] = 0x12u;
+    drive.ram[0x07FF] = 0x34u;
+    drive.rom[0x0000] = 0x56u;
+    drive.via1.ifr = 0x43u;
+    drive.via1.ier = 0x40u;
+
+    if (!c1541_debug_read_map(&drive, 0x0010u, &value))
+        fail("debug map should expose drive RAM");
+    expect_eq_u8("debug RAM byte", 0x12u, value);
+
+    if (!c1541_debug_read_map(&drive, 0x0FFFu, &value))
+        fail("debug map should expose RAM mirror");
+    expect_eq_u8("debug RAM mirror", 0x34u, value);
+
+    if (!c1541_debug_read_map(&drive, 0x180Du, &value))
+        fail("debug map should expose VIA1");
+    expect_eq_u8("debug VIA1 IFR", 0xC3u, value);
+    expect_eq_u8("debug VIA1 read side-effect", 0x43u, drive.via1.ifr);
+
+    if (!c1541_debug_read_map(&drive, 0xC000u, &value))
+        fail("debug map should expose loaded ROM");
+    expect_eq_u8("debug ROM byte", 0x56u, value);
+
+    if (c1541_debug_read_map(&drive, 0x1000u, &value))
+        fail("debug map should mark unmapped gap invalid");
+    expect_eq_u8("debug unmapped value", 0x00u, value);
+
+    if (!c64_debug_read_drive_map(&c64, 8, 0x0010u, &value))
+        fail("c64 drive map wrapper should expose drive 8 RAM");
+
+    printf("PASS: test_debug_read_map\n");
+}
+
 /* ------------------------------------------------------------------ */
 /* Phase 3A: IEC bus wiring                                            */
 /* ------------------------------------------------------------------ */
@@ -849,6 +892,7 @@ int main(void) {
     test_rom_loaded_flag();
     test_device_number();
     test_destroy_zeroes();
+    test_debug_read_map();
 
     /* Phase 3 */
     test_iec_drive_pulls_data();

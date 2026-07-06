@@ -34,7 +34,9 @@ typedef enum runtime_event_type {
 typedef enum runtime_memory_mode {
     RUNTIME_MEMORY_MODE_CPU_MAP = 0,
     RUNTIME_MEMORY_MODE_RAM,
-    RUNTIME_MEMORY_MODE_ROM
+    RUNTIME_MEMORY_MODE_ROM,
+    RUNTIME_MEMORY_MODE_DRIVE8_MAP,
+    RUNTIME_MEMORY_MODE_DRIVE9_MAP
 } runtime_memory_mode;
 
 typedef enum runtime_stop_reason {
@@ -179,6 +181,10 @@ typedef struct runtime_debug_memory_snapshot {
     uint8_t map[C64_RAM_SIZE];
     uint8_t ram[C64_RAM_SIZE];
     uint8_t rom[C64_RAM_SIZE];
+    uint8_t drive8_map[C64_RAM_SIZE];
+    uint8_t drive9_map[C64_RAM_SIZE];
+    uint8_t drive8_valid[C64_RAM_SIZE];
+    uint8_t drive9_valid[C64_RAM_SIZE];
     uint64_t write_history[C64_RAM_SIZE];
 } runtime_debug_memory_snapshot;
 

@@ -7,7 +7,8 @@
 - CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, and INI persistence are implemented.
 - Call stack view is implemented in the Misc|Debugger tab.
 - Hardware view is implemented in the Misc|Hardware tab.
-- Memory/disassembly source modes are implemented.
+- Memory/disassembly source modes are implemented. Memory views also support
+  read-only `1541 Map 8` / `1541 Map 9` inspection modes.
 - Memory view virtual views are implemented.
 - Assembler UI integration is implemented.
 - Host file load/save UI is implemented.
@@ -116,15 +117,32 @@
 
 ## Memory/disassembly source modes
 
-Modes are independent per view:
+The C64 source modes are independent per memory/disassembly view:
 
 - Map: CPU-visible address space through `c64_debug_read_cpu_map`.
 - ROM: physical ROM bytes through `c64_debug_read_rom`, regardless of current mapping.
 - RAM: raw RAM through `c64_debug_read_ram`, regardless of ROM overlay.
 
+Memory views also support read-only drive inspection modes:
+
+- `1541 Map 8` and `1541 Map 9` show the selected drive's side-effect-safe
+  address map from the runtime debug-memory snapshot.
+- `$0000-$07FF` shows drive RAM, `$0800-$0FFF` shows the RAM mirror, `$1800-$1BFF`
+  shows serial VIA registers, `$1C00-$1FFF` shows disk-controller VIA registers,
+  and `$C000-$FFFF` shows ROM when that drive has a ROM loaded.
+- Unmapped or unavailable drive addresses render as `--` in the hex column and
+  blank ASCII cells.
+- Drive map views are read-only. Hex/ASCII edit keystrokes are ignored and the
+  footer reports `read-only`.
+- The disassembly view remains C64 Map/ROM/RAM only in this phase; 1541
+  disassembly, drive CPU register display, drive stepping, and drive breakpoints
+  are deferred.
+
 UI behavior:
 
-- Right-click contextual popup selects source mode and shows active-mode dot indicator.
+- Right-click contextual popup selects source mode and shows active-mode dot
+  indicator. Memory popups include `1541 Map 8` and `1541 Map 9`; disassembly
+  popups do not.
 - The memory/disassembly contextual popup groups options under `Source`,
   `View`, and `Access` headings. Memory view popups include `Split` and, when
   multiple virtual views exist, `Join`. While stopped both popups show four
@@ -133,11 +151,13 @@ UI behavior:
   runtime-published snapshots; live machine pointers do not cross into
   frontend. The popups are clamped to the app viewport and use an internal
   scrollable region when the full menu cannot fit.
-- Opt+M cycles source mode in the focused memory/disassembly view.
+- Opt+M cycles source mode in the focused view. Memory cycles through
+  Map/ROM/RAM/1541 Map 8/1541 Map 9; disassembly cycles through Map/ROM/RAM.
 - Opt+Tab cycles active view C64 -> Disassembly -> Misc -> Memory.
 - Shift+Opt+Tab reverses that order.
 - ROM mode shows amber border inside the content area.
 - RAM mode shows blue border inside the content area.
+- 1541 Map 8/9 modes show a gray border inside the memory view content area.
 - Map has no source-mode color.
 - Active C64, disassembly, misc, or memory view shows a neutral border when no modal dialog is open.
 - Memory view bottom status row shows active edit field, cursor address, and editability.
@@ -264,6 +284,8 @@ UI behavior:
 ## Tests / smoke checks
 
 - Verify memory/disassembly Map/ROM/RAM source modes independently per view.
+- Verify memory `1541 Map 8` / `1541 Map 9` source modes render drive RAM/VIA/ROM
+  bytes, show unmapped holes as `--`, and ignore hex/ASCII edits.
 - Verify virtual memory views preserve per-view cursor, scroll, source mode, and edit state.
 - Verify modal dialogs prevent base view focus changes from outside clicks.
 - Verify assembler reset-on and reset-off flows.

@@ -56,6 +56,45 @@ uint8_t via6522_read(via6522 *v, uint8_t reg) {
     }
 }
 
+uint8_t via6522_debug_read_register(const via6522 *v, uint8_t reg) {
+    switch (reg & 0x0Fu) {
+        case 0:
+            return port_read(v->orb, v->ddrb, v->port_b_in);
+        case 1:
+            return port_read(v->ora, v->ddra, v->port_a_in);
+        case 2:
+            return v->ddrb;
+        case 3:
+            return v->ddra;
+        case 4:
+            return (uint8_t)(v->t1_counter & 0xFFu);
+        case 5:
+            return (uint8_t)(v->t1_counter >> 8);
+        case 6:
+            return (uint8_t)(v->t1_latch & 0xFFu);
+        case 7:
+            return (uint8_t)(v->t1_latch >> 8);
+        case 8:
+            return (uint8_t)(v->t2_counter & 0xFFu);
+        case 9:
+            return (uint8_t)(v->t2_counter >> 8);
+        case 10:
+            return v->sr;
+        case 11:
+            return v->acr;
+        case 12:
+            return v->pcr;
+        case 13:
+            return (uint8_t)(v->ifr | (((v->ifr & v->ier & 0x7Fu) != 0u) ? 0x80u : 0x00u));
+        case 14:
+            return (uint8_t)(v->ier | 0x80u);
+        case 15:
+            return port_read(v->ora, v->ddra, v->port_a_in);
+        default:
+            return 0xFFu;
+    }
+}
+
 void via6522_write(via6522 *v, uint8_t reg, uint8_t value) {
     switch (reg & 0x0Fu) {
         case 0:

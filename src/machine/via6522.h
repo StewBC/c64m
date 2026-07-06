@@ -27,6 +27,7 @@ typedef struct via6522 {
 void    via6522_init(via6522 *v);
 void    via6522_reset(via6522 *v);
 uint8_t via6522_read(via6522 *v, uint8_t reg);
+uint8_t via6522_debug_read_register(const via6522 *v, uint8_t reg);
 void    via6522_write(via6522 *v, uint8_t reg, uint8_t value);
 void    via6522_step(via6522 *v);
 int     via6522_irq_pending(via6522 *v);

@@ -459,17 +459,56 @@ static void frontend_draw_active_view_border(struct nk_context *ctx)
     frontend_draw_view_border(ctx, nk_rgb(188, 198, 190), 1.0f, 2.0f);
 }
 
+static bool frontend_memory_mode_is_drive(runtime_memory_mode mode)
+{
+    return mode == RUNTIME_MEMORY_MODE_DRIVE8_MAP ||
+           mode == RUNTIME_MEMORY_MODE_DRIVE9_MAP;
+}
+
+static bool frontend_memory_mode_is_editable(runtime_memory_mode mode)
+{
+    return !frontend_memory_mode_is_drive(mode);
+}
+
+static runtime_memory_mode frontend_memory_next_mode(runtime_memory_mode mode)
+{
+    if (mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
+        return RUNTIME_MEMORY_MODE_ROM;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_ROM) {
+        return RUNTIME_MEMORY_MODE_RAM;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_RAM) {
+        return RUNTIME_MEMORY_MODE_DRIVE8_MAP;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_DRIVE8_MAP) {
+        return RUNTIME_MEMORY_MODE_DRIVE9_MAP;
+    }
+    return RUNTIME_MEMORY_MODE_CPU_MAP;
+}
+
+static struct nk_color frontend_memory_mode_border_color(runtime_memory_mode mode)
+{
+    if (mode == RUNTIME_MEMORY_MODE_ROM) {
+        return nk_rgb(200, 130, 40);
+    }
+    if (frontend_memory_mode_is_drive(mode)) {
+        return nk_rgb(120, 126, 132);
+    }
+    return nk_rgb(60, 120, 200);
+}
+
 static void frontend_draw_memory_mode_border(struct nk_context *ctx, runtime_memory_mode mode, bool view_active)
 {
-    struct nk_color border_color;
-
     if (mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
         return;
     }
 
-    border_color = mode == RUNTIME_MEMORY_MODE_ROM ?
-        nk_rgb(200, 130, 40) : nk_rgb(60, 120, 200);
-    frontend_draw_view_border(ctx, border_color, view_active ? 4.0f : 1.0f, 2.0f);
+    frontend_draw_view_border(
+        ctx,
+        frontend_memory_mode_border_color(mode),
+        view_active ? 4.0f : 1.0f,
+        2.0f);
 }
 
 static SDL_Rect frontend_fit_rect(int area_x, int area_y, int area_w, int area_h, int source_w, int source_h)
@@ -2332,7 +2371,29 @@ static const uint8_t *frontend_debug_memory_source(
     if (mode == RUNTIME_MEMORY_MODE_ROM) {
         return snapshot->rom;
     }
+    if (mode == RUNTIME_MEMORY_MODE_DRIVE8_MAP) {
+        return snapshot->drive8_map;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_DRIVE9_MAP) {
+        return snapshot->drive9_map;
+    }
     return snapshot->map;
+}
+
+static const uint8_t *frontend_debug_memory_valid_source(
+    const runtime_debug_memory_snapshot *snapshot,
+    runtime_memory_mode mode)
+{
+    if (snapshot == NULL) {
+        return NULL;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_DRIVE8_MAP) {
+        return snapshot->drive8_valid;
+    }
+    if (mode == RUNTIME_MEMORY_MODE_DRIVE9_MAP) {
+        return snapshot->drive9_valid;
+    }
+    return NULL;
 }
 
 static void frontend_disasm_cache_replace(
@@ -3878,8 +3939,9 @@ static uint64_t frontend_memory_write_history_at(
     const frontend_memory_view_state *view,
     uint16_t address)
 {
-    (void)view;
     if (debug_state == NULL ||
+        view == NULL ||
+        frontend_memory_mode_is_drive(view->mode) ||
         !debug_state->has_debug_memory ||
         !debug_state->debug_memory.has_write_history) {
         return 0;
@@ -4098,6 +4160,21 @@ static uint8_t frontend_memory_view_byte_at(
     return bytes != NULL ? bytes[address] : 0;
 }
 
+static bool frontend_memory_view_byte_available(
+    const frontend_debug_state *debug_state,
+    const frontend_memory_view_state *view,
+    uint16_t address)
+{
+    const uint8_t *valid;
+
+    if (debug_state == NULL || view == NULL || !debug_state->has_debug_memory) {
+        return false;
+    }
+
+    valid = frontend_debug_memory_valid_source(&debug_state->debug_memory, view->mode);
+    return valid == NULL || valid[address] != 0;
+}
+
 static char frontend_memory_ascii(uint8_t value)
 {
     if (value >= 32 && value <= 126) {
@@ -4173,6 +4250,10 @@ static void frontend_memory_write_byte(
     if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
         return;
     }
+    if (!frontend_memory_mode_is_editable(memory->mode) ||
+        !frontend_memory_view_byte_available(debug_state, memory, address)) {
+        return;
+    }
 
     frontend_push_memory_write_byte(ui, address, value, memory->mode);
     memory->request_pending = false;
@@ -4189,6 +4270,10 @@ static void frontend_memory_apply_hex_digit(
     uint8_t new_value;
 
     if (digit < 0 || digit > 15) {
+        return;
+    }
+    if (!frontend_memory_mode_is_editable(memory->mode) ||
+        !frontend_memory_view_byte_available(debug_state, memory, memory->cursor_address)) {
         return;
     }
 
@@ -4449,7 +4534,9 @@ static void frontend_memory_draw_status_footer(
 
     field = memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII ? "ASCII" :
         (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex");
-    editable = debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED ?
+    editable = debug_state != NULL &&
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED &&
+        frontend_memory_mode_is_editable(memory->mode) ?
         "editable" : "read-only";
     snprintf(address, sizeof(address), "Address: %04X", memory->cursor_address);
 
@@ -4942,13 +5029,7 @@ static void frontend_memory_handle_key(
     }
 
     if (alt && sym == SDLK_m) {
-        if (memory->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
-            memory->mode = RUNTIME_MEMORY_MODE_ROM;
-        } else if (memory->mode == RUNTIME_MEMORY_MODE_ROM) {
-            memory->mode = RUNTIME_MEMORY_MODE_RAM;
-        } else {
-            memory->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
-        }
+        memory->mode = frontend_memory_next_mode(memory->mode);
         memory->request_pending = false;
         return;
     }
@@ -5045,17 +5126,29 @@ static void frontend_memory_handle_key(
 
     if (memory->edit_field == FRONTEND_MEMORY_EDIT_ASCII) {
         if (sym == SDLK_RETURN) {
+            if (!frontend_memory_mode_is_editable(memory->mode) ||
+                !frontend_memory_view_byte_available(debug_state, memory, memory->cursor_address)) {
+                return;
+            }
             frontend_memory_write_byte(ui, debug_state, memory->cursor_address, 0x0d);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
         if (sym == SDLK_BACKSPACE) {
+            if (!frontend_memory_mode_is_editable(memory->mode) ||
+                !frontend_memory_view_byte_available(debug_state, memory, memory->cursor_address)) {
+                return;
+            }
             frontend_memory_write_byte(ui, debug_state, memory->cursor_address, 0x08);
             frontend_memory_move_cursor(ui, 1);
             return;
         }
         if (sym >= 32 && sym <= 126) {
             uint8_t byte = (uint8_t)sym;
+            if (!frontend_memory_mode_is_editable(memory->mode) ||
+                !frontend_memory_view_byte_available(debug_state, memory, memory->cursor_address)) {
+                return;
+            }
             if (sym >= 'a' && sym <= 'z') {
                 bool caps = (mod & KMOD_CAPS) != 0;
                 if (shift ^ caps) {
@@ -5191,13 +5284,23 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
 
                     lp += written; remaining -= (size_t)written;
                     for (col = 0; col < mv->columns; col++) {
-                        uint8_t val = frontend_memory_view_byte_at(debug_state, mv, (uint16_t)(row_addr + col));
-                        written = snprintf(lp, remaining, "%02X ", val);
+                        uint16_t addr = (uint16_t)(row_addr + col);
+                        if (frontend_memory_view_byte_available(debug_state, mv, addr)) {
+                            uint8_t val = frontend_memory_view_byte_at(debug_state, mv, addr);
+                            written = snprintf(lp, remaining, "%02X ", val);
+                        } else {
+                            written = snprintf(lp, remaining, "-- ");
+                        }
                         lp += written; remaining -= (size_t)written;
                     }
                     for (col = 0; col < mv->columns; col++) {
-                        uint8_t val = frontend_memory_view_byte_at(debug_state, mv, (uint16_t)(row_addr + col));
-                        written = snprintf(lp, remaining, "%c", frontend_memory_ascii(val));
+                        uint16_t addr = (uint16_t)(row_addr + col);
+                        if (frontend_memory_view_byte_available(debug_state, mv, addr)) {
+                            uint8_t val = frontend_memory_view_byte_at(debug_state, mv, addr);
+                            written = snprintf(lp, remaining, "%c", frontend_memory_ascii(val));
+                        } else {
+                            written = snprintf(lp, remaining, " ");
+                        }
                         lp += written; remaining -= (size_t)written;
                     }
 
@@ -5296,8 +5399,8 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                 &ui->memory_context_popup,
                 120.0f,
                 stopped ?
-                    (can_join ? 297.0f : 275.0f) :
-                    (can_join ? 177.0f : 155.0f));
+                    (can_join ? 341.0f : 319.0f) :
+                    (can_join ? 221.0f : 199.0f));
         }
 
         /* Context menu applies to the virtual view that was right-clicked */
@@ -5337,6 +5440,22 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                     ctx_view->mode == RUNTIME_MEMORY_MODE_RAM,
                     "RAM")) {
                 ctx_view->mode = RUNTIME_MEMORY_MODE_RAM;
+                ctx_view->request_pending = false;
+                close_popup = true;
+            }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_DRIVE8_MAP,
+                    "1541 Map 8")) {
+                ctx_view->mode = RUNTIME_MEMORY_MODE_DRIVE8_MAP;
+                ctx_view->request_pending = false;
+                close_popup = true;
+            }
+            if (frontend_context_menu_mode_item(
+                    ui->ctx,
+                    ctx_view->mode == RUNTIME_MEMORY_MODE_DRIVE9_MAP,
+                    "1541 Map 9")) {
+                ctx_view->mode = RUNTIME_MEMORY_MODE_DRIVE9_MAP;
                 ctx_view->request_pending = false;
                 close_popup = true;
             }
@@ -5382,9 +5501,7 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
                     continue;
                 }
 
-                border_color = (mv->mode == RUNTIME_MEMORY_MODE_ROM)
-                    ? nk_rgb(200, 130, 40)
-                    : nk_rgb(60, 120, 200);
+                border_color = frontend_memory_mode_border_color(mv->mode);
                 thickness = (mem_active && v == ui->memory_active_view_index) ? 4.0f : 1.0f;
                 inset_top = (v > 0) ? 1.0f : 2.0f;
                 inset_bot = (v < ui->memory_view_count - 1) ? 1.0f : 2.0f;

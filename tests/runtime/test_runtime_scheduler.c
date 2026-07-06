@@ -876,6 +876,26 @@ static void test_runtime_memory_snapshots_and_writes_are_paused_only(void) {
     }
     expect_u8("RAM mode sees underlying RAM", 0x00, event.data.memory.bytes[0]);
 
+    expect_true("request drive 8 map memory", runtime_client_request_memory(
+        client,
+        0x0000,
+        1,
+        RUNTIME_MEMORY_MODE_DRIVE8_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("drive 8 map memory response not received");
+    }
+    expect_u8("drive 8 map sees drive RAM", 0x00, event.data.memory.bytes[0]);
+
+    expect_true("write drive 8 map while paused", runtime_client_write_memory_byte(
+        client,
+        0x0000,
+        0x77,
+        RUNTIME_MEMORY_MODE_DRIVE8_MAP));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("drive 8 map write response not received");
+    }
+    expect_u8("drive 8 map write ignored", 0x00, event.data.memory.bytes[0]);
+
     expect_true("write RAM while paused", runtime_client_write_memory_byte(
         client,
         0x2000,

@@ -2074,6 +2074,24 @@ uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address) {
     return machine->bus.ram[address];
 }
 
+bool c64_debug_read_drive_map(const c64_t *machine, uint8_t device, uint16_t address, uint8_t *out_value) {
+    const c1541 *drive;
+
+    assert(machine);
+    assert(out_value);
+
+    if (device == 8u) {
+        drive = &machine->drive8;
+    } else if (device == 9u) {
+        drive = &machine->drive9;
+    } else {
+        *out_value = 0;
+        return false;
+    }
+
+    return c1541_debug_read_map(drive, address, out_value) != 0;
+}
+
 uint64_t c64_debug_read_write_history(const c64_t *machine, uint16_t address) {
     assert(machine);
 

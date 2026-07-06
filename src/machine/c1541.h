@@ -32,5 +32,6 @@ void c1541_reset(c1541 *drive);
 int  c1541_load_rom(c1541 *drive, const char *path);
 int  c1541_load_rom_split(c1541 *drive, const char *path_lo, const char *path_hi);
 void c1541_advance_one_cycle(c1541 *drive);
+int  c1541_debug_read_map(const c1541 *drive, uint16_t address, uint8_t *out_value);
 
 #endif /* C1541_H */
