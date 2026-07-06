@@ -599,6 +599,18 @@ read from the live BASIC pointers (`$2B-$2E`) and written with no load-address h
 As with loading, only stock BASIC V2 keywords are handled. When Basic Text is selected
 the Start / End fields do not apply, and it is mutually exclusive with Basic Program.
 
+Control codes embedded in string literals — cursor movement, colour changes, CLR/HOME,
+reverse on/off, and so on — cannot be written as raw ASCII, so they are saved as named
+escapes in braces and translated back to the original bytes on load. For example a
+CLR/HOME character (`CHR$(147)`) is written as `{clr/home}`, HOME as `{home}`, cursor
+down as `{down}`, and colour codes as `{red}`, `{blue}`, and so on. The `π` character is
+written as `{pi}`. Any byte without a name — including graphics characters — is written
+as a hexadecimal escape such as `{$a0}`; a decimal form like `{147}` is also accepted on
+load. Escapes are recognized anywhere in a line, so a literal `{` in the text is itself
+written as `{$7b}`. Because the codes are normalized to the uppercase/graphics character
+set, lowercase-mode listings and embedded graphics characters do not round-trip
+literally, but their exact bytes are always preserved through the numeric escapes.
+
 ### State
 
 **[Load...]** opens a file browser for a `.c64state` snapshot and restores it.

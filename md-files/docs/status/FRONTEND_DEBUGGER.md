@@ -224,7 +224,18 @@ UI behavior:
   back to ASCII source via `util/basic_v2` and writes it with no PRG header;
   Start/End are disabled. Only stock BASIC V2 tokens are handled (extension
   dialects such as Simon's BASIC are out of scope). Basic Program and Basic Text
-  are mutually exclusive in both dialogs. Detokenized `π` is written as `{PI}`.
+  are mutually exclusive in both dialogs.
+- Non-printable PETSCII bytes (control codes, colour codes, cursor movement,
+  CLR/HOME, reverse, `π`, graphics) are written as `{name}` escapes on save and
+  translated back to the raw byte on load, so control codes embedded in string
+  literals round-trip. Named codes include `{clr/home}` (`$93`), `{home}`
+  (`$13`), `{down}`/`{up}`/`{left}`/`{right}`, `{rvon}`/`{rvoff}`, the colour
+  names, and `{pi}` (`$FF`); load also accepts aliases (`{clr}`, `{clear}`,
+  `{clr_home}`, `{rvson}`, `{rvsoff}`). Any unnamed byte uses a hex escape
+  `{$hh}` (decimal `{147}` also accepted on load), so every byte is lossless; a
+  literal `{` is therefore emitted as `{$7b}`. Escapes are honored in every
+  context (strings, REM/DATA, and normal code); an unknown `{name}` is a load
+  error. Implemented in `src/util/basic_v2.c`.
 - State has Save As... and Load... buttons wired to runtime save/load state
   commands. Dropping a `.c64state` file loads it.
 - `Opt+Shift+>` quicksaves to the configured quicksave folder using a

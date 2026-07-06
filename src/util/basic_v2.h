@@ -15,6 +15,12 @@
  *     [link lo][link hi][line# lo][line# hi][token bytes...][$00]
  * terminated by a final [$00][$00] link.  Link pointers are absolute addresses
  * based on load_addr.
+ *
+ * Non-printable PETSCII bytes (control codes, colour codes, cursor movement,
+ * CLR/HOME, reverse, graphics, and the PI constant $FF) are represented in the
+ * ASCII text as "{name}" escapes, or "{$hh}"/"{decimal}" for bytes without a
+ * name, so control codes embedded in string literals survive a round-trip.
+ * Escapes are recognised in every context; an unknown "{name}" is a load error.
  */
 
 /* Tokenize ASCII BASIC source text into a tokenized program image.

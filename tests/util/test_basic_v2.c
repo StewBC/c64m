@@ -141,6 +141,72 @@ static void test_link_pointers(void) {
     expect_true("end link hi", out[13] == 0x00);
 }
 
+/* Control codes embedded in a string literal must round-trip as named escapes.
+   CLR/HOME is $93, HOME is $13, cursor DOWN is $11, RED is $1C. */
+static void test_control_code_escapes(void) {
+    roundtrip("clr/home + home",
+              "10 PRINT \"{clr/home}HI{home}\"\n",
+              "10 PRINT \"{clr/home}HI{home}\"\n");
+    roundtrip("cursor + colour",
+              "10 PRINT \"{down}{red}X\"\n",
+              "10 PRINT \"{down}{red}X\"\n");
+}
+
+/* The tokenized bytes for a control escape must be the raw PETSCII code, not
+   the literal text of the escape. */
+static void test_control_code_tokenizes_to_byte(void) {
+    static const uint8_t expected[] = {
+        0x0C, 0x08,             /* link -> $080C (11-byte line record) */
+        0x0A, 0x00,             /* line 10 */
+        0x99,                   /* PRINT */
+        0x20,                   /* space */
+        0x22,                   /* " */
+        0x93,                   /* CLR/HOME control code */
+        0x41,                   /* A */
+        0x22,                   /* " */
+        0x00,
+        0x00, 0x00
+    };
+    uint8_t out[64];
+    size_t out_len = 0;
+    char err[128];
+    const char *src = "10 PRINT \"{clr/home}A\"\n";
+
+    expect_true("control tokenize ok",
+        basic_v2_tokenize(src, strlen(src), 0x0801u, out, sizeof(out), &out_len, err, sizeof(err)));
+    expect_bytes("control tokenize bytes", expected, sizeof(expected), out, out_len);
+}
+
+/* Hex and decimal escapes give exact byte control and round-trip; bytes with no
+   name fall back to "{$hh}" on save. */
+static void test_numeric_escapes(void) {
+    /* $A0 (shifted space) has no name -> saved as {$a0}. */
+    roundtrip("hex escape", "10 PRINT \"{$a0}\"\n", "10 PRINT \"{$a0}\"\n");
+    /* Decimal on load, canonical name on save: 147 == $93 == clr/home. */
+    roundtrip("decimal escape", "10 PRINT \"{147}\"\n", "10 PRINT \"{clr/home}\"\n");
+    /* Named alias on load, canonical on save. */
+    roundtrip("clr alias", "10 PRINT \"{clr}\"\n", "10 PRINT \"{clr/home}\"\n");
+}
+
+/* PI ($FF) round-trips through the {pi} escape in and out of strings. */
+static void test_pi_escape(void) {
+    roundtrip("pi in string", "10 PRINT \"{pi}\"\n", "10 PRINT \"{pi}\"\n");
+    roundtrip("pi bare", "10 A={pi}\n", "10 A={pi}\n");
+}
+
+/* An unknown escape name is a load error. */
+static void test_unknown_escape_error(void) {
+    uint8_t out[64];
+    size_t out_len = 0;
+    char err[128];
+    const char *src = "10 PRINT \"{bogus}\"\n";
+
+    if (basic_v2_tokenize(src, strlen(src), 0x0801u, out, sizeof(out), &out_len, err, sizeof(err))) {
+        fail("expected error for unknown escape");
+    }
+    expect_true("unknown escape message set", err[0] != '\0');
+}
+
 /* A line without a leading number is an error. */
 static void test_missing_line_number(void) {
     uint8_t out[64];
@@ -163,6 +229,11 @@ int main(void) {
     test_operators_and_prefixes();
     test_lowercase_normalised();
     test_link_pointers();
+    test_control_code_escapes();
+    test_control_code_tokenizes_to_byte();
+    test_numeric_escapes();
+    test_pi_escape();
+    test_unknown_escape_error();
     test_missing_line_number();
     printf("basic_v2 tests passed\n");
     return 0;
