@@ -5332,8 +5332,10 @@ static void frontend_draw_memory(frontend *ui, struct nk_rect bounds, const fron
 
                 /* Scroll wheel: route to hovered view after rows are known */
                 if (!any_dialog && ui->ctx->input.mouse.scroll_delta.y != 0.0f) {
+                    float mx = ui->ctx->input.mouse.pos.x;
                     float my = ui->ctx->input.mouse.pos.y;
-                    if (my >= mv->cached_y_top && my < mv->cached_y_bottom) {
+                    if (mx >= rows_x && mx < rows_x + rows_w &&
+                        my >= mv->cached_y_top && my < mv->cached_y_bottom) {
                         int32_t lines = ui->ctx->input.mouse.scroll_delta.y > 0.0f ? -3 : 3;
                         mv->view_address = (uint16_t)(mv->view_address + lines * mv->columns);
                         mv->request_pending = false;
