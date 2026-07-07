@@ -250,5 +250,26 @@ Acceptance:
       Phase 3); display/idle is still gated by the fixed 51..251 window (Phase 4);
       mid-line bad-line CONDITION timing is cycle-0 only (Phase 5). End-to-end
       dkarcade visual check is deferred to its phases.
-- Phases 3-6: NOT STARTED.
+- Phase 3: DONE.
+    * The live renderer now takes the character code and colour nibble from the
+      latched line buffers (video_matrix[] / color_line[]) instead of reading
+      screen/colour RAM live. The g-access (glyph / bitmap byte) stays a live
+      per-line fetch, as on hardware. vicii_line_ctx gained {vm_latch, color_latch}
+      pointers: non-NULL on the live path (point at the latches), NULL on the
+      snapshot/debug path (keeps live RAM reads, since it has no sequencer state).
+    * Ordering subtlety resolved: the latch is now filled for the whole line (all
+      40 columns) at cycle 0 of a bad line (vicii_fill_line_latch), replacing the
+      per-cycle 15-54 c-access loop. The cycle->pixel map draws the left columns
+      before cycle 15, so a spread-out fill would have shown stale data there;
+      filling atomically at line start guarantees a consistent latch with
+      identical values (same RAM, same VC). BA is modelled separately (cycle 12),
+      so BA timing is unchanged.
+    * Guardrails: full suite 40/40 green. The live text/bitmap/mcm/ecm tests now
+      exercise the latch and stayed byte-identical; savestate still round-trips the
+      latch arrays.
+    * New acceptance test test_expose_video_matrix_latched_at_badline: the same
+      screen-RAM write yields green (latched) when applied BEFORE the row's bad
+      line at raster 51 and red (old value retained) when applied AFTER it,
+      proving the row is frozen to its bad-line latch.
+- Phases 4-6: NOT STARTED.
 ```

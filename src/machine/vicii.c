@@ -274,6 +274,13 @@ typedef struct vicii_line_ctx {
     bool     display_active;
     uint16_t cell_base;
     uint8_t  row_in_cell;
+    /* Phase 3: video-matrix / colour line latch source, indexed by column 0..39.
+       Non-NULL on the live path -- the character codes and colour nibbles come
+       from the buffers latched at the last bad line, so a mid-frame change to
+       screen/colour RAM does not alter the rest of the character row. NULL on the
+       snapshot/debug path, which reads RAM live (it has no sequencer history). */
+    const uint8_t *vm_latch;
+    const uint8_t *color_latch;
 } vicii_line_ctx;
 
 static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
@@ -335,6 +342,8 @@ static vicii_line_ctx vicii_live_line_ctx(const vicii *v) {
     c.display_active = v->display_state;
     c.cell_base      = v->vc_base;
     c.row_in_cell    = v->rc;
+    c.vm_latch       = v->video_matrix;
+    c.color_latch    = v->color_line;
     return c;
 }
 
@@ -347,6 +356,10 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
     uint8_t  yscroll = v->registers[0x11] & 0x07u;
     uint32_t sy      = y - (uint32_t)VICII_VBORDER_TOP_25;
     uint32_t adjusted;
+
+    /* Snapshot/debug path has no sequencer history: read RAM live (NULL latch). */
+    c.vm_latch    = NULL;
+    c.color_latch = NULL;
 
     if (y < (uint32_t)VICII_VBORDER_TOP_25 ||
         !vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
@@ -667,12 +680,21 @@ static vicii_bg_pixel vicii_background_pixel(
     char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
     bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
 
+    /* Character code and colour come from the line latch on the live path (filled
+       at the last bad line) or live RAM on the snapshot path. The g-access (glyph
+       / bitmap byte) is a per-line fetch and is always read live below. */
+    {
+    uint8_t vm_byte   = lc->vm_latch    ? lc->vm_latch[col]
+                                        : c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+    uint8_t color_reg = lc->color_latch ? lc->color_latch[col]
+                                        : c64_bus_vic_read_color(bus, cell);
+
     switch (mode) {
     case 0u:
         {
-            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t code = vm_byte;
             uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
-            uint8_t fg = c64_bus_vic_read_color(bus, cell);
+            uint8_t fg = color_reg;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (glyph & bit) {
                 return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true));
@@ -682,8 +704,8 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 1u:
         {
-            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t code = vm_byte;
+            uint8_t color_nib = color_reg;
             uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
 
             if ((color_nib & 0x08u) == 0u) {
@@ -709,7 +731,6 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 2u:
         {
-            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
             uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
             uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
@@ -721,8 +742,7 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 3u:
         {
-            uint8_t vm_byte = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-            uint8_t color_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t color_nib = color_reg;
             uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
             uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
             uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
@@ -740,10 +760,10 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 4u:
         {
-            uint8_t code = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+            uint8_t code = vm_byte;
             uint8_t ecm_sel = (code >> 6) & 3u;
             uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code & 0x3fu, (uint8_t)row_in_cell);
-            uint8_t fg_nib = c64_bus_vic_read_color(bus, cell);
+            uint8_t fg_nib = color_reg;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             uint32_t ecm_bg;
 
@@ -762,6 +782,7 @@ static vicii_bg_pixel vicii_background_pixel(
 
     default:
         return vicii_bg_pixel_make(vicii_palette_argb[0], false);
+    }
     }
 }
 
@@ -944,11 +965,28 @@ static const uint32_t *vicii_sprite_ba_assert_table(const vicii *v) {
         vicii_ntsc_sprite_ba_assert;
 }
 
+/* Fill the video-matrix and colour-line latches for the whole line (all 40
+   columns) from screen/colour RAM at VC. On hardware the c-accesses are spread
+   across cycles 15-54, but nothing observes the partially-filled buffers -- only
+   the renderer reads them, and the cycle->pixel mapping draws the leftmost
+   columns before cycle 15. Filling the complete line latch at the bad line's
+   start guarantees every column is drawn from a consistent, correct latch, and
+   yields identical values to the per-cycle fill (same RAM, same VC). BA stalling
+   is modelled separately (cycle 12), so it is unaffected. */
+static void vicii_fill_line_latch(vicii *v, const c64_bus_t *bus) {
+    uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
+        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    uint32_t col;
+
+    for (col = 0; col < (uint32_t)VICII_TEXT_COLUMNS; col++) {
+        uint16_t vc_col = (uint16_t)(v->vc + col);
+        v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
+        v->color_line[col]   = c64_bus_vic_read_color(bus, vc_col);
+    }
+}
+
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     uint32_t cycle;
-    uint16_t screen_base;
-    uint32_t col;
-    uint16_t screen_addr;
 
     assert(v);
 
@@ -976,6 +1014,13 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
            unchanged, so all 8 rows re-address the same 40 video-matrix cells; the
            +40 advance happens once per row at the RC==7 line end below. */
         v->vc = v->vc_base;
+
+        /* On a bad line, latch this row's 40 video-matrix / colour cells. They
+           persist unchanged across the row's non-bad lines, so a later mid-frame
+           write to screen/colour RAM does not alter the rest of the row. */
+        if (v->bad_line && bus) {
+            vicii_fill_line_latch(v, bus);
+        }
     }
 
     if (cycle == 0) {
@@ -991,22 +1036,6 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         if (new_until > v->timing.ba_low_until_abs) {
             v->timing.ba_low_until_abs = new_until;
         }
-    }
-
-    /* ------------------------------------------------------------------
-     * c-access window (cycles 15-54) on Bad Lines
-     * ------------------------------------------------------------------ */
-    if (bus &&
-        v->bad_line &&
-        cycle >= (uint32_t)VICII_CACCESS_FIRST_CYCLE &&
-        cycle <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
-
-        col         = cycle - (uint32_t)VICII_CACCESS_FIRST_CYCLE;
-        screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) + (v->registers[0x18] >> 4) * 0x0400u);
-        screen_addr = (uint16_t)(screen_base + v->vc + col);
-
-        v->video_matrix[col] = c64_bus_vic_read_ram(bus, screen_addr);
-        v->color_line[col]   = c64_bus_vic_read_color(bus, (uint16_t)(v->vc + col));
     }
 
     /* ------------------------------------------------------------------

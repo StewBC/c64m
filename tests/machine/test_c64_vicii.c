@@ -1670,8 +1670,9 @@ static void test_config_frame_timing(void) {
 typedef struct expose_injection {
     uint32_t raster_line;
     uint32_t cycle_in_line;
-    uint16_t reg;   /* full I/O address, e.g. 0xd011 */
+    uint16_t reg;    /* VIC register I/O address (e.g. 0xd011), or RAM address if is_ram */
     uint8_t  value;
+    bool     is_ram; /* true: write machine RAM at 'reg'; false: write a VIC register */
 } expose_injection;
 
 /* Render exactly one VIC-II frame, applying each injection at its scheduled
@@ -1696,7 +1697,11 @@ static void run_vic_frame_with_injections(
         for (k = 0; k < inj_count; k++) {
             if (injs[k].raster_line == v->timing.raster_line &&
                 injs[k].cycle_in_line == v->timing.cycle_in_line) {
-                vicii_write_register(v, injs[k].reg, injs[k].value);
+                if (injs[k].is_ram) {
+                    machine->bus.ram[injs[k].reg] = injs[k].value;
+                } else {
+                    vicii_write_register(v, injs[k].reg, injs[k].value);
+                }
             }
         }
         vicii_step_cycle(v, &machine->bus, abs++);
@@ -1858,6 +1863,48 @@ static void test_expose_forced_badline_resets_row_counter(void) {
         white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
 }
 
+/* Phase 3 (C64MVICIIEXPHASES): the display reads character/colour data from the
+   line latch captured at the last bad line, not live RAM. Proof without relying
+   on removed code: the SAME screen-RAM write produces different output depending
+   on whether it lands BEFORE or AFTER the character row's bad line at raster 51.
+   Bitmap mode with all-zero bitmap data shows the background colour, which is the
+   low nibble of the latched video-matrix byte. */
+static void setup_latch_bitmap(c64_t *machine) {
+    reset_machine(machine);
+    c64_bus_write(&machine->bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine->bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine->bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine->bus, 0xd020, 0x00); /* black border */
+    machine->bus.ram[0x2000] = 0x00u;           /* cell 0 rows 0..2: no fg -> show bg colour */
+    machine->bus.ram[0x2001] = 0x00u;
+    machine->bus.ram[0x2002] = 0x00u;
+    machine->bus.ram[0x0400] = 0x12u;           /* vm byte: fg=1 (white), bg=2 (red) */
+}
+
+static void test_expose_video_matrix_latched_at_badline(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  red   = TEST_PALETTE_2; /* bg from vm byte low nibble 2 */
+    uint32_t  green = TEST_PALETTE_5; /* bg from vm byte low nibble 5 */
+    /* Write screen RAM cell 0 -> 0x15 (bg green) BEFORE the bad line at 51. */
+    const expose_injection pre[]  = { { 50u, 0u, 0x0400u, 0x15u, true } };
+    /* Same write, but AFTER the bad line at 51. */
+    const expose_injection post[] = { { 53u, 0u, 0x0400u, 0x15u, true } };
+
+    /* Before the bad line: latch captures the new value -> raster 53 is green. */
+    setup_latch_bitmap(&machine);
+    run_vic_frame_with_injections(&machine, pre, 1u, &frame);
+    expect_u32("pre-badline RAM write is latched (green)",
+        green, frame.pixels[53 * C64_FRAME_WIDTH + 24]);
+
+    /* After the bad line: latch keeps the old value for the rest of the row ->
+       raster 53 stays red even though screen RAM now reads 0x15. */
+    setup_latch_bitmap(&machine);
+    run_vic_frame_with_injections(&machine, post, 1u, &frame);
+    expect_u32("post-badline RAM write is NOT seen this row (red)",
+        red, frame.pixels[53 * C64_FRAME_WIDTH + 24]);
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -1914,5 +1961,6 @@ int main(void) {
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
     test_expose_forced_badline_resets_row_counter();
+    test_expose_video_matrix_latched_at_badline();
     return 0;
 }
