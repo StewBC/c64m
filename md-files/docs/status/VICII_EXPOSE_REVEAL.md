@@ -94,24 +94,38 @@ in.
   27-frame freeze**, confirming the reveal is not sprite-driven. That prototype
   was reverted to keep the tree focused on verified fixes.
 
-### Actual mechanism
+### Actual mechanism (CORRECTED — see C64MVICIIEXNEXT_UPD.md)
 
-The reveal is driven by the **raster IRQ writing `$D011` per raster line** from
-the `$CA00` table (per-scanline control-register manipulation, i.e. an
-**FLI/badline-class effect**), plus the two sprite strips. During the 27-frame
-"freeze" the game's main thread is spin-waiting while that IRQ keeps repainting;
-on hardware the per-scanline `$D011` timing advances the picture during those
-frames, but c64m emits identical frames because its **badline / mid-line
-`$D011` raster timing does not reproduce the progression**.
+> The earlier "FLI/badline-class effect" description below the line was **wrong**
+> and is superseded. YSCROLL is constant at 3 the whole frame; this is not a
+> bad-line effect. The reveal has since been traced end to end. Full diagnosis and
+> fix plan: [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
 
-### Why it is hard / why it is deferred
+The reveal is driven by a **cycle-exact "stable raster" kernel** the title copies
+into RAM at `$0400-$0590`. It waits for raster `$2E`, reads **CIA#2 Timer-A
+(`$DD04`)** to cancel interrupt jitter (self-modified `BPL` into a `cmp #$C9`
+NOP-sled), then walks down the screen with `cpy $D012` busy-waits, writing `$D011`
+(the `$73/$33` RST8/RSEL values that re-arm the raster-IRQ chain) and **`$D01B`
+(sprite-to-background priority)** per raster line from the `$CA00` table.
 
-Reproducing it needs **cycle-exact `$D011`/badline handling** (when a mid-line
-`$D011` write forces or suppresses a badline, and the exact raster/cycle at
-which the display state and VC/RC latches change). This is FLI-class raster
-accuracy — beyond the current milestone's "video output correct enough for
-normal PAL and NTSC software," and it touches the same timing code as the
-existing sprite-BA tests. It should be its own scoped task, not a tack-on.
+**The reveal itself is per-line `$D01B` (sprite-to-background priority)
+animation.** The `$CA00` mask sweeps `FF -> 00` (even entries top-down, then odd
+entries bottom-up) — exactly the "down then back up" motion. Where a line is `FF`
+the sprites sit behind the bitmap; flipping to `00` inverts priority and opens the
+line.
+
+### Why c64m gets it wrong
+
+c64m **runs the game logic perfectly** — the `$CA00` mask animates flawlessly
+every frame, and sprite priority is rendered live per pixel
+(`vicii_compose_pixel`). The defect is that the kernel is hand-cycle-counted
+against a real NTSC per-line cycle budget, and c64m's **CPU<->VIC bus
+cycle-stealing is not hardware-exact** in the sprite-dense region. A small
+per-line stall-count error accumulates down the walk, so the per-line writes
+desync and the lower band (odd rasters 171..251) freezes. Fix surface:
+`c64_cpu_cycle_stalled_by_ba` (c64.c:989, RDY/AEC write tolerance) and the Phase-H
+sprite BA windows (vicii.c:89-101, `vicii_sprite_dma_next_line`). The renderer is
+not involved.
 
 ## Reproduction recipe
 
@@ -132,11 +146,19 @@ Useful signals:
 The static picture can be checked at any settled frame (barrel top visible, no
 brown border bar, no black seams through the picture).
 
-## Suggested next steps
+## Suggested next steps (SUPERSEDED)
 
-1. Treat the expose reveal as a dedicated **`$D011`/badline raster-timing**
-   task, not a sprite task.
-2. Trace the game's per-raster `$D011` writes against the display-state / badline
-   transitions in `vicii_render_live_cycle` and compare to VICE's per-scanline
-   output to find where the progression is lost.
-3. Only then decide whether FLI-class accuracy is in scope for the milestone.
+> The badline-oriented steps below are obsolete — the mechanism is a cycle-exact
+> stable-raster kernel doing per-line `$D01B` priority animation, not a bad-line
+> effect. Follow the phased fix plan in
+> [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md) instead:
+
+1. **Phase A — localise:** log per-line CPU-executed vs BA-stalled cycles across
+   the kernel region (~raster 50..251) and diff against the Bauer NTSC 6567R8
+   budget (65/line − 40 bad line − 2/active sprite). The first divergent raster is
+   the bug site.
+2. **Phase B — fix:** correct the specific stall rule found in Phase A — the
+   sprite-DMA BA windows (vicii.c Phase H) and/or the RDY/AEC "up to 3 write
+   cycles after BA low" rule (c64.c:989).
+3. **Phase C — verify:** confirm against a VICE / real-hardware oracle and add a
+   per-line cycle-budget regression test.
