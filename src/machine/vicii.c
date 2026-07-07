@@ -1017,23 +1017,28 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
         vicii_update_live_vertical_border(v);
 
-        v->bad_line = vicii_is_bad_line(v);
-
-        if (v->bad_line) {
-            v->rc            = 0;
-            v->display_state = true;
-        }
-
         /* VC is reloaded from VCBASE at the start of every line (the hardware
            cycle-14 load), not only on bad lines. Within a character row VCBASE is
            unchanged, so all 8 rows re-address the same 40 video-matrix cells; the
            +40 advance happens once per row at the RC==7 line end below. */
         v->vc = v->vc_base;
 
-        /* On a bad line, latch this row's 40 video-matrix / colour cells. They
-           persist unchanged across the row's non-bad lines, so a later mid-frame
-           write to screen/colour RAM does not alter the rest of the row. */
-        if (v->bad_line && bus) {
+        /* Clear the per-line bad-line latch; the condition is (re)evaluated every
+           cycle below so a mid-line $D011 write can still commit it this line. */
+        v->bad_line = false;
+    }
+
+    /* Bad Line Condition (Bauer 3.5): present whenever RASTER is in [$30,$f7],
+       (RASTER & 7) == YSCROLL and DEN is set. It can turn true at ANY cycle if a
+       $D011 write changes YSCROLL mid-line -- this is the core of FLI/expose. The
+       first cycle it holds on a line, commit the bad line once: enter display
+       state, reset RC, and latch the row. An ordinary bad line commits at cycle 0,
+       reproducing the previous behaviour exactly. */
+    if (!v->bad_line && vicii_is_bad_line(v)) {
+        v->bad_line      = true;
+        v->display_state = true;
+        v->rc            = 0;
+        if (bus) {
             vicii_fill_line_latch(v, bus);
         }
     }

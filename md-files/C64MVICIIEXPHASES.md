@@ -295,5 +295,43 @@ Acceptance:
       path's run-cycles/wait-frame timing is not consistent across builds; the
       pixel-exact VICE-referenced check is deferred to Phase 6 as planned. Capture
       scripts kept in the session scratchpad for reuse.
-- Phases 5-6: NOT STARTED.
+- Phase 5: MECHANISM DONE; does NOT fix the dkarcade reveal (see finding).
+    * Implemented per-cycle Bad Line Condition evaluation. The condition is now
+      re-checked every cycle (v->bad_line acts as the per-line "already committed"
+      latch, cleared at cycle 0), so a $D011 write after cycle 0 can still force a
+      bad line on its own line -- entering display state, resetting RC and latching
+      the row. An ordinary bad line still commits at cycle 0, so all prior output
+      is unchanged.
+    * Guardrails: full suite 40/40 green.
+    * New acceptance test test_expose_midline_d011_forces_badline: a $D011 write at
+      cycle 20 of raster 53 restarts the row so raster 54 shows RC=1 -- impossible
+      with cycle-0-only evaluation. The mechanism works.
+
+- FINDING (blocks the original premise): Phase 5 does NOT change dkarcade at all.
+    * Deterministic control-port sweeps of the reveal are byte-identical between
+      Phase 4 and Phase 5. The documented ~27-frame plateau (here frames 270-297,
+      lit=194, one repeated hash) persists unchanged.
+    * A register-write trace of a plateau frame shows YSCROLL is CONSTANT at 3 for
+      the whole frame. The per-line $D011 writes are $33/$73 (and one $3b/$7b):
+      identical except bit 7 (RST8, the raster-IRQ compare high bit). $D016/$D018
+      are essentially static. There is NO YSCROLL/bad-line manipulation.
+    * Therefore the reveal is NOT the FLI/bad-line effect that
+      VICII_EXPOSE_REVEAL.md hypothesised. The per-scanline-badline premise behind
+      Phases 2-5 does not apply to this title. The reveal's per-frame progression
+      is driven by something else (raster-IRQ scheduling and/or sprite multiplex,
+      or progressive bitmap drawing plus a subtle per-frame hardware effect).
+    * Note: the reveal already LARGELY animates in c64m (the sweep shows lit rows
+      growing 123 -> 194 across frames); only the ~27-frame plateau remains.
+
+- Value retained regardless: Phases 2-5 made the VIC renderer counter-driven,
+  latch-based, sequencer-idle, and per-cycle bad-line accurate -- all real
+  accuracy improvements, unit-tested and regression-clean, and prerequisites for
+  genuine FLI titles. They are worth keeping independent of the reveal.
+
+- RECOMMENDATION: pause the phase plan and re-diagnose the actual reveal mechanism
+  against a VICE frame-by-frame capture before writing more code. Update
+  VICII_EXPOSE_REVEAL.md once the true mechanism is known (its current "Actual
+  mechanism" section is contradicted by the YSCROLL-constant trace).
+
+- Phase 6: NOT STARTED (VICE-referenced validation; blocked on the re-diagnosis).
 ```

@@ -1950,6 +1950,55 @@ static void test_expose_idle_state_shows_idle_graphics_in_window(void) {
         white, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
 }
 
+/* Phase 5 (C64MVICIIEXPHASES): the Bad Line Condition is evaluated every cycle,
+   so a $D011 write AFTER cycle 0 still forces a bad line on its own line -- the
+   FLI/expose core. Force a bad line at cycle 20 of raster 53 (not a bad line at
+   cycle 0 with YSCROLL=3), which resets RC there; YSCROLL is restored at raster
+   54 so line 54 is not itself a bad line. Line 54 therefore shows RC=1 only
+   because the mid-line force at 53 restarted the row -- impossible with cycle-0
+   only evaluation. */
+static void setup_rc_probe_bitmap(c64_t *machine) {
+    uint32_t i;
+    reset_machine(machine);
+    c64_bus_write(&machine->bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine->bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine->bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine->bus, 0xd020, 0x00); /* black border */
+    for (i = 0x2000u; i < 0x2008u; i++) {
+        machine->bus.ram[i] = 0x00u;            /* cell 0: all rows blank... */
+    }
+    machine->bus.ram[0x2001] = 0xffu;           /* ...except RC==1 -> foreground */
+    machine->bus.ram[0x0400] = 0x10u;           /* fg nibble 1 (white), bg nibble 0 (black) */
+}
+
+static void test_expose_midline_d011_forces_badline(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  white = 0xffffffffu;
+    uint32_t  black = TEST_PALETTE_0;
+    /* Force a bad line mid-line at cycle 20 of raster 53 (YSCROLL=5, 53&7==5),
+       then restore YSCROLL=3 at raster 54. */
+    const expose_injection injs[] = {
+        { 53u, 20u, 0xd011u, 0x3du, false }, /* mid-line: BMM|DEN|RSEL|YSCROLL=5 */
+        { 54u,  0u, 0xd011u, 0x3bu, false }, /* restore YSCROLL=3 */
+    };
+
+    /* Baseline: no force. Raster 52 is RC=1 (lit); raster 54 is RC=3 (blank). */
+    setup_rc_probe_bitmap(&machine);
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame);
+    expect_u32("baseline raster 52 is RC=1 (lit)",
+        white, frame.pixels[52 * C64_FRAME_WIDTH + 24]);
+    expect_u32("baseline raster 54 is RC=3 (blank)",
+        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+
+    /* Mid-line force at cycle 20 of raster 53 restarts the row, so raster 54 is
+       now RC=1 and lit. Only possible if the bad line is evaluated after cycle 0. */
+    setup_rc_probe_bitmap(&machine);
+    run_vic_frame_with_injections(&machine, injs, 2u, &frame);
+    expect_u32("mid-line $D011 force makes raster 54 RC=1 (lit)",
+        white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -2008,5 +2057,6 @@ int main(void) {
     test_expose_forced_badline_resets_row_counter();
     test_expose_video_matrix_latched_at_badline();
     test_expose_idle_state_shows_idle_graphics_in_window();
+    test_expose_midline_d011_forces_badline();
     return 0;
 }
