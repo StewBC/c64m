@@ -281,6 +281,12 @@ typedef struct vicii_line_ctx {
        snapshot/debug path, which reads RAM live (it has no sequencer history). */
     const uint8_t *vm_latch;
     const uint8_t *color_latch;
+    /* Phase 4: idle-vs-display selection. When true (live path) the idle state is
+       driven by the sequencer: any line not in display state shows idle-state
+       graphics, wherever it falls vertically. When false (snapshot/debug path)
+       the legacy geometry is used: idle graphics outside the fixed display window
+       and a B0C blank for inactive rows inside it. */
+    bool idle_when_inactive;
 } vicii_line_ctx;
 
 static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
@@ -339,11 +345,12 @@ static vicii_line_ctx vicii_live_line_ctx(const vicii *v) {
         return vicii_snapshot_line_ctx(v, v->timing.raster_line);
     }
 
-    c.display_active = v->display_state;
-    c.cell_base      = v->vc_base;
-    c.row_in_cell    = v->rc;
-    c.vm_latch       = v->video_matrix;
-    c.color_latch    = v->color_line;
+    c.display_active     = v->display_state;
+    c.cell_base          = v->vc_base;
+    c.row_in_cell        = v->rc;
+    c.vm_latch           = v->video_matrix;
+    c.color_latch        = v->color_line;
+    c.idle_when_inactive = true;
     return c;
 }
 
@@ -357,9 +364,11 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
     uint32_t sy      = y - (uint32_t)VICII_VBORDER_TOP_25;
     uint32_t adjusted;
 
-    /* Snapshot/debug path has no sequencer history: read RAM live (NULL latch). */
-    c.vm_latch    = NULL;
-    c.color_latch = NULL;
+    /* Snapshot/debug path has no sequencer history: read RAM live (NULL latch)
+       and use the legacy fixed-window idle geometry. */
+    c.vm_latch           = NULL;
+    c.color_latch        = NULL;
+    c.idle_when_inactive = false;
 
     if (y < (uint32_t)VICII_VBORDER_TOP_25 ||
         !vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
@@ -629,17 +638,23 @@ static vicii_bg_pixel vicii_background_pixel(
            as border; b0c keeps prior behaviour. */
         return vicii_bg_pixel_make(b0c, false);
     }
-    if (y < (uint32_t)VICII_VBORDER_TOP_25 || y >= (uint32_t)VICII_VBORDER_BOTTOM_25) {
-        /* Vertically outside the display window: idle-state graphics. Matters
-           when the vertical border has been opened so this region is visible.
 
-           The graphics/badline range that produces the picture is fixed at the
-           25-row window (51..250) and does NOT depend on RSEL -- RSEL only moves
-           the vertical *border* (via g->top/g->bottom) in by four lines. Using
-           the RSEL-dependent border edge here would drop the top/bottom four
-           display lines whenever a program runs RSEL=0 but opens the border to
-           show them (the sprites-over-border title technique), which is exactly
-           what split the picture into pieces. */
+    if (lc->idle_when_inactive) {
+        /* Live path: idle-state graphics are shown whenever the sequencer is not
+           in display state, wherever that occurs vertically. For an ordinary
+           screen this is exactly the region outside the fixed display window
+           (display state spans 51..250 at YSCROLL=3), so normal output is
+           unchanged; per-line $D011 bad-line forcing can now open or close the
+           display state mid-window, which is what the expose reveal needs. The
+           badline/display range is driven by YSCROLL, not RSEL, so RSEL still
+           does not split the picture. */
+        if (!lc->display_active) {
+            return vicii_idle_pixel(v, bus, x);
+        }
+    } else if (y < (uint32_t)VICII_VBORDER_TOP_25 || y >= (uint32_t)VICII_VBORDER_BOTTOM_25) {
+        /* Snapshot/debug path: idle-state graphics outside the fixed 25-row
+           window. Inactive rows inside the window fall through to the B0C blank
+           below, preserving the legacy geometric reconstruction. */
         return vicii_idle_pixel(v, bus, x);
     }
 

@@ -1905,6 +1905,51 @@ static void test_expose_video_matrix_latched_at_badline(void) {
         red, frame.pixels[53 * C64_FRAME_WIDTH + 24]);
 }
 
+/* Phase 4 (C64MVICIIEXPHASES): idle vs display is selected by the sequencer's
+   display state, not the fixed 51..251 window. Suppress the bad line at the start
+   of a character row (raster 59) by changing YSCROLL so 59 is no longer a bad
+   line; display state then stays OFF for that line even though it is inside the
+   window, so it must render idle-state graphics (black for bitmap idle) -- not the
+   bitmap, and not the B0C background the pre-Phase-4 in-window blank produced. */
+static void test_expose_idle_state_shows_idle_graphics_in_window(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  white = 0xffffffffu;  /* bitmap foreground (vm high nibble 1) */
+    uint32_t  red   = TEST_PALETTE_2; /* B0C, to prove idle != background blank */
+    uint32_t  black = TEST_PALETTE_0; /* bitmap idle output */
+    uint32_t  i;
+    /* At raster 59 set YSCROLL=0 (59&7==3, so YSCROLL=0 means no bad line). */
+    const expose_injection injs[] = { { 59u, 0u, 0xd011u, 0x38u, false } };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x00); /* black border */
+    c64_bus_write(&machine.bus, 0xd021, 0x02); /* B0C = red (must NOT appear) */
+    for (i = 0x2000u; i < 0x4000u; i++) {
+        machine.bus.ram[i] = 0xffu;             /* solid bitmap -> foreground */
+    }
+    for (i = 0x0400u; i < 0x0800u; i++) {
+        machine.bus.ram[i] = 0x10u;             /* fg nibble 1 (white) */
+    }
+
+    run_vic_frame_with_injections(&machine, injs, 1u, &frame);
+
+    /* Raster 57 (display state on, RC=6) shows the bitmap foreground. */
+    expect_u32("in-display line shows bitmap (white)",
+        white, frame.pixels[57 * C64_FRAME_WIDTH + 24]);
+
+    /* Raster 59 (bad line suppressed -> display state off) shows idle graphics
+       (black), NOT the bitmap and NOT the red B0C background. */
+    expect_u32("suppressed-badline line shows idle graphics (black)",
+        black, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("suppressed-badline line is not the B0C background",
+        red, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("suppressed-badline line is not the bitmap",
+        white, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -1962,5 +2007,6 @@ int main(void) {
     test_expose_harness_midline_injection_hits_exact_column();
     test_expose_forced_badline_resets_row_counter();
     test_expose_video_matrix_latched_at_badline();
+    test_expose_idle_state_shows_idle_graphics_in_window();
     return 0;
 }

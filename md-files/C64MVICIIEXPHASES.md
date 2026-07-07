@@ -271,5 +271,29 @@ Acceptance:
       screen-RAM write yields green (latched) when applied BEFORE the row's bad
       line at raster 51 and red (old value retained) when applied AFTER it,
       proving the row is frozen to its bad-line latch.
-- Phases 4-6: NOT STARTED.
+- Phase 4: DONE.
+    * Idle vs display is now selected by the sequencer's display state on the live
+      path, not the fixed 51..251 window. vicii_line_ctx gained idle_when_inactive:
+      true on the live path (any line not in display state renders idle-state
+      graphics), false on the snapshot/debug path (legacy geometry: idle outside
+      the fixed window, B0C blank for inactive rows inside it).
+    * Why it is safe: at YSCROLL=3 (which every existing test and the dkarcade
+      title use) display state spans exactly 51..250, so the idle region is
+      identical to the old fixed window -- normal output is unchanged. The
+      behaviour only diverges once per-line $D011 forces/suppresses bad lines mid
+      window, which is precisely what the reveal needs (Phase 5).
+    * Guardrails: full suite 40/40 green, including the PAL and NTSC open-border /
+      bottom-border regressions that codify the dkarcade-class technique.
+    * New acceptance test test_expose_idle_state_shows_idle_graphics_in_window:
+      suppressing the bad line at raster 59 (YSCROLL change) leaves display state
+      off inside the window, so that line renders idle graphics (black) rather than
+      the bitmap or the red B0C background the pre-Phase-4 blank produced.
+    * End-to-end smoke: the current build renders a settled dkarcade picture
+      deterministically over the control port (frame 442, black border, ~242 lit
+      rows; two runs byte-identical) with no crash. A rigorous pre/post pixel diff
+      was attempted via a worktree of the pre-refactor baseline but the control
+      path's run-cycles/wait-frame timing is not consistent across builds; the
+      pixel-exact VICE-referenced check is deferred to Phase 6 as planned. Capture
+      scripts kept in the session scratchpad for reuse.
+- Phases 5-6: NOT STARTED.
 ```
