@@ -12,7 +12,19 @@ src/machine/vicii.c                         renderer + sprite BA windows (Phase 
 src/machine/c64.c                           CPU<->VIC bus cycle-stealing (BA/RDY/AEC)
 ```
 
-## TL;DR
+## STATUS (2026-07): NTSC CLOSED, PAL is the open bug
+
+> **NTSC is RESOLVED — c64m is correct.** A VICE NTSC capture confirmed the
+> ~27-frame "plateau" is **intended hardware behaviour**, not a defect: VICE shows
+> the same hold. Both Phase A "open questions" below are therefore answered
+> (Q1: the plateau is NOT a defect; Q2: no fix needed). No NTSC code change is
+> required. The historical NTSC investigation is retained below for the record.
+>
+> **The live bug is the PAL reveal** — a genuinely broken, separate issue with its
+> own full diagnosis at the end of this document (see
+> "PAL reveal corruption (dkarcade2016)"). Start there.
+
+## TL;DR (NTSC — historical; see STATUS above)
 
 - The reveal is a **cycle-exact "stable raster" kernel**, not an FLI/bad-line
   effect and not a game stall. The title copies a hand-cycle-counted raster
@@ -20,14 +32,19 @@ src/machine/c64.c                           CPU<->VIC bus cycle-stealing (BA/RDY
 - The reveal itself is **per-line sprite-to-background priority (`$D01B`)
   animation**. A mask at `$CA00` sweeps `FF -> 00` (even entries top-down, then
   odd entries bottom-up) — exactly the "down then back up" motion VICE shows.
-- **c64m runs the game logic perfectly** — the `$CA00` mask animates flawlessly
-  frame by frame, and sprite priority is rendered live and correctly.
-- **The defect is CPU<->VIC bus cycle-stealing not being cycle-exact.** The kernel
-  is hand-counted against a real NTSC per-line cycle budget; c64m steals the wrong
-  number of CPU cycles per line while sprites are fetching, so the per-line writes
-  drift and the picture desyncs in the sprite-dense lower band.
-- Fix surface is small and already in the machine layer: `c64.c` BA/RDY stall
-  rule and `vicii.c` Phase-H sprite BA windows. **The renderer needs no changes.**
+- The `$CA00` reveal mask animates flawlessly frame by frame, and sprite priority
+  is rendered live and correctly.
+- ~~The defect is CPU<->VIC bus cycle-stealing not being cycle-exact.~~
+  **REFUTED BY PHASE A** — measurement shows the per-line cycle budget is correct
+  and the kernel's writes land at stable cycles top-to-bottom, with no divergence
+  at the frozen boundary. Bus timing and the renderer are both exonerated.
+- **Phase A finding:** the reveal is a per-line `$D011` toggle (`$33` = visible
+  bitmap, `$73` = ECM+BMM invalid = black). It DOES animate in c64m; the plateau
+  is the per-line `$D011` VALUES freezing for ~27 frames while the mask keeps
+  advancing — a stall in the game's reveal STATE MACHINE, not in timing/rendering.
+- **Before any code fix:** get a real VICE / hardware capture to confirm the
+  27-frame hold is even a defect (every measured c64m behaviour is clean and
+  self-consistent). See "Phase A RESULTS" for the two open questions.
 
 ## The mechanism (traced, not hypothesised)
 
@@ -93,29 +110,86 @@ wipes in.
   zero-page scratch (sprite data/pointers/colour RAM all frozen).
 ```
 
-## Root cause
+## Root cause — REVISED BY PHASE A (see "Phase A RESULTS" below)
 
-The kernel's correctness depends on the CPU consuming **exactly** the hardware
-number of cycles per raster line, because that is what makes each `cpy $D012`
-split and each hand-counted delay land on the intended raster/cycle. That budget
-is `cycles_per_line - cycles_the_VIC_steals`. c64m's cycle-stealing model is not
-hardware-exact in the sprite-dense region, so a small per-line error accumulates
-and the writes desync where sprites are densest (the lower band).
+> **The bus-timing hypothesis in this section was NOT supported by Phase A
+> measurement.** c64m's per-line cycle budget through the kernel is clean and the
+> kernel's writes land at stable cycles top-to-bottom, with no divergence at the
+> frozen boundary. The suspects below (sprite-DMA BA, RDY/AEC) are therefore NOT
+> the cause of this title's plateau. Kept for the record; superseded by Phase A.
 
-This is the machine-layer bus timing, NOT the renderer. Two suspects:
+The original hypothesis (retained for context): the kernel is hand-cycle-counted,
+so if c64m stole the wrong number of CPU cycles per line the per-line writes would
+desync. Suspected: sprite-DMA BA windows (vicii.c Phase-H, `vicii_sprite_dma_next_line`)
+and the RDY/AEC 3-write-cycle rule (`c64_cpu_cycle_stalled_by_ba`, c64.c:989).
+Phase A measured both and found the budget correct — see below.
+
+## Phase A RESULTS (measured — DONE)
+
+Method: temporary per-cycle instrumentation in the `c64.c` step loop (count CPU
+`exec` vs BA `stall` cycles per raster line) and in `vicii_write_register` (log
+the cycle-in-line of every `$D011`/`$D01B` write), gated to specific frames,
+driven headless over the control port. All instrumentation has been removed; tree
+clean, 40/40 tests green.
+
+Per-line cycle budget (frame 280, a plateau frame):
 
 ```text
-- Sprite-DMA BA windows: vicii.c Phase-H tables (vicii.c:89-101) and
-  vicii_sprite_dma_next_line (vicii.c:961). Each active sprite must steal exactly
-  its hardware cycles at the right line-relative cycle. This is the "NTSC sprite
-  BA timing parity" item that AGENTS.md already lists as in-scope.
-- RDY/AEC write tolerance: a real 6510 keeps WRITING for up to 3 cycles after BA
-  drops and only stalls on the first read thereafter. c64_cpu_cycle_stalled_by_ba
-  (c64.c:989) uses a read/write heuristic that may not match the exact 3-write
-  rule. $D011/$D01B are stores, so this directly moves when the kernel's writes
-  land. (AGENTS.md currently lists exact RDY/AEC sub-cycle timing as out of scope;
-  fixing this title may require pulling it in.)
+- total = 65 every line (VIC clock is correct; no missing/extra cycles).
+- Sprite DMA steals 18 cyc/line at EXACTLY the three sprite strips only:
+  rasters 0-8 (sprite Y=0), 29-50 (Y=29), 250-262 (Y=250). Matches the documented
+  sprite Y positions. The strips steal correctly.
+- Bad lines steal 43 cyc (exec=22) at raster == 3 (mod 8), uniform top to bottom.
+- The frozen band (odd rasters 171-249) has NO sprite steal at all -- it is NOT
+  "sprite-dense". There is no per-line stolen-cycle error there.
+- The kernel's $D011 write cycle-in-line is stable and periodic (~cyc 8-15) from
+  raster 45 to 250, with NO discontinuity at raster 171.
 ```
+
+Conclusion: **the CPU/VIC bus cycle-timing is not the defect.** No accumulating
+error, no per-line budget divergence, no sub-line write drift at the boundary.
+Phase B as written (fix BA/RDY stall) would not change this title.
+
+What the reveal actually is (from the write-value trace):
+
+```text
+- The kernel writes $D011 per raster line: $33 = valid MCM bitmap (line VISIBLE),
+  $73 = ECM+BMM invalid mode (line BLACK). Even rasters carry the picture; odd
+  rasters are blanked with $73. (The $D01B/mask writes are a separate concern and
+  fall on rasters with no active sprites, so they do not drive the bitmap band.)
+- The reveal DOES animate in c64m: comparing a revealing frame (250) to a later
+  one (280), even rasters 220-250 flip $73 -> $33 (more lines revealed). The
+  engine progresses.
+- The plateau = the per-line $D011 VALUES stop changing for ~27 frames (identical
+  output) even though the underlying $CA00 mask keeps advancing. The stall is in
+  the game's reveal state machine -- the step that turns the advancing mask into
+  new active $D011 values (the "even lines done -> start odd lines" transition) --
+  NOT in timing and NOT in rendering.
+```
+
+### Two open questions Phase A raises (resolve before any Phase B code)
+
+```text
+1. Is the plateau even a defect? Every c64m behaviour measured here is clean and
+   self-consistent, and the reveal animates. The claim that the 27-frame hold is
+   WRONG rests on a VICE observation that (per the older docs) was never actually
+   captured. A real VICE / hardware capture is now a PREREQUISITE, not a final
+   check -- if hardware also holds ~27 frames, c64m is already correct.
+2. If it is a defect: the fix site is the game's reveal state machine, i.e. what
+   gates the mask -> active-$D011 propagation for the odd-line phase. That is a
+   register READ the game samples each frame whose value c64m returns differently
+   (candidate: a $D0xx read-back, $D012 sampled at a specific point, or a CIA
+   timer). This is a NEW investigation, distinct from the raster kernel already
+   disassembled, and supersedes Phase B's BA/RDY target.
+```
+
+## Fix plan (phases) — PHASE B/C RE-SCOPED BY PHASE A
+
+> Phase A moved the target off bus timing. Phase B below (BA/RDY stall) is
+> **retained only as a rejected lead**; do not implement it for this title. The
+> live path forward is the two open questions above: get the hardware oracle
+> first, then (if the plateau is a real defect) trace the game's reveal state
+> machine. The renderer and the bus timing are both exonerated by measurement.
 
 ## Fix plan (phases)
 
@@ -220,4 +294,87 @@ Risk: low once Phase B lands (validation + documentation).
   plateau frame against a settled frame to see WHICH rasters are frozen.
 - Scratchpad capture scripts from the diagnosis session are session-temporary;
   recreate from the snippets in C64MVICIIEXNEXT.md if needed.
+```
+
+---
+
+# PAL reveal corruption (dkarcade2016) — separate bug, deep diagnosis
+
+NTSC is CLOSED (c64m matches VICE, including the ~27-frame hold — it is intended
+hardware behaviour, not a defect). The PAL reveal, however, is genuinely broken in
+c64m and correct in VICE. This section records the full diagnosis.
+
+## Symptom
+
+PAL only: the "expose" reveal shears diagonally and the bitmap corrupts during the
+opening. The SETTLED picture is correct; only the reveal DYNAMICS are wrong. VICE
+PAL reveals cleanly.
+
+## Mechanism (traced)
+
+The reveal's stable-raster kernel ($0400-$0590, entered once/frame via a raster IRQ,
+then `cpy $D012`-polls down the screen writing $D011/$D01B and multiplexing sprite Y)
+DESYNCS in c64m PAL. Its per-line line-cursor `Y` races ~3x ahead of the real raster,
+so the sprite-Y multiplex writes land at the wrong rasters, sprites stop matching
+their Y (0 active frames after the first few), stop stealing cycles, and the picture
+shears. NTSC's longer line (65 cyc) absorbs the same error; PAL (63 cyc) does not.
+
+## Cycle-exact VICE ground truth (x64sc, store/load watchpoints)
+
+```text
+- Sprite-Y multiplex ($D001), VICE PAL, STABLE every frame:
+    $D001 <- 250  at raster 53, cycle 29
+    $D001 <-  29  at raster 272, cycle 38
+  c64m PAL: first write ~aligned (raster 52), second write drifts to raster
+  ~124-173 and jitters -> the kernel reaches it ~145 lines early (3x race).
+- CIA#2 Timer-A read ($DD04) at the jitter correction (PC $0422, raster 29):
+    VICE: val+cyc == 74 for every jitter sample (cyc 13-21).
+    c64m: val+cyc == 74 (cyc 14, val $3C).  => $DD04 phase is CORRECT.
+```
+
+## Ruled OUT (each by direct measurement or empirical fix)
+
+```text
+- Detection / wrong table: DISPROVEN. The game correctly detects PAL and installs
+  the PAL table. $0318/$0501/$0419 and the whole kernel $0400-$0590 are
+  BYTE-IDENTICAL between c64m PAL and VICE PAL (and differ from c64m NTSC).
+- CIA-timer vs raster phase: DISPROVEN. $DD04 val+cyc==74 matches VICE exactly.
+- $D012 read value/timing: correct. Projecting the raster read to the true read
+  cycle (c64_cpu_read DEFER path) was implemented and verified active (d=3) but the
+  read value was already right (reads land mid-line); no effect on the drift.
+- Bad-line stall length: giving back the 3-cycle lead-in changed nothing.
+- Sprite BA cycle-stealing: works when sprites are active (frame 138 steals 18/line).
+- Sprite Y-match model, PAL geometry constants (63/312), 9-bit raster reads,
+  CIA stepping (advanced every cycle): all correct.
+```
+
+## Remaining root (unresolved)
+
+Identical kernel code + correct tables + correct $DD04 + correct $D012 reads, yet the
+first multiplex write lands ~74 cycles off and cascades. The divergence is in the
+EXACT cycle-by-cycle execution of the stable-raster entry/sled sequence (raster
+29 -> first write). Prime suspect: the deferred CPU model detects IRQs at instruction
+boundaries rather than the hardware's "2 cycles before instruction end" sampling,
+giving a different entry-jitter that the $DD04 correction cannot fully cancel. This is
+FLI-class sub-cycle timing, which AGENTS.md lists as out of scope.
+
+## Next step if pursued
+
+Instruction-by-instruction cycle trace of the ~23-line stretch (raster 29 -> first
+$D001 write) in BOTH VICE (monitor trace) and c64m, aligned at the $DD04 read, to
+find the exact instruction where the cycle counts diverge. Only then change the CPU
+IRQ-timing / entry model, validating against the PAL reveal AND all 40 tests AND the
+working NTSC reveal.
+
+## Tooling (reusable)
+
+```text
+- VICE PAL driver: x64sc -pal -autostartprgmode 1 -autostart <prg>
+    -remotemonitor -remotemonitoraddress ip4://127.0.0.1:<port>
+  (the .prg is a 64K IRQ-hooked one-loader: autostart mode 1 = inject to RAM.)
+- Watchpoints: `break store $d001` / `break load $dd04`; the hit line reports
+  raster/cycle; read the value with `m <addr> <addr>` (skip the echoed address when
+  parsing!). Byte dumps: `m <a0> <a1>`.
+- c64m PNG capture: get-frame format=argb8888 -> pure-python PNG writer (scratchpad
+  pnglib.py). PAL frame is 384x272.
 ```
