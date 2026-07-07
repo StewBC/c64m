@@ -260,6 +260,22 @@ typedef struct vicii_sprite_pixel {
     bool     opaque;
 } vicii_sprite_pixel;
 
+/* Per-line display addressing context. Phase 2 (C64MVICIIEXPHASES): the display
+   address is generated from the VIC's video counters, not from raster geometry.
+   - display_active: the character-row sequencer is producing graphics on this
+     line (VIC display state). When false the display window blanks to B0C, which
+     is exactly what the previous geometric out-of-range check produced.
+   - cell_base: VCBASE for this line (video-matrix index of the leftmost column).
+   - row_in_cell: RC for this line (0..7).
+   The live renderer fills this from the running sequencer so per-line $D011
+   changes that force/suppress bad lines shift the address the way hardware does.
+   The snapshot/debug renderer fills it geometrically to preserve prior output. */
+typedef struct vicii_line_ctx {
+    bool     display_active;
+    uint16_t cell_base;
+    uint8_t  row_in_cell;
+} vicii_line_ctx;
+
 static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     vicii_border_geometry g;
     bool rsel = (v->registers[0x11] & 0x08u) != 0;
@@ -295,6 +311,55 @@ static bool vicii_display_adjusted_y(uint32_t sy, uint8_t yscroll, uint32_t *out
 
     *out_adjusted = (uint32_t)adjusted;
     return true;
+}
+
+/* Live per-line context taken straight from the running sequencer. During a line
+   v->vc_base holds this line's VCBASE (it only advances at the end of RC==7) and
+   v->rc holds this line's RC, so reading them at render time is per-line correct,
+   including when a mid-line $D011 write has changed the bad-line progression. */
+static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y);
+
+static vicii_line_ctx vicii_live_line_ctx(const vicii *v) {
+    vicii_line_ctx c;
+
+    /* DEN=0 produces no bad lines, so the sequencer never enters display state.
+       The emulator still evaluates background graphics in that case to preserve
+       the documented DEN=0 collision/foreground behaviour (VICII.md); the visible
+       output is blanked to B0C downstream by the DEN handling. Fall back to the
+       geometric mapping there, matching the pre-counter renderer exactly. FLI
+       needs DEN=1, so this fallback never affects the bad-line-driven path. */
+    if ((v->registers[0x11] & 0x10u) == 0u) {
+        return vicii_snapshot_line_ctx(v, v->timing.raster_line);
+    }
+
+    c.display_active = v->display_state;
+    c.cell_base      = v->vc_base;
+    c.row_in_cell    = v->rc;
+    return c;
+}
+
+/* Snapshot/debug per-line context derived from raster geometry. Reproduces the
+   previous positional mapping exactly: the display is active where the
+   YSCROLL-adjusted row is in [0,200); cell base and row-in-cell decompose that
+   same adjusted row. Used only when no completed live frame exists. */
+static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
+    vicii_line_ctx c;
+    uint8_t  yscroll = v->registers[0x11] & 0x07u;
+    uint32_t sy      = y - (uint32_t)VICII_VBORDER_TOP_25;
+    uint32_t adjusted;
+
+    if (y < (uint32_t)VICII_VBORDER_TOP_25 ||
+        !vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
+        c.display_active = false;
+        c.cell_base      = 0;
+        c.row_in_cell    = 0;
+        return c;
+    }
+
+    c.display_active = true;
+    c.row_in_cell    = (uint8_t)(adjusted & 7u);
+    c.cell_base      = (uint16_t)((adjusted / 8u) * (uint32_t)VICII_TEXT_COLUMNS);
+    return c;
 }
 
 static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
@@ -524,6 +589,7 @@ static vicii_bg_pixel vicii_background_pixel(
     const vicii *v,
     const c64_bus_t *bus,
     const vicii_border_geometry *g,
+    const vicii_line_ctx *lc,
     uint32_t x,
     uint32_t y)
 {
@@ -533,10 +599,8 @@ static vicii_bg_pixel vicii_background_pixel(
     uint32_t b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
     uint8_t mode;
     uint8_t xscroll;
-    uint8_t yscroll;
     bool den;
     uint32_t sx_raw;
-    uint32_t sy;
     uint32_t sx;
     uint32_t row_in_cell;
     uint32_t col;
@@ -570,13 +634,18 @@ static vicii_bg_pixel vicii_background_pixel(
                      ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
     xscroll = v->registers[0x16] & 0x07u;
-    yscroll = v->registers[0x11] & 0x07u;
     den = (v->registers[0x11] & 0x10u) != 0u;
     sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
-    sy = y - (uint32_t)VICII_VBORDER_TOP_25;
 
     if (mode >= 5u) {
         return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[0], false));
+    }
+
+    /* Outside the active character-row sequence this line is blank (B0C). This
+       replaces the previous YSCROLL-adjusted range check; for a static screen the
+       active span is identical, but it now also tracks bad-line forcing. */
+    if (!lc->display_active) {
+        return vicii_bg_pixel_make(b0c, false);
     }
 
     if (sx_raw < (uint32_t)xscroll) {
@@ -588,16 +657,11 @@ static vicii_bg_pixel vicii_background_pixel(
     if (col >= 40u) {
         return vicii_bg_pixel_make(b0c, false);
     }
-    {
-        uint32_t adjusted;
-        uint32_t char_row;
-        if (!vicii_display_adjusted_y(sy, yscroll, &adjusted)) {
-            return vicii_bg_pixel_make(b0c, false);
-        }
-        row_in_cell = adjusted & 7u;
-        char_row = adjusted / 8u;
-        cell = (uint16_t)(char_row * 40u + col);
-    }
+
+    /* Address generation is now counter-driven: the row within the character
+       cell is RC, and the cell index is VCBASE + column. */
+    row_in_cell = lc->row_in_cell;
+    cell = (uint16_t)(lc->cell_base + col);
     vic_bank = c64_bus_vic_bank_base(bus);
     screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
     char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
@@ -768,10 +832,10 @@ static uint32_t vicii_compose_pixel(
     return bg.color;
 }
 
-static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, uint32_t x, uint32_t y) {
+static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, const vicii_line_ctx *lc, uint32_t x, uint32_t y) {
     bool hborder = x < g->left || x >= g->right;
     uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
-    vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, x, y);
+    vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
     vicii_sprite_pixel sprites[8];
     bool any_sprite_enabled = false;
     int n;
@@ -817,6 +881,7 @@ static void vicii_update_live_vertical_border(vicii *v) {
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_border_geometry g;
+    vicii_line_ctx lc;
     uint32_t y;
     uint32_t x0;
     uint32_t x1;
@@ -832,6 +897,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     g = vicii_get_border_geometry(v);
+    lc = vicii_live_line_ctx(v);
     x0 = (v->timing.cycle_in_line * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
     x1 = ((v->timing.cycle_in_line + 1u) * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
     if (x1 <= x0) {
@@ -842,7 +908,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     for (x = x0; x < x1; x++) {
-        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = vicii_live_pixel(v, bus, &g, x, y);
+        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = vicii_live_pixel(v, bus, &g, &lc, x, y);
     }
 }
 
@@ -902,9 +968,14 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
         if (v->bad_line) {
             v->rc            = 0;
-            v->vc            = v->vc_base;
             v->display_state = true;
         }
+
+        /* VC is reloaded from VCBASE at the start of every line (the hardware
+           cycle-14 load), not only on bad lines. Within a character row VCBASE is
+           unchanged, so all 8 rows re-address the same 40 video-matrix cells; the
+           +40 advance happens once per row at the RC==7 line end below. */
+        v->vc = v->vc_base;
     }
 
     if (cycle == 0) {
@@ -997,13 +1068,19 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     v->timing.cycle_in_line = 0;
 
     if (v->display_state) {
+        /* This display line advanced VC by one character row's worth of cells.
+           At RC==7 the character row is finished: latch VCBASE forward by 40 and
+           leave display state (idle) until the next bad line re-enters it. Bauer
+           only increments RC while it is below 7, so RC is not wrapped here; the
+           next bad line resets it to 0. */
         v->vc = (uint16_t)((v->vc + VICII_TEXT_COLUMNS) & (uint16_t)VICII_VC_MAX);
 
         if (v->rc == VICII_RC_MAX) {
             v->vc_base       = v->vc;
             v->display_state = false;
+        } else {
+            v->rc = (uint8_t)(v->rc + 1u);
         }
-        v->rc = (uint8_t)((v->rc + 1u) & 0x07u);
     }
 
     v->timing.raster_line++;
@@ -1309,6 +1386,7 @@ static bool vicii_make_frame_snapshot_internal(
 
     for (y = 0; y < out_frame->height; y++) {
         vicii_snapshot_sprite_row spr_rows[8];
+        vicii_line_ctx lc = vicii_snapshot_line_ctx(v, y);
 
         /* Vertical flip-flop transitions (Bauer §3.9) */
         if (y == g.top)    vborder = false;
@@ -1327,7 +1405,7 @@ static bool vicii_make_frame_snapshot_internal(
             if (x == g.right) hborder = true;
             if (x == g.left && !vborder) hborder = false;
 
-            bg = vicii_background_pixel(v, bus, &g, x, y);
+            bg = vicii_background_pixel(v, bus, &g, &lc, x, y);
             enable_reg = v->registers[VICII_REG_SPR_ENABLE];
             for (n = 0; n < 8; n++) {
                 sprites[n] = vicii_sprite_pixel_make(0, false);

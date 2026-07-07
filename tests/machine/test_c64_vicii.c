@@ -1805,6 +1805,59 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
         TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + 90]);
 }
 
+/* Phase 2 (C64MVICIIEXPHASES): address generation is counter-driven. A bad line
+   forced mid-character-row resets RC, which shifts the row-in-cell phase for the
+   REST of that character row. The distinguishing property vs the old positional
+   renderer: after restoring YSCROLL, the affected line has the SAME YSCROLL as
+   the un-forced run, so a renderer keyed only to (y, current YSCROLL) would show
+   identical output; the counter model instead remembers the RC reset. */
+static void test_expose_forced_badline_resets_row_counter(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  white = 0xffffffffu; /* palette[1] */
+    uint32_t  black = TEST_PALETTE_0;
+    /* Force a bad line at raster 53 (YSCROLL=5, since 53&7==5), then restore
+       YSCROLL=3 at raster 54 so line 54 is identical to the un-forced run except
+       for the remembered RC reset. */
+    const expose_injection injs[] = {
+        { 53u, 0u, 0xd011u, 0x3du }, /* BMM|DEN|RSEL|YSCROLL=5 -> bad line at 53 */
+        { 54u, 0u, 0xd011u, 0x3bu }, /* BMM|DEN|RSEL|YSCROLL=3 restored */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x00); /* black border */
+
+    /* Cell 0 bitmap: only row-in-cell 1 is lit; row-in-cell 3 is blank. */
+    machine.bus.ram[0x2001] = 0xffu; /* rc==1 -> foreground */
+    machine.bus.ram[0x2003] = 0x00u; /* rc==3 -> background */
+    machine.bus.ram[0x0400] = 0x10u; /* fg nibble 1 (white), bg nibble 0 (black) */
+
+    /* Baseline: no forcing. With YSCROLL=3, raster 54 is RC=3 -> blank cell row. */
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame);
+    expect_u32("baseline raster 52 (RC=1) is lit",
+        white, frame.pixels[52 * C64_FRAME_WIDTH + 24]);
+    expect_u32("baseline raster 54 (RC=3) is blank",
+        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+
+    /* Forced: the extra bad line at 53 resets RC, so raster 54 is now RC=1 and
+       lit -- even though YSCROLL is back to 3, exactly as in the baseline. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    machine.bus.ram[0x2001] = 0xffu;
+    machine.bus.ram[0x2003] = 0x00u;
+    machine.bus.ram[0x0400] = 0x10u;
+
+    run_vic_frame_with_injections(&machine, injs, 2u, &frame);
+    expect_u32("forced bad line shifts raster 54 to RC=1 (now lit)",
+        white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -1860,5 +1913,6 @@ int main(void) {
     test_vicii_debug_read_forced_high_bits();
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
+    test_expose_forced_badline_resets_row_counter();
     return 0;
 }

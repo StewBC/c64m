@@ -222,5 +222,33 @@ Acceptance:
     * Baseline confirmed: display window is the fixed 200 rows (raster 51..250);
       per-line register injection is pixel-accurate. FLI address/latch behavior is
       unchanged (still positional) as expected pre-Phase-2.
-- Phases 2-6: NOT STARTED.
+- Phase 2: DONE.
+    * Root sub-bug found and fixed: the sequencer never reloaded VC from VCBASE
+      per line, so VCBASE accumulated +320 per character row instead of +40. It
+      was invisible only because the renderer ignored the counters. Fixed to
+      Bauer semantics: VC = VCBASE at the start of EVERY line; at the RC==7 line
+      end VCBASE advances by 40 and display state leaves; RC increments only while
+      below 7 (reset by the next bad line).
+    * Renderer is now counter-driven. vicii_background_pixel takes a per-line
+      vicii_line_ctx {display_active, cell_base, row_in_cell}:
+        - live path fills it from the sequencer (v->display_state / v->vc_base /
+          v->rc) so forced/suppressed bad lines shift the address like hardware;
+        - snapshot/debug path fills it geometrically (unchanged output);
+        - DEN=0 falls back to geometric addressing in the live path too, to
+          preserve the documented DEN=0 collision/foreground quirk (FLI needs
+          DEN=1, so this never affects the bad-line path).
+    * Proven equivalence: for a static screen the counter model's active span is
+      exactly [48+YSCROLL, 248+YSCROLL) and the (char_row, RC, col) decomposition
+      matches the old positional mapping, so all static tests stay byte-identical.
+    * Guardrails: full suite 40/40 green (incl. live text/bitmap/mcm/ecm, DEN,
+      xscroll/yscroll, sprite-BA, snapshot round-trip).
+    * New acceptance test test_expose_forced_badline_resets_row_counter: a bad
+      line forced at raster 53 (then YSCROLL restored) shifts raster 54 from RC=3
+      to RC=1 — a badline-memory effect the old (y, YSCROLL)-keyed renderer could
+      not produce.
+    * Not done here (by design): render still reads RAM live per pixel (latch is
+      Phase 3); display/idle is still gated by the fixed 51..251 window (Phase 4);
+      mid-line bad-line CONDITION timing is cycle-0 only (Phase 5). End-to-end
+      dkarcade visual check is deferred to its phases.
+- Phases 3-6: NOT STARTED.
 ```
