@@ -51,8 +51,9 @@
 - Cycle-perfect video timing is not complete.
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
-- VIC idle-state g-access fetch behavior from `$3FFF` / `$39FF` in the renderer is deferred.
+- VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered outside the vertical display window (opened-border pictures); it is a per-mode approximation, not a full cycle-exact idle sequencer.
 - Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
+- Per-scanline `$D011`/badline (FLI-class) raster accuracy is deferred; the open-border "expose" reveal in `samples/dkarcade2016.prg` depends on it and is not reproduced. See [VICII_EXPOSE_REVEAL.md](VICII_EXPOSE_REVEAL.md).
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
 
 ## Tests / smoke checks
