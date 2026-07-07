@@ -80,8 +80,9 @@ rows containing any lit pixel in the display width):
 - Then the remaining (odd) lines fill in and the picture settles (~238 rows).
 
 On VICE the 27 "frozen" frames are instead spent actively revealing (down, then
-back up), so it looks like one smooth motion. In c64m it looks like: partial
-down-wipe → hold → the rest snaps in.
+back up, with ~6 cycles of idle between down and up), so it looks like one 
+smooth motion. In c64m it looks like: partial down-wipe → hold → the rest snaps
+in.
 
 ### Ruled out
 
