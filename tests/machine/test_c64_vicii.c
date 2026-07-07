@@ -1653,6 +1653,158 @@ static void test_config_frame_timing(void) {
         (int)(c64_config_clock_hz(&ntsc) / c64_config_cycles_per_frame(&ntsc)) == 59);
 }
 
+/* ------------------------------------------------------------------------
+ * Phase 1 (C64MVICIIEXPHASES): per-scanline measurement harness.
+ *
+ * These helpers drive the VIC-II directly, cycle by cycle, over one full
+ * frame against a real machine bus, and apply register writes at exact
+ * (raster_line, cycle_in_line) points. This mirrors how c64.c applies CPU
+ * bus events immediately BEFORE the VIC steps that cycle, so an injected
+ * $D011/$D020/... write lands at the same pixel it would on hardware.
+ *
+ * This is the foundation for the FLI/badline work: it lets later phases
+ * assert per-scanline behavior deterministically without running a CPU
+ * program, and it provides the reveal-progression metric (lit-row count).
+ * ------------------------------------------------------------------------ */
+
+typedef struct expose_injection {
+    uint32_t raster_line;
+    uint32_t cycle_in_line;
+    uint16_t reg;   /* full I/O address, e.g. 0xd011 */
+    uint8_t  value;
+} expose_injection;
+
+/* Render exactly one VIC-II frame, applying each injection at its scheduled
+   (raster_line, cycle_in_line) BEFORE the VIC steps that cycle. Assumes the
+   VIC is at a frame boundary (raster 0, cycle 0), as after reset. */
+static void run_vic_frame_with_injections(
+    c64_t *machine,
+    const expose_injection *injs,
+    size_t inj_count,
+    c64_frame *out_frame) {
+    vicii   *v = &machine->vic;
+    uint64_t abs = 0;
+    uint32_t guard;
+    uint32_t max_cycles =
+        v->timing.cycles_per_line * v->timing.lines_per_frame +
+        v->timing.cycles_per_line + 16u;
+
+    (void)vicii_consume_frame_complete(v);
+
+    for (guard = 0; guard < max_cycles; guard++) {
+        size_t k;
+        for (k = 0; k < inj_count; k++) {
+            if (injs[k].raster_line == v->timing.raster_line &&
+                injs[k].cycle_in_line == v->timing.cycle_in_line) {
+                vicii_write_register(v, injs[k].reg, injs[k].value);
+            }
+        }
+        vicii_step_cycle(v, &machine->bus, abs++);
+        if (vicii_consume_frame_complete(v)) {
+            expect_true("injected frame copied",
+                vicii_copy_completed_frame(v, out_frame, abs));
+            return;
+        }
+    }
+    fail("run_vic_frame_with_injections: frame did not complete");
+}
+
+/* Reveal-progression metric: number of raster rows containing at least one
+   pixel that differs from bg within x in [x0, x1). This is the signal the
+   VICII_EXPOSE_REVEAL doc uses to describe the reveal (it grows, plateaus for
+   ~27 frames on hardware, then grows again). */
+static uint32_t count_lit_rows(const c64_frame *f, uint32_t x0, uint32_t x1, uint32_t bg) {
+    uint32_t y, x, n = 0;
+
+    for (y = 0; y < f->height; y++) {
+        for (x = x0; x < x1; x++) {
+            if (f->pixels[y * C64_FRAME_WIDTH + x] != bg) {
+                n++;
+                break;
+            }
+        }
+    }
+    return n;
+}
+
+/* Fill a full-screen multicolor-free hires bitmap so every pixel in the
+   display window is foreground (white), against a black background/border.
+   Used to validate both the harness and the lit-row metric. */
+static void setup_full_white_bitmap(c64_t *machine) {
+    uint32_t i;
+
+    /* $D018 = $18: screen matrix at $0400, bitmap at $2000. */
+    c64_bus_write(&machine->bus, 0xd018, 0x18);
+    /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 -> $3B. */
+    c64_bus_write(&machine->bus, 0xd011, 0x3b);
+    /* CSEL=1, XSCROLL=0. */
+    c64_bus_write(&machine->bus, 0xd016, 0x08);
+    /* Black border. */
+    c64_bus_write(&machine->bus, 0xd020, 0x00);
+
+    for (i = 0x2000u; i < 0x4000u; i++) {
+        machine->bus.ram[i] = 0xffu;         /* every bitmap bit set */
+    }
+    for (i = 0x0400u; i < 0x0800u; i++) {
+        machine->bus.ram[i] = 0x10u;          /* fg nibble 1 (white), bg nibble 0 (black) */
+    }
+}
+
+static void test_expose_harness_renders_bitmap_and_metric(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint32_t  white = 0xffffffffu; /* palette[1] */
+    uint32_t  black = TEST_PALETTE_0;
+    uint32_t  in_window, above_window;
+    uint32_t  lit;
+
+    reset_machine(&machine);
+    setup_full_white_bitmap(&machine);
+
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame);
+
+    /* Inside the display window (row 100, a solid column) -> white foreground. */
+    in_window = frame.pixels[100 * C64_FRAME_WIDTH + 160];
+    expect_u32("harness bitmap in-window is white", white, in_window);
+
+    /* Above the display window (row 10) -> border/idle black. */
+    above_window = frame.pixels[10 * C64_FRAME_WIDTH + 160];
+    expect_u32("harness bitmap above-window is black", black, above_window);
+
+    /* Display window is 200 lines (raster 51..250); all lit, nothing else. */
+    lit = count_lit_rows(&frame, 24u, 344u, black);
+    expect_u32("lit-row metric counts the 200 display rows", 200u, lit);
+}
+
+static void test_expose_harness_midline_injection_hits_exact_column(void) {
+    c64_t     machine;
+    c64_frame frame;
+    /* Change border color from red to green partway across raster line 10. */
+    const expose_injection injs[] = {
+        { 10u, 20u, 0xd020u, 0x05u }, /* at cycle 20 of line 10: border -> green */
+    };
+
+    reset_machine(&machine);
+    /* DEN=1 so the border region renders the border color (not background). */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* start red */
+
+    run_vic_frame_with_injections(&machine, injs, 1u, &frame);
+
+    /* Line 10 is entirely top border. Pixels rendered before cycle 20 keep the
+       old (red) color; pixels from cycle 20 on take the new (green) color. With
+       NTSC 65 cycles/line over 384px, x=90 maps to ~cycle 15 (pre-write) and
+       x=140 to ~cycle 23 (post-write). */
+    expect_u32("border before mid-line write is red",
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 90]);
+    expect_u32("border after mid-line write is green",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 140]);
+
+    /* The next line (11) is fully past the write -> entirely green. */
+    expect_u32("subsequent line fully takes new border color",
+        TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + 90]);
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -1706,5 +1858,7 @@ int main(void) {
     test_vicii_debug_read_collision_no_clear();
     test_vicii_debug_read_irq_status_no_clear();
     test_vicii_debug_read_forced_high_bits();
+    test_expose_harness_renders_bitmap_and_metric();
+    test_expose_harness_midline_injection_hits_exact_column();
     return 0;
 }
