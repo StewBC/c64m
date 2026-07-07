@@ -75,7 +75,7 @@ static void test_generate_frame(void) {
     expect_true("generate test frame", c64_generate_test_frame(&machine, &frame));
 
     expect_u32("frame width", C64_FRAME_WIDTH, frame.width);
-    expect_u32("frame height", C64_FRAME_HEIGHT, frame.height);
+    expect_u32("frame height", C64_FRAME_NTSC_HEIGHT, frame.height);
     expect_u32("frame stride", C64_FRAME_WIDTH * sizeof(frame.pixels[0]), frame.stride_bytes);
     expect_u32("frame pixel format", C64_FRAME_PIXEL_FORMAT_ARGB8888, frame.pixel_format);
     expect_u64("frame number", 0, frame.frame_number);

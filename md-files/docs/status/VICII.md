@@ -30,10 +30,20 @@
 
 - C64MENH Phase 2 added per-standard NTSC sprite BA timing.
 - Sprite BA now selects a PAL 6569 or NTSC 6567R8 BA-assert table from the machine video standard.
+- Vertical border compares are raster-line numbers and are identical for PAL
+  (6569) and NTSC (6567): top/bottom 51/251 for RSEL=1 and 55/247 for RSEL=0.
+  Only the total line count differs, not the display-window position, so the
+  display window opens at line 51/55 on both standards. This keeps the
+  background (mapped through the top compare) aligned with sprites, which are
+  placed by absolute raster line.
+- Published frame height is PAL 272 or NTSC 263; the fixed pixel buffer remains
+  sized for the PAL maximum. Because NTSC has only 263 raster lines, the frontend
+  selects PAL crop Y=31 or NTSC crop Y=23 so the 240-line crop keeps the display
+  window and full bottom border on-screen without overrunning the shorter frame.
 - Existing PAL sprite BA tests still cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior.
 - NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - Galencia NTSC sprite multiplex corruption was fixed by preserving RAM underneath visible `$D000-$DFFF` I/O writes; VIC sprite data fetched from RAM under I/O is no longer overwritten by VIC register writes.
-- Bottom-border opening is covered by a live-frame regression: after the 24-row bottom compare has been missed, clearing RSEL before the 25-row bottom compare keeps the vertical border open and allows sprites at raster 251+ to show.
+- Bottom-border opening is covered by live-frame regressions for both standards: after the 24-row bottom compare has been missed, clearing RSEL before the 25-row bottom compare keeps the vertical border open and allows sprites in the bottom-border region to show.
 
 ## Known limitations / deferred
 

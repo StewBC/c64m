@@ -24,7 +24,12 @@
 enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
     FRONTEND_DISPLAY_CROP_X = 8,
-    FRONTEND_DISPLAY_CROP_Y = 31,
+    FRONTEND_DISPLAY_PAL_CROP_Y = 31,
+    /* NTSC has only 263 raster lines, so the 240-line crop starts lower than PAL
+       (which has 272). Row 23 keeps the 51..250 display window fully visible and
+       shows the full 12-line bottom border (rows 251..262) without overrunning
+       the frame. */
+    FRONTEND_DISPLAY_NTSC_CROP_Y = 23,
     FRONTEND_DISPLAY_CROP_W = 352,
     FRONTEND_DISPLAY_CROP_H = 240
 };
@@ -550,6 +555,14 @@ static struct nk_rect frontend_fit_nk_rect(
         (int)source_h);
 
     return nk_rect((float)fit.x, (float)fit.y, (float)fit.w, (float)fit.h);
+}
+
+static int frontend_display_crop_y_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return FRONTEND_DISPLAY_NTSC_CROP_Y;
+    }
+    return FRONTEND_DISPLAY_PAL_CROP_Y;
 }
 
 static bool frontend_point_in_rect(float x, float y, struct nk_rect rect)
@@ -2082,7 +2095,7 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
                 (nk_ushort)ui->current_frame.height,
                 nk_rect(
                     (float)FRONTEND_DISPLAY_CROP_X,
-                    (float)FRONTEND_DISPLAY_CROP_Y,
+                    (float)frontend_display_crop_y_for_frame(&ui->current_frame),
                     (float)FRONTEND_DISPLAY_CROP_W,
                     (float)FRONTEND_DISPLAY_CROP_H));
             struct nk_rect image_bounds = frontend_fit_nk_rect(
@@ -7247,7 +7260,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
     }
 
     if (frame->width != C64_FRAME_WIDTH ||
-        frame->height != C64_FRAME_HEIGHT ||
+        (frame->height != C64_FRAME_PAL_HEIGHT && frame->height != C64_FRAME_NTSC_HEIGHT) ||
         frame->stride_bytes != C64_FRAME_WIDTH * sizeof(frame->pixels[0]) ||
         frame->pixel_format != C64_FRAME_PIXEL_FORMAT_ARGB8888) {
         SDL_Log("unexpected frame format: %ux%u stride=%u format=%u",
@@ -7256,6 +7269,13 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
             frame->stride_bytes,
             frame->pixel_format);
         return false;
+    }
+
+    if (ui->display_texture != NULL &&
+        ui->has_frame &&
+        (ui->current_frame.width != frame->width || ui->current_frame.height != frame->height)) {
+        SDL_DestroyTexture(ui->display_texture);
+        ui->display_texture = NULL;
     }
 
     if (ui->display_texture == NULL) {
@@ -8073,7 +8093,7 @@ static void frontend_render_display_only(frontend *ui)
     {
         SDL_Rect src = {
             FRONTEND_DISPLAY_CROP_X,
-            FRONTEND_DISPLAY_CROP_Y,
+            frontend_display_crop_y_for_frame(&ui->current_frame),
             FRONTEND_DISPLAY_CROP_W,
             FRONTEND_DISPLAY_CROP_H,
         };

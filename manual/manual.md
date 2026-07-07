@@ -1587,13 +1587,14 @@ Memory modes:
 
 `get-memory` length is limited to 1..1024 bytes.
 
-Frame payloads are ARGB8888 pixels. The current frame metadata is:
+Frame payloads are ARGB8888 pixels. PAL frames are 384x272; NTSC frames are 384x263.
+The frame metadata is:
 
 ```text
-<id> data frame 417792 width=384 height=272 stride=1536 format=argb8888 frame=<n> cycle=<cycle>
+<id> data frame <bytes> width=384 height=<272|263> stride=1536 format=argb8888 frame=<n> cycle=<cycle>
 ```
 
-`417792` is `384 * 272 * 4`. `stride` is bytes per row.
+`<bytes>` is `height * stride`. `stride` is bytes per row.
 
 `get-debug-memory` returns concatenated 64 K buffers:
 

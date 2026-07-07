@@ -53,11 +53,13 @@ enum {
        Applies to both the early group (sprites 3-7) and late group (sprites 0-2). */
     VICII_SPRITE_BA_WINDOW     = 5,
 
-    /* PAL border compare values (pixel/line units within 384×272 frame) */
-    VICII_PAL_VBORDER_TOP_25    = 51,
-    VICII_PAL_VBORDER_BOTTOM_25 = 251,
-    VICII_PAL_VBORDER_TOP_24    = 55,
-    VICII_PAL_VBORDER_BOTTOM_24 = 247,
+    /* Vertical border compare values (raster-line units within the internal
+       frame). Identical for PAL (6569) and NTSC (6567); only the total line
+       count differs, not the display-window position. */
+    VICII_VBORDER_TOP_25    = 51,
+    VICII_VBORDER_BOTTOM_25 = 251,
+    VICII_VBORDER_TOP_24    = 55,
+    VICII_VBORDER_BOTTOM_24 = 247,
     VICII_HBORDER_LEFT_40       = 24,
     VICII_HBORDER_RIGHT_40      = 344,
     VICII_HBORDER_LEFT_38       = 31,
@@ -114,11 +116,18 @@ static void vicii_set_error(char *error, size_t error_size, const char *message)
     snprintf(error, error_size, "%s", message);
 }
 
-static void vicii_prepare_frame(c64_frame *frame, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
+static uint32_t vicii_frame_height(const vicii *v) {
+    assert(v);
+    return v->timing.lines_per_frame < C64_FRAME_HEIGHT ?
+        v->timing.lines_per_frame :
+        (uint32_t)C64_FRAME_HEIGHT;
+}
+
+static void vicii_prepare_frame(c64_frame *frame, uint32_t height, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
     assert(frame);
 
     frame->width = C64_FRAME_WIDTH;
-    frame->height = C64_FRAME_HEIGHT;
+    frame->height = height;
     frame->stride_bytes = C64_FRAME_WIDTH * sizeof(frame->pixels[0]);
     frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     frame->frame_number = frame_number;
@@ -139,8 +148,14 @@ static void vicii_begin_live_frame(vicii *v) {
         (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu) :
         (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
     fill_color = vicii_palette_argb[fill_index];
-    vicii_prepare_frame(&v->working_frame, v->timing.frame_number, 0, fill_color);
-    v->vertical_border_active = true;
+    vicii_prepare_frame(&v->working_frame, vicii_frame_height(v), v->timing.frame_number, 0, fill_color);
+    /* Do NOT reset the vertical border flip-flop here. On real hardware it is
+       only toggled by the top/bottom RSEL compares, so a program that dodges the
+       bottom compare (the classic "open the border" trick) keeps the border open
+       across the frame boundary, which is what lets sprites multiplexed into the
+       upper/lower border draw image data outside the normal display window.
+       Forcing it closed every frame re-hid those border sprites. Power-on/reset
+       still establishes the closed default via vicii_reset(). */
 }
 
 bool vicii_init(vicii *v, char *error, size_t error_size) {
@@ -250,8 +265,15 @@ static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     bool rsel = (v->registers[0x11] & 0x08u) != 0;
     bool csel = (v->registers[0x16] & 0x08u) != 0;
 
-    g.top    = rsel ? (uint32_t)VICII_PAL_VBORDER_TOP_25    : (uint32_t)VICII_PAL_VBORDER_TOP_24;
-    g.bottom = rsel ? (uint32_t)VICII_PAL_VBORDER_BOTTOM_25 : (uint32_t)VICII_PAL_VBORDER_BOTTOM_24;
+    /* The vertical border flip-flop compare values are raster-line numbers and
+       are identical on the 6569 (PAL) and 6567 (NTSC): first/last display line
+       51/251 for RSEL=1 and 55/247 for RSEL=0. Only the total line count and the
+       per-line cycle count differ between the standards, not where the display
+       window sits. Anchoring NTSC to different values desynchronises the
+       background (which is mapped through g.top) from sprites (which are placed
+       by absolute raster line), so both standards share these compares. */
+    g.top    = rsel ? (uint32_t)VICII_VBORDER_TOP_25    : (uint32_t)VICII_VBORDER_TOP_24;
+    g.bottom = rsel ? (uint32_t)VICII_VBORDER_BOTTOM_25 : (uint32_t)VICII_VBORDER_BOTTOM_24;
     g.left   = csel ? (uint32_t)VICII_HBORDER_LEFT_40       : (uint32_t)VICII_HBORDER_LEFT_38;
     g.right  = csel ? (uint32_t)VICII_HBORDER_RIGHT_40      : (uint32_t)VICII_HBORDER_RIGHT_38;
     return g;
@@ -458,6 +480,46 @@ static vicii_bg_pixel vicii_apply_den_blanking(bool den, uint32_t b0c, vicii_bg_
     return pixel;
 }
 
+/* Idle-state background pixel. Vertically outside the display window the VIC is
+   in idle state: g-accesses read a fixed byte from $3FFF (or $39FF when ECM=1)
+   and are displayed with the c-access data forced to 0. This is what shows
+   through when a program opens the vertical border (the classic sprites-over-
+   border title-screen technique), so the un-sprited gaps are idle graphics --
+   usually black -- not the live background colour. Returning the live b0c here
+   is what made c64m paint the opened border with the background colour instead
+   of the near-black idle output VICE/hardware produce. */
+static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uint32_t x) {
+    uint32_t b0c   = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    uint32_t black = vicii_palette_argb[0];
+    bool ecm = (v->registers[0x11] & 0x40u) != 0u;
+    bool bmm = (v->registers[0x11] & 0x20u) != 0u;
+    bool mcm = (v->registers[0x16] & 0x10u) != 0u;
+    uint16_t vic_bank = c64_bus_vic_bank_base(bus);
+    uint16_t addr = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
+    uint8_t g = c64_bus_vic_read_ram(bus, addr);
+    uint32_t sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
+
+    if (mcm) {
+        uint8_t pair = (uint8_t)((g >> (6u - (sx_raw & 6u))) & 3u);
+        if (pair == 0u) {
+            return vicii_bg_pixel_make(b0c, false);
+        }
+        /* 01/10/11 all resolve through the zero c-data / colour-RAM to black. */
+        return vicii_bg_pixel_make(black, pair >= 2u);
+    } else {
+        uint8_t bit = (uint8_t)(0x80u >> (sx_raw & 7u));
+        if (bmm) {
+            /* Standard bitmap idle: both nibbles of the zero c-data are black. */
+            return vicii_bg_pixel_make(black, (g & bit) != 0u);
+        }
+        /* Standard/ECM text idle: set bits take foreground colour 0 (black). */
+        if (g & bit) {
+            return vicii_bg_pixel_make(black, true);
+        }
+        return vicii_bg_pixel_make(b0c, false);
+    }
+}
+
 static vicii_bg_pixel vicii_background_pixel(
     const vicii *v,
     const c64_bus_t *bus,
@@ -484,8 +546,24 @@ static vicii_bg_pixel vicii_background_pixel(
     uint16_t char_base;
     uint16_t bitmap_base;
 
-    if (x < g->left || x >= g->right || y < g->top || y >= g->bottom) {
+    if (x < g->left || x >= g->right) {
+        /* Side border. Overridden by the border colour in vicii_compose_pixel,
+           so the exact value here only matters when the caller does not treat it
+           as border; b0c keeps prior behaviour. */
         return vicii_bg_pixel_make(b0c, false);
+    }
+    if (y < (uint32_t)VICII_VBORDER_TOP_25 || y >= (uint32_t)VICII_VBORDER_BOTTOM_25) {
+        /* Vertically outside the display window: idle-state graphics. Matters
+           when the vertical border has been opened so this region is visible.
+
+           The graphics/badline range that produces the picture is fixed at the
+           25-row window (51..250) and does NOT depend on RSEL -- RSEL only moves
+           the vertical *border* (via g->top/g->bottom) in by four lines. Using
+           the RSEL-dependent border edge here would drop the top/bottom four
+           display lines whenever a program runs RSEL=0 but opens the border to
+           show them (the sprites-over-border title technique), which is exactly
+           what split the picture into pieces. */
+        return vicii_idle_pixel(v, bus, x);
     }
 
     mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
@@ -495,7 +573,7 @@ static vicii_bg_pixel vicii_background_pixel(
     yscroll = v->registers[0x11] & 0x07u;
     den = (v->registers[0x11] & 0x10u) != 0u;
     sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
-    sy = y - (uint32_t)VICII_PAL_VBORDER_TOP_25;
+    sy = y - (uint32_t)VICII_VBORDER_TOP_25;
 
     if (mode >= 5u) {
         return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[0], false));
@@ -749,7 +827,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     y = v->timing.raster_line;
-    if (y >= C64_FRAME_HEIGHT) {
+    if (y >= v->working_frame.height) {
         return;
     }
 
@@ -1220,7 +1298,7 @@ static bool vicii_make_frame_snapshot_internal(
     border_color = vicii_palette_argb[border_index];
 
     out_frame->width        = C64_FRAME_WIDTH;
-    out_frame->height       = C64_FRAME_HEIGHT;
+    out_frame->height       = vicii_frame_height(v);
     out_frame->stride_bytes = C64_FRAME_WIDTH * sizeof(out_frame->pixels[0]);
     out_frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     out_frame->frame_number = v->timing.frame_number;
@@ -1229,7 +1307,7 @@ static bool vicii_make_frame_snapshot_internal(
     vborder = true;   /* border active until the top compare fires */
     hborder = true;
 
-    for (y = 0; y < C64_FRAME_HEIGHT; y++) {
+    for (y = 0; y < out_frame->height; y++) {
         vicii_snapshot_sprite_row spr_rows[8];
 
         /* Vertical flip-flop transitions (Bauer §3.9) */

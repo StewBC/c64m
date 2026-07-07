@@ -197,7 +197,7 @@ static void test_request_frame_while_paused(void) {
     expect_true("poll copied frame", runtime_client_poll_frame(client, &frame));
 
     expect_u32("frame width", C64_FRAME_WIDTH, frame.width);
-    expect_u32("frame height", C64_FRAME_HEIGHT, frame.height);
+    expect_u32("frame height", C64_FRAME_NTSC_HEIGHT, frame.height);
     expect_u32("frame pixel format", C64_FRAME_PIXEL_FORMAT_ARGB8888, frame.pixel_format);
     expect_u64("paused frame cycle", 0, frame.machine_cycle);
 
@@ -276,6 +276,12 @@ static void test_step_instruction_publishes_updated_frame(void) {
     step_and_expect_frame(client, &event, &frame); /* LDA #$01 */
     step_and_expect_frame(client, &event, &frame); /* STA $0400 */
 
+    expect_true("request post-step text frame", runtime_client_request_frame(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("post-step text FRAME_READY not received");
+    }
+    expect_true("poll post-step text frame", runtime_client_poll_frame(client, &frame));
+
     if (frame.pixels[TEST_ACTIVE_PIXEL] == before) {
         fail("step frame did not reflect screen RAM write");
     }
@@ -322,6 +328,12 @@ static void test_step_instruction_publishes_updated_hires_frame(void) {
 
     step_and_expect_frame(client, &event, &frame); /* LDA #$80 */
     step_and_expect_frame(client, &event, &frame); /* STA $2000 */
+
+    expect_true("request post-step hires frame", runtime_client_request_frame(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_FRAME_READY)) {
+        fail("post-step hires FRAME_READY not received");
+    }
+    expect_true("poll post-step hires frame", runtime_client_poll_frame(client, &frame));
 
     expect_u32("hires bitmap step foreground", TEST_COLOR_WHITE, frame.pixels[TEST_ACTIVE_PIXEL]);
 

@@ -89,20 +89,25 @@ static void copy_to_kernal(c64_rom_set *roms, uint16_t address, const uint8_t *p
     }
 }
 
-static void reset_machine_with_roms(c64_t *machine, const c64_rom_set *roms) {
+static void reset_machine_with_roms_standard(c64_t *machine, const c64_rom_set *roms, c64_video_standard standard) {
     c64_config  cfg;
     char error[256];
 
     c64_init(machine);
 
-    /* PAL is the canonical video standard for all tests: the 384×272 pixel
-       buffer matches PAL dimensions and border compare values (top=51, left=24). */
+    /* PAL is the canonical video standard for most tests: the 384×272 pixel
+       buffer matches PAL dimensions and border compare values (top=51, left=24).
+       Targeted NTSC tests opt in through reset_machine_with_standard(). */
     memset(&cfg, 0, sizeof(cfg));
-    cfg.video_standard = C64_VIDEO_STANDARD_PAL;
+    cfg.video_standard = standard;
     c64_set_config(machine, &cfg);
 
     expect_true("install synthetic ROMs", c64_install_roms(machine, roms, error, sizeof(error)));
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
+}
+
+static void reset_machine_with_roms(c64_t *machine, const c64_rom_set *roms) {
+    reset_machine_with_roms_standard(machine, roms, C64_VIDEO_STANDARD_PAL);
 }
 
 static void reset_machine(c64_t *machine) {
@@ -110,6 +115,13 @@ static void reset_machine(c64_t *machine) {
 
     build_roms(&roms);
     reset_machine_with_roms(machine, &roms);
+}
+
+static void reset_machine_with_standard(c64_t *machine, c64_video_standard standard) {
+    c64_rom_set roms;
+
+    build_roms(&roms);
+    reset_machine_with_roms_standard(machine, &roms, standard);
 }
 
 static void step_until_frame_complete(c64_t *machine) {
@@ -342,6 +354,30 @@ static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
     expect_u32("deterministic glyph pixel",
         frame_a.pixels[51 * C64_FRAME_WIDTH + 24],
         frame_b.pixels[51 * C64_FRAME_WIDTH + 24]);
+}
+
+static void test_ntsc_character_rendering_uses_ntsc_top_border(void) {
+    c64_t machine;
+    c64_frame frame;
+
+    reset_machine_with_standard(&machine, C64_VIDEO_STANDARD_NTSC);
+
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+
+    /* NTSC uses a shorter (263-line) frame but the display window still opens at
+       raster line 51 (RSEL=1), exactly as PAL: the vertical border compares are
+       identical across standards. This keeps the background aligned with sprites,
+       which are placed by absolute raster line. */
+    expect_true("make ntsc glyph frame", c64_make_frame_snapshot(&machine, &frame));
+    expect_u32("ntsc frame height", C64_FRAME_NTSC_HEIGHT, frame.height);
+    expect_u32("ntsc glyph foreground at display top", TEST_COLOR_GREEN,
+               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("ntsc glyph background at display top", TEST_COLOR_BLUE,
+               frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
 static void test_border_rsel_csel(void) {
@@ -910,6 +946,55 @@ static void test_live_bottom_border_can_be_opened_for_sprites(void) {
     expect_u32("opened bottom border shows sprite last row", TEST_PALETTE_7,
                frame.pixels[271 * C64_FRAME_WIDTH + 46]);
     expect_u32("opened bottom border keeps side border", TEST_PALETTE_2,
+               frame.pixels[251 * C64_FRAME_WIDTH + 10]);
+}
+
+static void test_ntsc_live_bottom_border_can_be_opened_for_sprites(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine_with_standard(&machine, C64_VIDEO_STANDARD_NTSC);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 250, 7);
+
+    make_live_frame(&machine, &frame, "ntsc closed bottom border frame");
+    expect_u32("ntsc closed bottom border hides sprite", TEST_PALETTE_2,
+               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+
+    reset_machine_with_standard(&machine, C64_VIDEO_STANDARD_NTSC);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 250, 7);
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    /* NTSC shares PAL's bottom compares (247 for 24-row, 251 for 25-row): the
+       vertical border compare values are raster-line numbers identical across
+       standards. Clearing RSEL after the 24-row compare and before the 25-row
+       compare leaves the vertical border open through the bottom of the frame.
+       The last-row check stays within the shorter 263-line NTSC frame. */
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* DEN=1, RSEL=0, YSCROLL=3 */
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("ntsc opened bottom border frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    expect_u32("ntsc opened bottom border shows sprite first row", TEST_PALETTE_7,
+               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+    expect_u32("ntsc opened bottom border shows sprite last row", TEST_PALETTE_7,
+               frame.pixels[261 * C64_FRAME_WIDTH + 46]);
+    expect_u32("ntsc opened bottom border keeps side border", TEST_PALETTE_2,
                frame.pixels[251 * C64_FRAME_WIDTH + 10]);
 }
 
@@ -1578,6 +1663,7 @@ int main(void) {
     test_frame_snapshot_geometry_and_regions();
     test_reset_screen_starts_clear();
     test_character_rendering_uses_screen_char_rom_and_color_ram();
+    test_ntsc_character_rendering_uses_ntsc_top_border();
     test_border_rsel_csel();
     test_xscroll_shifts_content();
     test_yscroll_shifts_content();
@@ -1596,6 +1682,7 @@ int main(void) {
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
     test_live_bottom_border_can_be_opened_for_sprites();
+    test_ntsc_live_bottom_border_can_be_opened_for_sprites();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();

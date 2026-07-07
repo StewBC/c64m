@@ -1288,13 +1288,13 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     /* Re-select the SID clock from the current config so a video-standard change
        (applied via config + reset) switches the envelope/filter rate tables,
        mirroring vicii_set_video_standard below. */
-    sid_init(&machine->sid, c64_config_clock_hz(&machine->config));
-    vicii_reset(&machine->vic);
     vicii_set_video_standard(
         &machine->vic,
         machine->config.video_standard == C64_VIDEO_STANDARD_PAL ?
             VICII_VIDEO_STANDARD_PAL :
             VICII_VIDEO_STANDARD_NTSC);
+    sid_init(&machine->sid, c64_config_clock_hz(&machine->config));
+    vicii_reset(&machine->vic);
     vicii_write_register(&machine->vic, C64_VICII_REG_MEMORY_POINTER, 0x15);
     cia_reset(&machine->cia1);
     cia_reset(&machine->cia2);
