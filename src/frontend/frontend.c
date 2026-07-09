@@ -360,7 +360,8 @@ typedef struct frontend_file_browser_state {
     char typeahead[PLATFORM_FS_NAME_MAX];
     int typeahead_len;
     uint64_t typeahead_last_ms; /* SDL tick of the last accepted keystroke */
-    bool scroll_to_selected;    /* ask the list_view to reveal the selection */
+    bool scroll_to_selected;    /* reveal selection, anchored ~1/4 down (type-ahead) */
+    bool scroll_ensure_visible; /* reveal selection with minimal scroll (key nav) */
 } frontend_file_browser_state;
 
 struct frontend {
@@ -7629,6 +7630,7 @@ static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
     dlg->error[0] = '\0';
     dlg->typeahead_len = 0;        /* fresh directory, fresh search */
     dlg->scroll_to_selected = false;
+    dlg->scroll_ensure_visible = false;
 
     if (!platform_fs_list_dir(dlg->current_dir, &dlg->listing)) {
         dlg->listing.count = 0;
@@ -7884,26 +7886,39 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
         }
         if (list_h < 60.0f) list_h = 60.0f;
 
-        /* When type-ahead (or a keyboard move) changes the selection, force the
-           list to a scroll offset that puts the selected row about a quarter of
-           the way down the visible area, so the cursor is comfortably on-screen.
-           Clamped to the valid range: near the top of the list the row simply
-           sits higher, and if everything fits there is no scroll at all. This
-           writes the same persistent offset nk_list_view reads by its id, so it
-           takes effect on this frame. Nuklear's list_view augments the row height
-           with one spacing.y, so mirror that here. */
-        if (dlg->scroll_to_selected && dlg->selected >= 0) {
-            int row_px    = ROW_H + (int)ctx->style.window.spacing.y;
-            int rows      = dlg->filtered_count > 0 ? dlg->filtered_count : 1;
-            int visible_h = (int)list_h;
-            int quarter   = visible_h / 4;
+        /* When the selection moves, force the list scroll so the cursor is
+           on-screen. Two strategies: a type-ahead jump anchors the row about a
+           quarter of the way down the visible area; keyboard navigation
+           (line/page/Home/End) scrolls the minimum needed to keep it visible so
+           the view does not jump around. Both write the same persistent offset
+           nk_list_view reads by its id, so they take effect on this frame.
+           Nuklear's list_view augments the row height with one spacing.y, so
+           mirror that here. */
+        if ((dlg->scroll_to_selected || dlg->scroll_ensure_visible) && dlg->selected >= 0) {
+            int row_px     = ROW_H + (int)ctx->style.window.spacing.y;
+            int rows       = dlg->filtered_count > 0 ? dlg->filtered_count : 1;
+            int visible_h  = (int)list_h;
             int max_scroll = row_px * rows - visible_h;
-            int target    = dlg->selected * row_px - quarter;
+            int item_top   = dlg->selected * row_px;
+            int target;
             if (max_scroll < 0) max_scroll = 0;
+            if (dlg->scroll_to_selected) {
+                target = item_top - visible_h / 4;
+            } else {
+                nk_uint cur = 0;
+                nk_group_get_scroll(ctx, "file_browser_rows", NULL, &cur);
+                target = (int)cur;
+                if (item_top < target) {
+                    target = item_top;
+                } else if (item_top + row_px > target + visible_h) {
+                    target = item_top + row_px - visible_h;
+                }
+            }
             if (target < 0) target = 0;
             if (target > max_scroll) target = max_scroll;
             nk_group_set_scroll(ctx, "file_browser_rows", 0, (nk_uint)target);
             dlg->scroll_to_selected = false;
+            dlg->scroll_ensure_visible = false;
         }
 
         nk_layout_row_dynamic(ctx, list_h, 1);
@@ -8034,6 +8049,50 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             const struct nk_input *in = &ctx->input;
             frontend_file_browser_typeahead(
                 dlg, in->keyboard.text, in->keyboard.text_len, SDL_GetTicks64());
+
+            /* Cursor navigation: Up/Down by a line, PageUp/PageDown by a page,
+               Home/End to the ends. macOS keyboards have no Home/End keys, so
+               Cmd+Up / Cmd+Down stand in for them. Any move resets the
+               type-ahead prefix and keeps the selection on-screen. */
+            if (dlg->filtered_count > 0) {
+                int row_px = ROW_H + (int)ctx->style.window.spacing.y;
+                int visible_rows = (int)list_h / row_px;
+                int page, old_sel = dlg->selected;
+                int sel = dlg->selected < 0 ? 0 : dlg->selected;
+                bool to_top = false, to_bottom = false;
+                if (visible_rows < 1) visible_rows = 1;
+                page = visible_rows > 1 ? visible_rows - 1 : 1;
+#if defined(__APPLE__)
+                {
+                    SDL_Keymod mods = SDL_GetModState();
+                    if (mods & KMOD_GUI) {
+                        if (nk_input_is_key_pressed(in, NK_KEY_UP))   to_top = true;
+                        if (nk_input_is_key_pressed(in, NK_KEY_DOWN)) to_bottom = true;
+                    }
+                }
+#endif
+                if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_START)) to_top = true;
+                if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_END))   to_bottom = true;
+
+                if (to_top) {
+                    sel = 0;
+                } else if (to_bottom) {
+                    sel = dlg->filtered_count - 1;
+                } else {
+                    if (nk_input_is_key_pressed(in, NK_KEY_UP))          sel -= 1;
+                    if (nk_input_is_key_pressed(in, NK_KEY_DOWN))        sel += 1;
+                    if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_UP))   sel -= page;
+                    if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_DOWN)) sel += page;
+                }
+                if (sel < 0) sel = 0;
+                if (sel >= dlg->filtered_count) sel = dlg->filtered_count - 1;
+                if (sel != old_sel) {
+                    dlg->selected = sel;
+                    dlg->scroll_ensure_visible = true;
+                    dlg->typeahead_len = 0;
+                }
+            }
+
             if (nk_input_is_key_pressed(in, NK_KEY_ENTER)) {
                 const platform_fs_entry *sel_entry = NULL;
                 if (dlg->selected >= 0 && dlg->selected < dlg->filtered_count) {
