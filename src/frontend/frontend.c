@@ -362,6 +362,7 @@ typedef struct frontend_file_browser_state {
     uint64_t typeahead_last_ms; /* SDL tick of the last accepted keystroke */
     bool scroll_to_selected;    /* reveal selection, anchored ~1/4 down (type-ahead) */
     bool scroll_ensure_visible; /* reveal selection with minimal scroll (key nav) */
+    float list_visible_h;       /* measured inner height of the list group, in px */
 } frontend_file_browser_state;
 
 struct frontend {
@@ -7630,7 +7631,10 @@ static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
     dlg->error[0] = '\0';
     dlg->typeahead_len = 0;        /* fresh directory, fresh search */
     dlg->scroll_to_selected = false;
-    dlg->scroll_ensure_visible = false;
+    /* The list_view keeps its scroll offset (keyed by id) across directory
+       changes, so a new listing would otherwise inherit the previous scroll and
+       leave the new selection off-screen. Ask the next frame to reveal it. */
+    dlg->scroll_ensure_visible = true;
 
     if (!platform_fs_list_dir(dlg->current_dir, &dlg->listing)) {
         dlg->listing.count = 0;
@@ -7888,35 +7892,43 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
 
         /* When the selection moves, force the list scroll so the cursor is
            on-screen. Two strategies: a type-ahead jump anchors the row about a
-           quarter of the way down the visible area; keyboard navigation
-           (line/page/Home/End) scrolls the minimum needed to keep it visible so
-           the view does not jump around. Both write the same persistent offset
-           nk_list_view reads by its id, so they take effect on this frame.
-           Nuklear's list_view augments the row height with one spacing.y, so
-           mirror that here. */
+           quarter of the way down; keyboard navigation (line/page/Home/End)
+           scrolls the minimum needed to keep it visible so the view does not jump
+           around. We work in whole rows: nk_list_view draws its rows from the top
+           of the viewport, so the scroll offset must land on a row boundary and
+           the first row index (begin) must not exceed rows - full_rows, otherwise
+           the final row is only partially drawn and gets clipped. Both writes go
+           to the same persistent offset nk_list_view reads by its id, so they take
+           effect on this frame. Nuklear augments the row height with one spacing.y,
+           so mirror that here; the viewport height was measured last frame. */
         if ((dlg->scroll_to_selected || dlg->scroll_ensure_visible) && dlg->selected >= 0) {
-            int row_px     = ROW_H + (int)ctx->style.window.spacing.y;
-            int rows       = dlg->filtered_count > 0 ? dlg->filtered_count : 1;
-            int visible_h  = (int)list_h;
-            int max_scroll = row_px * rows - visible_h;
-            int item_top   = dlg->selected * row_px;
-            int target;
-            if (max_scroll < 0) max_scroll = 0;
+            int row_px    = ROW_H + (int)ctx->style.window.spacing.y;
+            int rows      = dlg->filtered_count > 0 ? dlg->filtered_count : 1;
+            float vis_h   = dlg->list_visible_h > 0.0f ? dlg->list_visible_h : list_h;
+            int full_rows = (int)(vis_h / (float)row_px); /* rows that fit fully */
+            int max_begin;
+            int begin;
+            if (full_rows < 1) full_rows = 1;
+            max_begin = rows - full_rows;
+            if (max_begin < 0) max_begin = 0;
             if (dlg->scroll_to_selected) {
-                target = item_top - visible_h / 4;
+                begin = dlg->selected - full_rows / 4;    /* anchor ~1/4 down */
             } else {
                 nk_uint cur = 0;
+                int cur_begin;
                 nk_group_get_scroll(ctx, "file_browser_rows", NULL, &cur);
-                target = (int)cur;
-                if (item_top < target) {
-                    target = item_top;
-                } else if (item_top + row_px > target + visible_h) {
-                    target = item_top + row_px - visible_h;
+                cur_begin = (int)cur / row_px;
+                if (dlg->selected < cur_begin) {
+                    begin = dlg->selected;                /* reveal at the top */
+                } else if (dlg->selected > cur_begin + full_rows - 1) {
+                    begin = dlg->selected - full_rows + 1; /* reveal at the bottom */
+                } else {
+                    begin = cur_begin;                    /* already fully visible */
                 }
             }
-            if (target < 0) target = 0;
-            if (target > max_scroll) target = max_scroll;
-            nk_group_set_scroll(ctx, "file_browser_rows", 0, (nk_uint)target);
+            if (begin < 0) begin = 0;
+            if (begin > max_begin) begin = max_begin;
+            nk_group_set_scroll(ctx, "file_browser_rows", 0, (nk_uint)(begin * row_px));
             dlg->scroll_to_selected = false;
             dlg->scroll_ensure_visible = false;
         }
@@ -7926,6 +7938,14 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
         if (nk_list_view_begin(ctx, &lv, "file_browser_rows", 0, ROW_H, dlg->filtered_count)) {
             struct nk_style_selectable saved_sel = ctx->style.selectable;
             bool activated = false;
+
+            /* Record the group's scroll viewport height, exactly as the group's
+               own scrollbar measures it (nk_panel_end uses layout->bounds.h as the
+               track height and layout->at_y - bounds.y as the content span). Using
+               this same value below keeps our programmatic scroll clamp in lockstep
+               with the scrollbar, so End reveals the final row fully instead of
+               clamping short and clipping it. */
+            dlg->list_visible_h = ctx->current->layout->bounds.h;
 
             for (i = lv.begin; i < lv.end; ++i) {
                 const platform_fs_entry *entry;
@@ -8056,7 +8076,8 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
                type-ahead prefix and keeps the selection on-screen. */
             if (dlg->filtered_count > 0) {
                 int row_px = ROW_H + (int)ctx->style.window.spacing.y;
-                int visible_rows = (int)list_h / row_px;
+                float vis_h = dlg->list_visible_h > 0.0f ? dlg->list_visible_h : list_h;
+                int visible_rows = (int)vis_h / row_px;
                 int page, old_sel = dlg->selected;
                 int sel = dlg->selected < 0 ? 0 : dlg->selected;
                 bool to_top = false, to_bottom = false;
