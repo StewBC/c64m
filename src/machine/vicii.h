@@ -95,11 +95,19 @@ struct vicii {
     /* Live vertical border-unit state. Snapshot rendering keeps using conventional
        geometry; completed live frames preserve mid-frame RSEL timing effects. */
     bool     vertical_border_active;
+
+    /* When false, raster/BA/IRQ/sprite-DMA timing still advances, but ARGB pixel
+       fill, working-frame clears, and completed-frame copies are skipped. Used by
+       the runtime under high turbo so free-run is not bound by display work.
+       Sprite collision latches only update while pixel output is enabled. */
+    bool     pixel_output_enabled;
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard);
+void vicii_set_pixel_output_enabled(vicii *v, bool enabled);
+bool vicii_pixel_output_enabled(const vicii *v);
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
 void vicii_destroy(vicii *v);

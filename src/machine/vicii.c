@@ -216,7 +216,25 @@ void vicii_reset(vicii *v) {
     v->sprite_sprite_collision = 0;
     v->sprite_background_collision = 0;
     v->vertical_border_active = true;
+    /* Default on; runtime turbo policy re-applies after reset when needed. */
+    v->pixel_output_enabled = true;
     vicii_begin_live_frame(v);
+}
+
+void vicii_set_pixel_output_enabled(vicii *v, bool enabled) {
+    assert(v);
+
+    v->pixel_output_enabled = enabled;
+    if (!enabled) {
+        /* Stale live buffers must not be published as completed frames. */
+        v->completed_frame_ready = false;
+    }
+}
+
+bool vicii_pixel_output_enabled(const vicii *v) {
+    assert(v);
+
+    return v->pixel_output_enabled;
 }
 
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
@@ -1101,7 +1119,9 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         }
     }
 
-    vicii_render_live_cycle(v, bus);
+    if (v->pixel_output_enabled) {
+        vicii_render_live_cycle(v, bus);
+    }
 
     /* ------------------------------------------------------------------
      * Advance cycle counter
@@ -1142,17 +1162,23 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
      * ------------------------------------------------------------------ */
     v->timing.raster_line  = 0;
     v->timing.frame_number++;
-    v->working_frame.frame_number = v->timing.frame_number;
-    memcpy(&v->completed_frame, &v->working_frame, sizeof(v->completed_frame));
-    v->completed_frame_ready = true;
     v->timing.frame_complete = true;
+
+    if (v->pixel_output_enabled) {
+        v->working_frame.frame_number = v->timing.frame_number;
+        memcpy(&v->completed_frame, &v->working_frame, sizeof(v->completed_frame));
+        v->completed_frame_ready = true;
+        vicii_begin_live_frame(v);
+    } else {
+        /* Timing still advances; no ARGB buffers to copy or re-clear. */
+        v->completed_frame_ready = false;
+    }
 
     v->vc            = 0;
     v->vc_base       = 0;
     v->rc            = 0;
     v->display_state = false;
     v->bad_line      = false;
-    vicii_begin_live_frame(v);
 }
 
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {

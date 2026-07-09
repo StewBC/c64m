@@ -69,6 +69,16 @@ int main(int argc, char **argv) {
         return 1;
     }
     c64_set_audio_output_enabled(&machine, false);
+    /* Optional third arg: "no-video" mirrors high-turbo pixel throttle. */
+    if (argc >= 3 && strcmp(argv[2], "no-video") == 0) {
+        c64_set_video_output_enabled(&machine, false);
+        null_error = argc >= 4 && strcmp(argv[3], "null-error") == 0;
+    } else if (argc >= 3 && strcmp(argv[2], "null-error") == 0) {
+        null_error = true;
+        if (argc >= 4 && strcmp(argv[3], "no-video") == 0) {
+            c64_set_video_output_enabled(&machine, false);
+        }
+    }
 
     start = monotonic_seconds();
     for (i = 0; i < cycles; i++) {
@@ -80,12 +90,13 @@ int main(int argc, char **argv) {
     elapsed = monotonic_seconds() - start;
 
     printf(
-        "cycles=%llu seconds=%.6f mhz=%.3f pc=%04x machine_cycle=%llu cpu_cycles=%llu\n",
+        "cycles=%llu seconds=%.6f mhz=%.3f pc=%04x machine_cycle=%llu cpu_cycles=%llu video=%s\n",
         (unsigned long long)cycles,
         elapsed,
         elapsed > 0.0 ? (double)cycles / elapsed / 1000000.0 : 0.0,
         machine.cpu.cpu.pc,
         (unsigned long long)machine.clock.cycle,
-        (unsigned long long)machine.clock.cpu_cycles);
+        (unsigned long long)machine.clock.cpu_cycles,
+        c64_video_output_enabled(&machine) ? "on" : "off");
     return 0;
 }

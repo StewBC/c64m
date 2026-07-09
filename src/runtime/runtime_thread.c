@@ -36,6 +36,11 @@ enum {
        Logged periodically so the terminal shows progress. */
     STEP_OVER_FAST_LIMIT     = 500000,
     STEP_OVER_LOG_INTERVAL   = 10000,
+
+    /* At this turbo multiplier and above (and for breakpoint FAST mode), skip
+       per-cycle ARGB pixel fill / frame buffer copies and only publish a frame
+       when the UI slot is empty. 2x/4x keep full live video; 8x+ free-runs. */
+    RUNTIME_TURBO_DISPLAY_THRESHOLD = 8,
 };
 
 static void runtime_reset_pacer(runtime *rt) {
@@ -103,6 +108,25 @@ static void runtime_update_sid_sample_output(runtime *rt) {
         rt->speed_mode != RUNTIME_SPEED_MODE_FAST &&
         rt->audio_smoke == 0;
     c64_set_audio_output_enabled(&rt->machine, enabled);
+}
+
+/* High turbo / FAST: do not fill VIC ARGB every cycle. Display frames are
+   rebuilt only when the frontend has drained the frame slot. */
+static bool runtime_turbo_display_mode(const runtime *rt) {
+    uint32_t multiplier;
+
+    if (rt == NULL) {
+        return false;
+    }
+    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
+        return true;
+    }
+    multiplier = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
+    return multiplier >= (uint32_t)RUNTIME_TURBO_DISPLAY_THRESHOLD;
+}
+
+static void runtime_update_video_output(runtime *rt) {
+    c64_set_video_output_enabled(&rt->machine, !runtime_turbo_display_mode(rt));
 }
 
 static void runtime_audio_record_write_u16(FILE *file, uint16_t value) {
@@ -907,6 +931,47 @@ static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
     return true;
 }
 
+/* Turbo display path: if the UI still holds the previous frame, count a drop and
+   do no pixel copies and no FRAME_READY event. When the slot is free, rebuild one
+   geometric snapshot for display (live ARGB path is off under turbo). */
+static bool runtime_publish_completed_frame_turbo(runtime *rt) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_FRAME_READY,
+    };
+
+    mutex_lock(rt->frame_slot.mutex);
+    if (rt->frame_slot.has_frame) {
+        rt->frame_slot.dropped_frames++;
+        mutex_unlock(rt->frame_slot.mutex);
+        return true;
+    }
+    mutex_unlock(rt->frame_slot.mutex);
+
+    if (!c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
+        runtime_publish_error(rt, "failed to generate turbo display frame");
+        return false;
+    }
+
+    mutex_lock(rt->frame_slot.mutex);
+    /* Re-check: UI may have been empty when we started the snapshot, or another
+       publish path raced; still only one consumer. */
+    if (rt->frame_slot.has_frame) {
+        rt->frame_slot.dropped_frames++;
+        mutex_unlock(rt->frame_slot.mutex);
+        return true;
+    }
+    rt->frame_slot.frame = rt->publish_frame;
+    rt->frame_slot.has_frame = true;
+    rt->frame_slot.published_frames++;
+    event.data.frame_ready.frame_number = rt->publish_frame.frame_number;
+    event.data.frame_ready.machine_cycle = rt->publish_frame.machine_cycle;
+    event.data.frame_ready.dropped_frames = rt->frame_slot.dropped_frames;
+    mutex_unlock(rt->frame_slot.mutex);
+
+    runtime_publish_event(rt, &event);
+    return true;
+}
+
 static bool runtime_publish_debug_frame(runtime *rt) {
     if (!c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
         runtime_publish_error(rt, "failed to generate frame");
@@ -917,6 +982,10 @@ static bool runtime_publish_debug_frame(runtime *rt) {
 }
 
 static bool runtime_publish_completed_frame(runtime *rt) {
+    if (runtime_turbo_display_mode(rt)) {
+        return runtime_publish_completed_frame_turbo(rt);
+    }
+
     if (!c64_copy_completed_frame(&rt->machine, &rt->publish_frame)) {
         runtime_publish_error(rt, "no completed live frame available");
         return false;
@@ -977,6 +1046,9 @@ static bool runtime_reset_machine(runtime *rt) {
         runtime_publish_error(rt, error);
         return false;
     }
+
+    /* VIC reset re-enables pixel output; re-apply turbo display policy. */
+    runtime_update_video_output(rt);
 
     mutex_lock(rt->frame_slot.mutex);
     rt->frame_slot.has_frame = false;
@@ -1144,6 +1216,7 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     }
     c64_set_config(&rt->machine, &rt->machine_config);
     runtime_update_sid_sample_output(rt);
+    runtime_update_video_output(rt);
     if (command->data.apply_machine_config.reset != 0) {
         runtime_reset_machine(rt);
     } else {
@@ -1168,6 +1241,7 @@ static void runtime_cycle_turbo_speed(runtime *rt) {
 
     rt->active_turbo_multiplier = rt->turbo_speeds[next_index];
     rt->pace_initialized = false;
+    runtime_update_video_output(rt);
     runtime_publish_machine_state(rt);
 }
 
@@ -1422,12 +1496,14 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
         rt->speed_mode = RUNTIME_SPEED_MODE_FAST;
         rt->pace_initialized = false;
         runtime_update_sid_sample_output(rt);
+        runtime_update_video_output(rt);
     }
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_SLOW) != 0) {
         rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;
         rt->pace_initialized = false;
         runtime_update_sid_sample_output(rt);
+        runtime_update_video_output(rt);
     }
 
     if ((breakpoint->action_mask & RUNTIME_BREAKPOINT_ACTION_TRON) != 0) {
@@ -3013,6 +3089,7 @@ static void runtime_clear_host_transients_after_state_load(runtime *rt) {
         audio_buffer_reset(rt->audio_out);
     }
     runtime_update_sid_sample_output(rt);
+    runtime_update_video_output(rt);
 }
 
 static bool runtime_finish_pending_state_snapshot_instruction(runtime *rt) {
@@ -3932,6 +4009,7 @@ int runtime_thread_main(void *userdata) {
     rt->audio_smoke_phase = 0.0f;
     runtime_audio_record_init(rt);
     runtime_update_sid_sample_output(rt);
+    runtime_update_video_output(rt);
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     runtime_load_symbol_files(rt);
     if (runtime_load_configured_roms(rt)) {

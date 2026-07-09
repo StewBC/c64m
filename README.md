@@ -1,7 +1,7 @@
 # c64m — Commodore 64 Emulator
 
 c64m is a Commodore 64 emulator written in C99. It was almost entirely written using
-coding agents — Claude Code and ChatGPT's Codex. There are three exceptions:
+coding agents — ChatGPT's Codex (5.5), Claude Code (4.8) and Grok (4.5). There are three exceptions:
 
 1. Codex chose to use the CPU emulation I had written for
    [a2m](https://github.com/StewBC/a2m) (my Apple II emulator) verbatim.
@@ -13,7 +13,7 @@ coding agents — Claude Code and ChatGPT's Codex. There are three exceptions:
 
 ## What it does
 
-c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from D64 disk images (read-only by default, optionally writable). It also attaches generic 8K/16K `.crt` cartridges and can save and restore full machine snapshots to `.c64state` files. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode and can be pushed to around **14.8 MHz** at maximum turbo — enough to make a lot of BASIC programs feel instant.
+c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from D64 disk images (read-only by default, optionally writable). It also attaches generic 8K/16K `.crt` cartridges and can save and restore full machine snapshots to `.c64state` files. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode and can be pushed to around **23 MHz** at maximum turbo (high multipliers skip host ARGB fill and drop unconsumed frames while keeping cycle timing).
 
 The built-in debugger gives you a live disassembler, a hex memory editor, a full breakpoint system with read/write/execute watchpoints, a call-stack view, and a hardware-state inspector covering VIC-II, both CIAs, and SID. Both the disassembly and memory views can be switched independently between three source modes — the CPU-mapped address space, raw RAM, or the physical ROM bytes — so you can inspect what the CPU sees, what is underneath it, or what is in the ROM regardless of which is currently banked in.
 

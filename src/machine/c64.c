@@ -1572,6 +1572,18 @@ void c64_set_audio_output_enabled(c64_t *machine, bool enabled) {
     sid_set_sample_output_enabled(&machine->sid, enabled);
 }
 
+void c64_set_video_output_enabled(c64_t *machine, bool enabled) {
+    assert(machine);
+
+    vicii_set_pixel_output_enabled(&machine->vic, enabled);
+}
+
+bool c64_video_output_enabled(const c64_t *machine) {
+    assert(machine);
+
+    return vicii_pixel_output_enabled(&machine->vic);
+}
+
 void c64_restore(c64_t *machine) {
     assert(machine);
 
