@@ -1941,8 +1941,9 @@ without creating or releasing the CPU-visible latch.
 
 The MOS 6581 register map covers $D400-$D41F. Three voices each have a 24-bit phase
 accumulator, four waveforms (triangle, sawtooth, pulse with 12-bit width, noise via a
-23-bit LFSR), TEST bit, ADSR envelope with a fractional double accumulator and PAL rate
-tables, and gate control. Voice 3 oscillator (phase bits 23-16) and envelope are
+23-bit LFSR), TEST bit, ADSR envelope with a fractional double accumulator and
+clock-parameterized rate tables (PAL and NTSC constants selected at `sid_init`), and gate
+control. Voice 3 oscillator (phase bits 23-16) and envelope are
 readable at $D41B/$D41C. Paddle reads ($D419/$D41A) return $FF.
 
 The mixer scales each voice by its envelope, sums all three, divides by 3 for headroom,
@@ -1960,12 +1961,13 @@ continues to advance. The SDL audio callback reads from the ring buffer on a sep
 thread; it never calls runtime or machine code.
 
 **SID deferred:** per-voice filter routing ($D417 bits 0-2), exact 6581/8580
-combined-waveform analog blending, ring modulation and oscillator sync, paddle input
-beyond not-connected policy, NTSC SID rate tables.
+combined-waveform analog blending, ring modulation and oscillator sync, and paddle input
+beyond the not-connected policy.
 
 ### Disk
 
-Device 8 and device 9 each hold an independent read-only D64 image. In the default
+Device 8 and device 9 each hold an independent D64 image, read-only by default and
+optionally marked writable. In the default
 compatibility mode, the KERNAL LOAD trap intercepts $FFD5 for devices 8/9 only; all
 other devices fall through to ROM. `LOAD "NAME",8` loads at the BASIC start pointer and
 updates end-of-program pointers. `LOAD "NAME",8,1` loads at the embedded PRG load
@@ -1982,9 +1984,14 @@ emulated IEC bus. The 1541 model runs the drive 6502, two VIA 6522s, the standar
 ROM-level D64 sector reads. The disk-controller VIA mechanics are intentionally
 abstracted: ROM READ/SEARCH jobs are satisfied from the mounted D64 image rather than
 from a simulated stepper motor, GCR stream, or SYNC signal. This supports standard
-KERNAL disk loads and disk autorun. SAVE to D64 uses the compatibility KERNAL trap,
-not the real 1541 DOS write path; the error channel and unvalidated fast-loader
-mechanics remain out of scope.
+KERNAL disk loads and disk autorun. Writes to a writable image are handled at the same
+job-dispatch altitude: SAVE, sequential/relative file writes, and BAM/directory updates
+persist through the drive's WRITE job, and the DOS command channel (scratch, rename,
+validate, initialize, and a FORMT-job-intercepted format) and the `OPEN 15,8,15`
+error/status channel work through the real ROM. When the 1541 ROM is absent, SAVE falls
+back to the compatibility KERNAL trap. Media-level write fidelity (GCR/SYNC/head/motor),
+cross-drive copy, block/memory-execute commands, and unvalidated fast-loader mechanics
+remain out of scope.
 
 ### Joystick
 

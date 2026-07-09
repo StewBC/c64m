@@ -13,7 +13,7 @@ coding agents — Claude Code and ChatGPT's Codex. There are three exceptions:
 
 ## What it does
 
-c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from read-only D64 disk images. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode and can be pushed to around **14.8 MHz** at maximum turbo — enough to make a lot of BASIC programs feel instant.
+c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from D64 disk images (read-only by default, optionally writable). It also attaches generic 8K/16K `.crt` cartridges and can save and restore full machine snapshots to `.c64state` files. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode and can be pushed to around **14.8 MHz** at maximum turbo — enough to make a lot of BASIC programs feel instant.
 
 The built-in debugger gives you a live disassembler, a hex memory editor, a full breakpoint system with read/write/execute watchpoints, a call-stack view, and a hardware-state inspector covering VIC-II, both CIAs, and SID. Both the disassembly and memory views can be switched independently between three source modes — the CPU-mapped address space, raw RAM, or the physical ROM bytes — so you can inspect what the CPU sees, what is underneath it, or what is in the ROM regardless of which is currently banked in.
 
@@ -48,10 +48,13 @@ Press **F9** to toggle the debugger layout.
 The emulation is a work in progress. Many games from single-load collections run
 correctly, but accuracy gaps remain.
 
-- D64 support is read-only. Standard 1541 ROM/IEC disk loads work when 1541 emulation
-  is enabled, but disk writes, SAVE to disk, the error channel, devices beyond 8 and 9,
-  and fast loaders that depend on unmodeled disk mechanics are not implemented or not
-  broadly validated.
+- D64 images mount read-only by default; marking an image writable enables saving. SAVE
+  works through the compatibility KERNAL trap, and with 1541 emulation enabled
+  (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS write path also handles
+  SAVE, sequential/relative file writes, and the scratch/rename/validate/format command
+  and error channels. Still missing: media-level drive mechanics (GCR/SYNC/head/motor,
+  G64), cross-drive copy, block/memory-execute commands, devices beyond 8 and 9, and fast
+  loaders that depend on unmodeled disk mechanics.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
   last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 
