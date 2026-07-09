@@ -42,9 +42,8 @@ src/machine/c64.c                           CPU<->VIC bus cycle-stealing (BA/RDY
   bitmap, `$73` = ECM+BMM invalid = black). It DOES animate in c64m; the plateau
   is the per-line `$D011` VALUES freezing for ~27 frames while the mask keeps
   advancing — a stall in the game's reveal STATE MACHINE, not in timing/rendering.
-- **Before any code fix:** get a real VICE / hardware capture to confirm the
-  27-frame hold is even a defect (every measured c64m behaviour is clean and
-  self-consistent). See "Phase A RESULTS" for the two open questions.
+- **RESOLVED:** a VICE NTSC capture confirmed the 27-frame hold is intended
+  hardware behaviour, so c64m NTSC is correct and no fix is needed (see STATUS).
 
 ## The mechanism (traced, not hypothesised)
 
@@ -167,29 +166,22 @@ What the reveal actually is (from the write-value trace):
   NOT in timing and NOT in rendering.
 ```
 
-### Two open questions Phase A raises (resolve before any Phase B code)
+### Two open questions Phase A raised — BOTH NOW ANSWERED
 
 ```text
-1. Is the plateau even a defect? Every c64m behaviour measured here is clean and
-   self-consistent, and the reveal animates. The claim that the 27-frame hold is
-   WRONG rests on a VICE observation that (per the older docs) was never actually
-   captured. A real VICE / hardware capture is now a PREREQUISITE, not a final
-   check -- if hardware also holds ~27 frames, c64m is already correct.
-2. If it is a defect: the fix site is the game's reveal state machine, i.e. what
-   gates the mask -> active-$D011 propagation for the odd-line phase. That is a
-   register READ the game samples each frame whose value c64m returns differently
-   (candidate: a $D0xx read-back, $D012 sampled at a specific point, or a CIA
-   timer). This is a NEW investigation, distinct from the raster kernel already
-   disassembled, and supersedes Phase B's BA/RDY target.
+1. Is the plateau even a defect?  ANSWERED: NO. A VICE NTSC capture shows the same
+   ~27-frame hold, so it is intended hardware behaviour. c64m NTSC is correct.
+2. If it were a defect, where is the fix?  MOOT -- there is no NTSC defect, so no
+   fix. (The speculative "reveal state machine" lead was never needed.)
 ```
 
-## Fix plan (phases) — PHASE B/C RE-SCOPED BY PHASE A
+## Fix plan (phases) — OBSOLETE for NTSC (no defect); see PAL section for the live bug
 
-> Phase A moved the target off bus timing. Phase B below (BA/RDY stall) is
-> **retained only as a rejected lead**; do not implement it for this title. The
-> live path forward is the two open questions above: get the hardware oracle
-> first, then (if the plateau is a real defect) trace the game's reveal state
-> machine. The renderer and the bus timing are both exonerated by measurement.
+> Phase A moved the target off bus timing, and the VICE NTSC capture then showed
+> there is **no NTSC defect at all** (the hold is intended). Nothing below needs to
+> be implemented for NTSC. Phase B (BA/RDY stall) is a rejected lead. The historical
+> plan is retained only for context; the live work is the PAL bug documented at the
+> end of this file.
 
 ## Fix plan (phases)
 
