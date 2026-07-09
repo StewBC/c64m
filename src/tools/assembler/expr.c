@@ -91,7 +91,7 @@ static int64_t expr_primary(ASSEMBLER *as) {
     int64_t value;
     if(as->token.type == TOKEN_OP && as->token.op == '*') {
         next_token(as);
-        value = 1 + current_output_address(as);
+        value = current_output_address(as);
     } else if(as->token.type == TOKEN_OP && as->token.op == ':') {
         value = expr_anonymous_address(as);
     } else if(as->token.type == TOKEN_OP && as->token.op == 'D') {

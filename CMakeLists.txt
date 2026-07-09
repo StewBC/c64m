@@ -437,6 +437,18 @@ target_link_libraries(test_assembler_conditionals PRIVATE
 
 add_test(NAME assembler_conditionals COMMAND test_assembler_conditionals)
 
+add_executable(test_assembler_expressions
+    tests/tools/test_assembler_expressions.c
+)
+
+target_compile_features(test_assembler_expressions PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_expressions PRIVATE
+    assembler
+)
+
+add_test(NAME assembler_expressions COMMAND test_assembler_expressions)
+
 add_executable(test_assembler_loops
     tests/tools/test_assembler_loops.c
 )

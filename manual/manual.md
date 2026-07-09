@@ -952,14 +952,14 @@ with `:`.
 **Variables:** assigned with `ident = expr`. Postfix `++` and `--` modify the variable
 as a prefix operation: `lda #i++` loads the value after increment.
 
-**Current address:** `*` reads the current output address, but note that it returns
-the address incremented by one at the point of evaluation. Use `* - 1` or the anonymous
-label `:` (which returns the exact current address) when the exact value is needed.
+**Current address:** `*` reads the current output address — the address of the
+instruction or line being assembled, following the standard assembler convention. For
+example `jmp *` assembles a self-loop.
 
 ```
 * = $C000
-a = *       ; a = $C001
-: b = :-    ; b = $C000
+a = *       ; a = $C000
+jmp *       ; jmp $C000 (self-loop)
 ```
 
 **Numbers:**

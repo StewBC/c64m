@@ -707,7 +707,7 @@ Keep the `.6502` / `.65c02` dot commands. Default is 6502 (valid_opcodes = 0). I
 ## Known a2m Issues to Not Carry Over
 
 Read a2m `parse.c` carefully before porting dot-command handlers. Some known problem areas:
-- The `*` (current address) returns `address + 1` — this is intentional and documented, keep it.
+- The `*` (current address) evaluates to the address of the current instruction/line — the standard assembler convention (e.g. `jmp *` is a self-loop). NOTE: a2m historically returned `address + 1` here; c64m corrected this to the normal model.
 - The two-pass error suppression logic is correct; keep it.
 - The `input_stack` push/pop for macros/loops is the part being replaced with the file-ptr model above.
 - The `macro_buffers` DYNARRAY (stores heap copies of expanded macro text) is eliminated — not needed in the new model.
