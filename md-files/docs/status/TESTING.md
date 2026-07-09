@@ -22,8 +22,17 @@
   rejection preserving live RAM, ROM hash mismatch rejection, and save after a
   one-cycle mid-instruction run.
 - Save-state frontend/config hooks: `tests/test_app_options.c` covers
-  `[state] quicksave_folder` save/reload persistence. Hotkeys, native Save As /
-  Load dialogs, and `.c64state` drag/drop remain manual smoke coverage.
+  `[state] quicksave_folder` save/reload persistence. Hotkeys, the in-app file
+  browser's Save As / Load flow, and `.c64state` drag/drop remain manual smoke
+  coverage.
+- File browser directory listing: `tests/platform/test_platform_fs.c` covers
+  `platform_fs_path_join` separator handling, `platform_fs_get_cwd`,
+  `platform_fs_list_dir` on a missing directory (fails) and on a scratch
+  directory (`..`-first, then directories, then files, each group
+  case-insensitive alphabetical, correct `is_dir` per entry), and
+  `platform_fs_is_dir` for a directory/file/missing path. The Nuklear dialog UI
+  itself (`frontend_draw_file_browser`) is not exercised by automated tests and
+  remains manual smoke coverage, same as the other modal dialogs.
 - Runtime BRK auto-stop: `test_runtime_brk_pauses_without_executing` in `tests/runtime/test_runtime_scheduler.c` confirms a fetched BRK opcode pauses the runtime with `RUNTIME_STOP_REASON_BRK`, PC unchanged, and SP untouched (no stack push). The synthetic ROM builder in the same file (`write_runtime_roms`) now places `JMP $E000` at `$FFF0` so cycle-counted free-run tests loop inside ROM instead of running off the end into zero-filled RAM, which would now trip the same BRK auto-stop.
 - Runtime frame publication: `test_step_instruction_publishes_updated_frame` and `test_step_instruction_publishes_updated_hires_frame` in `tests/runtime/test_runtime_frame.c` first create a completed live frame, then pause and confirm single-step completion publishes a current-state frame snapshot after text screen RAM (`STA $0400`) and high-res bitmap RAM (`STA $2000`) writes.
 - Runtime run-to-cursor stepping: `test_run_to_cursor_at_current_pc_waits_for_next_hit` in `tests/runtime/test_runtime_stepping.c` confirms run-to-cursor on the current PC ignores the immediate match and stops on the next PC hit, matching loop-branch debugger use.
@@ -87,6 +96,15 @@
     (`test_load_and_save_basic_text`) tests.
   - Save raw range with and without header.
   - Verify Eject button and Machine tab section order.
+- File browser dialog (Linux, macOS, Windows): open each of the 10 triggers
+  (Load PRG dialog, Disk mount/add, Config INI/Symbol pickers, Assembler
+  Browse, Load/Save Bin Browse, State Save As/Load) and confirm directory
+  navigation via double-click and via typing a path in the Path field,
+  extension filtering hides non-matching files where configured (`d64`, `ini`,
+  `c64state`), Save-mode default-extension append and overwrite-confirm work,
+  Cancel/ESC/titlebar-close leave the originating field unchanged, and that it
+  blocks input to the base view the same way the Config/Symbol Lookup dialogs
+  do.
 - UI/debugger:
   - Verify modal dialogs block base-view focus changes on outside clicks.
   - Verify memory/disassembly source modes and virtual views.

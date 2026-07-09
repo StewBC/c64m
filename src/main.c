@@ -94,70 +94,6 @@ static void sdl_c64_controller_send_ports(
     const sdl_c64_controller_state *state,
     runtime_client *client);
 
-static bool choose_file_path(char *out_path, size_t out_size, const char *prompt, const char *types) {
-#if defined(__APPLE__)
-    FILE *pipe;
-    char *newline;
-    char command[512];
-
-    if (out_path == NULL || out_size == 0) {
-        return false;
-    }
-
-    out_path[0] = '\0';
-    snprintf(
-        command,
-        sizeof(command),
-        "osascript -e 'POSIX path of (choose file with prompt \"%s\"%s)'",
-        prompt,
-        types != NULL ? types : "");
-    pipe = popen(command, "r");
-    if (pipe == NULL) {
-        return false;
-    }
-
-    if (fgets(out_path, (int)out_size, pipe) == NULL) {
-        pclose(pipe);
-        out_path[0] = '\0';
-        return false;
-    }
-    pclose(pipe);
-
-    newline = strchr(out_path, '\n');
-    if (newline != NULL) {
-        *newline = '\0';
-    }
-
-    return out_path[0] != '\0';
-#else
-    (void)out_path;
-    (void)out_size;
-    (void)prompt;
-    (void)types;
-    return false;
-#endif
-}
-
-static bool choose_prg_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Load PRG/BAS", NULL);
-}
-
-static bool choose_disk_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Mount Disk Image", NULL);
-}
-
-static bool choose_ini_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Select INI File", " of type {\"ini\"}");
-}
-
-static bool choose_symbol_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Select Symbol File", NULL);
-}
-
-static bool choose_state_load_path(char *out_path, size_t out_size) {
-    return choose_file_path(out_path, out_size, "Load State", " of type {\"c64state\"}");
-}
-
 static bool path_has_extension(const char *path, const char *extension) {
     const char *dot;
 
@@ -167,52 +103,6 @@ static bool path_has_extension(const char *path, const char *extension) {
 
     dot = strrchr(path, '.');
     return dot != NULL && SDL_strcasecmp(dot + 1, extension) == 0;
-}
-
-static bool choose_save_path(char *out_path, size_t out_size, const char *prompt) {
-#if defined(__APPLE__)
-    FILE *pipe;
-    char *newline;
-    char command[512];
-
-    if (out_path == NULL || out_size == 0) {
-        return false;
-    }
-
-    out_path[0] = '\0';
-    snprintf(
-        command,
-        sizeof(command),
-        "osascript -e 'POSIX path of (choose file name with prompt \"%s\")'",
-        prompt);
-    pipe = popen(command, "r");
-    if (pipe == NULL) {
-        return false;
-    }
-
-    if (fgets(out_path, (int)out_size, pipe) == NULL) {
-        pclose(pipe);
-        out_path[0] = '\0';
-        return false;
-    }
-    pclose(pipe);
-
-    newline = strchr(out_path, '\n');
-    if (newline != NULL) {
-        *newline = '\0';
-    }
-
-    return out_path[0] != '\0';
-#else
-    (void)out_path;
-    (void)out_size;
-    (void)prompt;
-    return false;
-#endif
-}
-
-static bool choose_state_save_path(char *out_path, size_t out_size) {
-    return choose_save_path(out_path, out_size, "Save State");
 }
 
 static void make_relative_path(const char *abs_path, char *out, size_t out_size) {
@@ -2518,58 +2408,21 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG:
-                {
-                    char path[1024];
-                    if (choose_prg_path(path, sizeof(path))) {
-                        if (path_has_extension(path, "crt")) {
-                            sent = runtime_client_load_crt(client, path);
-                            if (sent) {
-                                remember_loaded_content(options, path, "crt");
-                            }
-                        } else {
-                            sent = runtime_client_load_prg(client, path);
-                            if (sent) {
-                                remember_loaded_content(options, path, "prg");
-                            }
-                        }
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG,
+                    "Load PRG/BAS", false, NULL, NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
-                {
-                    char path[1024];
-                    if ((intent.disk_device == 8 || intent.disk_device == 9) &&
-                        choose_disk_path(path, sizeof(path))) {
-                        sent = runtime_client_mount_d64_ex(client, intent.disk_device, path, false);
-                        if (sent) {
-                            app_disk_slot_set(&options->disk_slots[intent.disk_device], path);
-                            frontend_set_disk_queue(ui, intent.disk_device,
-                                &options->disk_slots[intent.disk_device]);
-                        }
-                    }
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
+                        "Mount Disk Image", false, "d64", NULL, intent.disk_device);
                 }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
-                    char path[1024];
-                    if (choose_disk_path(path, sizeof(path))) {
-                        app_disk_slot *slot = &options->disk_slots[intent.disk_device];
-                        bool was_empty = slot->count == 0;
-                        if (app_disk_slot_add_after_current(slot, path)) {
-                            if (was_empty) {
-                                sent = runtime_client_mount_d64_ex(
-                                    client,
-                                    intent.disk_device,
-                                    slot->paths[0],
-                                    app_disk_slot_current_writable(slot));
-                            } else {
-                                sent = true;
-                            }
-                            frontend_set_disk_queue(ui, intent.disk_device, slot);
-                        }
-                    }
+                    frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG,
+                        "Add Disk Image", false, "d64", NULL, intent.disk_device);
                 }
                 break;
 
@@ -2634,24 +2487,13 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
-                {
-                    char path[1024];
-                    app_options selected;
-                    if (choose_ini_path(path, sizeof(path)) && app_options_copy(&selected, options)) {
-                        app_options_set_string(&selected.ini_path, path);
-                        frontend_apply_selected_ini(ui, &selected);
-                        app_options_destroy(&selected);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
+                    "Select INI File", false, "ini", NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
-                {
-                    char path[1024];
-                    if (choose_symbol_path(path, sizeof(path))) {
-                        frontend_append_symbol_file(ui, path);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
+                    "Select Symbol File", false, NULL, NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
@@ -2701,12 +2543,8 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE:
-                {
-                    char path[1024];
-                    if (choose_file_path(path, sizeof(path), "Select Assembler Source", NULL)) {
-                        frontend_set_assembler_path(ui, path);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE,
+                    "Select Assembler Source", false, NULL, NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN:
@@ -2723,14 +2561,8 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE:
-                {
-                    char abs_path[1024];
-                    char rel_path[1024];
-                    if (choose_file_path(abs_path, sizeof(abs_path), "Select Binary File", NULL)) {
-                        make_relative_path(abs_path, rel_path, sizeof(rel_path));
-                        frontend_set_load_bin_path(ui, rel_path);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE,
+                    "Select Binary File", false, NULL, NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
@@ -2764,14 +2596,8 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE:
-                {
-                    char abs_path[1024];
-                    char rel_path[1024];
-                    if (choose_save_path(abs_path, sizeof(abs_path), "Save File")) {
-                        make_relative_path(abs_path, rel_path, sizeof(rel_path));
-                        frontend_set_save_bin_path(ui, rel_path);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE,
+                    "Save File", true, NULL, NULL, 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE:
@@ -2786,21 +2612,111 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
-                {
-                    char path[1024];
-                    if (choose_state_save_path(path, sizeof(path)) &&
-                        append_state_extension(path, sizeof(path))) {
-                        sent = runtime_client_save_state(client, path);
-                    }
-                }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG,
+                    "Save State", true, "c64state", "c64state", 0);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG:
-                {
-                    char path[1024];
-                    if (choose_state_load_path(path, sizeof(path))) {
-                        sent = runtime_client_load_state(client, path);
-                    }
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG,
+                    "Load State", false, "c64state", NULL, 0);
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT:
+                switch (intent.file_browser_purpose) {
+                    case FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG:
+                        if (path_has_extension(intent.file_browser_path, "crt")) {
+                            sent = runtime_client_load_crt(client, intent.file_browser_path);
+                            if (sent) {
+                                remember_loaded_content(options, intent.file_browser_path, "crt");
+                            }
+                        } else {
+                            sent = runtime_client_load_prg(client, intent.file_browser_path);
+                            if (sent) {
+                                remember_loaded_content(options, intent.file_browser_path, "prg");
+                            }
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
+                        sent = runtime_client_mount_d64_ex(
+                            client, intent.disk_device, intent.file_browser_path, false);
+                        if (sent) {
+                            app_disk_slot_set(&options->disk_slots[intent.disk_device], intent.file_browser_path);
+                            frontend_set_disk_queue(ui, intent.disk_device,
+                                &options->disk_slots[intent.disk_device]);
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
+                        {
+                            app_disk_slot *slot = &options->disk_slots[intent.disk_device];
+                            bool was_empty = slot->count == 0;
+                            if (app_disk_slot_add_after_current(slot, intent.file_browser_path)) {
+                                if (was_empty) {
+                                    sent = runtime_client_mount_d64_ex(
+                                        client,
+                                        intent.disk_device,
+                                        slot->paths[0],
+                                        app_disk_slot_current_writable(slot));
+                                } else {
+                                    sent = true;
+                                }
+                                frontend_set_disk_queue(ui, intent.disk_device, slot);
+                            }
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
+                        {
+                            app_options selected;
+                            if (app_options_copy(&selected, options)) {
+                                app_options_set_string(&selected.ini_path, intent.file_browser_path);
+                                frontend_apply_selected_ini(ui, &selected);
+                                app_options_destroy(&selected);
+                            }
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
+                        frontend_append_symbol_file(ui, intent.file_browser_path);
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE:
+                        frontend_set_assembler_path(ui, intent.file_browser_path);
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE:
+                        {
+                            char rel_path[1024];
+                            make_relative_path(intent.file_browser_path, rel_path, sizeof(rel_path));
+                            frontend_set_load_bin_path(ui, rel_path);
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE:
+                        {
+                            char rel_path[1024];
+                            make_relative_path(intent.file_browser_path, rel_path, sizeof(rel_path));
+                            frontend_set_save_bin_path(ui, rel_path);
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
+                        {
+                            char path[1024];
+                            snprintf(path, sizeof(path), "%s", intent.file_browser_path);
+                            if (append_state_extension(path, sizeof(path))) {
+                                sent = runtime_client_save_state(client, path);
+                            }
+                        }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG:
+                        sent = runtime_client_load_state(client, intent.file_browser_path);
+                        break;
+
+                    default:
+                        break;
                 }
                 break;
 
@@ -3533,11 +3449,19 @@ static void dispatch_control_request(
                 deferred->command_type = request->type;
                 deferred->deadline_ms =
                     SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                /* wait_event_name only ever needs to hold short identifiers
+                 * like "step-complete" (see control_runtime_event_name());
+                 * an oversized client-supplied name is truncated and simply
+                 * won't match any real event, which is a safe fail-closed
+                 * outcome, not a bug. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
                 snprintf(
                     deferred->wait_event_name,
                     sizeof(deferred->wait_event_name),
                     "%s",
                     request->args.text);
+#pragma GCC diagnostic pop
                 return;
             } else {
                 control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);

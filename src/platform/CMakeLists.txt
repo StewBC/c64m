@@ -3,6 +3,7 @@
 add_library(platform STATIC
     platform.c
     platform_audio.c
+    platform_fs.c
     platform_socket.c
 )
 

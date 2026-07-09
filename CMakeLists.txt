@@ -121,6 +121,7 @@ target_compile_features(test_sid PRIVATE c_std_99)
 target_link_libraries(test_sid PRIVATE
     machine
     util
+    m
 )
 
 add_test(NAME sid COMMAND test_sid)
@@ -294,6 +295,22 @@ target_link_libraries(test_frontend_joystick PRIVATE
 )
 
 add_test(NAME frontend_joystick COMMAND test_frontend_joystick)
+
+add_executable(test_platform_fs
+    tests/platform/test_platform_fs.c
+)
+
+target_compile_features(test_platform_fs PRIVATE c_std_99)
+
+target_include_directories(test_platform_fs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+)
+
+target_link_libraries(test_platform_fs PRIVATE
+    platform
+)
+
+add_test(NAME platform_fs COMMAND test_platform_fs)
 
 add_executable(test_c64_cpu_validation
     tests/machine/test_c64_cpu_validation.c

@@ -68,6 +68,13 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   normalized to the uppercase/graphics character set, so lowercase-mode listings
   do not round-trip to the same display case. Load assumes a `$0801` start with
   lines in ascending order (no insertion-sort/renumber).
+- The in-app file browser dialog (`docs/status/FRONTEND_DEBUGGER.md` § "File
+  browser dialog") has no keyboard row navigation (Up/Down/Enter-to-activate);
+  mouse click/double-click and the footer buttons are the only input path. It
+  does not remember a per-purpose last-used directory (always starts from the
+  process CWD). On Windows there is no drive-letter enumeration/switching UI;
+  typing a full path including a different drive letter into the Path field is
+  the workaround.
 
 ## Timing
 

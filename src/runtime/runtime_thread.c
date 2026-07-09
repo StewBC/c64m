@@ -1010,7 +1010,12 @@ static bool runtime_load_rom(
         return true;
     }
 
+    /* message is just a diagnostic string; if a long path/error truncates
+     * it, the report is merely shortened, not incorrect. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
     snprintf(message, sizeof(message), "failed to load %s ROM from %s: %s", name, path, error);
+#pragma GCC diagnostic pop
     runtime_publish_error(rt, message);
     return false;
 }

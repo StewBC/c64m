@@ -7,6 +7,7 @@
 #include "c64_layout.h"
 #include "c64_pro_mono_font_data.h"
 #include "disasm_6502.h"
+#include "platform_fs.h"
 #include "symbol_table.h"
 
 #include <assert.h>
@@ -337,6 +338,26 @@ typedef struct frontend_symbol_lookup_state {
     bool                            just_opened;
 } frontend_symbol_lookup_state;
 
+/* ---- File browser dialog ---- */
+
+typedef struct frontend_file_browser_state {
+    bool open;
+    frontend_debugger_intent_type purpose;
+    char title[64];
+    bool save_mode;
+    char filter_extension[16];   /* "" = no filter, else e.g. "d64" (no leading dot) */
+    char default_extension[16];  /* save_mode only; auto-appended if filename lacks it */
+    uint8_t disk_device;         /* pass-through context for the two disk purposes */
+    char current_dir[1024];
+    char filename[PLATFORM_FS_NAME_MAX + 8];
+    platform_fs_listing listing;
+    int filtered[PLATFORM_FS_MAX_ENTRIES];
+    int filtered_count;
+    int selected; /* index into filtered[], -1 = none */
+    bool confirm_overwrite;
+    char error[160];
+} frontend_file_browser_state;
+
 struct frontend {
     platform_window *window;
     struct nk_context *ctx;
@@ -372,6 +393,7 @@ struct frontend {
     frontend_save_bin_dialog_state save_bin_dialog;
     frontend_help_state help;
     frontend_symbol_lookup_state symbol_lookup;
+    frontend_file_browser_state file_browser;
     symbol_resolver symbols;
     symbol_table *symbol_table;
     app_disk_slot disk_queue[2]; /* mirrors options->disk_slots[8] and [9] */
@@ -401,7 +423,8 @@ static bool frontend_any_dialog_open(const frontend *ui)
         || ui->load_bin_dialog.open
         || ui->save_bin_dialog.open
         || ui->assembler.error_dialog_open
-        || ui->symbol_lookup.open;
+        || ui->symbol_lookup.open
+        || ui->file_browser.open;
 }
 
 static void frontend_set_active_view(frontend *ui, frontend_active_view view)
@@ -611,6 +634,12 @@ static bool frontend_click_in_any_dialog(const frontend *ui, float x, float y)
             return true;
         }
     }
+    if (ui->file_browser.open) {
+        win = nk_window_find(ui->ctx, "File Browser");
+        if (win && frontend_point_in_rect(x, y, win->bounds)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -670,6 +699,7 @@ static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int he
 static void frontend_draw_symbol_lookup(frontend *ui, int width, int height);
 static void frontend_open_symbol_lookup(frontend *ui, bool from_memory);
 static void frontend_symbol_lookup_commit(frontend *ui);
+static void frontend_draw_file_browser(frontend *ui, int width, int height);
 
 static void frontend_push_breakpoint_id_intent(
     frontend *ui,
@@ -1087,6 +1117,35 @@ static bool frontend_push_simple_intent(frontend *ui, frontend_debugger_intent_t
 
     memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
     ui->intents[ui->intent_write].type = type;
+    ui->intent_write = next;
+    return true;
+}
+
+static bool frontend_push_file_browser_result_intent(
+    frontend *ui,
+    frontend_debugger_intent_type purpose,
+    const char *path,
+    uint8_t disk_device)
+{
+    size_t next;
+
+    if (ui == NULL || path == NULL) {
+        return false;
+    }
+
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT;
+    ui->intents[ui->intent_write].file_browser_purpose = purpose;
+    snprintf(
+        ui->intents[ui->intent_write].file_browser_path,
+        sizeof(ui->intents[ui->intent_write].file_browser_path),
+        "%s", path);
+    ui->intents[ui->intent_write].disk_device = disk_device;
     ui->intent_write = next;
     return true;
 }
@@ -6943,7 +7002,13 @@ void frontend_append_symbol_file(frontend *ui, const char *path)
     }
 
     if (dialog->edited.symbol_files != NULL && dialog->edited.symbol_files[0] != '\0') {
+        /* symbol_files is a heap buffer GCC can't size-track; the trailing
+         * snprintf() below re-truncates to the same 1024 limit regardless,
+         * so a truncated merge here is harmless. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
         snprintf(merged, sizeof(merged), "%s,%s", dialog->edited.symbol_files, display_path);
+#pragma GCC diagnostic pop
     } else {
         snprintf(merged, sizeof(merged), "%s", display_path);
     }
@@ -7502,6 +7567,352 @@ static void frontend_symbol_lookup_set_sort(
     }
     dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
     dlg->scroll_to_selected = true;
+}
+
+/* ---- File browser dialog ---- */
+
+static bool frontend_file_browser_name_matches_ext(const char *name, const char *ext)
+{
+    size_t name_len, ext_len;
+
+    if (name == NULL || ext == NULL || ext[0] == '\0') {
+        return false;
+    }
+    name_len = strlen(name);
+    ext_len = strlen(ext);
+    if (name_len <= ext_len + 1 || name[name_len - ext_len - 1] != '.') {
+        return false;
+    }
+    return SDL_strcasecmp(name + (name_len - ext_len), ext) == 0;
+}
+
+static bool frontend_file_browser_canonicalize(char *out, size_t out_size, const char *path)
+{
+    char resolved[4096];
+
+#if defined(_WIN32)
+    if (_fullpath(resolved, path, sizeof(resolved)) != NULL) {
+        snprintf(out, out_size, "%s", resolved);
+        return true;
+    }
+#else
+    if (realpath(path, resolved) != NULL) {
+        snprintf(out, out_size, "%s", resolved);
+        return true;
+    }
+#endif
+    return false;
+}
+
+static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
+{
+    int i;
+
+    dlg->filtered_count = 0;
+    dlg->selected = -1;
+    dlg->error[0] = '\0';
+
+    if (!platform_fs_list_dir(dlg->current_dir, &dlg->listing)) {
+        dlg->listing.count = 0;
+        snprintf(dlg->error, sizeof(dlg->error), "Cannot open directory");
+        return;
+    }
+
+    for (i = 0; i < dlg->listing.count; i++) {
+        const platform_fs_entry *entry = &dlg->listing.entries[i];
+        if (entry->is_dir || dlg->filter_extension[0] == '\0' ||
+                frontend_file_browser_name_matches_ext(entry->name, dlg->filter_extension)) {
+            dlg->filtered[dlg->filtered_count++] = i;
+        }
+    }
+}
+
+void frontend_open_file_browser(
+    frontend *ui,
+    frontend_debugger_intent_type purpose,
+    const char *title,
+    bool save_mode,
+    const char *filter_extension,
+    const char *default_extension,
+    uint8_t disk_device)
+{
+    frontend_file_browser_state *dlg;
+
+    if (ui == NULL) {
+        return;
+    }
+
+    dlg = &ui->file_browser;
+    memset(dlg, 0, sizeof(*dlg));
+    dlg->purpose = purpose;
+    snprintf(dlg->title, sizeof(dlg->title), "%s", title != NULL ? title : "");
+    dlg->save_mode = save_mode;
+    snprintf(dlg->filter_extension, sizeof(dlg->filter_extension), "%s",
+        filter_extension != NULL ? filter_extension : "");
+    snprintf(dlg->default_extension, sizeof(dlg->default_extension), "%s",
+        default_extension != NULL ? default_extension : "");
+    dlg->disk_device = disk_device;
+    dlg->selected = -1;
+
+    if (save_mode && dlg->default_extension[0] != '\0') {
+        snprintf(dlg->filename, sizeof(dlg->filename), "untitled.%s", dlg->default_extension);
+    }
+
+    if (!platform_fs_get_cwd(dlg->current_dir, sizeof(dlg->current_dir))) {
+        dlg->current_dir[0] = '\0';
+    }
+    frontend_file_browser_reload(dlg);
+    dlg->open = true;
+}
+
+/* Navigates into a directory entry, or (for a file) either fills the save-mode
+   filename field or commits an open-mode selection. Shared by double-click and
+   the footer Open/Save button so both paths behave identically. */
+static void frontend_file_browser_activate(frontend *ui, frontend_file_browser_state *dlg, int filtered_index)
+{
+    const platform_fs_entry *entry;
+    char joined[1024];
+
+    if (filtered_index < 0 || filtered_index >= dlg->filtered_count) {
+        snprintf(dlg->error, sizeof(dlg->error), "No file selected");
+        return;
+    }
+
+    entry = &dlg->listing.entries[dlg->filtered[filtered_index]];
+    platform_fs_path_join(joined, sizeof(joined), dlg->current_dir, entry->name);
+
+    if (entry->is_dir) {
+        if (!frontend_file_browser_canonicalize(dlg->current_dir, sizeof(dlg->current_dir), joined)) {
+            snprintf(dlg->current_dir, sizeof(dlg->current_dir), "%s", joined);
+        }
+        frontend_file_browser_reload(dlg);
+        return;
+    }
+
+    if (dlg->save_mode) {
+        snprintf(dlg->filename, sizeof(dlg->filename), "%s", entry->name);
+        dlg->confirm_overwrite = false;
+        dlg->error[0] = '\0';
+        return;
+    }
+
+    frontend_push_file_browser_result_intent(ui, dlg->purpose, joined, dlg->disk_device);
+    dlg->open = false;
+}
+
+static void frontend_file_browser_commit_save(frontend *ui, frontend_file_browser_state *dlg)
+{
+    char target[1024];
+    bool has_ext;
+
+    if (dlg->filename[0] == '\0') {
+        snprintf(dlg->error, sizeof(dlg->error), "No filename entered");
+        dlg->confirm_overwrite = false;
+        return;
+    }
+
+    has_ext = dlg->default_extension[0] == '\0' ||
+        frontend_file_browser_name_matches_ext(dlg->filename, dlg->default_extension);
+    if (has_ext) {
+        platform_fs_path_join(target, sizeof(target), dlg->current_dir, dlg->filename);
+    } else {
+        char named[PLATFORM_FS_NAME_MAX + 8];
+        snprintf(named, sizeof(named), "%s.%s", dlg->filename, dlg->default_extension);
+        platform_fs_path_join(target, sizeof(target), dlg->current_dir, named);
+    }
+
+    if (frontend_file_exists(target) && !dlg->confirm_overwrite) {
+        dlg->confirm_overwrite = true;
+        snprintf(dlg->error, sizeof(dlg->error), "File exists - click Save again to overwrite");
+        return;
+    }
+
+    frontend_push_file_browser_result_intent(ui, dlg->purpose, target, dlg->disk_device);
+    dlg->open = false;
+}
+
+static void frontend_draw_file_browser(frontend *ui, int width, int height)
+{
+    frontend_file_browser_state *dlg;
+    struct nk_context *ctx;
+    struct nk_rect bounds;
+    struct nk_list_view lv;
+    nk_flags path_result;
+    float dw, dh, list_h;
+    int i;
+    static const int ROW_H = 18;
+    static const float SIZE_W = 84.0f;
+    static const float TYPE_W = 56.0f;
+
+    if (ui == NULL || !ui->file_browser.open || ui->ctx == NULL) {
+        return;
+    }
+
+    ctx = ui->ctx;
+    dlg = &ui->file_browser;
+
+    dw = (float)width * 0.62f;
+    if (dw < 460.0f) dw = 460.0f;
+    if (dw > (float)width - 16.0f && width > 0) dw = (float)width - 16.0f;
+    dh = (float)height * 0.66f;
+    if (dh < 360.0f) dh = 360.0f;
+    if (dh > (float)height - 16.0f && height > 0) dh = (float)height - 16.0f;
+
+    bounds = nk_rect(((float)width - dw) * 0.5f, ((float)height - dh) * 0.5f, dw, dh);
+
+    if (nk_begin(ctx, "File Browser", bounds,
+            NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+
+        if (nk_window_is_closed(ctx, "File Browser")) {
+            dlg->open = false;
+            nk_end(ctx);
+            return;
+        }
+
+        nk_layout_row_dynamic(ctx, 20.0f, 1);
+        nk_label(ctx, dlg->title, NK_TEXT_LEFT);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+        nk_layout_row_push(ctx, 0.14f);
+        nk_label(ctx, "Path", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.86f);
+        path_result = frontend_edit_replace(
+            ctx, NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+            dlg->current_dir, (int)sizeof(dlg->current_dir), nk_filter_default);
+        nk_layout_row_end(ctx);
+        if (path_result & NK_EDIT_COMMITED) {
+            if (!platform_fs_is_dir(dlg->current_dir)) {
+                snprintf(dlg->error, sizeof(dlg->error), "Not a directory");
+            } else {
+                frontend_file_browser_reload(dlg);
+            }
+        }
+
+        list_h = nk_window_get_height(ctx) - 20.0f /* title */ - 24.0f /* path row */
+                 - (dlg->save_mode ? 24.0f : 0.0f) /* filename row */
+                 - 18.0f /* error/spacer */ - 30.0f /* buttons */ - 40.0f /* padding/title bar */;
+        if (list_h < 60.0f) list_h = 60.0f;
+        nk_layout_row_dynamic(ctx, list_h, 1);
+
+        if (nk_list_view_begin(ctx, &lv, "file_browser_rows", 0, ROW_H, dlg->filtered_count)) {
+            struct nk_style_selectable saved_sel = ctx->style.selectable;
+            bool activated = false;
+
+            for (i = lv.begin; i < lv.end; ++i) {
+                const platform_fs_entry *entry;
+                struct nk_rect row_bounds;
+                bool sel;
+                bool clicked = false;
+                char size_buf[24];
+
+                if (i < 0 || i >= dlg->filtered_count) continue;
+                entry = &dlg->listing.entries[dlg->filtered[i]];
+                sel = (i == dlg->selected);
+
+                if (sel) {
+                    ctx->style.selectable.normal  = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.hover   = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.pressed = nk_style_item_color(nk_rgb(21, 91, 116));
+                    ctx->style.selectable.text_normal  = nk_rgb(226, 246, 255);
+                    ctx->style.selectable.text_hover   = nk_rgb(226, 246, 255);
+                    ctx->style.selectable.text_pressed = nk_rgb(226, 246, 255);
+                } else {
+                    ctx->style.selectable = saved_sel;
+                }
+
+                nk_layout_row_template_begin(ctx, (float)ROW_H);
+                nk_layout_row_template_push_dynamic(ctx);
+                nk_layout_row_template_push_static(ctx, SIZE_W);
+                nk_layout_row_template_push_static(ctx, TYPE_W);
+                nk_layout_row_template_end(ctx);
+
+                row_bounds = nk_widget_bounds(ctx);
+                {
+                    bool s = sel;
+                    if (nk_selectable_label(ctx, entry->name, NK_TEXT_LEFT, &s)) clicked = true;
+                }
+                if (entry->is_dir) {
+                    size_buf[0] = '\0';
+                } else {
+                    snprintf(size_buf, sizeof(size_buf), "%llu", (unsigned long long)entry->size);
+                }
+                nk_label(ctx, size_buf, NK_TEXT_RIGHT);
+                nk_label(ctx, entry->is_dir ? "Dir" : "File", NK_TEXT_LEFT);
+
+                if (clicked) {
+                    dlg->selected = i;
+                    dlg->error[0] = '\0';
+                    if (nk_input_is_mouse_click_down_in_rect(&ctx->input, NK_BUTTON_DOUBLE, row_bounds, nk_true)) {
+                        frontend_file_browser_activate(ui, dlg, i);
+                        activated = true;
+                    } else if (dlg->save_mode && !entry->is_dir) {
+                        snprintf(dlg->filename, sizeof(dlg->filename), "%s", entry->name);
+                        dlg->confirm_overwrite = false;
+                    }
+                }
+                if (activated) {
+                    break;
+                }
+            }
+
+            ctx->style.selectable = saved_sel;
+            nk_list_view_end(&lv);
+            if (activated && !dlg->open) {
+                nk_end(ctx);
+                return;
+            }
+        }
+
+        if (dlg->save_mode) {
+            nk_flags name_result;
+            char prev_filename[PLATFORM_FS_NAME_MAX + 8];
+
+            memcpy(prev_filename, dlg->filename, sizeof(dlg->filename));
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
+            nk_layout_row_push(ctx, 0.14f);
+            nk_label(ctx, "Filename", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, 0.86f);
+            name_result = frontend_edit_replace(
+                ctx, NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+                dlg->filename, (int)sizeof(dlg->filename), nk_filter_default);
+            nk_layout_row_end(ctx);
+            if (memcmp(prev_filename, dlg->filename, sizeof(dlg->filename)) != 0) {
+                dlg->confirm_overwrite = false;
+                dlg->error[0] = '\0';
+            }
+            if (name_result & NK_EDIT_COMMITED) {
+                frontend_file_browser_commit_save(ui, dlg);
+                if (!dlg->open) {
+                    nk_end(ctx);
+                    return;
+                }
+            }
+        }
+
+        if (dlg->error[0] != '\0') {
+            nk_layout_row_dynamic(ctx, 18.0f, 1);
+            nk_label_colored(ctx, dlg->error, NK_TEXT_LEFT, nk_rgb(255, 128, 118));
+        } else {
+            nk_layout_row_dynamic(ctx, 8.0f, 1);
+            nk_spacing(ctx, 1);
+        }
+
+        nk_layout_row_dynamic(ctx, 24.0f, 2);
+        if (nk_button_label(ctx, "Cancel")) {
+            dlg->open = false;
+        }
+        if (nk_button_label(ctx, dlg->save_mode ? "Save" : "Open")) {
+            if (dlg->save_mode) {
+                frontend_file_browser_commit_save(ui, dlg);
+            } else {
+                frontend_file_browser_activate(ui, dlg, dlg->selected);
+            }
+        }
+
+    } else if (nk_window_is_closed(ctx, "File Browser")) {
+        dlg->open = false;
+    }
+    nk_end(ctx);
 }
 
 static void frontend_open_symbol_lookup(frontend *ui, bool from_memory)
@@ -8196,6 +8607,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
             frontend_draw_save_bin_dialog(ui, width, height);
             frontend_draw_assembler_error_dialog(ui, width, height);
             frontend_draw_symbol_lookup(ui, width, height);
+            frontend_draw_file_browser(ui, width, height);
         }
     } else {
         frontend_render_display_only(ui);

@@ -212,6 +212,50 @@ UI behavior:
 - It gives each output target a flat 64K image, tracks the actual written address extent per target, and writes exactly that range. Named `.scope file="..."` targets are written to their own files. `C64MASM` is predefined to `1`.
 - Multi-target output rests on `CB_ASM_CTX.target_open`/`target_release`/`default_target` and per-`TARGET` `ctx`; `assembler_predefine()` seeds the build-flag define. See `ASMDESIGN.md` § "Output Targets and the Command-Line Tool".
 
+## File browser dialog
+
+- Every host "Browse..."/file-picker trigger opens a single in-app Nuklear
+  modal (`frontend_draw_file_browser` / `frontend_open_file_browser`,
+  `src/frontend/frontend.c`) instead of shelling out to an OS-native dialog.
+  This replaces the previous macOS-only `osascript`/AppleScript `choose file`
+  implementation (`choose_file_path`/`choose_save_path` in `src/main.c`, now
+  removed) and gives Linux and Windows the same picker macOS had, with
+  identical behavior on all three platforms.
+- Directory listing is provided by `src/platform/platform_fs.{c,h}`
+  (`platform_fs_list_dir`, `platform_fs_get_cwd`, `platform_fs_is_dir`,
+  `platform_fs_path_join`): POSIX `opendir`/`readdir`/`stat`, Windows
+  `FindFirstFileA`/`FindNextFileA`, matching this project's existing
+  `discover_rom_path` (`src/app_options.c`) convention. It deliberately never
+  calls `chdir()` — the dialog tracks its own current directory string instead
+  of mutating the shared process CWD. Entries are sorted `..` first, then
+  directories, then files, each group case-insensitive alphabetical.
+- Dialog behavior: single-click selects a row; double-click (or the footer
+  Open/Save button) on a directory navigates into it; on a file it commits
+  (Open mode) or copies the name into the filename field (Save mode). The path
+  row is directly editable and re-lists on Enter. Save mode auto-appends a
+  purpose-specific default extension (e.g. `.c64state`) when missing, and
+  requires a second Save click to overwrite an existing file
+  (`frontend_file_browser_commit_save`).
+- One dialog instance is reused for all 10 triggers via a `purpose` field
+  (reusing `frontend_debugger_intent_type`) plus an optional single
+  `filter_extension` that hides non-matching regular files (directories always
+  show): Load PRG/BAS dialog (no filter), Disk mount/add (`d64`), Config
+  INI picker (`ini`), Config symbol-file picker (no filter), Assembler browse
+  (no filter), Load/Save Bin browse (no filter), State Save As/Load
+  (`c64state`, save mode auto-appends it).
+- Round trip: a `*_BROWSE`/`*_DIALOG` intent now only calls
+  `frontend_open_file_browser`; committing the dialog pushes a new
+  `FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT` intent carrying
+  `file_browser_purpose` + `file_browser_path` (and `disk_device` for the two
+  disk purposes). `src/main.c`'s intent switch handles that one new case with
+  an inner switch on `file_browser_purpose`, running the same
+  `runtime_client_*`/`app_disk_slot_*`/`frontend_set_*_path` logic each
+  original case ran after its synchronous `choose_*_path` call used to return.
+- Known limitation: no keyboard row navigation (Up/Down/Enter-to-activate) yet
+  — mouse click/double-click and the Cancel/Open/Save buttons are the only
+  input path. No remembered per-purpose last-used directory; each open starts
+  from the process CWD. See `docs/status/DEFERRED.md`.
+
 ## Host load/save UI
 
 - Machine tab layout is Disks, Programs, State, Emulator.
@@ -326,5 +370,6 @@ UI behavior:
 - `src/frontend/*`
 - `src/runtime/*`
 - `src/tools/*`
+- `src/platform/platform_fs.{c,h}` (file browser directory listing)
 - `manual/manual.md`
 - UI/debugger/config/help tests under `tests/`

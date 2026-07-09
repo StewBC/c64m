@@ -18,6 +18,14 @@
 #define c64m_rmdir rmdir
 #endif
 
+/* Several tests below build "%s/literal/suffix" paths from a 1024-byte cwd
+ * buffer into another 1024-byte buffer. GCC can't prove the real cwd stays
+ * well under 1024 bytes, so it assumes the worst case and warns; the test
+ * environment's cwd never comes close, so any truncation here can't happen
+ * in practice. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+
 static void expect_string(const char *name, const char *expected, const char *actual) {
     if (!actual || strcmp(expected, actual) != 0) {
         fprintf(stderr, "%s: expected `%s`, got `%s`\n",
@@ -1050,6 +1058,8 @@ static void test_keyboard_joystick_saved_to_ini(void) {
     app_options_destroy(&options);
     remove("test_kbdjoy_save.ini");
 }
+
+#pragma GCC diagnostic pop
 
 int main(void) {
     test_rom_paths_from_ini();

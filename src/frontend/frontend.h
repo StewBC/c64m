@@ -126,7 +126,8 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE,
     FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG,
     FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG,
-    FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK
+    FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK,
+    FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT
 } frontend_debugger_intent_type;
 
 typedef struct frontend_config_apply_result {
@@ -174,6 +175,9 @@ typedef struct frontend_debugger_intent {
     bool save_bin_is_basic_text;
     /* Machine reset */
     bool machine_reset_detach_cartridge;
+    /* File browser result */
+    frontend_debugger_intent_type file_browser_purpose;
+    char file_browser_path[1024];
 } frontend_debugger_intent;
 
 typedef struct frontend_load_bin_dialog_state {
@@ -251,3 +255,11 @@ void frontend_set_save_bin_path(frontend *ui, const char *path);
 void frontend_invalidate_disassembly_cache(frontend *ui);
 void frontend_set_assembler_options(frontend *ui, const frontend_assembler_options *opts);
 void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *out);
+void frontend_open_file_browser(
+    frontend *ui,
+    frontend_debugger_intent_type purpose,
+    const char *title,
+    bool save_mode,
+    const char *filter_extension,
+    const char *default_extension,
+    uint8_t disk_device);
