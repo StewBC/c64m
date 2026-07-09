@@ -47,6 +47,14 @@ target_include_directories(frontend PUBLIC
 
 target_compile_features(frontend PUBLIC c_std_99)
 
+if(MSVC)
+    # nuklear.h/nuklear_sdl.h are vendored third-party headers; these MSVC
+    # diagnostics fire on intentional, standard-legal idioms there (the
+    # pre-C11 alignof-emulation trick, and enum-family flag combinations)
+    # that we don't want to alter upstream.
+    target_compile_options(frontend PRIVATE /wd4116 /wd5287)
+endif()
+
 target_link_libraries(frontend
     PUBLIC
         runtime

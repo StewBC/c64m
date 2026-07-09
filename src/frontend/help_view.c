@@ -927,7 +927,7 @@ static void help_render_nav_bar(struct nk_context *ctx, frontend_help_state *sta
 
         edit_res = nk_edit_string_zero_terminated(
             ctx,
-            NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            (nk_flags)NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
             state->search_buf, (int)sizeof(state->search_buf),
             nk_filter_default);
 

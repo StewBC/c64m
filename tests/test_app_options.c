@@ -23,8 +23,10 @@
  * well under 1024 bytes, so it assumes the worst case and warns; the test
  * environment's cwd never comes close, so any truncation here can't happen
  * in practice. */
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
 
 static void expect_string(const char *name, const char *expected, const char *actual) {
     if (!actual || strcmp(expected, actual) != 0) {
@@ -1059,7 +1061,9 @@ static void test_keyboard_joystick_saved_to_ini(void) {
     remove("test_kbdjoy_save.ini");
 }
 
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
 
 int main(void) {
     test_rom_paths_from_ini();

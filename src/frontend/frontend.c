@@ -1326,7 +1326,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.20f);
             frontend_edit_replace(
                 ctx,
-                dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->use_counter ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->initial_count,
                 sizeof(dialog->initial_count),
                 nk_filter_decimal);
@@ -1335,7 +1335,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.20f);
             frontend_edit_replace(
                 ctx,
-                dialog->use_counter ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->use_counter ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->reset_count,
                 sizeof(dialog->reset_count),
                 nk_filter_decimal);
@@ -1371,7 +1371,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.80f);
             frontend_edit_replace(
                 ctx,
-                dialog->action_tron ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->action_tron ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->tron_path_buf,
                 sizeof(dialog->tron_path_buf),
                 nk_filter_default);
@@ -1384,7 +1384,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.80f);
             frontend_edit_replace(
                 ctx,
-                dialog->action_swap ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->action_swap ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->swap_param_buf,
                 sizeof(dialog->swap_param_buf),
                 nk_filter_default);
@@ -1397,7 +1397,7 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
             nk_layout_row_push(ctx, 0.80f);
             frontend_edit_replace(
                 ctx,
-                dialog->action_type ? NK_EDIT_FIELD : (NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+                dialog->action_type ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
                 dialog->type_text_buf,
                 sizeof(dialog->type_text_buf),
                 nk_filter_default);
@@ -1726,7 +1726,7 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
             {
                 nk_flags ini_result = frontend_edit_replace(
                     ctx,
-                    NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+                    (nk_flags)NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
                     dialog->edited.ini_path,
                     1024,
                     nk_filter_default);
@@ -6572,7 +6572,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
 {
     struct nk_context *ctx;
     frontend_assembler_state *asm_state;
-    static const nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+    static const nk_flags edit_flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
 
     if (ui == NULL || ui->ctx == NULL) {
         return;
@@ -7005,10 +7005,14 @@ void frontend_append_symbol_file(frontend *ui, const char *path)
         /* symbol_files is a heap buffer GCC can't size-track; the trailing
          * snprintf() below re-truncates to the same 1024 limit regardless,
          * so a truncated merge here is harmless. */
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
         snprintf(merged, sizeof(merged), "%s,%s", dialog->edited.symbol_files, display_path);
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
     } else {
         snprintf(merged, sizeof(merged), "%s", display_path);
     }
@@ -7778,7 +7782,7 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
         nk_label(ctx, "Path", NK_TEXT_LEFT);
         nk_layout_row_push(ctx, 0.86f);
         path_result = frontend_edit_replace(
-            ctx, NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+            ctx, (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
             dlg->current_dir, (int)sizeof(dlg->current_dir), nk_filter_default);
         nk_layout_row_end(ctx);
         if (path_result & NK_EDIT_COMMITED) {
@@ -7889,7 +7893,7 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             nk_label(ctx, "Filename", NK_TEXT_LEFT);
             nk_layout_row_push(ctx, 0.86f);
             name_result = frontend_edit_replace(
-                ctx, NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+                ctx, (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
                 dlg->filename, (int)sizeof(dlg->filename), nk_filter_default);
             nk_layout_row_end(ctx);
             if (memcmp(prev_filename, dlg->filename, sizeof(dlg->filename)) != 0) {
@@ -8051,7 +8055,7 @@ static void frontend_draw_symbol_lookup(frontend *ui, int width, int height)
         }
         frontend_edit_replace(
             ctx,
-            NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+            (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
             dlg->search, sizeof(dlg->search), nk_filter_default);
         if (memcmp(prev_search, dlg->search, sizeof(dlg->search)) != 0) {
             frontend_symbol_lookup_refilter(dlg);
@@ -8188,7 +8192,7 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
     frontend_load_bin_dialog_state *dlg;
     struct nk_context *ctx;
     struct nk_rect bounds;
-    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+    nk_flags edit_flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
     uint16_t address;
 
     if (ui == NULL || !ui->load_bin_dialog.open || ui->ctx == NULL) {
@@ -8295,7 +8299,7 @@ static void frontend_draw_save_bin_dialog(frontend *ui, int width, int height)
     frontend_save_bin_dialog_state *dlg;
     struct nk_context *ctx;
     struct nk_rect bounds;
-    nk_flags edit_flags = NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
+    nk_flags edit_flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
     nk_flags ro_flags   = edit_flags | NK_EDIT_READ_ONLY;
     uint16_t start_addr;
     uint16_t end_addr;

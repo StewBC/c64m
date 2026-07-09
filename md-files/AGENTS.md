@@ -245,6 +245,13 @@ binaries). If the running emulator must be observed, time-limit the launch, for
 example `timeout 5 ./build/c64m`, and accept that it will be killed rather than
 exiting cleanly.
 
+**When running c64m for testing without an ini file, launch it from the repo
+root as `./build/c64m`, not from inside `build/` as `./c64m`.** With no ini
+file supplying explicit ROM paths, ROM lookup falls back to searching `.`,
+`rom`, and `roms` relative to the current working directory. The checked-in
+ROMs live in `roms/` at the repo root, so running from `build/` will not find
+them.
+
 If documents disagree, do not guess. Treat it as a reconciliation task:
 
 ```text

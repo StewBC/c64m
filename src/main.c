@@ -23,7 +23,6 @@
 #include <direct.h>
 #include <io.h>
 #include <windows.h>
-#define access _access
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -397,7 +396,11 @@ static bool make_quicksave_path(const app_options *options, char *out, size_t ou
         if (!join_path_local(out, out_size, folder, filename)) {
             return false;
         }
+#if defined(_WIN32)
+        if (_access(out, 0) != 0) {
+#else
         if (access(out, 0) != 0) {
+#endif
             return true;
         }
     }
@@ -3454,14 +3457,18 @@ static void dispatch_control_request(
                  * an oversized client-supplied name is truncated and simply
                  * won't match any real event, which is a safe fail-closed
                  * outcome, not a bug. */
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
                 snprintf(
                     deferred->wait_event_name,
                     sizeof(deferred->wait_event_name),
                     "%s",
                     request->args.text);
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
                 return;
             } else {
                 control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);

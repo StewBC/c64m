@@ -121,8 +121,11 @@ target_compile_features(test_sid PRIVATE c_std_99)
 target_link_libraries(test_sid PRIVATE
     machine
     util
-    m
 )
+
+if(NOT WIN32)
+    target_link_libraries(test_sid PRIVATE m)
+endif()
 
 add_test(NAME sid COMMAND test_sid)
 
