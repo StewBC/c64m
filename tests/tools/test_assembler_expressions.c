@@ -27,6 +27,7 @@ static int assemble_file(const char *path, test_memory *mem, ERRORLOG *log)
     ASSEMBLER as;
     int result;
 
+    memset(&cb, 0, sizeof(cb));
     cb.user = mem;
     cb.output_byte = output_byte;
 

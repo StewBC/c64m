@@ -22,7 +22,7 @@ The a2m assembler is the direct ancestor of this design. Some files come over ve
 
 1. **Parsing in place.** The a2m tokenizer uses a `token_start`/`input` two-pointer pair into the raw source buffer. This makes it impossible to mutate the source before tokenizing, which is required for `.DEFINE`.
 2. **`.DEFINE` is a first-class requirement.** It must be a text-level substitution pass over a mutable line buffer before any tokenization. The a2m macro path does something similar but it is bolted on and cannot handle operator sequences like `!=`.
-3. **Apple II baggage.** The `TARGET`/`output_redirect` machinery exists to route assembled bytes to different Apple II memory banks (`aux`, `lc2`, etc.). The C64 has a simpler flat memory model. This machinery will be simplified or removed.
+3. **Apple II baggage.** The a2m `TARGET`/`output_redirect` machinery existed to route assembled bytes to different Apple II memory banks (`aux`, `lc2`, etc.). This was first stripped to a single flat target, then a minimal multi-target mechanism was reintroduced to support named `.scope file="..."` output (loader + game, overlays). See "Output Targets and the Command-Line Tool" below.
 
 ---
 
@@ -33,10 +33,14 @@ Same as a2m (see `../a2m/manual/manual.md` § "Assembler Features and Syntax"), 
 - `.define <from> <to>` — text-level substitution applied to each line before tokenizing
 - Default CPU mode: 6502/6510 (not 65C02)
 
-Omitted (not needed for C64):
-- Named output targets with `file=` and `dest=` options on `.scope`
-- `output_redirect_start/end/release` callbacks
-- The `_asm6502_tool` built-in variable (no standalone tool, emulator only)
+Initially omitted, later restored in a clean C64-appropriate form (see
+"Output Targets and the Command-Line Tool" below):
+- Named output targets with `file=`/`dest=` options on `.scope` — restored via
+  `CB_ASM_CTX.target_open`/`target_release` and per-target `ctx`
+- A standalone command-line assembler (`c64masm`) under `src/tools/c64masm/`
+- Build-time detection of CLI vs. in-emulator assembly — replaced the a2m
+  `_asm6502_tool` variable with the general `assembler_predefine()` API (the CLI
+  predefines `C64MASM=1`, the runtime predefines `C64MASM=0`)
 
 ---
 
@@ -701,6 +705,39 @@ These are in a2m but not valid on 6502/6510:
 | `TSB`  | 65C02 test and set bits |
 
 Keep the `.6502` / `.65c02` dot commands. Default is 6502 (valid_opcodes = 0). If `.65c02` is seen and the above opcodes are not in the table, error gracefully.
+
+---
+
+## Output Targets and the Command-Line Tool
+
+The assembler supports more than one output target so a single source can build several
+binaries (loader + game, overlays). The mechanism is deliberately small:
+
+- **`TARGET`** (`segment.h`) holds its list of segments plus a `void *ctx` (the host's
+  per-target output context) and a `parent` pointer (the target active when it opened).
+  `emit_byte` routes each byte to `as->active_target->ctx` via `CB_ASM_CTX.output_byte`.
+- **Callbacks** (`CB_ASM_CTX`): `output_byte` (required); `target_open`/`target_release`
+  (optional). `default_target` is the ctx for the initial unnamed target — a host that
+  only sets `user`/`output_byte` still works because init falls back to `user`.
+- **`.scope name file="..." dest="..."`** calls `target_open`, `add_target`s the result,
+  records it on the `SCOPE` (`output_target`, `has_output_redirect`) and switches
+  `active_target`. The target is created once on pass 1 and reused on pass 2 (keyed on the
+  persistent scope, mirroring how `.segdef` dedups segments), so `target_open` runs exactly
+  once and the ctx lives across both passes. `.endscope` restores `active_target` to the
+  redirect target's `parent`. If `target_open` is NULL the directive errors — the
+  in-emulator host (assembling into live RAM) has no per-file targets.
+- **A fresh target's origin**: `parse_address` (`* =`) now anchors `segment_start_address`
+  on an uninitialised segment, matching `.org`, so a redirect scope's first origin is its
+  start.
+
+**Build-time detection** uses `assembler_predefine(as, name, value)`, which seeds a text
+define that is re-applied at the start of each pass (defines are cleared per pass). The
+CLI predefines `C64MASM=1`, the runtime predefines `C64MASM=0`; source branches with
+`.if C64MASM`. This replaced a2m's `_asm6502_tool` marker variable.
+
+**`c64masm`** (`src/tools/c64masm/main.c`) is the command-line front-end. It gives each
+target a flat 64K image, tracks the actual written address extent per target, and writes
+that exact range to the target's file. Switches: `-i -o -a -s -D -v -h`.
 
 ---
 

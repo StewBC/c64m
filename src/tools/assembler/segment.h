@@ -19,11 +19,18 @@ typedef struct {
     int segment_init;
 } SEGMENT;
 
-typedef struct TARGET {
+#ifndef ASM_TARGET_TYPEDEF
+#define ASM_TARGET_TYPEDEF
+typedef struct TARGET TARGET;
+#endif
+
+struct TARGET {
     DYNARRAY segments;
     SEGMENT *active_segment;
-} TARGET;
+    void *ctx;              // per-target output context passed to output_byte
+    struct TARGET *parent;  // target that was active when this one opened (NULL for default)
+};
 
 SEGMENT *segment_find(DYNARRAY *segments, const SEGMENT *seg);
-TARGET *add_target(ASSEMBLER *as);
+TARGET *add_target(ASSEMBLER *as, void *ctx);
 void targets_free(ASSEMBLER *as);

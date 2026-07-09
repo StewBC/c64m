@@ -50,6 +50,13 @@ static void reset_source_for_assemble(ASSEMBLER *as) {
     as->current_file = NULL;
 }
 
+static void seed_predefines(ASSEMBLER *as) {
+    for(size_t i = 0; i < as->predefines.items; i++) {
+        DEFINE *d = ARRAY_GET(&as->predefines, DEFINE, i);
+        define_add(as, d->from, d->from_len, d->to, d->to_len);
+    }
+}
+
 static void reset_pass_state(ASSEMBLER *as) {
     reset_targets_for_pass(as);
     scope_reset_ids(as->root_scope);
@@ -61,6 +68,7 @@ static void reset_pass_state(ASSEMBLER *as) {
     macro_definitions_clear(as);
     as->macro_id = 0;
     defines_free(as);
+    seed_predefines(as);
     free((char *)as->strcode);
     as->strcode = NULL;
     as->if_stack.items = 0;
@@ -246,6 +254,7 @@ int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
     ARRAY_INIT(&as->macro_stack, MACRO_EXPAND);
     ARRAY_INIT(&as->if_stack, IF_FRAME);
     ARRAY_INIT(&as->targets, TARGET*);
+    ARRAY_INIT(&as->predefines, DEFINE);
     as->valid_opcodes = 0;
 
     as->root_scope = malloc(sizeof(SCOPE));
@@ -257,9 +266,36 @@ int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
     }
     as->active_scope = as->root_scope;
     as->symbol_table = as->root_scope->symbol_table;
-    as->active_target = add_target(as);
+    // The default (unnamed) target routes emitted bytes to the host's default_target
+    // context; fall back to `user` so a host that only sets user+output_byte still works.
+    as->active_target = add_target(as, cb->default_target ? cb->default_target : cb->user);
     if(!as->active_target) {
         assembler_shutdown(as);
+        return ASM_ERR;
+    }
+    return ASM_OK;
+}
+
+int assembler_predefine(ASSEMBLER *as, const char *name, const char *value) {
+    if(!as || !name || name[0] == '\0' || !value) {
+        return ASM_ERR;
+    }
+    DEFINE d;
+    memset(&d, 0, sizeof(d));
+    d.from_len = (int)strlen(name);
+    d.to_len = (int)strlen(value);
+    d.from = malloc((size_t)d.from_len + 1);
+    d.to = malloc((size_t)d.to_len + 1);
+    if(!d.from || !d.to) {
+        free(d.from);
+        free(d.to);
+        return ASM_ERR;
+    }
+    memcpy(d.from, name, (size_t)d.from_len + 1);
+    memcpy(d.to, value, (size_t)d.to_len + 1);
+    if(ASM_OK != ARRAY_ADD(&as->predefines, d)) {
+        free(d.from);
+        free(d.to);
         return ASM_ERR;
     }
     return ASM_OK;
@@ -412,6 +448,12 @@ void assembler_shutdown(ASSEMBLER *as) {
     free(as->root_dir);
     as->root_dir = NULL;
     defines_free(as);
+    for(size_t i = 0; i < as->predefines.items; i++) {
+        DEFINE *d = ARRAY_GET(&as->predefines, DEFINE, i);
+        free(d->from);
+        free(d->to);
+    }
+    array_free(&as->predefines);
     macro_stack_clear(as);
     macro_definitions_clear(as);
     files_free(as);

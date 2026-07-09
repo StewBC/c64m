@@ -9,6 +9,11 @@
 typedef struct ASSEMBLER ASSEMBLER;
 #endif
 
+#ifndef ASM_TARGET_TYPEDEF
+#define ASM_TARGET_TYPEDEF
+typedef struct TARGET TARGET;
+#endif
+
 typedef struct SCOPE {
     int has_output_redirect;
     int scope_name_length;
@@ -18,6 +23,7 @@ typedef struct SCOPE {
     char *scope_name;
     struct SCOPE *parent_scope;
     DYNARRAY *symbol_table;
+    TARGET *output_target;   // redirect target for a named .scope file=/dest= (persists across passes)
 } SCOPE;
 
 #define ASM_SCOPE_TYPEDEF

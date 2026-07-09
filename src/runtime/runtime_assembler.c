@@ -102,8 +102,12 @@ bool c64_assemble_file(
 
     errlog_init(&log);
     output_ctx.machine = machine;
+    memset(&cb, 0, sizeof(cb));
     cb.user = &output_ctx;
+    cb.default_target = &output_ctx;
     cb.output_byte = runtime_assembler_output_byte;
+    // No target_open: assembling live into machine RAM has no per-file targets,
+    // so a named `.scope file="..."` is rejected rather than silently ignored.
 
     if (assembler_init(&assembler, &log, &cb) != ASM_OK) {
         if (error != NULL && error_size > 0) {
@@ -112,6 +116,9 @@ bool c64_assemble_file(
         errlog_shutdown(&log);
         return false;
     }
+
+    // Let source detect it is being assembled live in the emulator (vs the c64masm CLI).
+    assembler_predefine(&assembler, "C64MASM", "0");
 
     if (assembler_assemble(&assembler, path, address) == ASM_OK) {
         ok = true;

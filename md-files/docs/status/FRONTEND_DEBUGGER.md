@@ -204,6 +204,13 @@ UI behavior:
 - When Reset C64 is unchecked, assembly writes directly into live RAM in any execution state.
 - If Auto Run is set with Reset C64 unchecked, the runtime jumps to run address and resumes running.
 - Rearm one-shots checkbox (default off): when checked, any breakpoint with `reset_count == 0` that is currently disabled is re-enabled and its counter reset to `initial_count` before assembly runs. Designed for iterative development sessions where auto-disabled one-shot breakpoints need to fire again on the next run.
+- The runtime path (`runtime_assembler.c`) predefines `C64MASM=0` so source can detect it is being assembled live in the emulator (vs. the `c64masm` CLI, which predefines `1`). It provides no `target_open` callback, so a named `.scope file="..."`/`dest="..."` redirect reports an error rather than writing files.
+
+## Command-line assembler (c64masm)
+
+- `src/tools/c64masm/` builds the standalone `c64masm` executable from the shared `assembler` library. Switches: `-i` input, `-o` output binary, `-a` origin address, `-s` symbol/segment listing (`-`=stdout), `-D name[=value]` predefined defines (repeatable), `-v` hex dump, `-h` help.
+- It gives each output target a flat 64K image, tracks the actual written address extent per target, and writes exactly that range. Named `.scope file="..."` targets are written to their own files. `C64MASM` is predefined to `1`.
+- Multi-target output rests on `CB_ASM_CTX.target_open`/`target_release`/`default_target` and per-`TARGET` `ctx`; `assembler_predefine()` seeds the build-flag define. See `ASMDESIGN.md` § "Output Targets and the Command-Line Tool".
 
 ## Host load/save UI
 

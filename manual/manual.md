@@ -1021,8 +1021,8 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.macro name [args]`    | Define a macro with optional parameter list                  |
 | `.endmacro`             | End of macro definition                                      |
 | `.local name`           | Macro-local label; expanded to a unique name at call time    |
-| `.scope [name]`         | Open a scope namespace; anonymous if no name given           |
-| `.endscope`             | Close the innermost scope                                    |
+| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `file=`/`dest=` redirect the scope's output to a separate file (command-line `c64masm` only) |
+| `.endscope`             | Close the innermost scope (and end any output redirect)     |
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
 | `.segdef "n",addr[,noemit]` | Define a named segment at `addr`; `noemit` suppresses output |
@@ -1127,6 +1127,79 @@ This remaps A-Z to 0-25 and a-z to 0-25, leaving other characters unchanged. Res
 default behavior with `.strcode _`. Quoted escape sequences (`\n`, `\r`, `\t`, `\0`,
 `\\`, `\xNN`, `\0NN` octal) are processed in strings but are not passed through
 `.strcode`.
+
+### Output Redirection (Multiple Files)
+
+A named `.scope` can send its output to a separate file, so a single source can build
+several binaries in one pass -- a loader plus a game, a main program plus overlays, and
+so on:
+
+```
+* = $0801
+        ; ... loader code, written to the default output ...
+
+.scope game file="game.bin"
+    * = $C000
+main:
+        inc $D021
+        jmp main
+.endscope
+```
+
+Everything between the named `.scope file="..."` and its `.endscope` is assembled into
+its own output image; code outside goes to the default output. Labels remain visible
+across files through the normal scope rules (`game::main`), so the loader can reference
+addresses in the game and vice versa. An optional `dest="..."` names the target for
+tooling without binding it to a file name.
+
+Output redirection is honoured by the command-line assembler (`c64masm`, below). The
+in-emulator Assembler tab assembles into live RAM and has no per-file targets, so a
+`.scope` with `file=`/`dest=` reports an error there.
+
+### Build-Time Detection
+
+The define `C64MASM` distinguishes how the source is being assembled: it is `1` under the
+command-line `c64masm` tool and `0` when assembled by the in-emulator Assembler tab. Use
+it to switch behaviour between a live-poke session and a file build:
+
+```
+.if C64MASM
+    * = $0801           ; standalone build: normal load address
+.else
+    * = $C000           ; live in the emulator: assemble into spare RAM
+.endif
+```
+
+Additional build flags can be injected from the command line with `-D name[=value]`
+(see below) and tested the same way.
+
+### Command-Line Assembler (c64masm)
+
+`c64masm` is a standalone build of the same assembler, for use in scripts and makefiles.
+It writes raw binary files rather than poking live memory.
+
+```
+c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
+        [-D name[=value]]... [-v] [-h]
+```
+
+| Switch            | Effect                                                             |
+|-------------------|-------------------------------------------------------------------|
+| `-i <infile>`     | Assembly source to assemble (required)                            |
+| `-o <outfile>`    | Binary output for the default (unnamed) target                    |
+| `-a <addr>`       | Origin/load address of the default target (default `$0000`; accepts `$hex`, `0xhex`, or decimal). Not needed if the source sets its own origin with `* =` / `.org` |
+| `-s <symfile\|->` | Write a symbol + segment listing; `-` sends it to stdout          |
+| `-D name[=value]` | Predefine a text define (value defaults to `1`); repeatable       |
+| `-v`              | Verbose: hex-dump each target's emitted bytes                     |
+| `-h`              | Show usage                                                        |
+
+Each output file contains exactly the range of addresses the source emitted into.
+Named `.scope file="..."` targets are written to their own files (resolved relative to
+the current directory). `C64MASM` is predefined to `1`.
+
+```
+c64masm -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
+```
 
 ## Configure
 

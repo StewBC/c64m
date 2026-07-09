@@ -3,6 +3,7 @@
 add_library(tools INTERFACE)
 
 add_subdirectory(assembler)
+add_subdirectory(c64masm)
 add_subdirectory(crt)
 add_subdirectory(d64)
 add_subdirectory(disasm_6502)

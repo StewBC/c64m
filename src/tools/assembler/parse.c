@@ -888,8 +888,14 @@ static void dot_endscope(ASSEMBLER *as) {
         asm_err(as, ASM_ERR_RESOLVE, ".endscope without a matching .scope");
         return;
     }
+    SCOPE *closing = as->active_scope;
     if(!scope_pop(as)) {
         asm_err(as, ASM_ERR_RESOLVE, ".endscope without a matching .scope");
+        return;
+    }
+    // Leaving a named output-redirect scope restores the previously active target.
+    if(closing->has_output_redirect && closing->output_target) {
+        as->active_target = closing->output_target->parent;
     }
 }
 
@@ -903,10 +909,54 @@ static void dot_endproc(ASSEMBLER *as) {
     }
 }
 
+// Parse the optional `file="..."` / `dest="..."` clauses that follow a named
+// .scope. Copies of the strings are not made here; they point into the current
+// line buffer and are only valid until the redirect target is opened below.
+static void dot_scope_parse_redirect(ASSEMBLER *as,
+                                     const char **file_name, int *file_len,
+                                     const char **dest_name, int *dest_len) {
+    while(!token_is_line_end(as)) {
+        if(as->token.op == ',') {
+            next_token(as);
+            continue;
+        }
+        if(as->token.type == TOKEN_VAR &&
+           as->token.name_length == 4 && 0 == asm_strnicmp(as->token.name, "file", 4)) {
+            next_token(as);
+            expect_op(as, '=');
+            if(as->token.type != TOKEN_STR) {
+                asm_err(as, ASM_ERR_RESOLVE, ".scope file= must be followed by a file name in quotes");
+                return;
+            }
+            *file_name = as->token.name;
+            *file_len = (int)as->token.name_length;
+            next_token(as);
+        } else if(as->token.type == TOKEN_VAR &&
+                  as->token.name_length == 4 && 0 == asm_strnicmp(as->token.name, "dest", 4)) {
+            next_token(as);
+            expect_op(as, '=');
+            if(as->token.type != TOKEN_STR) {
+                asm_err(as, ASM_ERR_RESOLVE, ".scope dest= must be followed by a name in quotes");
+                return;
+            }
+            *dest_name = as->token.name;
+            *dest_len = (int)as->token.name_length;
+            next_token(as);
+        } else {
+            asm_err(as, ASM_ERR_RESOLVE, ".scope name may only be followed by file=\"...\" and/or dest=\"...\"");
+            return;
+        }
+    }
+}
+
 static void dot_scope(ASSEMBLER *as) {
     const char *name;
     int name_len;
     char anon_name[16];
+    const char *file_name = NULL;
+    int file_len = 0;
+    const char *dest_name = NULL;
+    int dest_len = 0;
 
     next_token(as);
     if(token_is_line_end(as)) {
@@ -920,13 +970,7 @@ static void dot_scope(ASSEMBLER *as) {
             return;
         }
         next_token(as);
-        if(!token_is_line_end(as)) {
-            asm_err(as, ASM_ERR_RESOLVE, ".scope does not support file= or dest= options on C64");
-            while(!token_is_line_end(as)) {
-                next_token(as);
-            }
-            return;
-        }
+        dot_scope_parse_redirect(as, &file_name, &file_len, &dest_name, &dest_len);
     } else {
         asm_err(as, ASM_ERR_RESOLVE, ".scope name must be an identifier");
         return;
@@ -940,6 +984,38 @@ static void dot_scope(ASSEMBLER *as) {
             return;
         }
     }
+
+    if(file_name || dest_name) {
+        // Open the redirect target once (pass 1); reuse it on pass 2 so target_open
+        // is called exactly once and the host context persists across both passes.
+        if(!scope->output_target) {
+            if(!as->cb.target_open) {
+                asm_err(as, ASM_ERR_RESOLVE,
+                        ".scope file=/dest= output redirection is not supported by this assembler host");
+                scope_push(as, scope);
+                return;
+            }
+            void *ctx = as->cb.target_open(as->cb.user, name, name_len,
+                                           file_name, file_len, dest_name, dest_len);
+            if(!ctx) {
+                asm_err(as, ASM_ERR_RESOLVE, ".scope could not open output redirect for %.*s", name_len, name);
+                scope_push(as, scope);
+                return;
+            }
+            TARGET *target = add_target(as, ctx);
+            if(!target) {
+                as->cb.target_release(as->cb.user, ctx);
+                asm_err(as, ASM_ERR_FATAL, "Out of memory creating output target for %.*s", name_len, name);
+                scope_push(as, scope);
+                return;
+            }
+            target->parent = as->active_target;
+            scope->output_target = target;
+            scope->has_output_redirect = 1;
+        }
+        as->active_target = scope->output_target;
+    }
+
     scope_push(as, scope);
 }
 
@@ -1428,12 +1504,18 @@ void parse_address(ASSEMBLER *as) {
 
     uint16_t address;
     int64_t value = expr_evaluate(as);
+    SEGMENT *segment = as->active_target ? as->active_target->active_segment : NULL;
     if(relative) {
         address = current_output_address(as) + value;
     } else {
         address = (uint16_t)value;
-        if(as->active_target && as->active_target->active_segment) {
-            as->active_target->active_segment->segment_init = 1;
+        if(segment && !segment->segment_init) {
+            // First origin for a fresh segment (e.g. a named .scope redirect target):
+            // anchor its start here, mirroring .org.
+            segment->segment_start_address = address;
+        }
+        if(segment) {
+            segment->segment_init = 1;
         }
     }
 

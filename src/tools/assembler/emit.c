@@ -14,7 +14,7 @@ void emit_byte(ASSEMBLER *as, uint8_t byte_value) {
 
     uint16_t address = segment->segment_output_address;
     if(as->pass == 2 && !segment->do_not_emit) {
-        as->cb.output_byte(as->cb.user, address, byte_value);
+        as->cb.output_byte(target->ctx, address, byte_value);
     }
     segment->segment_output_address = address + 1;
 }

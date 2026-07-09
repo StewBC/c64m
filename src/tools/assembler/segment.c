@@ -15,7 +15,7 @@ SEGMENT *segment_find(DYNARRAY *segments, const SEGMENT *seg) {
     return NULL;
 }
 
-TARGET *add_target(ASSEMBLER *as) {
+TARGET *add_target(ASSEMBLER *as, void *ctx) {
     SEGMENT *segment = malloc(sizeof(SEGMENT));
     if(!segment) {
         return NULL;
@@ -29,6 +29,7 @@ TARGET *add_target(ASSEMBLER *as) {
 
     memset(segment, 0, sizeof(SEGMENT));
     memset(target, 0, sizeof(TARGET));
+    target->ctx = ctx;
 
     ARRAY_INIT(&target->segments, SEGMENT*);
     if(ASM_OK != ARRAY_ADD(&target->segments, segment)) {
@@ -55,6 +56,11 @@ void targets_free(ASSEMBLER *as) {
         TARGET *t = *ARRAY_GET(&as->targets, TARGET*, i);
         if(!t) {
             continue;
+        }
+        // The default target (index 0) uses a host-owned ctx; only release the
+        // contexts that were handed to us by target_open for named .scope redirects.
+        if(i > 0 && t->ctx && as->cb.target_release) {
+            as->cb.target_release(as->cb.user, t->ctx);
         }
         for(size_t j = 0; j < t->segments.items; j++) {
             SEGMENT *s = *ARRAY_GET(&t->segments, SEGMENT*, j);
