@@ -7761,7 +7761,8 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
     bounds = nk_rect(((float)width - dw) * 0.5f, ((float)height - dh) * 0.5f, dw, dh);
 
     if (nk_begin(ctx, "File Browser", bounds,
-            NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+            NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE
+            | NK_WINDOW_NO_SCROLLBAR)) {
 
         if (nk_window_is_closed(ctx, "File Browser")) {
             dlg->open = false;
@@ -7788,9 +7789,24 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             }
         }
 
-        list_h = nk_window_get_height(ctx) - 20.0f /* title */ - 24.0f /* path row */
-                 - (dlg->save_mode ? 24.0f : 0.0f) /* filename row */
-                 - 18.0f /* error/spacer */ - 30.0f /* buttons */ - 40.0f /* padding/title bar */;
+        /* Size the list so every row fits inside the window: no window-level
+         * scrollbar should ever appear. Compute from the real content region and
+         * the active style metrics rather than guessed constants. Each Nuklear row
+         * consumes its height plus one spacing.y, and the panel reserves padding.y
+         * at the top and bottom. The list_view keeps its own scrollbar for long
+         * listings. */
+        {
+            struct nk_rect content = nk_window_get_content_region(ctx);
+            float pad_y = ctx->style.window.padding.y;
+            float sp_y  = ctx->style.window.spacing.y;
+            int rows = dlg->save_mode ? 6 : 5; /* title,path,list,[filename],error,buttons */
+            float other_h = 20.0f  /* title label */
+                          + 24.0f  /* path row */
+                          + (dlg->save_mode ? 24.0f : 0.0f) /* filename row */
+                          + 18.0f  /* error/spacer row (reserve max) */
+                          + 24.0f; /* buttons row */
+            list_h = content.h - other_h - (float)rows * sp_y - 2.0f * pad_y;
+        }
         if (list_h < 60.0f) list_h = 60.0f;
         nk_layout_row_dynamic(ctx, list_h, 1);
 
