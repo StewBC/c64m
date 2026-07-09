@@ -1167,14 +1167,15 @@ static void test_d018_no_phase_g_masking(void) {
  * that no bad lines fire and only sprite BA windows affect the predicate.
  *
  * Cycle schedule reference (0-based, from vicii_pal_sprite_ba_assert[]):
- *   sprite 0: BA assert cycle 54, window [54, 59)
- *   sprite 1: BA assert cycle 56, window [56, 61)
- *   sprite 2: BA assert cycle 58, window [58, 63)
+ *   Each assert opens a 6-cycle window [assert, assert+6).
+ *   sprite 0: BA assert cycle 54, window [54, 60)
+ *   sprite 1: BA assert cycle 56, window [56, 62)
+ *   sprite 2: BA assert cycle 58, window [58, 64) (spans PAL line end)
  *   sprite 3: BA assert cycle 60 of PREVIOUS line, window spans into next line
  *   sprite 4: BA assert cycle 62 of PREVIOUS line, window spans into next line
- *   sprite 5: BA assert cycle  1, window [ 1,  6)
- *   sprite 6: BA assert cycle  3, window [ 3,  8)
- *   sprite 7: BA assert cycle  5, window [ 5, 10)
+ *   sprite 5: BA assert cycle  1, window [ 1,  7)
+ *   sprite 6: BA assert cycle  3, window [ 3,  9)
+ *   sprite 7: BA assert cycle  5, window [ 5, 11)
  * ---------------------------------------------------------------------------*/
 
 /* Helper: advance vicii by one cycle and return the new abs_cycle. */
@@ -1238,7 +1239,7 @@ static void setup_sprite_ba_test(
    (Covered by test_bad_line_ba_asserts_at_cycle_12 — no new assertions needed.) */
 
 /* Phase H test 2: single active sprite (sprite 5) on a non-bad-line raster.
-   BA window [1, 6) must fire and expire exactly. */
+   BA window [1, 7) must fire and expire exactly. */
 static void test_sprite5_ba_window_within_line(void) {
     vicii v;
     char error[256];
@@ -1254,7 +1255,7 @@ static void test_sprite5_ba_window_within_line(void) {
     expect_true("sprite5 ba not yet at abs 1", !vicii_ba_active(&v, abs));
     abs = step_vicii(&v, abs);
 
-    /* abs=2: window [1,6) is open. */
+    /* abs=2: window [1,7) is open. */
     expect_true("sprite5 ba open at abs 2", vicii_ba_active(&v, abs));
     abs = step_vicii(&v, abs); /* process cycle 2 */
 
@@ -1264,12 +1265,14 @@ static void test_sprite5_ba_window_within_line(void) {
     abs = step_vicii(&v, abs);
     expect_true("sprite5 ba open at abs 5", vicii_ba_active(&v, abs));
     abs = step_vicii(&v, abs);
+    expect_true("sprite5 ba open at abs 6", vicii_ba_active(&v, abs));
+    abs = step_vicii(&v, abs);
 
-    /* abs=6: window expired (sprite_ba_low_until_abs = 1+5 = 6). */
-    expect_true("sprite5 ba closed at abs 6", !vicii_ba_active(&v, abs));
+    /* abs=7: window expired (sprite_ba_low_until_abs = 1+6 = 7). */
+    expect_true("sprite5 ba closed at abs 7", !vicii_ba_active(&v, abs));
 }
 
-/* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 10). */
+/* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */
 static void test_sprites567_adjacent_ba_union(void) {
     vicii v;
     char error[256];
@@ -1285,14 +1288,13 @@ static void test_sprites567_adjacent_ba_union(void) {
     abs = step_vicii(&v, abs); /* processes cycle 1, sprite 5 asserts */
     expect_true("spr567 ba open at abs 2", vicii_ba_active(&v, abs));
 
-    /* Cycle 3 (abs=3): sprite 6 assert fires, extends to 8. Already within window. */
-    /* Cycle 5 (abs=5): sprite 7 assert fires, extends to 10. */
-    for (i = 2; i < 10; i++) {
+    /* Cycle 3: sprite 6 assert extends to 9. Cycle 5: sprite 7 extends to 11. */
+    for (i = 2; i < 11; i++) {
         expect_true("spr567 union ba open", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    /* abs=10: window expired (max of 6, 8, 10 = 10). */
-    expect_true("spr567 ba closed at abs 10", !vicii_ba_active(&v, abs));
+    /* abs=11: window expired (max of 7, 9, 11 = 11). */
+    expect_true("spr567 ba closed at abs 11", !vicii_ba_active(&v, abs));
 }
 
 /* Phase H test 4: six sprites (0,1,2,5,6,7) active — two disjoint windows.
@@ -1302,9 +1304,9 @@ static void test_sprites567_adjacent_ba_union(void) {
    flags (bus=NULL means vicii_fetch_sprites never clears them).  The cross-line
    behaviour of sprites 3 and 4 is covered by dedicated tests below.
 
-   Early group (sprites 5-7): window [1, 10).
-   Late group  (sprites 0-2): window [54, 63).
-   Gap [10, 54) must have BA high. */
+   Early group (sprites 5-7): window [1, 11).
+   Late group  (sprites 0-2): window [54, 64).
+   Gap [11, 54) must have BA high. */
 static void test_6sprite_ba_early_and_late_windows(void) {
     vicii v;
     char error[256];
@@ -1316,37 +1318,37 @@ static void test_6sprite_ba_early_and_late_windows(void) {
     abs = 0;
     abs = step_vicii(&v, abs); /* cycle 0 */
 
-    /* Early group: sprite 5 at cycle 1 → until=6; 6 at cycle 3 → until=8;
-       7 at cycle 5 → until=10.  Union [1, 10). */
+    /* Early group: sprite 5 at cycle 1 → until=7; 6 at cycle 3 → until=9;
+       7 at cycle 5 → until=11.  Union [1, 11). */
     abs = step_vicii(&v, abs); /* cycle 1: sprite 5 asserts */
     expect_true("6spr early ba open at abs 2", vicii_ba_active(&v, abs));
 
-    for (i = 2u; i < 10u; i++) {
+    for (i = 2u; i < 11u; i++) {
         expect_true("6spr early ba union", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    expect_true("6spr gap at abs 10", !vicii_ba_active(&v, abs));
+    expect_true("6spr gap at abs 11", !vicii_ba_active(&v, abs));
 
-    /* Gap [10, 54). */
-    abs = advance_vicii(&v, abs, 54u - 10u);
+    /* Gap [11, 54). */
+    abs = advance_vicii(&v, abs, 54u - 11u);
     expect_true("6spr gap before late group", !vicii_ba_active(&v, abs));
 
-    /* Late group: sprite 0 at cycle 54 → until=59; 1 at 56 → until=61;
-       2 at 58 → until=63.  Union [54, 63). */
+    /* Late group: sprite 0 at cycle 54 → until=60; 1 at 56 → until=62;
+       2 at 58 → until=64.  Union [54, 64). */
     abs = step_vicii(&v, abs); /* cycle 54: sprite 0 asserts */
     expect_true("6spr late ba open after sprite0 assert", vicii_ba_active(&v, abs));
 
-    for (i = 55u; i < 63u; i++) {
+    for (i = 55u; i < 64u; i++) {
         expect_true("6spr late ba union", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    /* abs=63: sprite_ba_low_until_abs=63 (set by sprite 2: 58+5=63). */
-    expect_true("6spr late ba closed at abs 63", !vicii_ba_active(&v, abs));
+    /* abs=64: sprite_ba_low_until_abs=64 (set by sprite 2: 58+6=64). */
+    expect_true("6spr late ba closed at abs 64", !vicii_ba_active(&v, abs));
 }
 
 /* Phase 2: NTSC 6567R8 late sprite group. NTSC mode is 65 cycles/line, so
-   sprites 0-2 assert BA at cycles 56, 58, and 60, producing union [56, 65).
-   This must not reuse the PAL late group [54, 63). */
+   sprites 0-2 assert BA at cycles 56, 58, and 60, producing union [56, 66).
+   This must not reuse the PAL late group [54, 64). */
 static void test_ntsc_sprites012_late_ba_window(void) {
     vicii v;
     char error[256];
@@ -1368,12 +1370,12 @@ static void test_ntsc_sprites012_late_ba_window(void) {
     abs = step_vicii(&v, abs); /* cycle 56: sprite 0 asserts */
     expect_true("ntsc late ba opens at abs 57", vicii_ba_active(&v, abs));
 
-    for (i = 57u; i < 65u; i++) {
+    for (i = 57u; i < 66u; i++) {
         expect_true("ntsc late ba union", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    expect_true("ntsc late ba closed at abs 65", !vicii_ba_active(&v, abs));
-    expect_u32("ntsc line wraps after 65 cycles", 0, v.timing.cycle_in_line);
+    expect_true("ntsc late ba closed at abs 66", !vicii_ba_active(&v, abs));
+    expect_u32("ntsc line wraps after 65 cycles", 1, v.timing.cycle_in_line);
 }
 
 /* NTSC sprite 4 asserts at cycle 64 of line N-1 and remains low across the
@@ -1400,11 +1402,11 @@ static void test_ntsc_sprite4_cross_line_ba(void) {
     expect_true("ntsc sprite4 ba asserted at abs 65", vicii_ba_active(&v, abs));
     expect_u32("ntsc cross-line wrapped to next line", 0, v.timing.cycle_in_line);
 
-    for (i = 65u; i < 69u; i++) {
+    for (i = 65u; i < 70u; i++) {
         expect_true("ntsc sprite4 cross-line ba open", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    expect_true("ntsc sprite4 ba closed at abs 69", !vicii_ba_active(&v, abs));
+    expect_true("ntsc sprite4 ba closed at abs 70", !vicii_ba_active(&v, abs));
 }
 
 /* Phase H test 5: inactive sprites contribute no BA window. */
@@ -1430,7 +1432,7 @@ static void test_inactive_sprites_no_ba(void) {
 }
 
 /* Phase H test 6a: sprite 3 cross-line BA — asserted at cycle 60 of line N-1
-   for a fetch on line N. Verifies window spans [abs60, abs65). */
+   for a fetch on line N. Verifies window spans [abs60, abs66). */
 static void test_sprite3_cross_line_ba(void) {
     vicii v;
     char error[256];
@@ -1456,18 +1458,18 @@ static void test_sprite3_cross_line_ba(void) {
 
     expect_true("sprite3 ba not yet at abs 60", !vicii_ba_active(&v, abs));
 
-    /* Step at cycle 60: vicii_sprite_dma_next_line(3) fires, sprite_ba_low_until_abs=65. */
+    /* Step at cycle 60: vicii_sprite_dma_next_line(3) fires, sprite_ba_low_until_abs=66. */
     abs = step_vicii(&v, abs);
     /* abs=61 */
     expect_true("sprite3 ba asserted at abs 61", vicii_ba_active(&v, abs));
 
     /* Continue through end of line (cycles 61, 62) and into next line. */
-    for (i = 61u; i < 65u; i++) {
+    for (i = 61u; i < 66u; i++) {
         expect_true("sprite3 cross-line ba open", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    /* abs=65: window expires (60+5=65). */
-    expect_true("sprite3 ba closed at abs 65", !vicii_ba_active(&v, abs));
+    /* abs=66: window expires (60+6=66). */
+    expect_true("sprite3 ba closed at abs 66", !vicii_ba_active(&v, abs));
 }
 
 /* Phase H test 6b: sprite 4 cross-line BA — asserted at cycle 62 of line N-1. */
@@ -1491,17 +1493,17 @@ static void test_sprite4_cross_line_ba(void) {
 
     expect_true("sprite4 ba not yet at abs 62", !vicii_ba_active(&v, abs));
 
-    /* Step at cycle 62: sprite_ba_low_until_abs set to 62+5=67. */
+    /* Step at cycle 62: sprite_ba_low_until_abs set to 62+6=68. */
     abs = step_vicii(&v, abs);
     /* abs=63: end of PAL line, cycle_in_line wraps to 0, raster_line=71 */
     expect_true("sprite4 ba asserted at abs 63", vicii_ba_active(&v, abs));
 
-    for (i = 63u; i < 67u; i++) {
+    for (i = 63u; i < 68u; i++) {
         expect_true("sprite4 cross-line ba open", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    /* abs=67: window expires (62+5=67). */
-    expect_true("sprite4 ba closed at abs 67", !vicii_ba_active(&v, abs));
+    /* abs=68: window expires (62+6=68). */
+    expect_true("sprite4 ba closed at abs 68", !vicii_ba_active(&v, abs));
 }
 
 /* Phase H test 7: AEC absence — verify no AEC-named symbols exist.

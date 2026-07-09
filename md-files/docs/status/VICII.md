@@ -28,6 +28,10 @@
 
 ## Recent changes
 
+- Fixed PAL dkarcade2016 "expose" reveal: sprite BA window widened from 5 to 6
+  cycles so the stable-raster kernel's first wait locks to `$D012`. Also project
+  deferred free-run reads of `$D011`/`$D012` to the bus-access cycle offset.
+  See [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
 - C64MENH Phase 2 added per-standard NTSC sprite BA timing.
 - Sprite BA now selects a PAL 6569 or NTSC 6567R8 BA-assert table from the machine video standard.
 - Vertical border compares are raster-line numbers and are identical for PAL
@@ -53,8 +57,10 @@
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered outside the vertical display window (opened-border pictures); it is a per-mode approximation, not a full cycle-exact idle sequencer.
 - Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
-- Per-scanline `$D011`/badline (FLI-class) raster accuracy is deferred; the open-border "expose" reveal in `samples/dkarcade2016.prg` depends on it and is not reproduced. See [VICII_EXPOSE_REVEAL.md](VICII_EXPOSE_REVEAL.md).
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
+- Sprite BA window is 6 cycles per assert (not 5). That length is required for
+  the `samples/dkarcade2016.prg` PAL stable-raster reveal to stay locked to the
+  raster (matches VICE x64sc `$D001` multiplex at r53/c~30 and r272/c~36).
 
 ## Tests / smoke checks
 

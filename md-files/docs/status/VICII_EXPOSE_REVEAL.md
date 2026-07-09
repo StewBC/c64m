@@ -12,7 +12,8 @@ motion.
 
 Three separate rendering bugs behind the **static** picture were found and
 fixed (see "Fixed" below); the picture now matches VICE. The **reveal
-animation** is *not* yet correct and is documented here as deferred work.
+animation** is fixed for both NTSC (plateau is intended) and PAL (sprite BA
+window 5→6). Full write-up: [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
 
 This file is the detailed record so the next agent does not re-derive it.
 See also [VICII.md](VICII.md) and [DEFERRED.md](DEFERRED.md).
@@ -67,22 +68,19 @@ All three are in `src/machine/vicii.c` (+ one crop constant in
 Frontend NTSC crop is `Y=23` (263-line frame) so the 240-line crop keeps the
 51..250 window plus the full bottom border on screen.
 
-## NOT fixed: the expose reveal (deferred)
+## Expose reveal — FIXED
 
-### Symptom
+### NTSC
 
-Measured frame-by-frame over the control port (`get-frame`, count of raster
-rows containing any lit pixel in the display width):
+The ~27-frame hold matches VICE and is **intended** hardware/game behaviour, not
+a c64m defect.
 
-- Even lines wipe in top-to-bottom (≈1 line/frame) up to ~197 lit rows.
-- Then the output is **byte-identical for ~27 consecutive frames** (a hard
-  freeze; the frames hash the same).
-- Then the remaining (odd) lines fill in and the picture settles (~238 rows).
+### PAL (was broken)
 
-On VICE the 27 "frozen" frames are instead spent actively revealing (down, then
-back up, with ~6 cycles of idle between down and up), so it looks like one 
-smooth motion. In c64m it looks like: partial down-wipe → hold → the rest snaps
-in.
+Root cause: sprite BA window was 5 cycles; needs 6. Under-stall during the
+8-sprite strip left the stable-raster kernel one line early at the first
+`$D012` wait, so the wait never locked and the multiplex desynced permanently.
+Fixed by `VICII_SPRITE_BA_WINDOW = 6`.
 
 ### Ruled out
 

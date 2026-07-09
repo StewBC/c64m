@@ -48,10 +48,10 @@ enum {
     VICII_IRQ_IMBC             = 0x02,
     VICII_IRQ_IMMC             = 0x04,
 
-    /* Phase H: sprite BA window width (cycles). Formula: ba_start = p_cycle - 3,
-       ba_end = p_cycle + 2 (exclusive), so the window is always 5 cycles wide.
-       Applies to both the early group (sprites 3-7) and late group (sprites 0-2). */
-    VICII_SPRITE_BA_WINDOW     = 5,
+    /* Phase H: sprite BA-low window width in cycles from each assert point.
+       6 cycles (not 5): matches VICE x64sc and is required for the dkarcade2016
+       stable-raster kernel's per-line cycle budget under 8-sprite BA. */
+    VICII_SPRITE_BA_WINDOW     = 6,
 
     /* Vertical border compare values (raster-line units within the internal
        frame). Identical for PAL (6569) and NTSC (6567); only the total line
@@ -1061,7 +1061,7 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     /* ------------------------------------------------------------------
      * Phase H: Sprite BA windows.
      *
-     * Each active sprite contributes a 5-cycle BA-low window starting at
+     * Each active sprite contributes a 6-cycle BA-low window starting at
      * the selected standard's BA assert table. Sprites 0-2 and 5-7 are asserted
      * during the same line as their fetch.  Sprites 3-4 are asserted
      * during the PREVIOUS line for the next line's

@@ -12,17 +12,26 @@ src/machine/vicii.c                         renderer + sprite BA windows (Phase 
 src/machine/c64.c                           CPU<->VIC bus cycle-stealing (BA/RDY/AEC)
 ```
 
-## STATUS (2026-07): NTSC CLOSED, PAL is the open bug
+## STATUS (2026-07): NTSC CLOSED, PAL CLOSED
 
 > **NTSC is RESOLVED — c64m is correct.** A VICE NTSC capture confirmed the
-> ~27-frame "plateau" is **intended hardware behaviour**, not a defect: VICE shows
-> the same hold. Both Phase A "open questions" below are therefore answered
-> (Q1: the plateau is NOT a defect; Q2: no fix needed). No NTSC code change is
-> required. The historical NTSC investigation is retained below for the record.
+> ~27-frame "plateau" is **intended hardware behaviour**, not a defect.
 >
-> **The live bug is the PAL reveal** — a genuinely broken, separate issue with its
-> own full diagnosis at the end of this document (see
-> "PAL reveal corruption (dkarcade2016)"). Start there.
+> **PAL is RESOLVED.** Root cause was a **1-cycle-short sprite BA window**
+> (`VICII_SPRITE_BA_WINDOW` was 5, hardware/VICE need 6). The missing stall
+> time left the stable-raster kernel ~1 line early at the first `$D012` wait, so
+> `cpy $D012 / beq` never locked, Y raced ahead, sprite multiplex desynced, and
+> sprite BA dropped for the rest of the session. With window=6, c64m matches
+> VICE PAL multiplex timing every frame:
+>
+> ```text
+> $D001 <- 250  at raster 53, cycle ~30   (VICE: 53/29)
+> $D001 <-  29  at raster 272, cycle ~36  (VICE: 272/38)
+> ```
+>
+> Also: free-run DEFER path now projects `$D011`/`$D012` reads to the bus-access
+> cycle offset. CIA timer projection was tried and rejected for this core
+> (frozen counter already matches VICE at `$DD04`).
 
 ## TL;DR (NTSC — historical; see STATUS above)
 
@@ -290,11 +299,9 @@ Risk: low once Phase B lands (validation + documentation).
 
 ---
 
-# PAL reveal corruption (dkarcade2016) — separate bug, deep diagnosis
+# PAL reveal corruption (dkarcade2016) — FIXED (sprite BA window 5→6)
 
-NTSC is CLOSED (c64m matches VICE, including the ~27-frame hold — it is intended
-hardware behaviour, not a defect). The PAL reveal, however, is genuinely broken in
-c64m and correct in VICE. This section records the full diagnosis.
+NTSC is CLOSED. PAL is CLOSED. This section keeps the diagnosis for the record.
 
 ## Symptom
 
@@ -340,23 +347,17 @@ shears. NTSC's longer line (65 cyc) absorbs the same error; PAL (63 cyc) does no
   CIA stepping (advanced every cycle): all correct.
 ```
 
-## Remaining root (unresolved)
+## Root cause (resolved)
 
-Identical kernel code + correct tables + correct $DD04 + correct $D012 reads, yet the
-first multiplex write lands ~74 cycles off and cascades. The divergence is in the
-EXACT cycle-by-cycle execution of the stable-raster entry/sled sequence (raster
-29 -> first write). Prime suspect: the deferred CPU model detects IRQs at instruction
-boundaries rather than the hardware's "2 cycles before instruction end" sampling,
-giving a different entry-jitter that the $DD04 correction cannot fully cancel. This is
-FLI-class sub-cycle timing, which AGENTS.md lists as out of scope.
+Sprite BA window was **5 cycles** per assert; VICE/hardware need **6**. Over the
+8-sprite strip (rasters ~30–50) that under-stalled the CPU by ~70–80 cycles total,
+so the kernel reached the first main-walk wait (`$04AC`) one raster line early
+with `Y = $D012+1`. The wait (`cpy $D012 / beq`) never engaged → Y free-ran →
+multiplex wrote `$D001` at the wrong rasters → sprites stopped matching → **zero
+sprite BA thereafter** → permanent shear. IRQ sampling was a red herring.
 
-## Next step if pursued
-
-Instruction-by-instruction cycle trace of the ~23-line stretch (raster 29 -> first
-$D001 write) in BOTH VICE (monitor trace) and c64m, aligned at the $DD04 read, to
-find the exact instruction where the cycle counts diverge. Only then change the CPU
-IRQ-timing / entry model, validating against the PAL reveal AND all 40 tests AND the
-working NTSC reveal.
+Fix: `VICII_SPRITE_BA_WINDOW = 6` in `src/machine/vicii.c`, unit tests updated.
+Secondary: project deferred `$D011`/`$D012` reads in `c64_cpu_read` DEFER path.
 
 ## Tooling (reusable)
 

@@ -11,9 +11,10 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered for the region
   outside the vertical display window (needed for opened-border pictures); it is
   a per-mode approximation, not a full cycle-exact idle sequencer.
-- Per-scanline `$D011`/badline (FLI-class) raster accuracy is deferred. The
-  open-border "expose" reveal in `samples/dkarcade2016.prg` depends on it and is
-  not reproduced; see [VICII_EXPOSE_REVEAL.md](VICII_EXPOSE_REVEAL.md).
+- Broader FLI-class mid-line `$D011`/badline accuracy beyond what ordinary
+  software needs is still not claimed. The dkarcade2016 PAL "expose" reveal is
+  fixed (sprite BA window = 6 cycles + deferred `$D012` projection); see
+  [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
 
 ## CIA

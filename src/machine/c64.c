@@ -930,7 +930,7 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
         if (event->record_write_history) {
             c64_record_cpu_write(machine, event->address, machine->pending_cpu_trace.opcode_pc);
         }
-        c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
+c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
         break;
 
     case C64_CPU_BUS_EVENT_INTERNAL:
@@ -1066,12 +1066,63 @@ static void c64_finish_pending_cpu_trace(c64_t *machine) {
     }
 }
 
+/*
+ * DEFER_WRITES runs the whole instruction against a frozen device world, then
+ * plays bus events back with BA stalls. VIC raster ($D011/$D012) is projected to
+ * the access cycle_offset so boundary reads see the correct line. CIA timers are
+ * intentionally NOT projected: with this core's cycle accounting the frozen
+ * counter already matches VICE's bus-read value for the stable-raster $DD04
+ * sample (projecting by offset made A = $40-timer too small/large).
+ */
+static uint8_t c64_deferred_io_read(const c64_t *machine, uint16_t address, uint64_t offset_cycles) {
+    uint8_t reg;
+
+    if (address >= 0xd000u && address <= 0xd3ffu) {
+        reg = (uint8_t)(address & 0x3fu);
+        if (reg == 0x12u || reg == 0x11u) {
+            uint32_t cpl = machine->vic.timing.cycles_per_line;
+            uint32_t lpf = machine->vic.timing.lines_per_frame;
+            uint64_t abs_cycle;
+            uint32_t raster;
+
+            if (cpl == 0) {
+                return c64_debug_read_cpu_map(machine, address);
+            }
+
+            abs_cycle = (uint64_t)machine->vic.timing.cycle_in_line + offset_cycles;
+            raster = machine->vic.timing.raster_line + (uint32_t)(abs_cycle / cpl);
+            if (lpf != 0) {
+                raster %= lpf;
+            }
+
+            if (reg == 0x12u) {
+                return (uint8_t)(raster & 0xffu);
+            }
+
+            {
+                uint8_t value = (uint8_t)(machine->vic.registers[0x11u] & 0x7fu);
+                if ((raster & 0x100u) != 0) {
+                    value |= 0x80u;
+                }
+                return value;
+            }
+        }
+    }
+
+    return c64_debug_read_cpu_map(machine, address);
+}
+
 static uint8_t c64_cpu_read(void *user, uint16_t address) {
     c64_t *machine = user;
     uint8_t value;
 
     if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
-        value = c64_debug_read_cpu_map(machine, address);
+        if (c64_cpu_address_is_io(machine, address)) {
+            uint64_t offset = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
+            value = c64_deferred_io_read(machine, address, offset);
+        } else {
+            value = c64_debug_read_cpu_map(machine, address);
+        }
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_READ, address, value);
         return value;
     }
