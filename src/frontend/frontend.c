@@ -356,6 +356,11 @@ typedef struct frontend_file_browser_state {
     int selected; /* index into filtered[], -1 = none */
     bool confirm_overwrite;
     char error[160];
+    /* Type-ahead incremental search (active when no edit field has focus). */
+    char typeahead[PLATFORM_FS_NAME_MAX];
+    int typeahead_len;
+    uint64_t typeahead_last_ms; /* SDL tick of the last accepted keystroke */
+    bool scroll_to_selected;    /* ask the list_view to reveal the selection */
 } frontend_file_browser_state;
 
 struct frontend {
@@ -7281,6 +7286,13 @@ bool frontend_wants_text_input(const frontend *ui)
         return false;
     }
 
+    /* The file browser consumes typed characters for its type-ahead search even
+       when no edit field is focused, so text input must stay enabled the whole
+       time it is open. */
+    if (ui->file_browser.open) {
+        return true;
+    }
+
     /* Nuklear keeps at most one active text editor at a time, spread across its
        window list. Walk every window and report whether any edit widget
        currently holds focus. The main loop uses this to keep SDL text input
@@ -7615,6 +7627,8 @@ static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
     dlg->filtered_count = 0;
     dlg->selected = -1;
     dlg->error[0] = '\0';
+    dlg->typeahead_len = 0;        /* fresh directory, fresh search */
+    dlg->scroll_to_selected = false;
 
     if (!platform_fs_list_dir(dlg->current_dir, &dlg->listing)) {
         dlg->listing.count = 0;
@@ -7629,6 +7643,10 @@ static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
             dlg->filtered[dlg->filtered_count++] = i;
         }
     }
+
+    /* Give the list an initial cursor so type-ahead and Enter/Open have a
+       target, matching the symbol-lookup dialog's behavior. */
+    dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
 }
 
 void frontend_open_file_browser(
@@ -7735,6 +7753,53 @@ static void frontend_file_browser_commit_save(frontend *ui, frontend_file_browse
     dlg->open = false;
 }
 
+/* Sliding-window timeout for the file-browser type-ahead search. Each accepted
+   keystroke resets the window; once it lapses, the next keystroke starts a new
+   search prefix. */
+#define FRONTEND_FILE_BROWSER_TYPEAHEAD_MS 500u
+
+/* Feeds this frame's typed characters into the type-ahead buffer and moves the
+   selection to the first entry (scanning from the top) whose name starts with
+   the accumulated prefix, case-insensitively. No match leaves the selection
+   untouched. Called only when no text field has focus. */
+static void frontend_file_browser_typeahead(
+    frontend_file_browser_state *dlg, const char *text, int text_len, uint64_t now_ms)
+{
+    int i;
+
+    if (dlg == NULL || text == NULL || text_len <= 0) {
+        return;
+    }
+
+    /* Sliding window: drop the old prefix if the user paused too long. */
+    if (dlg->typeahead_len > 0 &&
+            (now_ms - dlg->typeahead_last_ms) > FRONTEND_FILE_BROWSER_TYPEAHEAD_MS) {
+        dlg->typeahead_len = 0;
+    }
+    dlg->typeahead_last_ms = now_ms;
+
+    /* Append the raw bytes the user typed; we do not filter what is accepted. */
+    for (i = 0; i < text_len; i++) {
+        if (dlg->typeahead_len < (int)sizeof(dlg->typeahead) - 1) {
+            dlg->typeahead[dlg->typeahead_len++] = text[i];
+        }
+    }
+    dlg->typeahead[dlg->typeahead_len] = '\0';
+    if (dlg->typeahead_len == 0) {
+        return;
+    }
+
+    /* First forward (prefix) match from the top of the current list. */
+    for (i = 0; i < dlg->filtered_count; i++) {
+        const platform_fs_entry *entry = &dlg->listing.entries[dlg->filtered[i]];
+        if (SDL_strncasecmp(entry->name, dlg->typeahead, (size_t)dlg->typeahead_len) == 0) {
+            dlg->selected = i;
+            dlg->scroll_to_selected = true;
+            break;
+        }
+    }
+}
+
 static void frontend_draw_file_browser(frontend *ui, int width, int height)
 {
     frontend_file_browser_state *dlg;
@@ -7742,6 +7807,7 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
     struct nk_rect bounds;
     struct nk_list_view lv;
     nk_flags path_result;
+    bool edit_active_this_frame;
     float dw, dh, list_h;
     int i;
     static const int ROW_H = 18;
@@ -7774,6 +7840,8 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             return;
         }
 
+        edit_active_this_frame = false;
+
         nk_layout_row_dynamic(ctx, 20.0f, 1);
         nk_label(ctx, dlg->title, NK_TEXT_LEFT);
 
@@ -7785,6 +7853,9 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             ctx, (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
             dlg->current_dir, (int)sizeof(dlg->current_dir), nk_filter_default);
         nk_layout_row_end(ctx);
+        if (path_result & NK_EDIT_ACTIVE) {
+            edit_active_this_frame = true;
+        }
         if (path_result & NK_EDIT_COMMITED) {
             if (!platform_fs_is_dir(dlg->current_dir)) {
                 snprintf(dlg->error, sizeof(dlg->error), "Not a directory");
@@ -7812,6 +7883,29 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
             list_h = content.h - other_h - (float)rows * sp_y - 2.0f * pad_y;
         }
         if (list_h < 60.0f) list_h = 60.0f;
+
+        /* When type-ahead (or a keyboard move) changes the selection, force the
+           list to a scroll offset that puts the selected row about a quarter of
+           the way down the visible area, so the cursor is comfortably on-screen.
+           Clamped to the valid range: near the top of the list the row simply
+           sits higher, and if everything fits there is no scroll at all. This
+           writes the same persistent offset nk_list_view reads by its id, so it
+           takes effect on this frame. Nuklear's list_view augments the row height
+           with one spacing.y, so mirror that here. */
+        if (dlg->scroll_to_selected && dlg->selected >= 0) {
+            int row_px    = ROW_H + (int)ctx->style.window.spacing.y;
+            int rows      = dlg->filtered_count > 0 ? dlg->filtered_count : 1;
+            int visible_h = (int)list_h;
+            int quarter   = visible_h / 4;
+            int max_scroll = row_px * rows - visible_h;
+            int target    = dlg->selected * row_px - quarter;
+            if (max_scroll < 0) max_scroll = 0;
+            if (target < 0) target = 0;
+            if (target > max_scroll) target = max_scroll;
+            nk_group_set_scroll(ctx, "file_browser_rows", 0, (nk_uint)target);
+            dlg->scroll_to_selected = false;
+        }
+
         nk_layout_row_dynamic(ctx, list_h, 1);
 
         if (nk_list_view_begin(ctx, &lv, "file_browser_rows", 0, ROW_H, dlg->filtered_count)) {
@@ -7896,6 +7990,9 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
                 ctx, (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
                 dlg->filename, (int)sizeof(dlg->filename), nk_filter_default);
             nk_layout_row_end(ctx);
+            if (name_result & NK_EDIT_ACTIVE) {
+                edit_active_this_frame = true;
+            }
             if (memcmp(prev_filename, dlg->filename, sizeof(dlg->filename)) != 0) {
                 dlg->confirm_overwrite = false;
                 dlg->error[0] = '\0';
@@ -7926,6 +8023,30 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
                 frontend_file_browser_commit_save(ui, dlg);
             } else {
                 frontend_file_browser_activate(ui, dlg, dlg->selected);
+            }
+        }
+
+        /* Keyboard handling for the list itself, only while no text field has
+           focus (otherwise the keys belong to that field). Type-ahead moves the
+           selection; Enter acts as the Open/Save button on it. Processed here,
+           after every widget, so the focus state for this frame is final. */
+        if (dlg->open && !edit_active_this_frame) {
+            const struct nk_input *in = &ctx->input;
+            frontend_file_browser_typeahead(
+                dlg, in->keyboard.text, in->keyboard.text_len, SDL_GetTicks64());
+            if (nk_input_is_key_pressed(in, NK_KEY_ENTER)) {
+                const platform_fs_entry *sel_entry = NULL;
+                if (dlg->selected >= 0 && dlg->selected < dlg->filtered_count) {
+                    sel_entry = &dlg->listing.entries[dlg->filtered[dlg->selected]];
+                }
+                /* A highlighted folder is always entered (like a double-click).
+                   Otherwise Enter mirrors the footer button: Save in save mode,
+                   Open/mount in open mode. */
+                if (dlg->save_mode && !(sel_entry != NULL && sel_entry->is_dir)) {
+                    frontend_file_browser_commit_save(ui, dlg);
+                } else {
+                    frontend_file_browser_activate(ui, dlg, dlg->selected);
+                }
             }
         }
 
