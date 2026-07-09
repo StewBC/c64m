@@ -3818,11 +3818,15 @@ static bool run_main_loop(
                 } else if (key_is_quickload_shortcut(&event.key)) {
                     send_quickload(client, options);
                     send_event_to_frontend = false;
-                } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
+                } else if ((event.key.keysym.sym == SDLK_0 ||
+                            event.key.keysym.sym == SDLK_1 ||
+                            event.key.keysym.sym == SDLK_2) &&
                            frontend_input_has_option_modifier(&event.key) &&
                            frontend_input_has_shift_modifier(&event.key)) {
-                    unsigned requested = event.key.keysym.sym == SDLK_1 ? 1u : 2u;
-                    /* Toggle: re-pressing the assigned port disables it. */
+                    unsigned requested = event.key.keysym.sym == SDLK_1 ? 1u :
+                                         event.key.keysym.sym == SDLK_2 ? 2u : 0u;
+                    /* Port 0 explicitly disables; re-pressing the assigned port
+                       also toggles it back off. */
                     unsigned next = kbd_joystick.port == requested ? 0u : requested;
                     frontend_joystick_set_port(&kbd_joystick, next);
                     options->keyboard_joystick_port = (int)next;
@@ -3832,10 +3836,13 @@ static bool run_main_loop(
                     if (!frontend_config_dialog_is_open(ui)) {
                         frontend_set_config_state(ui, options);
                     }
-                    SDL_Log("keyboard joystick %s port %u (%s)",
-                            next == 0u ? "disabled on" : "assigned to",
-                            requested,
-                            frontend_joystick_layout_to_string(kbd_joystick.layout));
+                    if (next == 0u) {
+                        SDL_Log("keyboard joystick disabled");
+                    } else {
+                        SDL_Log("keyboard joystick assigned to port %u (%s)",
+                                next,
+                                frontend_joystick_layout_to_string(kbd_joystick.layout));
+                    }
                 } else if ((event.key.keysym.sym == SDLK_1 || event.key.keysym.sym == SDLK_2) &&
                            frontend_input_has_option_modifier(&event.key)) {
                     sdl_c64_controller_switch_mapping(

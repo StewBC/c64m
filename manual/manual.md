@@ -1364,6 +1364,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Opt+2**       | Map gamepad to joystick port 2 (default)                   |
 | **Shift+Opt+1** | Assign the keyboard joystick to port 1 (press again to disable) |
 | **Shift+Opt+2** | Assign the keyboard joystick to port 2 (press again to disable) |
+| **Shift+Opt+0** | Disable the keyboard joystick on any port                       |
 | **Shift+Opt+>** | Quicksave state to the configured quicksave folder              |
 | **Shift+Opt+<** | Quickload the newest state from the configured quicksave folder |
 | **Cmd+Q**       | Quit (macOS)                                               |

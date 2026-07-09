@@ -44,8 +44,8 @@
      to C64 port 1 / 2.
   2. The host keyboard, via `src/frontend/frontend_joystick_input.{c,h}`.
      `Alt+Shift+1` / `Alt+Shift+2` assign or toggle-off the keyboard joystick on
-     port 1 / 2. A real controller and the keyboard can share a port (their
-     masks are OR'd).
+     port 1 / 2, and `Alt+Shift+0` disables it on whichever port it holds. A real
+     controller and the keyboard can share a port (their masks are OR'd).
 - Two config-selectable layouts:
   - `numpad`: `KP_8/2/4/6` cardinal, `KP_7/9/1/3` diagonal, `KP_0` fire. These
     keypad digits are not C64 keys, so they are consumed without stealing any
@@ -61,7 +61,7 @@
   (Off / Port 1 / Port 2) and a Numpad/WASD layout selector. Applying the dialog
   updates the live keyboard-joystick source immediately (`dispatch_debugger_intents`
   re-runs `frontend_joystick_set_layout`/`set_port`). The layout can only be
-  changed here; the port can be changed here or at runtime via `Alt+Shift+1/2`.
+  changed here; the port can be changed here or at runtime via `Alt+Shift+1/2` (or cleared via `Alt+Shift+0`).
 - Persistence: `[input]` INI section keys `keyboard_joystick_layout`
   (`numpad`|`wasd`) and `keyboard_joystick_port` (`0`|`1`|`2`), plus CLI
   `--kbdjoy <0|1|2>` and `--kbdjoy-layout <numpad|wasd>`. Runtime port changes
