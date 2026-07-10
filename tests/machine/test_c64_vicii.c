@@ -95,7 +95,7 @@ static void reset_machine_with_roms_standard(c64_t *machine, const c64_rom_set *
 
     c64_init(machine);
 
-    /* PAL is the canonical video standard for most tests: the 384×272 pixel
+    /* PAL is the canonical video standard for most tests: the 384×PAL-height pixel
        buffer matches PAL dimensions and border compare values (top=51, left=24).
        Targeted NTSC tests opt in through reset_machine_with_standard(). */
     memset(&cfg, 0, sizeof(cfg));
@@ -996,6 +996,42 @@ static void test_ntsc_live_bottom_border_can_be_opened_for_sprites(void) {
                frame.pixels[261 * C64_FRAME_WIDTH + 46]);
     expect_u32("ntsc opened bottom border keeps side border", TEST_PALETTE_2,
                frame.pixels[251 * C64_FRAME_WIDTH + 10]);
+}
+
+/* Galencia-class HUD: sprite Y=254 paints lines 255..275. PAL paint height is
+   the full 312-line raster so no border effect is clipped by the buffer. */
+static void test_live_deep_bottom_border_sprite_is_painted(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 254, 7);
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* open vertical border */
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("deep bottom border frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("PAL paint height is full raster", 312u, frame.height);
+    expect_u32("PAL paint height matches frame constant", C64_FRAME_PAL_HEIGHT, frame.height);
+    expect_u32("PAL paint height matches lines_per_frame",
+               machine.vic.timing.lines_per_frame, frame.height);
+    expect_u32("deep sprite first row", TEST_PALETTE_7,
+               frame.pixels[255 * C64_FRAME_WIDTH + 46]);
+    expect_u32("deep sprite last row", TEST_PALETTE_7,
+               frame.pixels[275 * C64_FRAME_WIDTH + 46]);
 }
 
 static void test_den_clear_blanks_text_display(void) {
@@ -2031,6 +2067,7 @@ int main(void) {
     test_border_hides_sprites_but_collision_latches();
     test_live_bottom_border_can_be_opened_for_sprites();
     test_ntsc_live_bottom_border_can_be_opened_for_sprites();
+    test_live_deep_bottom_border_sprite_is_painted();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();

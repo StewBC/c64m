@@ -115,22 +115,24 @@ The Misc area is a scrollable area where you can see SID, VIC II registers, conf
 
 The emulator produces a fixed-size display surface.
 
-Recommended dimensions:
+Recommended dimensions (published machine frame):
 
 ```text
-384 x 272
+384 x 312  (PAL: full 6569 raster, lines 0..311)
+384 x 263  (NTSC: full short frame)
 ```
 
-This represents:
+The frontend displays a fixed crop of that frame:
 
 ```text
-320 x 200 active display
-plus visible border area
+352 x 248  (origin x=8, y=28)  -> frame rows 28..275
 ```
 
-The exact VIC-II implementation may internally produce PAL or NTSC raster timings.
+This covers the 320 x 200 active display plus side/top/bottom border, including
+top-border scores and lower overscan for bottom-border sprites.
 
-The frontend display surface remains fixed.
+The exact VIC-II implementation produces PAL or NTSC raster timings; only the
+paint height and crop differ from a pure "full raster" dump.
 
 ---
 

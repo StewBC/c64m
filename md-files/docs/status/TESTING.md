@@ -113,7 +113,7 @@
   - `./build/c64m --control-port 6510`, connect to `127.0.0.1:6510`, send `1 ping`, and expect `1 ok`.
   - Verify Phase 2 with `reset`, `step-instruction`, and deferred `get-cpu`.
   - Verify Phase 3 binary payloads: `get-frame` returns `height * stride`
-    bytes (`384 * 272 * 4` for PAL, `384 * 263 * 4` for NTSC),
+    bytes (`384 * 312 * 4` for PAL, `384 * 263 * 4` for NTSC),
     `get-memory $0400 64 map` returns 64 bytes, and `get-debug-memory`
     returns 196608 bytes without write history.
   - Verify Phase 4 commands: key up/down, joystick, RESTORE, `paste-text-data`, D64 mount/unmount/status, `load-prg`, `load-bin`, and `save-bin`.

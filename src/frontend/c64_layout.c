@@ -25,8 +25,8 @@ void c64_layout_init(c64_layout *layout)
     layout->split_top_bottom = 0.58f;
     layout->split_memory_misc = 0.55f;
     layout->display_px_w = 352;
-    layout->display_px_h = 240;
-    layout->display_aspect = 352.0f / 240.0f;
+    layout->display_px_h = 248;
+    layout->display_aspect = 352.0f / 248.0f;
     layout->drag_active = C64_LAYOUT_DRAG_NONE;
     layout->drag_last_x = 0.0f;
     layout->drag_last_y = 0.0f;

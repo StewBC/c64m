@@ -28,6 +28,12 @@
 
 ## Recent changes
 
+- PAL published frame height is the full 6569 raster: 312 (lines 0..311), matching
+  `lines_per_frame`. Frontend still crops 352x248 at Y=28 for normal display so
+  top-border scores and bottom-border HUDs (e.g. Galencia) remain visible without
+  showing full blanking. No change to BA windows or raster numbering
+  (`frame Y == raster_line`). Regression:
+  `test_live_deep_bottom_border_sprite_is_painted`.
 - Fixed PAL dkarcade2016 "expose" reveal: sprite BA window widened from 5 to 6
   cycles so the stable-raster kernel's first wait locks to `$D012`. Also project
   deferred free-run reads of `$D011`/`$D012` to the bus-access cycle offset.
@@ -40,10 +46,12 @@
   display window opens at line 51/55 on both standards. This keeps the
   background (mapped through the top compare) aligned with sprites, which are
   placed by absolute raster line.
-- Published frame height is PAL 272 or NTSC 263; the fixed pixel buffer remains
-  sized for the PAL maximum. Because NTSC has only 263 raster lines, the frontend
-  selects PAL crop Y=31 or NTSC crop Y=23 so the 240-line crop keeps the display
-  window and full bottom border on-screen without overrunning the shorter frame.
+- Published frame height is PAL 312 or NTSC 263 (full raster for each standard).
+  The fixed pixel buffer is sized for the PAL maximum. Frontend shows a 352x248
+  crop starting at Y=28 (rows 28..275) so the 200-line display window,
+  top-border scores, and deep bottom-border sprites stay on-screen without a
+  full-overscan window. NTSC frames are padded in the display texture to the PAL
+  height so both standards share the crop.
 - Existing PAL sprite BA tests still cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior.
 - NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window.
 - Galencia NTSC sprite multiplex corruption was fixed by preserving RAM underneath visible `$D000-$DFFF` I/O writes; VIC sprite data fetched from RAM under I/O is no longer overwritten by VIC register writes.

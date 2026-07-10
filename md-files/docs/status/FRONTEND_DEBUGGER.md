@@ -3,9 +3,10 @@
 ## Current implementation
 
 - Debugger UI is complete through Phase 13, with subsequent breakpoint action enhancements.
-- PAL and NTSC C64 frames use a common 240-line display crop. NTSC's shorter
-  frame is uploaded into a PAL-height frontend texture, using its initialized
-  border-color padding rows to keep the top and bottom display borders balanced.
+- PAL and NTSC C64 frames use a common 352x248 display crop from frame Y=28
+  (rows 28..275). NTSC's shorter frame is uploaded into a PAL-height frontend
+  texture, using its initialized border-color padding rows so the same crop
+  origin works for both standards.
 - Configuration UI is complete through Phase 14.
 - CPU/registers, memory, disassembly, misc/debugger tabs, execute/read/write breakpoints/watchpoints, counters/actions, and INI persistence are implemented.
 - Call stack view is implemented in the Misc|Debugger tab.

@@ -26,13 +26,15 @@
 enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
     FRONTEND_DISPLAY_CROP_X = 8,
-    FRONTEND_DISPLAY_PAL_CROP_Y = 31,
-    /* The display texture is padded to the PAL frame height below, so both
-       standards can use the same crop. This gives NTSC 20 lines of border above
-       and below the 200-line display area, matching PAL's visual framing. */
-    FRONTEND_DISPLAY_NTSC_CROP_Y = 31,
+    /* Crop of the published frame. Origin and height cover both top-border
+       title/score sprites (Galencia content from ~raster 29) and bottom-border
+       HUD sprites (Y=254 -> last painted line 275). Visible rows: 28..275.
+       Texture is always PAL-height so NTSC can share the crop origin (padding
+       fills past line 262). */
+    FRONTEND_DISPLAY_PAL_CROP_Y = 28,
+    FRONTEND_DISPLAY_NTSC_CROP_Y = 28,
     FRONTEND_DISPLAY_CROP_W = 352,
-    FRONTEND_DISPLAY_CROP_H = 240
+    FRONTEND_DISPLAY_CROP_H = 248
 };
 
 typedef enum frontend_register_field {
@@ -7473,7 +7475,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
 
         /* NTSC frames end at row 262, but the frame buffer is initialized to
            the border colour through the PAL-sized storage. Upload those valid
-           padding rows so the common PAL crop can extend through row 270. */
+           padding rows so the common PAL crop can extend past the NTSC frame. */
         if (frame->height < C64_FRAME_PAL_HEIGHT) {
             SDL_Rect padding_rect = {
                 0,

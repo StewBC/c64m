@@ -4,7 +4,11 @@
 
 enum {
     C64_FRAME_WIDTH = 384,
-    C64_FRAME_PAL_HEIGHT = 272,
+    /* PAL paint height equals the full VIC-II raster (6569: 312 lines, 0..311).
+       Timing and paint coverage match so demo/border effects are never clipped
+       by a short pixel buffer. Frontend still crops for normal display.
+       NTSC paint height remains the full short frame (263). */
+    C64_FRAME_PAL_HEIGHT = 312,
     C64_FRAME_NTSC_HEIGHT = 263,
     C64_FRAME_HEIGHT = C64_FRAME_PAL_HEIGHT,
     C64_FRAME_PIXEL_FORMAT_ARGB8888 = 1,

@@ -192,7 +192,7 @@ Implementation files:
   - receive `1 ok`.
   - issue `reset`, `step-instruction`, `get-cpu`; verify accepted responses
     and a CPU snapshot response.
-  - issue `get-frame`; verify byte count is `height * stride` (`384 * 272 * 4`
+  - issue `get-frame`; verify byte count is `height * stride` (`384 * 312 * 4`
     for PAL, `384 * 263 * 4` for NTSC).
   - issue `get-memory $0400 64 map`; verify a 64-byte payload.
   - issue `get-debug-memory`; verify a `196608` byte payload when write

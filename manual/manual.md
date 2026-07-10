@@ -1690,11 +1690,11 @@ Memory modes:
 
 `get-memory` length is limited to 1..1024 bytes.
 
-Frame payloads are ARGB8888 pixels. PAL frames are 384x272; NTSC frames are 384x263.
+Frame payloads are ARGB8888 pixels. PAL frames are 384x312; NTSC frames are 384x263.
 The frame metadata is:
 
 ```text
-<id> data frame <bytes> width=384 height=<272|263> stride=1536 format=argb8888 frame=<n> cycle=<cycle>
+<id> data frame <bytes> width=384 height=<312|263> stride=1536 format=argb8888 frame=<n> cycle=<cycle>
 ```
 
 `<bytes>` is `height * stride`. `stride` is bytes per row.
@@ -1992,8 +1992,9 @@ feature.
 
 Pixels are emitted cycle-by-cycle as VIC-II time advances. Mid-frame register changes
 (color, scroll, mode bits) take effect at their exact event cycle rather than at frame
-start. The internal frame is 384x272 (PAL) or 384x263 (NTSC); the displayed crop is a
-balanced 352x240 window.
+start. The internal frame is 384x312 (PAL, full raster) or 384x263 (NTSC); the
+displayed crop is a 352x248 window (from frame row 28) that keeps the 200-line
+display area plus top and lower overscan on screen.
 
 **Graphics modes:** standard text (40x25), multicolor text, standard bitmap, multicolor
 bitmap, ECM (extended color), and invalid modes 5/6/7 (black background and display
