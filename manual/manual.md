@@ -1465,6 +1465,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **F9**          | Toggle Debug Mode on/off                                   |
 | **Opt+H**       | Toggle in-emulator help on/off                             |
 | **Shift+Opt+A** | Assemble the configured source file using the Assembler settings |
+| **Shift+Opt+M** | Toggle keyboard joystick mapping between Numpad and WASD   |
 | **F10**         | Step instruction (paused) or Pause (running)               |
 | **Shift+F10**   | Step out of current subroutine                             |
 | **F11**             | Step over JSR                                         |

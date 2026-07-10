@@ -3755,6 +3755,24 @@ static bool run_main_loop(
                            frontend_input_has_shift_modifier(&event.key)) {
                     frontend_trigger_assembler(ui);
                     send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_m &&
+                           frontend_input_has_option_modifier(&event.key) &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    frontend_joystick_layout next_layout =
+                        kbd_joystick.layout == FRONTEND_JOYSTICK_LAYOUT_NUMPAD ?
+                            FRONTEND_JOYSTICK_LAYOUT_WASD :
+                            FRONTEND_JOYSTICK_LAYOUT_NUMPAD;
+                    frontend_joystick_set_layout(&kbd_joystick, next_layout);
+                    app_options_set_string(
+                        &options->keyboard_joystick_layout,
+                        frontend_joystick_layout_to_string(next_layout));
+                    sdl_c64_controller_send_ports(&controller_state, client);
+                    if (!frontend_config_dialog_is_open(ui)) {
+                        frontend_set_config_state(ui, options);
+                    }
+                    SDL_Log("keyboard joystick layout: %s",
+                            frontend_joystick_layout_to_string(next_layout));
+                    send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");

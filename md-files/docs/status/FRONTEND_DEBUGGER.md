@@ -16,6 +16,7 @@
 - Assembler UI integration is implemented.
 - Shift+Opt+A assembles the configured source file globally, using the same
   settings and action as the Misc|Assembler Assemble button.
+- Shift+Opt+M toggles the live keyboard joystick layout between Numpad and WASD.
 - Host file load/save UI is implemented.
 - In-app file browser has keyboard navigation/type-ahead and remembers a default
   folder per browse slot (INI `[browse]`), editable on the Configure dialog's

@@ -3208,7 +3208,7 @@ static void frontend_disassembly_handle_key(
         return;
     }
 
-    if (alt && sym == SDLK_m) {
+    if (alt && !shift && sym == SDLK_m) {
         if (view->mode == RUNTIME_MEMORY_MODE_CPU_MAP) {
             view->mode = RUNTIME_MEMORY_MODE_ROM;
         } else if (view->mode == RUNTIME_MEMORY_MODE_ROM) {
@@ -5170,7 +5170,7 @@ static void frontend_memory_handle_key(
         return;
     }
 
-    if (alt && sym == SDLK_m) {
+    if (alt && !shift && sym == SDLK_m) {
         memory->mode = frontend_memory_next_mode(memory->mode);
         memory->request_pending = false;
         return;
