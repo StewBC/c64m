@@ -1122,6 +1122,36 @@ static bool frontend_push_assemble_run_intent(
     return true;
 }
 
+bool frontend_trigger_assembler(frontend *ui)
+{
+    frontend_assembler_state *asm_state;
+
+    if (ui == NULL) {
+        return false;
+    }
+
+    asm_state = &ui->assembler;
+    if (!asm_state->initialized) {
+        snprintf(asm_state->address_buf, sizeof(asm_state->address_buf), "8000");
+        snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "8000");
+        asm_state->reset_first = true;
+        asm_state->initialized = true;
+    }
+
+    if (asm_state->file_path[0] == '\0') {
+        return false;
+    }
+
+    return frontend_push_assemble_run_intent(
+        ui,
+        asm_state->file_path,
+        (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
+        (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
+        asm_state->auto_run,
+        asm_state->reset_first,
+        asm_state->rearm_oneshots);
+}
+
 static bool frontend_push_simple_intent(frontend *ui, frontend_debugger_intent_type type)
 {
     size_t next;
@@ -3137,7 +3167,7 @@ static void frontend_disassembly_handle_key(
     frontend_disassembly_view_state *view;
     SDL_Keycode sym;
     SDL_Keymod mod;
-    bool alt;
+    bool alt, shift;
     int row;
 
     if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN) {
@@ -3152,6 +3182,7 @@ static void frontend_disassembly_handle_key(
     sym = key->keysym.sym;
     mod = key->keysym.mod;
     alt = (mod & KMOD_ALT) != 0;
+    shift = (mod & KMOD_SHIFT) != 0;
 
     if (alt && sym == SDLK_b) {
         frontend_disassembly_ensure_user_cursor(ui, debug_state);
@@ -3163,7 +3194,7 @@ static void frontend_disassembly_handle_key(
         return;
     }
 
-    if (alt && sym == SDLK_a) {
+    if (alt && !shift && sym == SDLK_a) {
         frontend_disassembly_ensure_user_cursor(ui, debug_state);
         view->address_entry = !view->address_entry;
         view->active_address_digit = 0;
@@ -5118,7 +5149,7 @@ static void frontend_memory_handle_key(
         return;
     }
 
-    if (alt && sym == SDLK_a) {
+    if (alt && !shift && sym == SDLK_a) {
         if (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS) {
             memory->edit_field = FRONTEND_MEMORY_EDIT_HEX;
         } else {

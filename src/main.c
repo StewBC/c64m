@@ -3750,6 +3750,11 @@ static bool run_main_loop(
                     send_event_to_frontend = false;
                 } else if (frontend_help_is_open(ui)) {
                     send_event_to_frontend = true;
+                } else if (event.key.keysym.sym == SDLK_a &&
+                           frontend_input_has_option_modifier(&event.key) &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    frontend_trigger_assembler(ui);
+                    send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_F9) {
                     ui_visible = !ui_visible;
                     SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
