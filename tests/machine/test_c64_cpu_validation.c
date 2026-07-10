@@ -551,6 +551,94 @@ static void test_cpu_trace_tags_rmw_accesses(void) {
     expect_u8("asl result", 0x82u, machine.bus.ram[0x1234]);
 }
 
+static void test_cpu_trace_tags_branch_and_stack_reads(void) {
+    static const uint8_t program[] = {
+        0xd0, 0x00,       /* BNE +0 (taken after reset) */
+        0x68              /* PLA */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x0101] = 0x5au;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("branch trace events", 3, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("branch opcode access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
+    expect_u8("branch displacement access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("branch taken dummy access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+
+    step_machine(&machine, 1);
+    expect_u64("pla trace events", 4, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("pla dummy pc access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("pla dummy stack access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("pla stack read access", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("pla value", 0x5au, snapshot(&machine).a);
+}
+
+static void expect_interrupt_trace(
+    const char *name,
+    const c64_cpu_instruction_trace *trace,
+    uint16_t vector)
+{
+    expect_u64(name, 7, trace->event_count);
+    expect_u8("interrupt dummy fetch access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace->events[0].access_kind);
+    expect_u8("interrupt dummy stack access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace->events[1].access_kind);
+    expect_u8("interrupt PC high stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace->events[2].access_kind);
+    expect_u8("interrupt PC low stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace->events[3].access_kind);
+    expect_u8("interrupt flags stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace->events[4].access_kind);
+    expect_u8("interrupt vector low access", C6510_BUS_ACCESS_VECTOR_READ,
+        (uint8_t)trace->events[5].access_kind);
+    expect_u16("interrupt vector low address", vector, trace->events[5].address);
+    expect_u8("interrupt vector high access", C6510_BUS_ACCESS_VECTOR_READ,
+        (uint8_t)trace->events[6].access_kind);
+    expect_u16("interrupt vector high address", (uint16_t)(vector + 1u), trace->events[6].address);
+}
+
+static void test_cpu_trace_tags_irq_and_nmi_accesses(void) {
+    static const uint8_t program[] = {
+        0x58,             /* CLI */
+        0xea              /* NOP */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+    step_machine(&machine, 1); /* CLI enables IRQ after the deferred boundary. */
+    cia_write_register(&machine.cia1, 0xdc0d, 0x81u);
+    cia_set_interrupt_source(&machine.cia1, 0x01u);
+    step_machine(&machine, 1); /* NOP consumes CLI's one-instruction IRQ defer. */
+    step_machine(&machine, 1);
+    c64_debug_copy_last_cpu_trace(&machine, &trace);
+    expect_interrupt_trace("irq trace events", &trace, 0xfffeu);
+
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+    c64_restore(&machine);
+    step_machine(&machine, 1);
+    c64_debug_copy_last_cpu_trace(&machine, &trace);
+    expect_interrupt_trace("nmi trace events", &trace, 0xfffau);
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -997,6 +1085,8 @@ int main(void) {
     test_sta_abs_bus_event_trace();
     test_cpu_trace_tags_dummy_stack_and_vector_accesses();
     test_cpu_trace_tags_rmw_accesses();
+    test_cpu_trace_tags_branch_and_stack_reads();
+    test_cpu_trace_tags_irq_and_nmi_accesses();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();

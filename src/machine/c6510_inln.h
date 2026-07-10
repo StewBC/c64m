@@ -275,7 +275,7 @@ static inline void aix(C6510 *m) {
         if(m->cpu.class == CPU_6502) {
             read_from_memory(m, m->cpu.address_16);
         } else {
-            read_from_memory(m, m->cpu.pc - 1);
+            read_dummy(m, m->cpu.pc - 1);
         }
         m->cpu.address_hi++;
         CYCLE(m);
@@ -289,7 +289,7 @@ static inline void aipxr(C6510 *m) {
     if(m->cpu.class == CPU_6502) {
         read_from_memory(m, m->cpu.address_16);
     } else {
-        read_from_memory(m, m->cpu.pc - 1);
+        read_dummy(m, m->cpu.pc - 1);
     }
     CYCLE(m);
     if(m->cpu.address_lo < lo) {
@@ -321,7 +321,7 @@ static inline void aiy(C6510 *m) {
         if(m->cpu.class == CPU_6502) {
             read_from_memory(m, m->cpu.address_16);
         } else {
-            read_from_memory(m, m->cpu.pc - 1);
+            read_dummy(m, m->cpu.pc - 1);
         }
         m->cpu.address_hi++;
         CYCLE(m);
@@ -335,7 +335,7 @@ static inline void aiyr(C6510 *m) {
     if(m->cpu.class == CPU_6502) {
         read_from_memory(m, m->cpu.address_16);
     } else {
-        read_from_memory(m, m->cpu.pc - 1);
+        read_dummy(m, m->cpu.pc - 1);
     }
     CYCLE(m);
     if(m->cpu.address_lo < lo) {
@@ -400,7 +400,7 @@ static inline void miy(C6510 *m) {
         if(m->cpu.class == CPU_6502) {
             read_from_memory(m, m->cpu.address_16);
         } else {
-            read_from_memory(m, m->cpu.pc - 1);
+            read_dummy(m, m->cpu.pc - 1);
         }
         m->cpu.address_hi++;
         CYCLE(m);
@@ -416,7 +416,7 @@ static inline void miyr(C6510 *m) {
     if(m->cpu.class == CPU_6502) {
         read_from_memory(m, m->cpu.address_16);
     } else {
-        read_from_memory(m, m->cpu.pc - 1);
+        read_dummy(m, m->cpu.pc - 1);
     }
     CYCLE(m);
     if(m->cpu.address_lo < lo) {
@@ -579,7 +579,7 @@ static inline void adc_a16(C6510 *m) {
 }
 
 static inline void adc_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     CYCLE(m);
     if(m->cpu.class == CPU_65c02 && m->cpu.D) {
@@ -593,7 +593,7 @@ static inline void ahx_a16(C6510 *m) {
 }
 
 static inline void anc_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     set_register_to_value(m, &m->cpu.A, m->cpu.A & m->cpu.scratch_lo);
     m->cpu.C = m->cpu.N;
@@ -601,7 +601,7 @@ static inline void anc_imm(C6510 *m) {
 }
 
 static inline void alr_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     m->cpu.A &= m->cpu.scratch_lo;
     m->cpu.C = m->cpu.A & 0x01 ? 1 : 0;
@@ -616,14 +616,14 @@ static inline void and_a16(C6510 *m) {
 }
 
 static inline void and_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.A & m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
 }
 
 static inline void arr_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     uint8_t value = m->cpu.A & m->cpu.scratch_lo;
     uint8_t result = (value >> 1) | (m->cpu.C << 7);
@@ -645,7 +645,7 @@ static inline void arr_imm(C6510 *m) {
 }
 
 static inline void asl_a(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.C = m->cpu.A & 0x80 ? 1 : 0;
     set_register_to_value(m, &m->cpu.A, m->cpu.A <<= 1);
     CYCLE(m);
@@ -659,7 +659,7 @@ static inline void asl_a16(C6510 *m) {
 }
 
 static inline void axs_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     uint8_t value = m->cpu.A & m->cpu.X;
     compare_bytes(m, value, m->cpu.scratch_lo);
@@ -668,7 +668,7 @@ static inline void axs_imm(C6510 *m) {
 }
 
 static inline void bcc(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(!m->cpu.C) {
@@ -677,7 +677,7 @@ static inline void bcc(C6510 *m) {
 }
 
 static inline void bcs(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(m->cpu.C) {
@@ -686,7 +686,7 @@ static inline void bcs(C6510 *m) {
 }
 
 static inline void beq(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(m->cpu.Z) {
@@ -703,14 +703,14 @@ static inline void bit_a16(C6510 *m) {
 }
 
 static inline void bit_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.Z = (m->cpu.A & m->cpu.scratch_lo) == 0 ? -1 : 0;
     m->cpu.pc++;
 }
 
 static inline void bmi(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(m->cpu.N) {
@@ -719,7 +719,7 @@ static inline void bmi(C6510 *m) {
 }
 
 static inline void bne(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(!m->cpu.Z) {
@@ -728,7 +728,7 @@ static inline void bne(C6510 *m) {
 }
 
 static inline void bpl(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(!m->cpu.N) {
@@ -737,14 +737,14 @@ static inline void bpl(C6510 *m) {
 }
 
 static inline void bra(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     branch(m);
 }
 
 static inline void bvc(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(!m->cpu.V) {
@@ -753,7 +753,7 @@ static inline void bvc(C6510 *m) {
 }
 
 static inline void bvs(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.address_16 = ++m->cpu.pc;
     if(m->cpu.V) {
@@ -776,19 +776,19 @@ static inline void c6510_brk(C6510 *m) {
 }
 
 static inline void clc(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.C = 0;
     CYCLE(m);
 }
 
 static inline void cld(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.D = 0;
     CYCLE(m);
 }
 
 static inline void cli(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.irq_defer = 1;
     m->cpu.irq_defer_i = 1;
     m->cpu.I = 0;
@@ -796,7 +796,7 @@ static inline void cli(C6510 *m) {
 }
 
 static inline void clv(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.V = 0;
     CYCLE(m);
 }
@@ -808,7 +808,7 @@ static inline void cmp_a16(C6510 *m) {
 }
 
 static inline void cmp_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     compare_bytes(m, m->cpu.A, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -821,7 +821,7 @@ static inline void cpx_a16(C6510 *m) {
 }
 
 static inline void cpx_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     compare_bytes(m, m->cpu.X, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -834,7 +834,7 @@ static inline void cpy_a16(C6510 *m) {
 }
 
 static inline void cpy_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     compare_bytes(m, m->cpu.Y, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -848,7 +848,7 @@ static inline void dcp_a16(C6510 *m) {
 }
 
 static inline void dea(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.A - 1);
     CYCLE(m);
 }
@@ -860,13 +860,13 @@ static inline void dec_a16(C6510 *m) {
 }
 
 static inline void dex(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.X, m->cpu.X - 1);
     CYCLE(m);
 }
 
 static inline void dey(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.Y, m->cpu.Y - 1);
     CYCLE(m);
 }
@@ -878,7 +878,7 @@ static inline void eor_a16(C6510 *m) {
 }
 
 static inline void eor_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.A ^ m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -891,19 +891,19 @@ static inline void inc_a16(C6510 *m) {
 }
 
 static inline void ina(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.A + 1);
     CYCLE(m);
 }
 
 static inline void inx(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.X, m->cpu.X + 1);
     CYCLE(m);
 }
 
 static inline void iny(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.Y, m->cpu.Y + 1);
     CYCLE(m);
 }
@@ -949,7 +949,7 @@ static inline void jmp_ind(C6510 *m) {
 
 static inline void jmp_ind_x(C6510 *m) {
     a(m);
-    read_from_memory(m, m->cpu.pc - 2);
+    read_dummy(m, m->cpu.pc - 2);
     m->cpu.address_16 += m->cpu.X;
     CYCLE(m);
     sl_read_a16(m);
@@ -980,7 +980,7 @@ static inline void lax_a16(C6510 *m) {
 }
 
 static inline void lax_imm_und(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     m->cpu.A = (m->cpu.A | 0xEE) & m->cpu.scratch_lo;
     set_register_to_value(m, &m->cpu.X, m->cpu.A);
@@ -994,7 +994,7 @@ static inline void lda_a16(C6510 *m) {
 }
 
 static inline void lda_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -1007,7 +1007,7 @@ static inline void ldx_a16(C6510 *m) {
 }
 
 static inline void ldx_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.X, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -1020,14 +1020,14 @@ static inline void ldy_a16(C6510 *m) {
 }
 
 static inline void ldy_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.Y, m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
 }
 
 static inline void lsr_a(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     m->cpu.C = m->cpu.A & 0x01 ? 1 : 0;
     set_register_to_value(m, &m->cpu.A, m->cpu.A >>= 1);
     CYCLE(m);
@@ -1047,7 +1047,7 @@ static inline void ora_a16(C6510 *m) {
 }
 
 static inline void ora_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     set_register_to_value(m, &m->cpu.A, m->cpu.A | m->cpu.scratch_lo);
     m->cpu.pc++;
     CYCLE(m);
@@ -1150,7 +1150,7 @@ static inline void sbc_a16(C6510 *m) {
 }
 
 static inline void sbc_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     CYCLE(m);
     if(m->cpu.class == CPU_65c02 && m->cpu.D) {
@@ -1285,7 +1285,7 @@ static inline void tya(C6510 *m) {
 }
 
 static inline void xaa_imm(C6510 *m) {
-    m->cpu.scratch_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     set_register_to_value(m, &m->cpu.A, (m->cpu.A | 0xEE) & m->cpu.X & m->cpu.scratch_lo);
     CYCLE(m);

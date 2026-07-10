@@ -302,3 +302,17 @@ helpers, especially immediate and indexed forms, still inherit the generic
 data-read tag. The next Phase 1 slice is to route those through named operand
 and dummy helpers, then add page-crossing, branch, pull/RTI, IRQ, and NMI
 fixtures before the trace is used to change scheduler behavior.
+
+Phase 1 follow-up completed on 2026-07-10:
+
+- Direct immediate and branch-displacement reads now use the operand-read
+  helper. Direct PC reads used for implied, accumulator, and indexed timing
+  cycles now use the dummy-read helper.
+- New trace fixtures cover a taken branch, `PLA`, an IRQ after `CLI`'s required
+  one-instruction deferral, and a RESTORE-driven NMI. They verify the operand,
+  dummy, stack, and vector access sequence without changing execution.
+
+Remaining Phase 1 work is now narrower: audit the indirect/indexed address
+generation helpers, especially their page-crossing dummy reads, and add an
+`RTI` stack-read fixture. Once that is done, typed traces are sufficient to
+begin the Phase 2 arbiter behind a selected opcode-family gate.
