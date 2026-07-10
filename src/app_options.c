@@ -1044,10 +1044,6 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->video_standard, value);
     }
-    options->display_width = config_get_int(
-        cfg, "Video", "display_width", options->display_width);
-    options->display_height = config_get_int(
-        cfg, "Video", "display_height", options->display_height);
     value = config_get(cfg, "input", "keyboard_joystick_layout");
     if (value != NULL) {
         replace_string(&options->keyboard_joystick_layout, value);
@@ -1421,8 +1417,6 @@ void app_options_init(app_options *options)
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
-    options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
-    options->display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
     replace_string(&options->keyboard_joystick_layout,
                    C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT);
     options->keyboard_joystick_port = 0;
@@ -1431,8 +1425,8 @@ void app_options_init(app_options *options)
     options->layout_split_display_right = C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT;
     options->layout_split_top_bottom = C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM;
     options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
-    options->layout_display_width = C64M_DEFAULT_DISPLAY_WIDTH;
-    options->layout_display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
+    options->layout_display_width = C64M_DEFAULT_LAYOUT_DISPLAY_WIDTH;
+    options->layout_display_height = C64M_DEFAULT_LAYOUT_DISPLAY_HEIGHT;
     options->assembler_auto_run = false;
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
@@ -1478,8 +1472,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
     dest->audio_record_duration_seconds = src->audio_record_duration_seconds;
     dest->scroll_wheel_lines = src->scroll_wheel_lines;
-    dest->display_width = src->display_width;
-    dest->display_height = src->display_height;
     dest->window_width = src->window_width;
     dest->window_height = src->window_height;
     dest->layout_split_display_right = src->layout_split_display_right;
@@ -1590,8 +1582,8 @@ bool app_options_save_shutdown(const app_options *options)
     if (options->video_standard != NULL) {
         config_set(cfg, "Video", "standard", options->video_standard);
     }
-    config_set_int(cfg, "Video", "display_width", options->display_width);
-    config_set_int(cfg, "Video", "display_height", options->display_height);
+    config_remove_prefix(cfg, "Video", "display_width");
+    config_remove_prefix(cfg, "Video", "display_height");
     if (options->keyboard_joystick_layout != NULL) {
         config_set(cfg, "input", "keyboard_joystick_layout",
                    options->keyboard_joystick_layout);

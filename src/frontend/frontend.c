@@ -1463,14 +1463,6 @@ static void frontend_draw_breakpoint_editor(frontend *ui, int width, int height)
 
 static bool frontend_config_validate(frontend_config_dialog_state *dialog)
 {
-    if (dialog->edited.display_width < 160 || dialog->edited.display_width > 2048) {
-        snprintf(dialog->error, sizeof(dialog->error), "Display width must be 160..2048");
-        return false;
-    }
-    if (dialog->edited.display_height < 120 || dialog->edited.display_height > 2048) {
-        snprintf(dialog->error, sizeof(dialog->error), "Display height must be 120..2048");
-        return false;
-    }
     if (dialog->edited.scroll_wheel_lines < 1 || dialog->edited.scroll_wheel_lines > 100) {
         snprintf(dialog->error, sizeof(dialog->error), "Scroll wheel speed must be 1..100");
         return false;

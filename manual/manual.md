@@ -1292,8 +1292,6 @@ emulator removes comments.
 | Key              | Value                                                    |
 |------------------|----------------------------------------------------------|
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
-| `display_width`  | Legacy startup sizing base width; not shown in Configure |
-| `display_height` | Legacy startup sizing base height; not shown in Configure |
 
 ### [input]
 

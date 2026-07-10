@@ -4167,8 +4167,6 @@ int main(int argc, char **argv) {
     }
     platform_started = true;
 
-    window_config.display_width = options.display_width;
-    window_config.display_height = options.display_height;
     window_config.window_width = options.window_width;
     window_config.window_height = options.window_height;
 

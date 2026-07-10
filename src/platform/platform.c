@@ -2,7 +2,8 @@
 
 #include <SDL.h>
 
-#define C64M_STARTUP_WINDOW_SCALE 3
+#define C64M_STARTUP_WINDOW_WIDTH 1152
+#define C64M_STARTUP_WINDOW_HEIGHT 816
 
 struct platform_window {
     SDL_Window *window;
@@ -41,8 +42,6 @@ void platform_shutdown(void)
 platform_window *platform_window_create(const platform_window_config *config)
 {
     platform_window *platform;
-    int display_width;
-    int display_height;
     int window_width;
     int window_height;
 
@@ -50,14 +49,12 @@ platform_window *platform_window_create(const platform_window_config *config)
         return NULL;
     }
 
-    display_width = config->display_width > 0 ? config->display_width : 384;
-    display_height = config->display_height > 0 ? config->display_height : 272;
     window_width = config->window_width > 0 ?
         config->window_width :
-        display_width * C64M_STARTUP_WINDOW_SCALE;
+        C64M_STARTUP_WINDOW_WIDTH;
     window_height = config->window_height > 0 ?
         config->window_height :
-        display_height * C64M_STARTUP_WINDOW_SCALE;
+        C64M_STARTUP_WINDOW_HEIGHT;
 
     platform = (platform_window *)SDL_calloc(1, sizeof(*platform));
     if (platform == NULL) {
