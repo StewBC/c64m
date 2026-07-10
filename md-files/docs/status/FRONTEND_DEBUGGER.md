@@ -217,6 +217,9 @@ UI behavior:
 ## Assembler UI
 
 - Assembler tab, file picker, address/run address, auto-run, reset/run-to-BASIC assembly flow, assembler error event/dialog, and symbol snapshot handoff to disassembler are implemented.
+- The Assembler source field displays the selected file relative to the INI
+  directory; assembly and persistence resolve that display path back to the
+  absolute source path.
 - Reset C64 checkbox is above Assemble and defaults on (previously labelled "Reset").
 - When Reset C64 is unchecked, assembly writes directly into live RAM in any execution state.
 - If Auto Run is set with Reset C64 unchecked, the runtime jumps to run address and resumes running.

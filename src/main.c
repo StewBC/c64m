@@ -2577,13 +2577,24 @@ static void dispatch_debugger_intents(
                 if (intent.assemble_rearm_oneshots) {
                     runtime_client_rearm_oneshot_breakpoints(client);
                 }
+                {
+                    char assemble_path[1024];
+                    const char *source_path = intent.assemble_path;
+
+                    if (options != NULL &&
+                        app_options_path_absolute_from_ini(
+                            options, intent.assemble_path,
+                            assemble_path, sizeof(assemble_path))) {
+                        source_path = assemble_path;
+                    }
                 sent = runtime_client_assemble_file_full(
                     client,
-                    intent.assemble_path,
+                    source_path,
                     intent.assemble_address,
                     intent.assemble_run_address,
                     intent.assemble_auto_run,
                     intent.assemble_reset_first);
+                }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE:
@@ -4267,9 +4278,16 @@ int main(int argc, char **argv) {
     options.layout_display_height = layout_state.display_height;
     {
         frontend_assembler_options asm_opts;
+        char assembler_path[1024];
         frontend_get_assembler_options(ui, &asm_opts);
-        app_options_set_string(&options.assembler_file,
-            asm_opts.file[0] ? asm_opts.file : NULL);
+        if (asm_opts.file[0] != '\0' &&
+            app_options_path_absolute_from_ini(
+                &options, asm_opts.file, assembler_path, sizeof(assembler_path))) {
+            app_options_set_string(&options.assembler_file, assembler_path);
+        } else {
+            app_options_set_string(&options.assembler_file,
+                asm_opts.file[0] ? asm_opts.file : NULL);
+        }
         app_options_set_string(&options.assembler_address,
             asm_opts.address[0] ? asm_opts.address : NULL);
         app_options_set_string(&options.assembler_run_address,

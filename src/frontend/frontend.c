@@ -245,8 +245,7 @@ typedef enum frontend_active_view {
 } frontend_active_view;
 
 typedef enum frontend_config_tab {
-    FRONTEND_CONFIG_TAB_MACHINE = 0,
-    FRONTEND_CONFIG_TAB_EMULATOR,
+    FRONTEND_CONFIG_TAB_EMULATOR = 0,
     FRONTEND_CONFIG_TAB_PATHS
 } frontend_config_tab;
 
@@ -1037,7 +1036,6 @@ static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *d
     return
         frontend_config_reserve_string(&dialog->edited.ini_path, 1024) &&
         frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
-        frontend_config_reserve_string(&dialog->edited.video_filter, 64) &&
         frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
         frontend_config_reserve_string(&dialog->edited.symbol_files, 1024) &&
         frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16);
@@ -1057,7 +1055,7 @@ static bool frontend_config_dialog_open(frontend *ui)
     }
 
     ui->config_dialog.open = true;
-    ui->config_dialog.active_tab = FRONTEND_CONFIG_TAB_MACHINE;
+    ui->config_dialog.active_tab = FRONTEND_CONFIG_TAB_EMULATOR;
     ui->config_dialog.error[0] = '\0';
     return true;
 }
@@ -1524,44 +1522,14 @@ static void frontend_draw_config_tab_button(frontend *ui, frontend_config_tab ta
     ui->ctx->style.button = saved_button;
 }
 
-static void frontend_draw_config_machine_tab(frontend_config_dialog_state *dialog, struct nk_context *ctx)
-{
-    nk_layout_row_dynamic(ctx, 20.0f, 2);
-    if (nk_option_label(ctx, "NTSC", frontend_string_equal(dialog->edited.video_standard, "NTSC"))) {
-        app_options_set_string(&dialog->edited.video_standard, "NTSC");
-    }
-    if (nk_option_label(ctx, "PAL", frontend_string_equal(dialog->edited.video_standard, "PAL"))) {
-        app_options_set_string(&dialog->edited.video_standard, "PAL");
-    }
-
-    nk_layout_row_dynamic(ctx, 22.0f, 2);
-    nk_label(ctx, "Display Width", NK_TEXT_LEFT);
-    nk_property_int(ctx, "#W", 160, &dialog->edited.display_width, 2048, 1, 8.0f);
-    nk_label(ctx, "Display Height", NK_TEXT_LEFT);
-    nk_property_int(ctx, "#H", 120, &dialog->edited.display_height, 2048, 1, 8.0f);
-
-    nk_layout_row_dynamic(ctx, 20.0f, 2);
-    frontend_checkbox_bool(ctx, "Integer Scale", &dialog->edited.integer_scale);
-    frontend_checkbox_bool(ctx, "Aspect Correct", &dialog->edited.aspect_correct);
-
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
-    nk_layout_row_push(ctx, 0.30f);
-    nk_label(ctx, "Filter", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.70f);
-    if (dialog->edited.video_filter == NULL) {
-        app_options_set_string(&dialog->edited.video_filter, "nearest");
-    }
-    frontend_edit_replace(
-        ctx,
-        NK_EDIT_FIELD,
-        dialog->edited.video_filter,
-        64,
-        nk_filter_default);
-    nk_layout_row_end(ctx);
-}
-
 static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dialog_state *dialog, struct nk_context *ctx)
 {
+    static const char *const video_items[] = { "NTSC", "PAL" };
+    static const char *const joystick_port_items[] = { "Off", "Port 1", "Port 2" };
+    static const char *const joystick_layout_items[] = { "Numpad", "WASD" };
+    int selected;
+    int next;
+
     if (dialog->edited.turbo_multipliers == NULL) {
         app_options_set_string(&dialog->edited.turbo_multipliers, "2,4,8,16");
     }
@@ -1569,67 +1537,89 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         app_options_set_string(&dialog->edited.symbol_files, "");
     }
 
-    nk_layout_row_dynamic(ctx, 22.0f, 2);
-    nk_label(ctx, "Scroll Wheel Speed", NK_TEXT_LEFT);
-    nk_property_int(ctx, "#L", 1, &dialog->edited.scroll_wheel_lines, 100, 1, 4.0f);
-
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
-    nk_layout_row_push(ctx, 0.30f);
-    nk_label(ctx, "Turbo Speeds", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.70f);
-    frontend_edit_replace(
-        ctx,
-        NK_EDIT_FIELD,
-        dialog->edited.turbo_multipliers,
-        256,
-        nk_filter_default);
-    nk_layout_row_end(ctx);
-
-    if (dialog->edited.no_save_ini) {
-        nk_layout_row_dynamic(ctx, 20.0f, 1);
-        nk_label(ctx, "Saving disabled", NK_TEXT_LEFT);
-    } else {
-        nk_layout_row_dynamic(ctx, 20.0f, 1);
-        frontend_checkbox_bool(ctx, "Auto-save INI on Quit", &dialog->edited.remember);
-    }
-
     if (dialog->edited.keyboard_joystick_layout == NULL) {
         app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
     }
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Keyboard Joystick", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 20.0f, 3);
-    if (nk_option_label(ctx, "Off", dialog->edited.keyboard_joystick_port == 0)) {
-        dialog->edited.keyboard_joystick_port = 0;
-    }
-    if (nk_option_label(ctx, "Port 1", dialog->edited.keyboard_joystick_port == 1)) {
-        dialog->edited.keyboard_joystick_port = 1;
-    }
-    if (nk_option_label(ctx, "Port 2", dialog->edited.keyboard_joystick_port == 2)) {
-        dialog->edited.keyboard_joystick_port = 2;
-    }
-    nk_layout_row_dynamic(ctx, 20.0f, 2);
-    if (nk_option_label(ctx, "Numpad",
-                        frontend_string_equal(dialog->edited.keyboard_joystick_layout, "numpad"))) {
-        app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
-    }
-    if (nk_option_label(ctx, "WASD",
-                        frontend_string_equal(dialog->edited.keyboard_joystick_layout, "wasd"))) {
-        app_options_set_string(&dialog->edited.keyboard_joystick_layout, "wasd");
+
+    nk_layout_row_dynamic(ctx, 132.0f, 1);
+    if (nk_group_begin(ctx, "machine-settings", NK_WINDOW_BORDER)) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "Machine", NK_TEXT_LEFT);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+        nk_layout_row_push(ctx, 0.30f);
+        nk_label(ctx, "Video", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.70f);
+        selected = frontend_string_equal(dialog->edited.video_standard, "PAL") ? 1 : 0;
+        next = nk_combo(ctx, video_items, 2, selected, 18, nk_vec2(120.0f, 100.0f));
+        if (next != selected) {
+            app_options_set_string(&dialog->edited.video_standard, video_items[next]);
+        }
+        nk_layout_row_end(ctx);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+        nk_layout_row_push(ctx, 0.30f);
+        nk_label(ctx, "Keyboard Joystick", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.35f);
+        selected = dialog->edited.keyboard_joystick_port;
+        if (selected < 0 || selected > 2) selected = 0;
+        next = nk_combo(ctx, joystick_port_items, 3, selected, 18, nk_vec2(120.0f, 120.0f));
+        if (next != selected) {
+            dialog->edited.keyboard_joystick_port = next;
+        }
+        nk_layout_row_push(ctx, 0.35f);
+        selected = frontend_string_equal(dialog->edited.keyboard_joystick_layout, "wasd") ? 1 : 0;
+        next = nk_combo(ctx, joystick_layout_items, 2, selected, 18, nk_vec2(120.0f, 100.0f));
+        if (next != selected) {
+            app_options_set_string(&dialog->edited.keyboard_joystick_layout, joystick_layout_items[next]);
+            for (char *p = dialog->edited.keyboard_joystick_layout; *p != '\0'; ++p) {
+                if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+            }
+        }
+        nk_layout_row_end(ctx);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+        nk_layout_row_push(ctx, 0.30f);
+        nk_label(ctx, "Turbo Speeds", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.70f);
+        frontend_edit_replace(ctx, NK_EDIT_FIELD, dialog->edited.turbo_multipliers, 256, nk_filter_default);
+        nk_layout_row_end(ctx);
+        nk_group_end(ctx);
     }
 
-    nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Symbol Files", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 22.0f, 1);
-    frontend_edit_replace(
-        ctx,
-        NK_EDIT_FIELD,
-        dialog->edited.symbol_files,
-        1024,
-        nk_filter_default);
-    nk_layout_row_dynamic(ctx, 24.0f, 1);
-    if (nk_button_label(ctx, "Add...")) {
-        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG);
+    nk_layout_row_dynamic(ctx, 132.0f, 1);
+    if (nk_group_begin(ctx, "ui-settings", NK_WINDOW_BORDER)) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "UI", NK_TEXT_LEFT);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+        nk_layout_row_push(ctx, 0.55f);
+        nk_label(ctx, "Scroll Wheel Speed", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.45f);
+        nk_property_int(ctx, "#L", 1, &dialog->edited.scroll_wheel_lines, 100, 1, 4.0f);
+        nk_layout_row_end(ctx);
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+        nk_layout_row_push(ctx, 0.30f);
+        nk_label(ctx, "Symbol Files", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.55f);
+        nk_spacing(ctx, 1);
+        nk_layout_row_push(ctx, 0.15f);
+        if (nk_button_label(ctx, "Add")) {
+            frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG);
+        }
+        nk_layout_row_end(ctx);
+
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        frontend_edit_replace(ctx, NK_EDIT_FIELD, dialog->edited.symbol_files, 1024, nk_filter_default);
+        nk_group_end(ctx);
+    }
+
+    nk_layout_row_dynamic(ctx, 20.0f, 1);
+    if (dialog->edited.no_save_ini) {
+        nk_label(ctx, "Saving disabled", NK_TEXT_LEFT);
+    } else {
+        frontend_checkbox_bool(ctx, "Auto-save INI on Quit", &dialog->edited.remember);
     }
 }
 
@@ -1743,28 +1733,25 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
 
     if (nk_begin(ctx, "Configure", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
         if (!nk_window_is_closed(ctx, "Configure")) {
-            nk_layout_row_dynamic(ctx, 24.0f, 3);
-            frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_MACHINE, "Machine");
+            nk_layout_row_dynamic(ctx, 24.0f, 2);
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_EMULATOR, "Emulator");
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_PATHS, "Paths");
 
             /* Grow the tab body to fill the space above the bottom controls (INI
-               row, Save-on-Quit, message line, OK/Cancel) so no dead space is left
-               and the tab content is not clipped. */
+               row, message line, OK/Cancel) so no dead space is left and the tab
+               content is not clipped. */
             {
                 struct nk_rect cregion = nk_window_get_content_region(ctx);
                 float sp = ctx->style.window.spacing.y;
                 float pad = ctx->style.window.padding.y;
-                float other = 24.0f /*tabs*/ + 24.0f /*INI*/ + 20.0f /*save-on-quit*/
-                            + 18.0f /*message*/ + 24.0f /*OK/Cancel*/;
-                float group_h = cregion.h - other - 6.0f * sp - 2.0f * pad;
+                float other = 24.0f /*tabs*/ + 24.0f /*INI*/ + 18.0f /*message*/
+                            + 24.0f /*OK/Cancel*/;
+                float group_h = cregion.h - other - 5.0f * sp - 2.0f * pad;
                 if (group_h < 120.0f) group_h = 120.0f;
                 nk_layout_row_dynamic(ctx, group_h, 1);
             }
             if (nk_group_begin(ctx, "config-tab-body", NK_WINDOW_BORDER)) {
-                if (dialog->active_tab == FRONTEND_CONFIG_TAB_MACHINE) {
-                    frontend_draw_config_machine_tab(dialog, ctx);
-                } else if (dialog->active_tab == FRONTEND_CONFIG_TAB_EMULATOR) {
+                if (dialog->active_tab == FRONTEND_CONFIG_TAB_EMULATOR) {
                     frontend_draw_config_emulator_tab(ui, dialog, ctx);
                 } else {
                     frontend_draw_config_paths_tab(ui, ctx);
@@ -1805,13 +1792,6 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG);
             }
             nk_layout_row_end(ctx);
-
-            nk_layout_row_dynamic(ctx, 20.0f, 1);
-            if (dialog->edited.no_save_ini) {
-                nk_label(ctx, "Save INI on Quit disabled by --nosaveini", NK_TEXT_LEFT);
-            } else {
-                frontend_checkbox_bool(ctx, "Save INI on Quit", &dialog->save_ini_on_quit);
-            }
 
             if (dialog->error[0] != '\0') {
                 nk_layout_row_dynamic(ctx, 18.0f, 1);
@@ -5867,10 +5847,10 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "State", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 24.0f, 2);
-    if (nk_button_label(ctx, "Load...")) {
+    if (nk_button_label(ctx, "Load")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG);
     }
-    if (nk_button_label(ctx, "Save As...")) {
+    if (nk_button_label(ctx, "Save")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG);
     }
 
@@ -7082,11 +7062,19 @@ void frontend_append_symbol_file(frontend *ui, const char *path)
 
 void frontend_set_assembler_path(frontend *ui, const char *path)
 {
+    char display_path[1024];
+
     if (ui == NULL || path == NULL) {
         return;
     }
 
-    snprintf(ui->assembler.file_path, sizeof(ui->assembler.file_path), "%s", path);
+    if (ui->config_dialog.initialized &&
+        app_options_path_relative_to_ini(
+            &ui->config_dialog.edited, path, display_path, sizeof(display_path))) {
+        snprintf(ui->assembler.file_path, sizeof(ui->assembler.file_path), "%s", display_path);
+    } else {
+        snprintf(ui->assembler.file_path, sizeof(ui->assembler.file_path), "%s", path);
+    }
 }
 
 void frontend_show_assembler_errors(frontend *ui, const char *errors)
@@ -7124,6 +7112,7 @@ void frontend_set_save_bin_path(frontend *ui, const char *path)
 void frontend_set_assembler_options(frontend *ui, const frontend_assembler_options *opts)
 {
     frontend_assembler_state *s;
+    char display_path[1024];
 
     if (ui == NULL || opts == NULL) {
         return;
@@ -7131,7 +7120,13 @@ void frontend_set_assembler_options(frontend *ui, const frontend_assembler_optio
 
     s = &ui->assembler;
     if (opts->file[0] != '\0') {
-        snprintf(s->file_path, sizeof(s->file_path), "%s", opts->file);
+        if (ui->config_dialog.initialized &&
+            app_options_path_relative_to_ini(
+                &ui->config_dialog.edited, opts->file, display_path, sizeof(display_path))) {
+            snprintf(s->file_path, sizeof(s->file_path), "%s", display_path);
+        } else {
+            snprintf(s->file_path, sizeof(s->file_path), "%s", opts->file);
+        }
     }
     snprintf(s->address_buf, sizeof(s->address_buf), "%s",
              opts->address[0] != '\0' ? opts->address : "8000");

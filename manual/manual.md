@@ -27,7 +27,7 @@ Useful flags:
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
 | `--turbo <list>` / `-t`| Set turbo multipliers, e.g. `2,4,8,16`             |
 | `--video PAL|NTSC`, `-P`, `-N` | Override the configured video standard for this run |
-| `--disk <drive>=<image[,image…]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
+| `--disk <drive>=<image[,image...]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--crt <file>`         | Attach a generic 8K/16K cartridge at startup        |
@@ -61,11 +61,11 @@ the emulated 1541 DOS ROM instead.
 
 `--prg <file>` (or `-p`) loads any file as a PRG at startup. The machine resets, boots
 through KERNAL and BASIC, then injects the file bytes at the load address embedded in
-the file's first two bytes. Execution continues automatically — no key press needed.
+the file's first two bytes. Execution continues automatically - no key press needed.
 
 `--basic <file>` (or `-B`) loads any file as a BASIC program at startup. The machine
 resets, boots to BASIC, writes the file to RAM at the address in its two-byte header,
-and updates the BASIC start and end pointers (`$2B–$2E`).
+and updates the BASIC start and end pointers (`$2B-$2E`).
 
 For both options the file extension is irrelevant; the flag determines how the file is
 treated, not the filename.
@@ -74,13 +74,13 @@ treated, not the filename.
 
 c64m supports generic 8K and 16K `.crt` cartridges (normal hardware type). `--crt <file>`
 attaches the cartridge at startup and resets with it running; a `.crt` file can also be
-dragged onto the window at any time. ROML maps at `$8000–$9FFF` and, for 16K cartridges,
-ROMH at `$A000–$BFFF`.
+dragged onto the window at any time. ROML maps at `$8000-$9FFF` and, for 16K cartridges,
+ROMH at `$A000-$BFFF`.
 
 Loading a program (drag a `.prg`/`.t64`/`.bas`, or use `--prg`/`--basic`) detaches an
 attached cartridge first, so the program boots to BASIC instead of the cartridge. To go
-from a running cartridge to BASIC without loading a program — for example to reach a disk
-you have mounted — use **[Reset]** and leave **Unmount cartridge on reset** checked (see
+from a running cartridge to BASIC without loading a program - for example to reach a disk
+you have mounted - use **[Reset]** and leave **Unmount cartridge on reset** checked (see
 **Emulator Controls**). Because mounting a disk does not reset the machine, mounting a disk
 while a cartridge is running only becomes reachable after such a reset.
 
@@ -116,13 +116,13 @@ The file extension determines how the file is handled:
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
 | `.c64state` | Load a saved machine state snapshot                         |
 | `.crt`    | Attach a generic 8K/16K cartridge and reset with it running |
-| `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B–$2E`) |
+| `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B-$2E`) |
 | `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
 | anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |
 
 Extension matching is case-insensitive (`.D64` and `.d64` are treated identically).
 Unlike the `--prg` and `--basic` startup flags, the extension drives the decision when
-dropping — there is no way to override it by name alone.
+dropping - there is no way to override it by name alone.
 
 Dropping a program (`.prg`, `.t64`, or `.bas`) while a cartridge is attached automatically
 detaches the cartridge, so the dropped program boots instead of the cartridge. Dropping
@@ -296,7 +296,7 @@ The annotation appears for:
   `screen,Y`, `($40,X)`, and `($FB),Y`, which show `[$addr:value]`;
 - `JMP ($xxxx)` indirect jumps, which show the resolved `[$addr]` target;
 - direct addresses, branches, `JMP`, and `JSR` operands that are shown as a
-  **label** — data references show `[$addr:value]`, branch and jump targets
+  **label** - data references show `[$addr:value]`, branch and jump targets
   show `[$addr]`.
 
 It is deliberately omitted where the address is already plain in the operand,
@@ -529,25 +529,25 @@ programs, and emulator management.
 Devices 8 and 9 each show a row of controls followed by a disk selector:
 
 ```
-[8] [Add] [Eject]  <disk name ▼>
-[9] [Add] [Eject]  <disk name ▼>
+[8] [Add] [Eject]  <disk name [v]>
+[9] [Add] [Eject]  <disk name [v]>
 ```
 
 Each device maintains an ordered queue of D64 images. At most one image is mounted at a
 time; the rest are queued for later use.
 
-**[8] / [9]** — Opens a file browser. Selecting an image replaces the entire queue with
+**[8] / [9]** - Opens a file browser. Selecting an image replaces the entire queue with
 that one disk and mounts it immediately.
 
-**[Add]** — Opens a file browser. The selected image is inserted into the queue
+**[Add]** - Opens a file browser. The selected image is inserted into the queue
 immediately after the currently mounted disk. If the drive is empty, the image is added
 and mounted.
 
-**[Eject]** — Removes the currently mounted disk from the queue and mounts the next one.
+**[Eject]** - Removes the currently mounted disk from the queue and mounts the next one.
 If the last disk in the queue is ejected, the drive becomes empty. The queue wraps
 round-robin: ejecting the final entry mounts the first remaining entry, not nothing.
 
-**[Eject!]** (hold Shift while clicking **[Eject]**) — Ejects all disks from the queue
+**[Eject!]** (hold Shift while clicking **[Eject]**) - Ejects all disks from the queue
 and leaves the drive empty.
 
 The selector to the right of the buttons shows the basename of the currently mounted
@@ -579,8 +579,8 @@ action as **[OK]** when the Name field is nonempty, including the normal address
 validation. **Opt+Return** opens **Browse...**. Once the file browser is open, it is the
 active dialog, so typing selects a file and **Return** opens the selected file.
 
-**Basic Text** loads a plain-text BASIC listing — the kind you get from a `LIST`,
-or an ASCII `.bas` file — rather than a tokenized PRG. c64m tokenizes the source on
+**Basic Text** loads a plain-text BASIC listing - the kind you get from a `LIST`,
+or an ASCII `.bas` file - rather than a tokenized PRG. c64m tokenizes the source on
 the host exactly as the C64 would, writes the program to memory at `$0801`, and sets
 the BASIC pointers so the result is ready to `LIST` or `RUN`. Each line must begin with
 a line number, and lines are expected in ascending order. Only stock BASIC V2 keywords
@@ -604,12 +604,12 @@ read from the live BASIC pointers (`$2B-$2E`) and written with no load-address h
 As with loading, only stock BASIC V2 keywords are handled. When Basic Text is selected
 the Start / End fields do not apply, and it is mutually exclusive with Basic Program.
 
-Control codes embedded in string literals — cursor movement, colour changes, CLR/HOME,
-reverse on/off, and so on — cannot be written as raw ASCII, so they are saved as named
+Control codes embedded in string literals - cursor movement, colour changes, CLR/HOME,
+reverse on/off, and so on - cannot be written as raw ASCII, so they are saved as named
 escapes in braces and translated back to the original bytes on load. For example a
 CLR/HOME character (`CHR$(147)`) is written as `{clr/home}`, HOME as `{home}`, cursor
-down as `{down}`, and colour codes as `{red}`, `{blue}`, and so on. The `π` character is
-written as `{pi}`. Any byte without a name — including graphics characters — is written
+down as `{down}`, and colour codes as `{red}`, `{blue}`, and so on. The `pi` character is
+written as `{pi}`. Any byte without a name - including graphics characters - is written
 as a hexadecimal escape such as `{$a0}`; a decimal form like `{147}` is also accepted on
 load. Escapes are recognized anywhere in a line, so a literal `{` in the text is itself
 written as `{$7b}`. Because the codes are normalized to the uppercase/graphics character
@@ -618,9 +618,9 @@ literally, but their exact bytes are always preserved through the numeric escape
 
 ### State
 
-**[Load...]** opens a file browser for a `.c64state` snapshot and restores it.
+**[Load]** opens a file browser for a `.c64state` snapshot and restores it.
 
-**[Save As...]** opens a save dialog and writes a named `.c64state` snapshot.
+**[Save]** opens a save dialog and writes a named `.c64state` snapshot.
 
 State snapshots preserve the emulated machine state, RAM, color RAM, CPU, VIC-II, CIA,
 SID, attached generic cartridge, mounted D64 references, and the frontend keyboard
@@ -628,7 +628,7 @@ joystick layout/port. The current v1 format stores references and hashes for ext
 content rather than embedding every ROM or media byte, so a snapshot is expected to be
 loaded with the same ROM files available.
 
-**Shift+Opt+>** quicksaves to the snapshot folder (Configure → Paths → `snapshot`,
+**Shift+Opt+>** quicksaves to the snapshot folder (Configure -> Paths -> `snapshot`,
 which defaults to the current directory). Each quicksave creates a new timestamped
 `.c64state` file; existing quicksaves are not overwritten. **Shift+Opt+<** quickloads
 the newest `.c64state` in that folder.
@@ -670,17 +670,17 @@ elapsed during that operation.
 
 Two values are shown because they can differ:
 
-- **CPU** — cycles the 6510 actually spent executing. This is deterministic with respect
+- **CPU** - cycles the 6510 actually spent executing. This is deterministic with respect
   to your code and is the right metric when profiling or counting instruction cycles.
 
-- **Machine** — wall-clock cycles of the C64 chip: every tick of the crystal oscillator,
+- **Machine** - wall-clock cycles of the C64 chip: every tick of the crystal oscillator,
   including cycles where the CPU was frozen while VIC-II held the bus. This reflects real
   elapsed time on the hardware.
 
 The difference between the two is **BA stall cycles**. When VIC-II needs the bus to fetch
 sprite or bitmap data it asserts the BA (Bus Available) line low. The CPU sees RDY go low
-and freezes — it has no say in the matter. Depending on sprite configuration and timing,
-a stall can last 1–3 cycles or longer. Because stalls depend on what VIC-II is doing at
+and freezes - it has no say in the matter. Depending on sprite configuration and timing,
+a stall can last 1-3 cycles or longer. Because stalls depend on what VIC-II is doing at
 that exact moment, machine cycle counts can vary between otherwise identical runs. CPU
 cycle counts will not.
 
@@ -728,7 +728,7 @@ window title (see **Window Title**) reads `c64m - Paused (BRK)`.
 
 This matters because real C64 software essentially never executes BRK on its normal
 control path. If the CPU lands on one anyway, it is almost always a sign that execution
-has run off the rails — into uninitialized memory, past the end of a program, or through
+has run off the rails - into uninitialized memory, past the end of a program, or through
 a corrupted jump vector. Letting that BRK execute is rarely useful: with no real KERNAL
 handler behind the vector it triggers, the CPU just re-enters BRK on whatever it jumps to
 next, repeatedly pushing to the stack and wrapping the stack pointer through `$0100-$01FF`
@@ -777,10 +777,10 @@ breakpoint.
 
 | Action  | Parameter field | Effect                                                  |
 |---------|-----------------|---------------------------------------------------------|
-| Break   | —               | Pause execution (default)                               |
-| Fast    | —               | Switch to maximum turbo speed                           |
-| Slow    | —               | Restore normal paced speed                              |
-| Troff   | —               | Disable per-instruction execution trace                 |
+| Break   | -               | Pause execution (default)                               |
+| Fast    | -               | Switch to maximum turbo speed                           |
+| Slow    | -               | Restore normal paced speed                              |
+| Troff   | -               | Disable per-instruction execution trace                 |
 | Tron    | Filename        | Enable per-instruction execution trace; writes to the given file, or `trace.log` if the field is empty |
 | Swap    | Queue step      | Navigate the device 8 disk queue (see below)            |
 | Type    | Text            | Inject text as C64 keystrokes when the breakpoint fires |
@@ -818,8 +818,8 @@ produce SHIFT+key; lowercase produce the unshifted key. Up to 128 events per seq
 | `\xHH`            | PETSCII byte, two hex digits                                     |
 | `\dDDD`           | PETSCII byte, three decimal digits                               |
 | `\oOOO`           | PETSCII byte, three octal digits                                 |
-| `\mR,C`           | Direct matrix key: row R, column C (digits 0–7)                  |
-| `\jPD` / `\jPD,B` | Joystick: port P (1–2), direction D (0–8), optional button B (0–1) |
+| `\mR,C`           | Direct matrix key: row R, column C (digits 0-7)                  |
+| `\jPD` / `\jPD,B` | Joystick: port P (1-2), direction D (0-8), optional button B (0-1) |
 
 Direction codes: 0=centre, 1=up, 2=up-right, 3=right, 4=down-right, 5=down,
 6=down-left, 7=left, 8=up-left.
@@ -832,11 +832,11 @@ Direction codes: 0=centre, 1=up, 2=up-right, 3=right, 4=down-right, 5=down,
 | `RESTORE`  | `RE`  | Restore (NMI) | `CBM`       | `CB`  | Commodore    |
 | `RUNSTOP`  | `RS`  | Run/Stop      | `CTRL`      | `CT`  | Control      |
 | `CLRHOME`  | `CH`  | Clr/Home      | `SPACE`     | `SP`  | Space        |
-| `INSDEL`   | `ID`  | Ins/Del       | `POUND`     | `PO`  | £            |
-| `CUU`      |       | Cursor up     | `LEFTARROW` | `LA`  | ←            |
-| `CUD`      |       | Cursor down   | `UPARROW`   | `UA`  | ↑            |
-| `CUL`      |       | Cursor left   | `PI`        |       | π            |
-| `CUR`      |       | Cursor right  | `F1`–`F8`   |       | Function keys |
+| `INSDEL`   | `ID`  | Ins/Del       | `POUND`     | `PO`  | POUND        |
+| `CUU`      |       | Cursor up     | `LEFTARROW` | `LA`  | <-           |
+| `CUD`      |       | Cursor down   | `UPARROW`   | `UA`  | ^            |
+| `CUL`      |       | Cursor left   | `PI`        |       | pi           |
+| `CUR`      |       | Cursor right  | `F1`-`F8`   |       | Function keys |
 | `PLUS`     |       | +             | `MINUS`     |       | -            |
 | `AT`       |       | @             | `ASTERISK`  | `AS`  | *            |
 
@@ -868,7 +868,7 @@ For example, `\[CTRL+]\[CTRL]SA\[CTRL-]` keeps Ctrl held for both `S` and `A`;
 the middle bare `\[CTRL]` is redundant because Ctrl is already explicitly held.
 
 **RESTORE and the `+`/`-` modifier:** `RESTORE` is an NMI key, not a keyboard matrix key.
-The `+` and `-` modifiers are silently ignored — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire
+The `+` and `-` modifiers are silently ignored - `\[RE]`, `\[RE+]`, and `\[RE-]` all fire
 the same one-shot NMI. There is no way to "hold" RESTORE.
 
 **RUN/STOP + RESTORE soft reset:** Use `\[RS]\[RE]`.
@@ -906,7 +906,7 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 
 | Field        | Meaning                                                        |
 |--------------|----------------------------------------------------------------|
-| File Name    | Path to the root assembly source file; use **Browse...** to pick |
+| File Name    | Path to the root assembly source file, shown relative to the INI directory; use **Browse...** to pick |
 | Address      | Hex load and assembly origin address (default `$8000`)         |
 | Run Address  | Hex address to jump to after successful assembly               |
 | Auto Run        | If checked, sets PC to Run Address and resumes after assembly  |
@@ -958,7 +958,7 @@ with `:`.
 **Variables:** assigned with `ident = expr`. Postfix `++` and `--` modify the variable
 as a prefix operation: `lda #i++` loads the value after increment.
 
-**Current address:** `*` reads the current output address — the address of the
+**Current address:** `*` reads the current output address - the address of the
 instruction or line being assembled, following the standard assembler convention. For
 example `jmp *` assembles a self-loop.
 
@@ -1209,28 +1209,34 @@ c64masm -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
 
 ## Configure
 
-The Configure dialog (opened from **[Configure...]** in the Machine tab) has two tabs:
-**Machine** and **Emulator**.
-
-### Machine
-
-| Control       | Effect                                            |
-|---------------|---------------------------------------------------|
-| PAL / NTSC    | Select the video standard; changes take effect on reboot |
+The Configure dialog (opened from **[Configure...]** in **Misc -> Machine**) has two tabs:
+**Emulator** and **Paths**.
 
 ### Emulator
 
-| Control              | Effect                                          |
-|----------------------|-------------------------------------------------|
-| Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
-| Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
-| Symbol Files         | Comma-separated paths to symbol files loaded at startup |
-| Keyboard Joystick    | Tri-state port selector (Off / Port 1 / Port 2) and Numpad / WASD layout |
-| Auto-save INI on Quit| Save `c64m.ini` automatically when quitting     |
+The tab is organized into three sections:
+
+**Machine**
+
+| Control           | Effect |
+|-------------------|--------|
+| Video             | Select `NTSC` or `PAL`; changes take effect on reboot |
+| Keyboard Joystick| Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
+| Turbo Speeds      | Comma-separated multiplier list, e.g. `2,4,8,16` |
+
+**UI**
+
+| Control           | Effect |
+|-------------------|--------|
+| Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
+| Symbol Files      | Add symbol files and display the comma-separated list of selected files |
+
+**Auto-save INI on Quit** saves `c64m.ini` automatically when quitting.
 
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. The layout can
-only be changed here. Applying the dialog takes effect immediately.
+only be changed here. The Video dropdown change reboots the emulated machine;
+other settings apply immediately.
 
 ### Paths
 
@@ -1246,7 +1252,7 @@ directory, and each row has a **[...]** button that opens a folder picker:
 | program   | Load PRG/BAS, and Load/Save Binary with no Basic checkbox      |
 | basic     | Load/Save Binary with **Basic Program** ticked                 |
 | text      | Load/Save Binary with **Basic Text** ticked                    |
-| snapshot  | Save/Load State — and the quicksave folder (Shift+Opt+> / <)   |
+| snapshot  | Save/Load State - and the quicksave folder (Shift+Opt+> / <)   |
 
 Edits here take effect on the next browse immediately. The folder picker's **[Use This
 Folder]** button selects the folder currently shown. **[Save Paths Only]** rewrites just
@@ -1286,11 +1292,8 @@ emulator removes comments.
 | Key              | Value                                                    |
 |------------------|----------------------------------------------------------|
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
-| `display_width`  | Integer; internal display width in pixels               |
-| `display_height` | Integer; internal display height in pixels              |
-| `integer_scale`  | `1` -- use integer-only scaling                          |
-| `aspect_correct` | `1` -- preserve pixel aspect ratio (default on)          |
-| `filter`         | `nearest` or `linear` (default `nearest`)               |
+| `display_width`  | Legacy startup sizing base width; not shown in Configure |
+| `display_height` | Legacy startup sizing base height; not shown in Configure |
 
 ### [input]
 
@@ -1360,14 +1363,14 @@ Paths may be absolute or relative to the directory containing the INI file.
 | `9_writable` | Parallel `0`/`1` list for device 9 images; omitted means read-only |
 | `emulate_1541` | `true`/`false`; when true and a 1541 ROM is loaded, route disk LOADs through real IEC/1541 emulation |
 
-Example — single disk:
+Example - single disk:
 
 ```
 [disk]
 8=./games/galencia.d64
 ```
 
-Example — multi-disk queue for a multi-part game:
+Example - multi-disk queue for a multi-part game:
 
 ```
 [disk]
@@ -1377,7 +1380,7 @@ Example — multi-disk queue for a multi-part game:
 The first image in the list is mounted at startup. The current position within the queue
 is not saved; launching the emulator always starts from the first image.
 
-Example — writable scratch disk:
+Example - writable scratch disk:
 
 ```
 [disk]
@@ -1392,12 +1395,12 @@ defaults on next launch.
 
 | Key              | Value                                               | Default |
 |------------------|-----------------------------------------------------|---------|
-| `file`           | Path to the root source file (relative or absolute) | —       |
+| `file`           | Path to the root source file, normally stored relative to the INI directory | -       |
 | `address`        | Hex load/assembly origin, e.g. `8000`               | `8000`  |
 | `run_address`    | Hex run address, e.g. `8000`                        | `8000`  |
-| `auto_run`       | `yes` / `no` — Jump to run address after assembling | `no`    |
-| `reset`          | `yes` / `no` — Reset C64 before assembling          | `yes`   |
-| `rearm_oneshots` | `yes` / `no` — Rearm one-shot breakpoints before assembling | `no` |
+| `auto_run`       | `yes` / `no` - Jump to run address after assembling | `no`    |
+| `reset`          | `yes` / `no` - Reset C64 before assembling          | `yes`   |
+| `rearm_oneshots` | `yes` / `no` - Rearm one-shot breakpoints before assembling | `no` |
 
 ### [DEBUG]
 

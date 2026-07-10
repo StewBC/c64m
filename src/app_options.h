@@ -34,9 +34,6 @@ typedef struct app_options {
     char *video_standard;
     int display_width;
     int display_height;
-    bool integer_scale;
-    bool aspect_correct;
-    char *video_filter;
     int window_width;
     int window_height;
     float layout_split_display_right;

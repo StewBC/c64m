@@ -22,7 +22,6 @@
 
 #define C64M_DEFAULT_INI "c64m.ini"
 #define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
-#define C64M_DEFAULT_VIDEO_FILTER "nearest"
 #define C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT "numpad"
 #define C64M_DEFAULT_SCROLL_WHEEL_LINES 3
 #define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
@@ -1049,15 +1048,6 @@ static void apply_config(app_options *options, config *cfg)
         cfg, "Video", "display_width", options->display_width);
     options->display_height = config_get_int(
         cfg, "Video", "display_height", options->display_height);
-    options->integer_scale = config_get_bool(
-        cfg, "Video", "integer_scale", options->integer_scale);
-    options->aspect_correct = config_get_bool(
-        cfg, "Video", "aspect_correct", options->aspect_correct);
-    value = config_get(cfg, "Video", "filter");
-    if (value != NULL) {
-        replace_string(&options->video_filter, value);
-    }
-
     value = config_get(cfg, "input", "keyboard_joystick_layout");
     if (value != NULL) {
         replace_string(&options->keyboard_joystick_layout, value);
@@ -1433,9 +1423,6 @@ void app_options_init(app_options *options)
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
     options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
     options->display_height = C64M_DEFAULT_DISPLAY_HEIGHT;
-    options->integer_scale = true;
-    options->aspect_correct = true;
-    replace_string(&options->video_filter, C64M_DEFAULT_VIDEO_FILTER);
     replace_string(&options->keyboard_joystick_layout,
                    C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT);
     options->keyboard_joystick_port = 0;
@@ -1493,8 +1480,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->scroll_wheel_lines = src->scroll_wheel_lines;
     dest->display_width = src->display_width;
     dest->display_height = src->display_height;
-    dest->integer_scale = src->integer_scale;
-    dest->aspect_correct = src->aspect_correct;
     dest->window_width = src->window_width;
     dest->window_height = src->window_height;
     dest->layout_split_display_right = src->layout_split_display_right;
@@ -1516,7 +1501,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->turbo_multipliers, src->turbo_multipliers) ||
         !replace_string(&dest->symbol_files, src->symbol_files) ||
         !replace_string(&dest->video_standard, src->video_standard) ||
-        !replace_string(&dest->video_filter, src->video_filter) ||
         !replace_string(&dest->basic_rom_path, src->basic_rom_path) ||
         !replace_string(&dest->char_rom_path, src->char_rom_path) ||
         !replace_string(&dest->kernal_rom_path, src->kernal_rom_path) ||
@@ -1608,12 +1592,6 @@ bool app_options_save_shutdown(const app_options *options)
     }
     config_set_int(cfg, "Video", "display_width", options->display_width);
     config_set_int(cfg, "Video", "display_height", options->display_height);
-    config_set_bool(cfg, "Video", "integer_scale", options->integer_scale);
-    config_set_bool(cfg, "Video", "aspect_correct", options->aspect_correct);
-    if (options->video_filter != NULL) {
-        config_set(cfg, "Video", "filter", options->video_filter);
-    }
-
     if (options->keyboard_joystick_layout != NULL) {
         config_set(cfg, "input", "keyboard_joystick_layout",
                    options->keyboard_joystick_layout);
@@ -1761,7 +1739,6 @@ void app_options_destroy(app_options *options)
     free(options->turbo_multipliers);
     free(options->symbol_files);
     free(options->video_standard);
-    free(options->video_filter);
     free(options->keyboard_joystick_layout);
     free(options->basic_rom_path);
     free(options->char_rom_path);

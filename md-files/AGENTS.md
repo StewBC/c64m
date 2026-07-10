@@ -127,6 +127,13 @@ C64MCPU_NEW.md
 C64MCIA_NEW.md
 ```
 
+## Documentation Character Rule
+
+`manual/manual.md` is a C64-facing document. Its source text must use only
+characters available in ASCII or PETSCII. In practice, keep the file ASCII-only:
+do not add Unicode punctuation, arrows, typographic quotes, or Unicode glyphs.
+Use ASCII spellings, names, or documented escapes for PETSCII characters instead.
+
 ## Architecture
 
 Allowed dependency direction:
