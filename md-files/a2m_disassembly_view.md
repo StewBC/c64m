@@ -123,13 +123,6 @@ This is a behavioral reference for Phase 12 planning only. Do not reuse the a2m 
   - View: Disassembly.
   - Changes: opens symbol lookup dialog.
   - On accepted symbol, cursor moves to the symbol address and the address is centered.
-- `Tab`:
-  - View: Disassembly.
-  - Changes: cycles symbol display mode forward.
-- `Shift+Tab`:
-  - View: Disassembly.
-  - Changes: cycles symbol display mode backward.
-
 ## Breakpoint interactions
 
 - `F9`:

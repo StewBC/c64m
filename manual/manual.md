@@ -330,9 +330,6 @@ first and newest entry last. `0000` means no writer has been recorded for that s
 Selecting one of the entries moves the Disassembly cursor to that address, the same kind
 of jump as entering the writer PC with `Opt+A`.
 
-**Tab** and **Shift+Tab** cycle the symbol display through `auto`, `names`, and `raw`
-modes independently of the source mode.
-
 ### Keyboard Controls
 
 | Key             | Action                                                     |
@@ -342,8 +339,6 @@ modes independently of the source mode.
 | `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                |
 | `Opt+S`         | Open the Symbol Lookup dialog                              |
 | `Opt+Left`      | Set PC to cursor address (paused only)                     |
-| `Tab`           | Cycle symbol display mode forward                          |
-| `Shift+Tab`     | Cycle symbol display mode backward                         |
 | `Up` / `Down`   | Move cursor one instruction                                |
 | `PgUp` / `PgDn` | Scroll one page                                            |
 | `Home` / `End`  | Jump to first or last line of the current view             |

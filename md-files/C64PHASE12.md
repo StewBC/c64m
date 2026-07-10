@@ -272,7 +272,6 @@ Core state owned by frontend:
 * address-entry mode
 * active address digit
 * follow-PC behavior
-* symbol display mode placeholder
 * selected breakpoint highlight state from copied breakpoint snapshot
 
 Display:
@@ -354,9 +353,6 @@ Keyboard behavior:
 * Ctrl+S:
 
   * future symbol lookup; for Phase 12 may open placeholder or no-op
-* Tab / Shift+Tab:
-
-  * cycle symbol display mode placeholder
 * F9:
 
   * global debugger layer toggles execute breakpoint at disassembly cursor address

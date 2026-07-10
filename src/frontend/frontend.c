@@ -164,7 +164,6 @@ typedef struct frontend_disassembly_view_state {
     uint8_t cursor_row;
     uint8_t cursor_length;
     uint8_t active_address_digit;
-    uint8_t symbol_display_mode;
     uint16_t last_pc;
     frontend_runtime_state last_runtime_state;
     bool initialized;
@@ -3217,15 +3216,6 @@ static void frontend_disassembly_handle_key(
             view->mode = RUNTIME_MEMORY_MODE_CPU_MAP;
         }
         view->request_pending = false;
-        return;
-    }
-
-    if (sym == SDLK_TAB) {
-        if ((mod & KMOD_SHIFT) != 0) {
-            view->symbol_display_mode = (uint8_t)((view->symbol_display_mode + 2u) % 3u);
-        } else {
-            view->symbol_display_mode = (uint8_t)((view->symbol_display_mode + 1u) % 3u);
-        }
         return;
     }
 
