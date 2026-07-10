@@ -335,3 +335,29 @@ The next Phase 2 slice is no longer public-step convergence; it is replacing
 the frozen `c6510_step()` trace/replay implementation itself with a resumable
 CPU micro-cycle executor. That is a separate, higher-risk change and must be
 introduced behind opcode-family trace-equivalence gates.
+
+## Phase 2 / 3 progress (2026-07-10)
+
+The first resumable executor is now active. It issues one real CPU bus callback
+per Phi2 cycle through the arbiter rather than executing an instruction against
+a frozen device world. The migrated, trace-gated families are:
+
+- NOP; immediate loads, ALU, compare, and common flag operations.
+- Zero-page and absolute loads/stores.
+- Absolute JMP; conditional branches including page-cross dummy cycles.
+- JSR/RTS, PHA/PHP/PLA/PLP, RTI, and BRK.
+
+IRQ/NMI entry and all other opcode families deliberately remain on compatibility replay. This is
+not yet a complete replacement for `c6510_step()` and must not be described as
+full cycle-perfect CPU execution.
+
+VIC-II now also records its current scheduled bus operation for bad-line
+c-accesses and PAL/NTSC sprite fetch cycles. BA continues to use the existing
+tested lead-window predicate. The schedule marker is the Phase 3 bridge toward
+individual fetch scheduling; idle g-accesses and per-byte sprite data accesses
+remain future work.
+
+The complete 43-test suite passes after these changes. Phase 4 remains active:
+the remaining legal and practical-undocumented opcode families, interrupt
+sequences, and complete VIC fetch scheduling have not migrated. Phase 5's full
+compatibility decision therefore cannot yet be closed honestly.

@@ -471,6 +471,10 @@ static void test_reject_mid_instruction_state(void) {
     init_ready_machine(&machine);
     machine.pending_cpu_trace_active = true;
     expect_u64("mid-instruction snapshot size", 0, c64_snapshot_size(&machine));
+
+    machine.pending_cpu_trace_active = false;
+    machine.cpu.micro_active = true;
+    expect_u64("mid-microcycle snapshot size", 0, c64_snapshot_size(&machine));
 }
 
 int main(void) {

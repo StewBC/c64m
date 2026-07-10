@@ -154,7 +154,7 @@ static void capture_timing_step(c64_t *machine, timing_sample *sample) {
     sample->raster_line_before = machine->vic.timing.raster_line;
     sample->cycle_in_line_before = machine->vic.timing.cycle_in_line;
     sample->ba_before = vicii_ba_active(&machine->vic, machine->clock.cycle);
-    sample->pending_before = machine->pending_cpu_trace_active;
+    sample->pending_before = machine->pending_cpu_trace_active || machine->cpu.micro_active;
     sample->elapsed_before = machine->pending_cpu_elapsed;
 
     expect_true("captured step cycle", c64_step_cycle(machine, error, sizeof(error)));
@@ -696,6 +696,134 @@ static void test_cpu_trace_tags_page_cross_and_rti_stack_reads(void) {
     expect_u16("rti restored PC", 0x1234u, snapshot(&machine).pc);
 }
 
+static void test_microcycle_zero_page_load_store_trace(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x85, 0x80,       /* STA $80 */
+        0xa5, 0x80        /* LDA $80 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    step_machine(&machine, 1);
+    expect_u64("zp store trace events", 3, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("zp store operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("zp store data access", C6510_BUS_ACCESS_DATA_WRITE,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("zp store address", 0x0080u, trace.events[2].address);
+    expect_u8("zp store value", 0x5au, machine.bus.ram[0x0080]);
+
+    step_machine(&machine, 1);
+    expect_u64("zp load trace events", 3, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("zp load operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("zp load data access", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("zp load address", 0x0080u, trace.events[2].address);
+    expect_u8("zp load value", 0x5au, snapshot(&machine).a);
+}
+
+static void test_microcycle_jmp_trace(void) {
+    static const uint8_t program[] = {
+        0x4c, 0x05, 0xe0, /* JMP $e005 */
+        0xea, 0xea, 0xea
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("jmp trace events", 3, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("jmp opcode access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
+    expect_u8("jmp low operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("jmp high operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("jmp destination", 0xe005u, snapshot(&machine).pc);
+}
+
+static void test_microcycle_branch_page_cross_trace(void) {
+    static const uint8_t program[] = {
+        0xd0, 0x02,       /* BNE from $e0fd: target $e101 */
+        0xea, 0xea, 0xea
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, 0xe0fdu);
+    copy_to_kernal(&roms, 0xe0fdu, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("branch page-cross trace events", 4,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("branch page-cross operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("branch page-cross first dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("branch page-cross first dummy address", 0xe0ffu, trace.events[2].address);
+    expect_u8("branch page-cross second dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("branch page-cross second dummy address", 0xe001u, trace.events[3].address);
+    expect_u16("branch page-cross target", 0xe101u, snapshot(&machine).pc);
+}
+
+static void test_microcycle_jsr_rts_trace(void) {
+    static const uint8_t program[] = {
+        0x20, 0x05, 0xe0, /* JSR $e005 */
+        0xea, 0xea,
+        0x60              /* RTS */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("jsr trace events", 6, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("jsr low operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("jsr stack dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("jsr PC high push", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("jsr PC low push", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u8("jsr high operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u16("jsr destination", 0xe005u, snapshot(&machine).pc);
+
+    step_machine(&machine, 1);
+    expect_u64("rts trace events", 6, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("rts stack low", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("rts stack high", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u8("rts final dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u16("rts destination", 0xe003u, snapshot(&machine).pc);
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -780,8 +908,7 @@ static void test_ba_allows_pending_write_cycle(void) {
 
     step_machine_cycles(&machine, 2); /* LDA #$5a */
     step_machine_cycles(&machine, 3); /* STA opcode, low address, high address reads */
-    expect_true("sta write pending", machine.pending_cpu_trace_active);
-    expect_u64("sta write elapsed", 3, machine.pending_cpu_elapsed);
+    expect_true("sta write pending", machine.pending_cpu_trace_active || machine.cpu.micro_active);
     expect_u8("ram before ba write", 0x00, c64_bus_read(&machine.bus, 0x1234));
 
     machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 1000u;
@@ -793,7 +920,7 @@ static void test_ba_allows_pending_write_cycle(void) {
     expect_u8("ba write completed", 0x5a, c64_bus_read(&machine.bus, 0x1234));
     expect_u64("ba write advances cpu", before_cpu_cycles + 1, machine.clock.cpu_cycles);
     expect_u64("ba write advances machine", before_machine_cycles + 1, machine.clock.cycle);
-    expect_true("sta trace complete", !machine.pending_cpu_trace_active);
+    expect_true("sta trace complete", !machine.pending_cpu_trace_active && !machine.cpu.micro_active);
 }
 
 static void test_ba_stalls_pending_read_cycle(void) {
@@ -812,8 +939,7 @@ static void test_ba_stalls_pending_read_cycle(void) {
     machine.bus.ram[0x1234] = 0x5a;
 
     step_machine_cycles(&machine, 3); /* opcode, low address, high address reads */
-    expect_true("lda read pending", machine.pending_cpu_trace_active);
-    expect_u64("lda read elapsed", 3, machine.pending_cpu_elapsed);
+    expect_true("lda read pending", machine.pending_cpu_trace_active || machine.cpu.micro_active);
 
     machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 1000u;
     before_cpu_cycles = machine.clock.cpu_cycles;
@@ -825,7 +951,7 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_u64("ba read stalls cpu", before_cpu_cycles, machine.clock.cpu_cycles);
     expect_u64("ba read advances machine", before_machine_cycles + 1, machine.clock.cycle);
     expect_u64("ba read keeps elapsed", before_elapsed, machine.pending_cpu_elapsed);
-    expect_true("lda trace still pending", machine.pending_cpu_trace_active);
+    expect_true("lda trace still pending", machine.pending_cpu_trace_active || machine.cpu.micro_active);
 }
 
 static void test_instruction_and_cycle_step_share_ba_arbiter(void) {
@@ -1188,6 +1314,10 @@ int main(void) {
     test_cpu_trace_tags_branch_and_stack_reads();
     test_cpu_trace_tags_irq_and_nmi_accesses();
     test_cpu_trace_tags_page_cross_and_rti_stack_reads();
+    test_microcycle_zero_page_load_store_trace();
+    test_microcycle_jmp_trace();
+    test_microcycle_branch_page_cross_trace();
+    test_microcycle_jsr_rts_trace();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();

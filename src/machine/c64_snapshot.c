@@ -571,7 +571,7 @@ static bool write_snapshot(const c64_t *m, uint8_t *out, size_t out_cap, size_t 
     snapshot_writer w;
     uint32_t flags;
 
-    if (m == NULL || out_size == NULL || m->pending_cpu_trace_active) {
+    if (m == NULL || out_size == NULL || m->pending_cpu_trace_active || m->cpu.micro_active) {
         return false;
     }
 

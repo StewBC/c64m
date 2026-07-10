@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -80,6 +81,11 @@ typedef struct C6510 {
     c6510_irq_pending_fn irq_pending;
     c6510_nmi_pending_fn nmi_pending;
     c6510_bus_access_kind bus_access_kind;
+    uint8_t micro_active;
+    uint8_t micro_opcode;
+    uint8_t micro_phase;
+    uint8_t micro_branch_taken;
+    uint16_t micro_target;
 } C6510;
 
 typedef enum {
@@ -139,3 +145,12 @@ void c6510_set_nmi_pending_callback(C6510 *m, c6510_nmi_pending_fn nmi_pending);
 void c6510_reset(C6510 *m);
 void c6510_set_overflow(C6510 *m);
 size_t c6510_step(C6510 *m);
+
+/* Resumable Phi2 path for a deliberately small, trace-gated set of common
+   6510 instructions. Unsupported opcodes continue through c6510_step() and
+   the compatibility trace/replay path until migrated. */
+bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode);
+void c6510_micro_begin(C6510 *m);
+c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m);
+bool c6510_micro_step(C6510 *m);
+size_t c6510_micro_cycles_remaining(const C6510 *m);

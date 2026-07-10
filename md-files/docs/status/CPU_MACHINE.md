@@ -7,6 +7,13 @@
 - Real 64C ROM execution reaches BASIC READY with visible cursor and keyboard input.
 - Machine owns monotonic master cycle.
 - Machine coordinates CPU bus events with VIC, CIA, and SID hooks.
+- Public instruction stepping and cycle stepping now use the same Phi2 arbiter,
+  so both honor BA stalls and produce the same CPU/VIC timing result.
+- A resumable CPU path is active for a trace-gated subset of common instructions:
+  NOP, immediate loads/ALU/compare/flag operations, zero-page and absolute
+  loads/stores, absolute JMP, conditional branches, JSR/RTS, PHA/PHP/PLA/PLP,
+  RTI, and BRK. IRQ/NMI entry plus remaining opcode families still use the
+  compatibility instruction-trace/replay path.
 
 ## 6510 / undocumented opcodes
 
@@ -25,6 +32,9 @@
   - JAM/KIL
 - C64 wrapper routes all CPU reads/writes through the machine bus.
 - BA stalls use traced read/write events, so undocumented RMW/store opcodes follow the same integration path as official opcodes.
+- CPU traces distinguish opcode fetches, operands, data, dummy cycles, RMW
+  dummy writes, stack accesses, and vector reads. Mid-instruction snapshots are
+  rejected for either the replay or resumable execution path.
 
 ## Interrupts
 

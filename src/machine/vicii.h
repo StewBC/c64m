@@ -29,6 +29,14 @@ typedef enum vicii_video_standard {
     VICII_VIDEO_STANDARD_PAL
 } vicii_video_standard;
 
+/* The VIC-II bus operation scheduled for the current Phi2 cycle. This is
+   machine-internal timing evidence; it deliberately does not expose AEC. */
+typedef enum vicii_bus_access_kind {
+    VICII_BUS_ACCESS_NONE = 0,
+    VICII_BUS_ACCESS_C,
+    VICII_BUS_ACCESS_SPRITE
+} vicii_bus_access_kind;
+
 typedef struct vicii_timing {
     uint32_t cycles_per_line;
     uint32_t lines_per_frame;
@@ -37,6 +45,7 @@ typedef struct vicii_timing {
     uint64_t frame_number;
     bool     frame_complete;
     vicii_video_standard standard;
+    vicii_bus_access_kind bus_access;
 
     /* Phase A additions */
     uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
@@ -110,6 +119,7 @@ void vicii_set_pixel_output_enabled(vicii *v, bool enabled);
 bool vicii_pixel_output_enabled(const vicii *v);
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
+vicii_bus_access_kind vicii_bus_access(const vicii *v);
 void vicii_destroy(vicii *v);
 
 uint8_t vicii_read_register(vicii *v, uint16_t addr);

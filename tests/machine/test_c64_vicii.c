@@ -1353,6 +1353,28 @@ static void test_sprite5_ba_window_within_line(void) {
     expect_true("sprite5 ba closed at abs 7", !vicii_ba_active(&v, abs));
 }
 
+static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    vicii_write_register(&v, 0xd011, 0x13u);
+    v.timing.raster_line = 0x33u;
+    abs = advance_vicii(&v, 0, 16u); /* process cycles 0 through 15 */
+    expect_u8("badline c-access schedule", VICII_BUS_ACCESS_C,
+        (uint8_t)vicii_bus_access(&v));
+    abs = advance_vicii(&v, abs, 40u); /* process cycles 16 through 55 */
+    expect_u8("post-badline c-access schedule", VICII_BUS_ACCESS_NONE,
+        (uint8_t)vicii_bus_access(&v));
+
+    setup_sprite_ba_test(&v, error, 100u, 0x01u);
+    (void)advance_vicii(&v, 0, 58u); /* process PAL sprite-0 fetch cycle 57 */
+    expect_u8("sprite fetch schedule", VICII_BUS_ACCESS_SPRITE,
+        (uint8_t)vicii_bus_access(&v));
+}
+
 /* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */
 static void test_sprites567_adjacent_ba_union(void) {
     vicii v;
@@ -2124,6 +2146,7 @@ int main(void) {
     test_d018_no_phase_g_masking();
     /* Phase H: sprite BA windows */
     test_sprite5_ba_window_within_line();
+    test_vicii_bus_schedule_reports_c_and_sprite_accesses();
     test_sprites567_adjacent_ba_union();
     test_6sprite_ba_early_and_late_windows();
     test_ntsc_sprites012_late_ba_window();

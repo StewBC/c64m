@@ -10,6 +10,9 @@
 - Sprites are implemented, including priority, collisions, expansion, multicolor, sprite pointer/data fetch, and IRQs.
 - Open/unused register reads are implemented according to the current Phase G policy.
 - PAL and NTSC sprite BA stealing are implemented.
+- The VIC-II exposes its current machine-internal scheduled bus operation for
+  bad-line c-accesses and sprite fetch cycles. BA still uses the existing
+  lead-window predicate while the full fetch scheduler is expanded.
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 

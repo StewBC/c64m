@@ -24,6 +24,7 @@ enum {
     C64_CPU_BUS_MODE_IMMEDIATE = 0,
     C64_CPU_BUS_MODE_TIMED_IMMEDIATE,
     C64_CPU_BUS_MODE_DEFER_WRITES,
+    C64_CPU_BUS_MODE_ARBITER,
 };
 
 static const uint8_t c64_d64_sectors_per_track[35] = {
@@ -1025,8 +1026,81 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
     machine->pending_cpu_trace_active = true;
 }
 
+static bool c64_micro_interrupt_pending(const c64_t *machine) {
+    bool cia1_irq;
+    bool vic_irq;
+    bool cia2_edge;
+
+    assert(machine);
+
+    cia1_irq = cia_irq_pending(&machine->cia1);
+    vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
+    cia2_edge = cia_irq_pending(&machine->cia2) && !machine->cia2_nmi_line;
+    return machine->restore_pending || cia1_irq || vic_irq || cia2_edge;
+}
+
+static bool c64_prepare_micro_instruction(c64_t *machine) {
+    uint8_t opcode;
+
+    assert(machine);
+
+    if (c64_micro_interrupt_pending(machine)) {
+        return false;
+    }
+
+    opcode = c64_debug_read_cpu_map(machine, machine->cpu.cpu.pc);
+    if (!c6510_micro_can_begin(&machine->cpu, opcode)) {
+        return false;
+    }
+
+    if (machine->cpu_trace_enabled) {
+        c64_trace_reset(&machine->last_cpu_trace);
+    }
+    machine->cpu_trace_start_cycle = machine->clock.cycle;
+    machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    c6510_micro_begin(&machine->cpu);
+    return true;
+}
+
+static bool c64_micro_cycle_stalled_by_ba(const c64_t *machine) {
+    c6510_bus_access_kind kind;
+
+    assert(machine);
+
+    if (!vicii_ba_active(&machine->vic, machine->clock.cycle)) {
+        return false;
+    }
+
+    kind = c6510_micro_access_kind(&machine->cpu);
+    return kind != C6510_BUS_ACCESS_DATA_WRITE &&
+           kind != C6510_BUS_ACCESS_RMW_DUMMY_WRITE &&
+           kind != C6510_BUS_ACCESS_STACK_WRITE;
+}
+
+static void c64_step_micro_cycle(c64_t *machine) {
+    bool completed;
+
+    assert(machine);
+    assert(machine->cpu.micro_active);
+
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_ARBITER;
+    completed = c6510_micro_step(&machine->cpu);
+    machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
+    c64_advance_one_cycle(machine);
+    machine->clock.cpu_cycles++;
+
+    if (completed) {
+        if (machine->cpu_trace_enabled) {
+            machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
+            machine->last_cpu_trace.total_cycles =
+                (size_t)(machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle);
+        }
+        machine->instruction_complete = true;
+    }
+}
+
 static bool c64_step_cycle_internal(c64_t *machine) {
-    if (!machine->pending_cpu_trace_active &&
+    if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
         (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine))) {
         machine->instruction_complete = true;
         machine->clock.cpu_cycles++;
@@ -1034,8 +1108,20 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         return true;
     }
 
-    if (!machine->pending_cpu_trace_active && !vicii_ba_active(&machine->vic, machine->clock.cycle)) {
-        c64_prepare_deferred_cpu_trace(machine);
+    if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
+        !vicii_ba_active(&machine->vic, machine->clock.cycle)) {
+        if (!c64_prepare_micro_instruction(machine)) {
+            c64_prepare_deferred_cpu_trace(machine);
+        }
+    }
+
+    if (machine->cpu.micro_active) {
+        if (!c64_micro_cycle_stalled_by_ba(machine)) {
+            c64_step_micro_cycle(machine);
+        } else {
+            c64_advance_one_cycle(machine);
+        }
+        return true;
     }
 
     if (machine->pending_cpu_trace_active && !c64_cpu_cycle_stalled_by_ba(machine)) {
@@ -1062,7 +1148,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
 }
 
 static void c64_finish_pending_cpu_trace(c64_t *machine) {
-    while (machine->pending_cpu_trace_active) {
+    while (machine->pending_cpu_trace_active || machine->cpu.micro_active) {
         c64_step_cycle_internal(machine);
     }
 }
@@ -1166,6 +1252,9 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     c64_bus_write(&machine->bus, address, value);
     if (machine->cpu.cpu.opcode_active) {
         c64_record_cpu_write(machine, address, machine->cpu.cpu.opcode_pc);
+    }
+    if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_ARBITER) {
+        c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
     }
     c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
 }
@@ -1425,9 +1514,14 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
     }
 
     c64_step_cycle_internal(machine);
-    machine->cpu_cycles_remaining = machine->pending_cpu_trace_active ?
-        machine->pending_cpu_trace.total_cycles - machine->pending_cpu_elapsed :
-        0;
+    if (machine->cpu.micro_active) {
+        machine->cpu_cycles_remaining = c6510_micro_cycles_remaining(&machine->cpu);
+    } else if (machine->pending_cpu_trace_active) {
+        machine->cpu_cycles_remaining =
+            machine->pending_cpu_trace.total_cycles - machine->pending_cpu_elapsed;
+    } else {
+        machine->cpu_cycles_remaining = 0;
+    }
     return true;
 }
 

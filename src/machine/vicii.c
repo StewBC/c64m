@@ -108,6 +108,14 @@ static const uint32_t vicii_ntsc_sprite_ba_assert[8] = {
      1,  3,  5    /* sprites 5-7: asserted in current line  (fetch at 0-based  4, 6, 8) */
 };
 
+static const uint32_t vicii_pal_sprite_fetch_cycle[8] = {
+    57, 59, 61, 0, 2, 4, 6, 8
+};
+
+static const uint32_t vicii_ntsc_sprite_fetch_cycle[8] = {
+    59, 61, 63, 0, 2, 4, 6, 8
+};
+
 static void vicii_set_error(char *error, size_t error_size, const char *message) {
     if (!error || error_size == 0) {
         return;
@@ -998,6 +1006,32 @@ static const uint32_t *vicii_sprite_ba_assert_table(const vicii *v) {
         vicii_ntsc_sprite_ba_assert;
 }
 
+static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {
+    return v->timing.standard == VICII_VIDEO_STANDARD_PAL ?
+        vicii_pal_sprite_fetch_cycle :
+        vicii_ntsc_sprite_fetch_cycle;
+}
+
+static void vicii_schedule_bus_access(vicii *v, uint32_t cycle) {
+    const uint32_t *sprite_fetch_cycle;
+    int n;
+
+    v->timing.bus_access = VICII_BUS_ACCESS_NONE;
+    if (v->bad_line && cycle >= VICII_CACCESS_FIRST_CYCLE &&
+        cycle <= VICII_CACCESS_LAST_CYCLE) {
+        v->timing.bus_access = VICII_BUS_ACCESS_C;
+        return;
+    }
+
+    sprite_fetch_cycle = vicii_sprite_fetch_cycle_table(v);
+    for (n = 0; n < 8; n++) {
+        if (v->sprite_active[n] && cycle == sprite_fetch_cycle[n]) {
+            v->timing.bus_access = VICII_BUS_ACCESS_SPRITE;
+            return;
+        }
+    }
+}
+
 /* Fill the video-matrix and colour-line latches for the whole line (all 40
    columns) from screen/colour RAM at VC. On hardware the c-accesses are spread
    across cycles 15-54, but nothing observes the partially-filled buffers -- only
@@ -1065,6 +1099,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         vicii_fetch_sprites(v, bus);
         vicii_latch_sprite_line_state(v);
     }
+
+    vicii_schedule_bus_access(v, cycle);
 
     /* Bad-line BA: assert at cycle 12 for the 43-cycle c-access window (12-54
        inclusive). Window = [abs_cycle_at_12, abs_cycle_at_12 + 44). */
@@ -1185,6 +1221,11 @@ bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {
     assert(v);
     return abs_cycle < v->timing.ba_low_until_abs ||
            abs_cycle < v->timing.sprite_ba_low_until_abs;
+}
+
+vicii_bus_access_kind vicii_bus_access(const vicii *v) {
+    assert(v);
+    return v->timing.bus_access;
 }
 
 void vicii_destroy(vicii *v) {
