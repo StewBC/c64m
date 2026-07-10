@@ -1,20 +1,19 @@
-# c64m - A Commodore 64 emulator written by Codex and Claude Code, produced by Stefan Wessels, 2026
+# c64m - A Commodore 64 emulator written by Codex, Claude Code and Grok, produced by Stefan Wessels, 2026
 
-c64m is a Commodore 64 emulator written in C99. It supports both PAL (6569) and NTSC
-video standards and can run BASIC programs, PRG files, and D64 disk images. The built-in
-debugger and assembler make it a practical environment for C64 development and
-exploration.
+c64m is a Commodore 64 emulator with PAL (6569) and NTSC video support. It runs BASIC
+programs, PRG files, and D64 disk images, and includes a debugger and assembler for C64
+development.
 
-c64m requires C64 ROM files to run. Place `basic`, `kernal`, `character`, and optionally
-`system` ROM files in the same directory as the executable, or in a subdirectory named
-`rom` or `roms`. Files are matched by stem name and size; extensions are ignored.
+c64m requires C64 ROM files. Place `basic`, `kernal`, `character`, and optionally `system`
+ROM files beside the executable or in a `rom` or `roms` subdirectory. Files are matched
+by stem name and size; extensions are ignored.
 
 ## Overview
 
 ### Running c64m
 
-Launch c64m from the command line or as a GUI application. Use `--help` (or `-h`) to
-see the full command-line reference.
+Launch c64m from the command line or as a GUI application. Use `--help` or `-h` for the
+full command-line reference.
 
 Useful flags:
 
@@ -36,39 +35,37 @@ Useful flags:
 | `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 
-By default, c64m loads `c64m.ini` from the current directory. The INI file records
+By default, c64m loads `c64m.ini` from the current directory. The INI file stores
 configuration, window size, debugger layout, and breakpoints.
 
 ### Video Standards
 
-PAL and NTSC are selectable in the Configure dialog or via the `[Video]` INI section.
-PAL runs at the 6569 timing (approximately 50 Hz frames), NTSC at the 6567 timing
-(approximately 60 Hz frames). Changing the video standard reboots the emulated machine.
-For a one-run override, use `--video PAL`, `--video NTSC`, `-P`, or `-N`; the command-line
-choice is applied after the INI file is loaded.
+Select PAL or NTSC in Configure or in the `[Video]` INI section. PAL uses 6569 timing
+(approximately 50 Hz); NTSC uses 6567 timing (approximately 60 Hz). Changing the video
+standard reboots the emulated machine. For a one-run override, use `--video PAL`,
+`--video NTSC`, `-P`, or `-N`. The command-line choice overrides the INI setting.
 
 ### Disk Images
 
-c64m supports D64 images on device 8 and device 9. Images mount read-only by default.
+c64m supports D64 images on devices 8 and 9. Images mount read-only by default.
 `LOAD "NAME",8`, `LOAD "NAME",8,1`, wildcard loads, and `LOAD "$",8` work through a
-compatibility KERNAL trap by default. When an image is marked writable, standard
-`SAVE "NAME",8` writes a PRG back into the mounted D64 and flushes the host `.d64`
-file after the save. If a 1541 ROM is available and `[disk] emulate_1541=1` is set,
-standard disk LOADs for devices 8/9 run through the real C64 KERNAL IEC routines and
-the emulated 1541 DOS ROM instead.
+compatibility KERNAL trap by default. When an image is marked writable, `SAVE "NAME",8`
+writes a PRG into the mounted D64 and flushes the host `.d64` file. If a 1541 ROM is
+available and `[disk] emulate_1541=1` is set, standard disk loads for devices 8 and 9
+use the C64 KERNAL IEC routines and the emulated 1541 DOS ROM.
 
 ### PRG and BASIC Files
 
-`--prg <file>` (or `-p`) loads any file as a PRG at startup. The machine resets, boots
-through KERNAL and BASIC, then injects the file bytes at the load address embedded in
-the file's first two bytes. Execution continues automatically - no key press needed.
+`--prg <file>` or `-p` loads a file as a PRG at startup. The machine resets, boots
+through KERNAL and BASIC, then injects the file at the load address in its first two
+bytes. Execution continues automatically.
 
-`--basic <file>` (or `-B`) loads any file as a BASIC program at startup. The machine
-resets, boots to BASIC, writes the file to RAM at the address in its two-byte header,
-and updates the BASIC start and end pointers (`$2B-$2E`).
+`--basic <file>` or `-B` loads a file as a BASIC program at startup. The machine resets,
+boots to BASIC, writes the file to RAM at the address in its two-byte header, and
+updates the BASIC start and end pointers (`$2B-$2E`).
 
-For both options the file extension is irrelevant; the flag determines how the file is
-treated, not the filename.
+For both options, the flag determines how the file is treated; the filename extension
+does not matter.
 
 ### Cartridges
 
@@ -86,7 +83,7 @@ while a cartridge is running only becomes reachable after such a reset.
 
 ### Auto Run
 
-`--autorun` (or `-a`) can be combined with `--prg`, `--basic`, or `--disk` to start
+`--autorun` or `-a` can be combined with `--prg`, `--basic`, or `--disk` to start
 execution without any manual key press.
 
 **With `--prg` or `--basic`:** after the file bytes are placed in memory at the BASIC
@@ -108,7 +105,7 @@ that bypass the KERNAL keyboard handler entirely will not receive the injected t
 
 ### Drag and Drop
 
-Files can be dragged onto the c64m window at any time while the emulator is running.
+Files can be dragged onto the c64m window while the emulator is running.
 The file extension determines how the file is handled:
 
 | Extension | Action                                                         |
@@ -140,14 +137,14 @@ state continues to advance normally.
 
 ## Interface
 
-### Display Mode
+### Display
 
-When launched, c64m shows the C64 display filling the entire window. All regular keys
-are forwarded to the emulated C64. The window can be resized; the display is always
-scaled to fit the available area with aspect-ratio correction.
+When launched, c64m shows the C64 display filling the window. Regular keys are forwarded
+to the emulated C64. The window can be resized; the display always scales to fit the
+available area with aspect-ratio correction.
 
 Press **F9** to open or close Debug Mode. Press **Opt+H** to open or close the in-emulator
-help. **Cmd+Q** (macOS) quits.
+help. On macOS, **Cmd+Q** quits.
 
 ### Window Title
 
@@ -160,12 +157,11 @@ is closed and no other indicator is visible:
 | `c64m - Paused (reason)`  | Execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
 | `c64m - Error`            | The runtime hit an error and stopped.                    |
 
-This is the quickest way to tell whether the emulator is waiting on something (paused) or
-just busy (running) without opening the debugger.
+This lets you tell whether the emulator is paused or running without opening the debugger.
 
 ### Debug Mode
 
-In Debug Mode the window is divided into four main areas:
+In Debug Mode, the window is divided into four main areas:
 
 | Area          | Contents                                                    |
 |---------------|-------------------------------------------------------------|
@@ -176,11 +172,10 @@ In Debug Mode the window is divided into four main areas:
 | Lower right   | Misc panel (Machine, Debugger, Breakpoints, Hardware, Assembler tabs) |
 
 c64m tracks an active view for keyboard input. When no modal dialog is open, the active
-C64 display, Disassembly, Misc, or Memory view is outlined with a neutral gray rectangle.
-Click a view to make it active, or press **Opt+Tab** to cycle
-C64->Disassembly->Misc->Memory. Press **Shift+Opt+Tab** to cycle in reverse. Modal
-dialogs keep input to themselves, so these view-cycling keys do not work while a dialog
-is open.
+C64 display, Disassembly, Misc, or Memory view has a neutral gray outline. Click a view
+to make it active, or press **Opt+Tab** to cycle C64->Disassembly->Misc->Memory. Press
+**Shift+Opt+Tab** to cycle in reverse. Modal dialogs keep input to themselves, so these
+view-cycling keys do not work while a dialog is open.
 
 ### Layout
 
@@ -189,18 +184,18 @@ Two splitters divide the debug layout:
 - A **vertical splitter** between the C64 display region and the CPU/Disassembly pane.
 - A **horizontal splitter** between the upper and lower halves.
 
-Drag the splitters to resize the panes. Window size and splitter positions are saved to
-the INI file on quit.
+Drag the splitters to resize the panes. The window size and splitter positions are saved
+to the INI file on quit.
 
 ### Turbo Mode
 
 **Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
-Turbo speeds are listed in the Configure dialog and stored in the INI file.
+Configure shows the list, which is stored in the INI file.
 
 ### Help
 
-Press **Opt+H** or **ESC** to open or close the in-emulator help overlay. The C64 is
-paused while the overlay is open and resumes when it is dismissed.
+Press **Opt+H** or **ESC** to open or close the in-emulator help overlay. The C64 pauses
+while the overlay is open and resumes when it is dismissed.
 
 The overlay shows one section of the manual at a time in a scrollable content area. A
 navigation bar along the bottom of the overlay contains:
@@ -252,7 +247,7 @@ When the CPU is paused, all fields are editable:
 The `-` position in the flag row represents the unused bit; it is always 1 and cannot
 be modified.
 
-## Disasm
+## Disassembly View
 
 The Disassembly view shows the code at and around the program counter. While running,
 the current instruction (the PC line) scrolls into view. While paused, the cursor is
@@ -275,7 +270,7 @@ C123: LABEL        A9 00       LDA #$00
 
 Breakpoint addresses show an indicator in the left gutter.
 
-### Effective Address And Value
+### Effective Address and Value
 
 When the emulator is paused, lines whose target address is not already obvious
 from the operand gain a trailing annotation showing the resolved address and,
@@ -386,7 +381,7 @@ ascending.
 **On commit:** the Disassembly view cursor jumps to the symbol's address, equivalent to
 entering the address with `Opt+A`.
 
-## Mem View
+## Memory View
 
 The Memory view shows the full 64 K address space as 16-byte rows in hex and ASCII.
 
@@ -721,14 +716,10 @@ A `BRK` opcode ($00) always pauses the emulator, with no breakpoint needed. The 
 not execute it; the instruction is intercepted before the stack is touched, and the
 window title (see **Window Title**) reads `c64m - Paused (BRK)`.
 
-This matters because real C64 software essentially never executes BRK on its normal
-control path. If the CPU lands on one anyway, it is almost always a sign that execution
-has run off the rails - into uninitialized memory, past the end of a program, or through
-a corrupted jump vector. Letting that BRK execute is rarely useful: with no real KERNAL
-handler behind the vector it triggers, the CPU just re-enters BRK on whatever it jumps to
-next, repeatedly pushing to the stack and wrapping the stack pointer through `$0100-$01FF`
-forever. Pausing on the first BRK stops that immediately so you can inspect what happened
-instead of digging through an overwritten stack.
+This usually indicates that execution has reached uninitialized memory, passed the end of
+a program, or followed a corrupted jump vector. Letting it execute can repeatedly push to
+the stack and wrap the stack pointer through `$0100-$01FF`. Pausing at the first BRK lets
+you inspect the failure before the stack is overwritten.
 
 This applies only to free-running execution (Run, Step Over, Step Out, and run-N
 commands). A single explicit step (**F11**) still executes a BRK normally, since you asked
@@ -1229,14 +1220,14 @@ The tab is organized into three sections:
 **Auto-save INI on Quit** enables persistent automatic saving of the configuration.
 
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
-**Shift+Opt+2** assignment; either place can change the active port. The layout can
-only be changed here. The Video dropdown change reboots the emulated machine;
-other settings apply immediately.
+**Shift+Opt+2** assignment; either place can change the active port. Change the layout
+here or with **Shift+Opt+M**. Changing Video reboots the emulated machine; other settings
+apply immediately.
 
 ### Paths
 
 The Paths tab holds the default folder the file browser remembers per browse type.
-Each field starts empty (the browser then opens at the shell's current directory) and
+Each field starts empty (the browser then opens in the current working directory) and
 updates as you pick files. Paths are shown and stored relative to the INI file's
 directory, and each row has a **[...]** button that opens a folder picker:
 
@@ -1256,10 +1247,10 @@ silent no-op if no INI file is set.
 
 ### INI File
 
-The INI file path is shown in the Configure dialog with a **Browse...** button. Changing
-the path prompts to parse the selected file immediately. **Save INI file on Quit** is a
-one-time save request for the current configuration. **Auto-save INI on Quit** enables
-persistent save-on-quit behavior by writing `Save=yes` under `[config]`.
+The Configure dialog shows the INI file path with a **Browse...** button. Changing the
+path prompts c64m to parse the selected file immediately. **Save INI file on Quit** is a
+one-time save request. **Auto-save INI on Quit** enables persistent save-on-quit behavior
+by writing `Save=yes` under `[config]`.
 
 **[OK]** applies all changes immediately. **[Cancel]** discards them.
 
@@ -1302,7 +1293,7 @@ The port can also be set for one launch with `--kbdjoy <0|1|2>`, and the layout 
 ### [browse]
 
 Default folders the file browser remembers per browse type (see the Configure
-dialog's Paths tab). Any missing key defaults to the shell's current directory.
+dialog's Paths tab). Any missing key defaults to the current working directory.
 
 | Key         | Used by                                                   |
 |-------------|-----------------------------------------------------------|
@@ -2123,22 +2114,20 @@ Two layouts are available:
 | `wasd`   | W / S / A / D          | (hold two keys)      | Space  |
 
 The numpad keys are not C64 keys, so the `numpad` layout never interferes with typing.
-The `wasd` keys are C64 keys, so while the keyboard joystick is assigned to a port those
-keys drive the joystick instead of reaching the C64; they type normally when the keyboard
+The `wasd` keys are C64 keys, so while the keyboard joystick is assigned to a port they
+drive the joystick instead of reaching the C64. They type normally when the keyboard
 joystick is disabled or when a debugger view has keyboard focus. The `numpad` layout
-follows the keypad key codes, so it requires Num Lock to be on. The port and layout are
-saved in the `[input]` INI section.
+uses keypad key codes, so Num Lock must be on. The port and layout are saved in the
+`[input]` INI section.
 
 ### Display and Scaling
 
-The C64 display is scaled to fit its panel with aspect-ratio correction and optional
-integer scaling. Letterbox or pillarbox fills the unused space. The internal pixel
-dimensions and scaling mode are configurable in the Configure dialog and saved to the
-INI file.
+The C64 display is scaled to fit its panel with aspect-ratio correction. Letterbox or
+pillarbox fills the unused space.
 
 ### Vendored third-party code and assets
 - `C64_TrueType_v1.2.1-STYLE`
-  - Upstteam: <http://style64.org/c64-truetype>
+  - Upstream: <http://style64.org/c64-truetype>
   - License: http://style64.org/c64-truetype/license
 - `stb/stb_ds.h`
   - Upstream: <https://github.com/nothings/stb>
@@ -2161,5 +2150,5 @@ INI file.
 
 ## Versions
 
-29 Jun 2026
-:   The 77 hours into it version.  Not a release yet.
+9 July 2026
+:   The 87 hours into it version.  Not a release yet.
