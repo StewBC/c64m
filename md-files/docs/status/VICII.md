@@ -28,6 +28,12 @@
 
 ## Recent changes
 
+- Raster IRQ now re-triggers when `$D011`/`$D012` updates make the 9-bit compare
+  equal the *current* raster mid-line (hardware behaviour). Previously IRQ was
+  only evaluated at cycle 0 of a matching line, so Galencia NTSC's bottom-border
+  IRQ chain skipped its cleanup slice every other frame (flashing status bar,
+  half-rate music). Regression:
+  `test_raster_compare_write_triggers_same_line_irq`.
 - PAL published frame height is the full 6569 raster: 312 (lines 0..311), matching
   `lines_per_frame`. Frontend still crops 352x248 at Y=28 for normal display so
   top-border scores and bottom-border HUDs (e.g. Galencia) remain visible without

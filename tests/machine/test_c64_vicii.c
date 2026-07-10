@@ -223,6 +223,51 @@ static void test_irq_status_high_bit_reports_enabled_pending_irq(void) {
     expect_u8("d01a high nibble", 0xf1, vicii_read_register(&v, 0xd01a));
 }
 
+/* Writing $D012 (or $D011 RST8) so the 9-bit compare equals the current
+   raster must raise the raster IRQ on that write. Hardware re-triggers mid-line;
+   Galencia NTSC depends on this to chain its bottom-border IRQ slice. */
+static void test_raster_compare_write_triggers_same_line_irq(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs;
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_NTSC);
+    vicii_write_register(&v, 0xd01a, 0x01); /* enable raster IRQ */
+
+    abs = 0;
+    /* Reach line 50, cycle 20 (past the cycle-0 line-start check). */
+    for (i = 0; i < VICII_NTSC_CYCLES_PER_LINE * 50u + 20u; i++) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    expect_u32("at raster 50", 50u, v.timing.raster_line);
+    expect_true("past cycle 0", v.timing.cycle_in_line >= 20u);
+
+    vicii_write_register(&v, 0xd019, 0x01); /* clear any pending */
+    expect_u8("irq clear before same-line write", 0x70,
+              (uint8_t)(vicii_read_register(&v, 0xd019) & 0xf1u));
+
+    vicii_write_register(&v, 0xd012, 50); /* compare == current line */
+    expect_u8("same-line d012 write raises raster irq", 0xf1,
+              vicii_read_register(&v, 0xd019));
+
+    /* Also RST8 path: line 200, set compare high bit via $D011 then low byte. */
+    vicii_write_register(&v, 0xd019, 0x01);
+    abs = 0;
+    vicii_reset(&v);
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_NTSC);
+    vicii_write_register(&v, 0xd01a, 0x01);
+    for (i = 0; i < VICII_NTSC_CYCLES_PER_LINE * 200u + 10u; i++) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    vicii_write_register(&v, 0xd019, 0x01);
+    vicii_write_register(&v, 0xd011, 0x1b); /* RST8=0 */
+    vicii_write_register(&v, 0xd012, 200);
+    expect_u8("same-line compare via d011/d012 raises irq", 0xf1,
+              vicii_read_register(&v, 0xd019));
+}
+
 static void test_sprite_collision_registers_read_clear(void) {
     vicii v;
     char error[256];
@@ -2042,6 +2087,7 @@ int main(void) {
     test_vicii_reset_state();
     test_raster_progression();
     test_irq_status_high_bit_reports_enabled_pending_irq();
+    test_raster_compare_write_triggers_same_line_irq();
     test_sprite_collision_registers_read_clear();
     test_bad_line_ba_asserts_at_cycle_12();
     test_frame_snapshot_geometry_and_regions();

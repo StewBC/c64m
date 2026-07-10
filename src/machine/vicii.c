@@ -1297,6 +1297,19 @@ uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr) {
     return v->registers[reg];
 }
 
+/* After $D011/$D012 update the 9-bit raster compare: if it now equals the
+   current raster line, raise the raster IRQ immediately. Hardware does this
+   on the write (not only at the start of a matching line). Galencia NTSC's
+   bottom-border IRQ chain writes compare == current line mid-line to chain
+   the next slice; without re-trigger the cleanup IRQ is skipped, RST8 is left
+   set, and every other frame misses the top-of-frame multiplex (flashing HUD,
+   half-rate music). */
+static void vicii_raster_compare_maybe_trigger(vicii *v) {
+    if (v->timing.raster_line == (uint32_t)v->timing.raster_compare) {
+        vicii_assert_raster_irq(v);
+    }
+}
+
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
     uint8_t reg;
 
@@ -1311,11 +1324,13 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
         } else {
             v->timing.raster_compare &= 0x00FFu;
         }
+        vicii_raster_compare_maybe_trigger(v);
         break;
 
     case 0x12: /* RASTER compare low byte */
         v->timing.raster_compare =
             (v->timing.raster_compare & 0x100u) | (uint16_t)value;
+        vicii_raster_compare_maybe_trigger(v);
         break;
 
     case 0x19: /* IRQ_STATUS: write-1-to-clear */
