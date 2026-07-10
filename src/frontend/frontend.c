@@ -363,6 +363,7 @@ typedef struct frontend_file_browser_state {
     bool scroll_to_selected;    /* reveal selection, anchored ~1/4 down (type-ahead) */
     bool scroll_ensure_visible; /* reveal selection with minimal scroll (key nav) */
     float list_visible_h;       /* measured inner height of the list group, in px */
+    int browse_slot;            /* frontend_browse_slot for this session, -1 = none */
 } frontend_file_browser_state;
 
 struct frontend {
@@ -401,6 +402,9 @@ struct frontend {
     frontend_help_state help;
     frontend_symbol_lookup_state symbol_lookup;
     frontend_file_browser_state file_browser;
+    /* Remembered default folder per browse slot (session memory; main.c bridges
+       these to the INI). Empty string means "unset" -> fall back to cwd. */
+    char browse_dirs[FRONTEND_BROWSE_SLOT_COUNT][1024];
     symbol_resolver symbols;
     symbol_table *symbol_table;
     app_disk_slot disk_queue[2]; /* mirrors options->disk_slots[8] and [9] */
@@ -7655,6 +7659,62 @@ static void frontend_file_browser_reload(frontend_file_browser_state *dlg)
     dlg->selected = dlg->filtered_count > 0 ? 0 : -1;
 }
 
+/* Maps a browse purpose to the slot whose remembered folder it should use. The
+   Load/Save binary dialogs split by their Basic Program / Basic Text checkboxes;
+   everything not listed (e.g. the config INI/symbol pickers) returns -1 and just
+   opens at the cwd without remembering. */
+static int frontend_file_browser_slot_for(const frontend *ui, frontend_debugger_intent_type purpose)
+{
+    switch (purpose) {
+        case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE:
+            return FRONTEND_BROWSE_SLOT_ASSEMBLER;
+        case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
+            return FRONTEND_BROWSE_SLOT_DISK;
+        case FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG:
+            return FRONTEND_BROWSE_SLOT_PROGRAM;
+        case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG:
+            return FRONTEND_BROWSE_SLOT_SNAPSHOT;
+        case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE:
+            if (ui->load_bin_dialog.basic_text)    return FRONTEND_BROWSE_SLOT_TEXT;
+            if (ui->load_bin_dialog.basic_program) return FRONTEND_BROWSE_SLOT_BASIC;
+            return FRONTEND_BROWSE_SLOT_PROGRAM;
+        case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_BROWSE:
+            if (ui->save_bin_dialog.basic_text)    return FRONTEND_BROWSE_SLOT_TEXT;
+            if (ui->save_bin_dialog.basic_program) return FRONTEND_BROWSE_SLOT_BASIC;
+            return FRONTEND_BROWSE_SLOT_PROGRAM;
+        default:
+            return -1;
+    }
+}
+
+/* Records dlg's current directory as the remembered folder for its slot. Called
+   when a selection commits so the next open of the same slot reopens there. */
+static void frontend_file_browser_remember_dir(frontend *ui, const frontend_file_browser_state *dlg)
+{
+    if (ui != NULL && dlg->browse_slot >= 0 && dlg->browse_slot < FRONTEND_BROWSE_SLOT_COUNT) {
+        snprintf(ui->browse_dirs[dlg->browse_slot], sizeof(ui->browse_dirs[dlg->browse_slot]),
+            "%s", dlg->current_dir);
+    }
+}
+
+void frontend_set_browse_dir(frontend *ui, frontend_browse_slot slot, const char *dir)
+{
+    if (ui == NULL || slot < 0 || slot >= FRONTEND_BROWSE_SLOT_COUNT) {
+        return;
+    }
+    snprintf(ui->browse_dirs[slot], sizeof(ui->browse_dirs[slot]), "%s", dir != NULL ? dir : "");
+}
+
+const char *frontend_get_browse_dir(const frontend *ui, frontend_browse_slot slot)
+{
+    if (ui == NULL || slot < 0 || slot >= FRONTEND_BROWSE_SLOT_COUNT) {
+        return "";
+    }
+    return ui->browse_dirs[slot];
+}
+
 void frontend_open_file_browser(
     frontend *ui,
     frontend_debugger_intent_type purpose,
@@ -7665,6 +7725,7 @@ void frontend_open_file_browser(
     uint8_t disk_device)
 {
     frontend_file_browser_state *dlg;
+    const char *remembered;
 
     if (ui == NULL) {
         return;
@@ -7673,6 +7734,7 @@ void frontend_open_file_browser(
     dlg = &ui->file_browser;
     memset(dlg, 0, sizeof(*dlg));
     dlg->purpose = purpose;
+    dlg->browse_slot = frontend_file_browser_slot_for(ui, purpose);
     snprintf(dlg->title, sizeof(dlg->title), "%s", title != NULL ? title : "");
     dlg->save_mode = save_mode;
     snprintf(dlg->filter_extension, sizeof(dlg->filter_extension), "%s",
@@ -7686,7 +7748,12 @@ void frontend_open_file_browser(
         snprintf(dlg->filename, sizeof(dlg->filename), "untitled.%s", dlg->default_extension);
     }
 
-    if (!platform_fs_get_cwd(dlg->current_dir, sizeof(dlg->current_dir))) {
+    /* Prefer this slot's remembered folder; fall back to the shell cwd if it is
+       unset or no longer a directory. */
+    remembered = dlg->browse_slot >= 0 ? ui->browse_dirs[dlg->browse_slot] : "";
+    if (remembered[0] != '\0' && platform_fs_is_dir(remembered)) {
+        snprintf(dlg->current_dir, sizeof(dlg->current_dir), "%s", remembered);
+    } else if (!platform_fs_get_cwd(dlg->current_dir, sizeof(dlg->current_dir))) {
         dlg->current_dir[0] = '\0';
     }
     frontend_file_browser_reload(dlg);
@@ -7724,6 +7791,7 @@ static void frontend_file_browser_activate(frontend *ui, frontend_file_browser_s
         return;
     }
 
+    frontend_file_browser_remember_dir(ui, dlg);
     frontend_push_file_browser_result_intent(ui, dlg->purpose, joined, dlg->disk_device);
     dlg->open = false;
 }
@@ -7755,6 +7823,7 @@ static void frontend_file_browser_commit_save(frontend *ui, frontend_file_browse
         return;
     }
 
+    frontend_file_browser_remember_dir(ui, dlg);
     frontend_push_file_browser_result_intent(ui, dlg->purpose, target, dlg->disk_device);
     dlg->open = false;
 }

@@ -1002,11 +1002,18 @@ static bool apply_disk_spec(app_options *options, const char *spec)
     return disk_slot_parse_list(&options->disk_slots[drive], NULL, images);
 }
 
+/* Keys in the [browse] section, indexed by frontend_browse_slot / APP_BROWSE_DIR
+   order. Keep in sync with frontend_browse_slot in frontend/frontend.h. */
+static const char *const browse_dir_keys[APP_BROWSE_DIR_COUNT] = {
+    "assembler", "disk", "program", "basic", "text", "snapshot"
+};
+
 static void apply_config(app_options *options, config *cfg)
 {
     const char *value;
     char key[32];
     int drive;
+    int i;
 
     if (cfg == NULL) {
         return;
@@ -1151,6 +1158,13 @@ static void apply_config(app_options *options, config *cfg)
         value = config_get(cfg, "disk", key);
         if (value != NULL) {
             disk_slot_parse_writable_list(&options->disk_slots[drive], value);
+        }
+    }
+
+    for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
+        value = config_get(cfg, "browse", browse_dir_keys[i]);
+        if (value != NULL && value[0] != '\0') {
+            replace_string(&options->browse_dirs[i], value);
         }
     }
 }
@@ -1512,6 +1526,13 @@ bool app_options_copy(app_options *dest, const app_options *src)
         }
     }
 
+    for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
+        if (!replace_string(&dest->browse_dirs[i], src->browse_dirs[i])) {
+            app_options_destroy(dest);
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -1666,6 +1687,15 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_bool(cfg, "assembler", "reset", options->assembler_reset_first);
     config_set_bool(cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
 
+    {
+        int i;
+        for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
+            if (options->browse_dirs[i] != NULL && options->browse_dirs[i][0] != '\0') {
+                config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+            }
+        }
+    }
+
     ok = config_save(cfg, options->ini_path);
     config_destroy(cfg);
     return ok;
@@ -1699,6 +1729,9 @@ void app_options_destroy(app_options *options)
     free(options->assembler_file);
     free(options->assembler_address);
     free(options->assembler_run_address);
+    for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
+        free(options->browse_dirs[i]);
+    }
     for (i = 0; i < C64M_DRIVE_COUNT; ++i) {
         disk_slot_free(&options->disk_slots[i]);
     }

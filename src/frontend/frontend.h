@@ -130,6 +130,21 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT
 } frontend_debugger_intent_type;
 
+/* File-browser "default folder" slots. Each remembers the last directory used by
+   a family of callers so the browser reopens there. The order must match the
+   [browse] key order in app_options.c. Load/Save-binary pick prg/basic/text by
+   the dialog's Basic Program / Basic Text checkboxes; the plain PRG program load
+   shares the PROGRAM slot; disk 8 & 9 share DISK; state save/load share SNAPSHOT. */
+typedef enum frontend_browse_slot {
+    FRONTEND_BROWSE_SLOT_ASSEMBLER = 0,
+    FRONTEND_BROWSE_SLOT_DISK,
+    FRONTEND_BROWSE_SLOT_PROGRAM,
+    FRONTEND_BROWSE_SLOT_BASIC,
+    FRONTEND_BROWSE_SLOT_TEXT,
+    FRONTEND_BROWSE_SLOT_SNAPSHOT,
+    FRONTEND_BROWSE_SLOT_COUNT
+} frontend_browse_slot;
+
 typedef struct frontend_config_apply_result {
     bool accepted;
     bool needs_reboot;
@@ -263,3 +278,9 @@ void frontend_open_file_browser(
     const char *filter_extension,
     const char *default_extension,
     uint8_t disk_device);
+
+/* Seed / read the remembered default folder for a browse slot. main.c uses these
+   to bridge the slots to the INI file: seed from options at startup, read back
+   before saving. get returns "" (never NULL) when the slot is unset. */
+void frontend_set_browse_dir(frontend *ui, frontend_browse_slot slot, const char *dir);
+const char *frontend_get_browse_dir(const frontend *ui, frontend_browse_slot slot);

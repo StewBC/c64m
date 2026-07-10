@@ -7,6 +7,10 @@
 #define C64M_DEFAULT_DISPLAY_WIDTH 384
 #define C64M_DEFAULT_DISPLAY_HEIGHT 272
 
+/* Remembered file-browser default folders, one per browse slot. The order and
+   count must match frontend_browse_slot in frontend/frontend.h. */
+#define APP_BROWSE_DIR_COUNT 6
+
 /* Ordered list of disk image paths for one drive slot. */
 typedef struct {
     char **paths;
@@ -49,6 +53,8 @@ typedef struct app_options {
     char *crt_path;
     char *prg_path;
     char *basic_path;
+    /* Remembered file-browser folders, indexed by frontend_browse_slot. */
+    char *browse_dirs[APP_BROWSE_DIR_COUNT];
     /* When true, runtime emits a 440 Hz square wave via the audio path to
        verify that samples reach the host audio device without needing SID. */
     bool audio_smoke;

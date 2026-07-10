@@ -4166,6 +4166,14 @@ int main(int argc, char **argv) {
     frontend_set_config_state(ui, &options);
     frontend_set_disk_queue(ui, 8, &options.disk_slots[8]);
     frontend_set_disk_queue(ui, 9, &options.disk_slots[9]);
+    /* Seed the file browser's remembered folders from the INI. The slot enum and
+       options.browse_dirs share the same order (see frontend_browse_slot). */
+    {
+        int slot;
+        for (slot = 0; slot < FRONTEND_BROWSE_SLOT_COUNT && slot < APP_BROWSE_DIR_COUNT; ++slot) {
+            frontend_set_browse_dir(ui, (frontend_browse_slot)slot, options.browse_dirs[slot]);
+        }
+    }
     {
         frontend_assembler_options asm_opts;
         memset(&asm_opts, 0, sizeof(asm_opts));
@@ -4242,6 +4250,15 @@ int main(int argc, char **argv) {
         options.assembler_auto_run = asm_opts.auto_run;
         options.assembler_reset_first = asm_opts.reset_first;
         options.assembler_rearm_oneshots = asm_opts.rearm_oneshots;
+    }
+    /* Pull the file browser's remembered folders back into options so they are
+       written to the INI (same slot order as frontend_browse_slot). */
+    {
+        int slot;
+        for (slot = 0; slot < FRONTEND_BROWSE_SLOT_COUNT && slot < APP_BROWSE_DIR_COUNT; ++slot) {
+            const char *dir = frontend_get_browse_dir(ui, (frontend_browse_slot)slot);
+            app_options_set_string(&options.browse_dirs[slot], dir[0] ? dir : NULL);
+        }
     }
     if ((options.save_ini || options.remember) && !app_options_save_shutdown(&options)) {
         SDL_Log("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
