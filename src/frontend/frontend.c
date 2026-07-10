@@ -27,11 +27,10 @@ enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
     FRONTEND_DISPLAY_CROP_X = 8,
     FRONTEND_DISPLAY_PAL_CROP_Y = 31,
-    /* NTSC has only 263 raster lines, so the 240-line crop starts lower than PAL
-       (which has 272). Row 23 keeps the 51..250 display window fully visible and
-       shows the full 12-line bottom border (rows 251..262) without overrunning
-       the frame. */
-    FRONTEND_DISPLAY_NTSC_CROP_Y = 23,
+    /* The display texture is padded to the PAL frame height below, so both
+       standards can use the same crop. This gives NTSC 20 lines of border above
+       and below the 200-line display area, matching PAL's visual framing. */
+    FRONTEND_DISPLAY_NTSC_CROP_Y = 31,
     FRONTEND_DISPLAY_CROP_W = 352,
     FRONTEND_DISPLAY_CROP_H = 240
 };
@@ -2212,7 +2211,7 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
             struct nk_image image = nk_subimage_handle(
                 nk_handle_ptr(ui->display_texture),
                 (nk_ushort)ui->current_frame.width,
-                (nk_ushort)ui->current_frame.height,
+                C64_FRAME_PAL_HEIGHT,
                 nk_rect(
                     (float)FRONTEND_DISPLAY_CROP_X,
                     (float)frontend_display_crop_y_for_frame(&ui->current_frame),
@@ -7423,7 +7422,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
 
     if (ui->display_texture != NULL &&
         ui->has_frame &&
-        (ui->current_frame.width != frame->width || ui->current_frame.height != frame->height)) {
+        ui->current_frame.width != frame->width) {
         SDL_DestroyTexture(ui->display_texture);
         ui->display_texture = NULL;
     }
@@ -7434,7 +7433,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
             (int)frame->width,
-            (int)frame->height);
+            C64_FRAME_PAL_HEIGHT);
         if (ui->display_texture == NULL) {
             SDL_Log("SDL_CreateTexture failed: %s", SDL_GetError());
             return false;
@@ -7442,9 +7441,34 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         SDL_SetTextureBlendMode(ui->display_texture, SDL_BLENDMODE_NONE);
     }
 
-    if (SDL_UpdateTexture(ui->display_texture, NULL, frame->pixels, (int)frame->stride_bytes) != 0) {
-        SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
-        return false;
+    {
+        SDL_Rect frame_rect = { 0, 0, (int)frame->width, (int)frame->height };
+
+        if (SDL_UpdateTexture(ui->display_texture, &frame_rect, frame->pixels,
+                (int)frame->stride_bytes) != 0) {
+            SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
+            return false;
+        }
+
+        /* NTSC frames end at row 262, but the frame buffer is initialized to
+           the border colour through the PAL-sized storage. Upload those valid
+           padding rows so the common PAL crop can extend through row 270. */
+        if (frame->height < C64_FRAME_PAL_HEIGHT) {
+            SDL_Rect padding_rect = {
+                0,
+                (int)frame->height,
+                (int)frame->width,
+                C64_FRAME_PAL_HEIGHT - (int)frame->height,
+            };
+            const uint32_t *padding = frame->pixels +
+                (size_t)frame->height * (size_t)frame->width;
+
+            if (SDL_UpdateTexture(ui->display_texture, &padding_rect, padding,
+                    (int)frame->stride_bytes) != 0) {
+                SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
+                return false;
+            }
+        }
     }
 
     ui->current_frame = *frame;
