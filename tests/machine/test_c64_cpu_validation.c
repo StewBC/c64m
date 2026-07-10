@@ -639,6 +639,63 @@ static void test_cpu_trace_tags_irq_and_nmi_accesses(void) {
     expect_interrupt_trace("nmi trace events", &trace, 0xfffau);
 }
 
+static void test_cpu_trace_tags_page_cross_and_rti_stack_reads(void) {
+    static const uint8_t page_cross_program[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xbd, 0xff, 0x12  /* LDA $12ff,X */
+    };
+    static const uint8_t rti_program[] = {
+        0x40              /* RTI */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, page_cross_program, sizeof(page_cross_program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1200] = 0x11u;
+    machine.bus.ram[0x1300] = 0x5au;
+    c64_set_cpu_trace_enabled(&machine, true);
+    step_machine(&machine, 1);
+    step_machine(&machine, 1);
+    expect_u64("page-cross trace events", 5, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("page-cross opcode access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
+    expect_u8("page-cross low operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("page-cross high operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("page-cross dummy access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("page-cross dummy address", 0x1200u, trace.events[3].address);
+    expect_u8("page-cross final data access", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u16("page-cross final data address", 0x1300u, trace.events[4].address);
+    expect_u8("page-cross loaded value", 0x5au, snapshot(&machine).a);
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, rti_program, sizeof(rti_program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x0101] = 0x20u;
+    machine.bus.ram[0x0102] = 0x34u;
+    machine.bus.ram[0x0103] = 0x12u;
+    c64_set_cpu_trace_enabled(&machine, true);
+    step_machine(&machine, 1);
+    expect_u64("rti trace events", 6, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("rti dummy pc access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("rti dummy stack access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("rti flags stack access", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("rti PC low stack access", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u8("rti PC high stack access", C6510_BUS_ACCESS_STACK_READ,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u16("rti restored PC", 0x1234u, snapshot(&machine).pc);
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -769,6 +826,49 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_u64("ba read advances machine", before_machine_cycles + 1, machine.clock.cycle);
     expect_u64("ba read keeps elapsed", before_elapsed, machine.pending_cpu_elapsed);
     expect_true("lda trace still pending", machine.pending_cpu_trace_active);
+}
+
+static void test_instruction_and_cycle_step_share_ba_arbiter(void) {
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t instruction_machine;
+    c64_t cycle_machine;
+    c64_cpu_snapshot instruction_cpu;
+    c64_cpu_snapshot cycle_cpu;
+    c64_cpu_instruction_trace instruction_trace;
+    c64_cpu_instruction_trace cycle_trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&instruction_machine, &roms);
+    reset_machine(&cycle_machine, &roms);
+    instruction_machine.bus.ram[0x1234] = 0x5au;
+    cycle_machine.bus.ram[0x1234] = 0x5au;
+    instruction_machine.vic.timing.ba_low_until_abs = instruction_machine.clock.cycle + 2u;
+    cycle_machine.vic.timing.ba_low_until_abs = cycle_machine.clock.cycle + 2u;
+    c64_set_cpu_trace_enabled(&instruction_machine, true);
+    c64_set_cpu_trace_enabled(&cycle_machine, true);
+
+    step_machine(&instruction_machine, 1);
+    while (!cycle_machine.instruction_complete) {
+        step_machine_cycles(&cycle_machine, 1);
+    }
+
+    instruction_cpu = snapshot(&instruction_machine);
+    cycle_cpu = snapshot(&cycle_machine);
+    expect_u16("arbiter same PC", instruction_cpu.pc, cycle_cpu.pc);
+    expect_u8("arbiter same accumulator", instruction_cpu.a, cycle_cpu.a);
+    expect_u64("arbiter same master cycle", instruction_machine.clock.cycle,
+        cycle_machine.clock.cycle);
+    expect_u64("arbiter same CPU cycle count", instruction_machine.clock.cpu_cycles,
+        cycle_machine.clock.cpu_cycles);
+    expect_u64("arbiter same trace event count",
+        c64_debug_copy_last_cpu_trace(&instruction_machine, &instruction_trace),
+        c64_debug_copy_last_cpu_trace(&cycle_machine, &cycle_trace));
+    expect_u64("arbiter same data-read cycle",
+        instruction_trace.events[3].absolute_cycle, cycle_trace.events[3].absolute_cycle);
 }
 
 static void test_timing_fixture_records_pending_read_stall(void) {
@@ -1087,11 +1187,13 @@ int main(void) {
     test_cpu_trace_tags_rmw_accesses();
     test_cpu_trace_tags_branch_and_stack_reads();
     test_cpu_trace_tags_irq_and_nmi_accesses();
+    test_cpu_trace_tags_page_cross_and_rti_stack_reads();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
     test_ba_stalls_pending_read_cycle();
+    test_instruction_and_cycle_step_share_ba_arbiter();
     test_timing_fixture_records_pending_read_stall();
     test_timing_fixture_records_real_badline_stall();
     test_timing_fixture_records_pal_sprite_ba_stall();

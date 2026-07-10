@@ -89,7 +89,7 @@ static inline void add_value_to_accumulator(C6510 *m, uint8_t value) {
         }
         m->cpu.A = (m->cpu.scratch_hi << 4) | (m->cpu.scratch_lo & 0x0F);
         if(m->cpu.class == CPU_65c02) {
-            read_from_memory(m, m->cpu.address_16);
+            read_dummy(m, m->cpu.address_16);
             CYCLE(m);
             set_register_to_value(m, &m->cpu.A, m->cpu.A);
         }
@@ -273,7 +273,7 @@ static inline void aix(C6510 *m) {
     m->cpu.address_lo += m->cpu.X;
     if(m->cpu.address_lo < lo) {
         if(m->cpu.class == CPU_6502) {
-            read_from_memory(m, m->cpu.address_16);
+            read_dummy(m, m->cpu.address_16);
         } else {
             read_dummy(m, m->cpu.pc - 1);
         }
@@ -287,7 +287,7 @@ static inline void aipxr(C6510 *m) {
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.X;
     if(m->cpu.class == CPU_6502) {
-        read_from_memory(m, m->cpu.address_16);
+        read_dummy(m, m->cpu.address_16);
     } else {
         read_dummy(m, m->cpu.pc - 1);
     }
@@ -319,7 +319,7 @@ static inline void aiy(C6510 *m) {
     m->cpu.address_lo += m->cpu.Y;
     if(m->cpu.address_lo < lo) {
         if(m->cpu.class == CPU_6502) {
-            read_from_memory(m, m->cpu.address_16);
+            read_dummy(m, m->cpu.address_16);
         } else {
             read_dummy(m, m->cpu.pc - 1);
         }
@@ -333,7 +333,7 @@ static inline void aiyr(C6510 *m) {
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.Y;
     if(m->cpu.class == CPU_6502) {
-        read_from_memory(m, m->cpu.address_16);
+        read_dummy(m, m->cpu.address_16);
     } else {
         read_dummy(m, m->cpu.pc - 1);
     }
@@ -348,7 +348,7 @@ static inline void aiyr_und(C6510 *m) {
     m->cpu.scratch_hi = m->cpu.address_hi + 1;
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.Y;
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     CYCLE(m);
     m->cpu.page_fault = m->cpu.address_lo < lo;
     if(m->cpu.page_fault) {
@@ -361,7 +361,7 @@ static inline void aipxr_und(C6510 *m) {
     m->cpu.scratch_hi = m->cpu.address_hi + 1;
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.X;
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     CYCLE(m);
     m->cpu.page_fault = m->cpu.address_lo < lo;
     if(m->cpu.page_fault) {
@@ -398,7 +398,7 @@ static inline void miy(C6510 *m) {
     m->cpu.address_lo += m->cpu.Y;
     if(m->cpu.address_lo < lo) {
         if(m->cpu.class == CPU_6502) {
-            read_from_memory(m, m->cpu.address_16);
+            read_dummy(m, m->cpu.address_16);
         } else {
             read_dummy(m, m->cpu.pc - 1);
         }
@@ -414,7 +414,7 @@ static inline void miyr(C6510 *m) {
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.Y;
     if(m->cpu.class == CPU_6502) {
-        read_from_memory(m, m->cpu.address_16);
+        read_dummy(m, m->cpu.address_16);
     } else {
         read_dummy(m, m->cpu.pc - 1);
     }
@@ -431,7 +431,7 @@ static inline void miyr_und(C6510 *m) {
     m->cpu.scratch_hi = m->cpu.address_hi + 1;
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.Y;
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     CYCLE(m);
     m->cpu.page_fault = m->cpu.address_lo < lo;
     if(m->cpu.page_fault) {

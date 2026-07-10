@@ -316,3 +316,22 @@ Remaining Phase 1 work is now narrower: audit the indirect/indexed address
 generation helpers, especially their page-crossing dummy reads, and add an
 `RTI` stack-read fixture. Once that is done, typed traces are sufficient to
 begin the Phase 2 arbiter behind a selected opcode-family gate.
+
+Phase 1 completion and Phase 2 entry (2026-07-10):
+
+- Indexed/page-crossing address-generation accesses are now typed as dummy
+  reads. The `LDA $12FF,X` fixture verifies the intermediate `$1200` dummy
+  cycle and final `$1300` data read. An `RTI` fixture verifies its three stack
+  pulls.
+- `c64_step_instruction()` now runs an instruction through the same existing
+  per-Phi2 replay arbiter used by `c64_step_cycle()`. This removes the former
+  timed-immediate instruction path, which could bypass BA stalls and produce a
+  different raster position from cycle stepping.
+- A parity fixture starts `LDA abs` under BA-low and proves that instruction
+  stepping and cycle stepping finish with identical PC, CPU/master cycle
+  counts, event count, and data-read absolute cycle.
+
+The next Phase 2 slice is no longer public-step convergence; it is replacing
+the frozen `c6510_step()` trace/replay implementation itself with a resumable
+CPU micro-cycle executor. That is a separate, higher-risk change and must be
+introduced behind opcode-family trace-equivalence gates.

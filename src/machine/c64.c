@@ -1394,9 +1394,6 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
 }
 
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
-    uint64_t start_cycle;
-    size_t total_cycles;
-
     assert(machine);
 
     if (!machine->ready) {
@@ -1406,30 +1403,14 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
 
     c64_finish_pending_cpu_trace(machine);
 
-    if (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine)) {
-        machine->clock.cycle++;
-        machine->clock.cpu_cycles++;
-        machine->instruction_complete = true;
-        c64_set_error(error, error_size, "");
-        return true;
+    /* Instruction stepping must use the same Phi2 arbiter as cycle stepping.
+       The old timed-immediate path advanced devices to callback offsets but
+       bypassed BA stalls entirely, so the two public stepping APIs could reach
+       different raster positions for the same instruction. */
+    machine->instruction_complete = false;
+    while (!machine->instruction_complete) {
+        c64_step_cycle_internal(machine);
     }
-
-    start_cycle = machine->clock.cycle;
-    c64_trace_reset(&machine->last_cpu_trace);
-    machine->cpu_trace_start_cycle = start_cycle;
-    machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
-    machine->cpu_bus_mode = C64_CPU_BUS_MODE_TIMED_IMMEDIATE;
-    total_cycles = c6510_step(&machine->cpu);
-    machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
-    if (total_cycles == 0) {
-        total_cycles = 1;
-    }
-    if (machine->cpu_trace_enabled) {
-        machine->last_cpu_trace.opcode_pc = machine->cpu.cpu.opcode_pc;
-        machine->last_cpu_trace.total_cycles = total_cycles;
-    }
-    c64_advance_devices_to(machine, start_cycle + total_cycles);
-    machine->clock.cpu_cycles = machine->cpu.cpu.cycles;
     machine->cpu_cycles_remaining = 0;
     c64_set_error(error, error_size, "");
     return true;
