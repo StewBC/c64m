@@ -1231,7 +1231,8 @@ only be changed here. Applying the dialog takes effect immediately.
 
 The Paths tab holds the default folder the file browser remembers per browse type.
 Each field starts empty (the browser then opens at the shell's current directory) and
-updates as you pick files:
+updates as you pick files. Paths are shown and stored relative to the INI file's
+directory, and each row has a **[...]** button that opens a folder picker:
 
 | Field     | Used by                                                        |
 |-----------|----------------------------------------------------------------|
@@ -1242,9 +1243,10 @@ updates as you pick files:
 | text      | Load/Save Binary with **Basic Text** ticked                    |
 | snapshot  | Save/Load State — and the quicksave folder (Shift+Opt+> / <)   |
 
-Edits here take effect on the next browse immediately. **[Save Paths Only]** rewrites
-just these paths into the named INI file, leaving every other setting untouched; it is
-a silent no-op if no INI file is set.
+Edits here take effect on the next browse immediately. The folder picker's **[Use This
+Folder]** button selects the folder currently shown. **[Save Paths Only]** rewrites just
+these paths into the named INI file, leaving every other setting untouched; it is a
+silent no-op if no INI file is set.
 
 ### INI File
 

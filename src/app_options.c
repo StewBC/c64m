@@ -218,6 +218,15 @@ static bool path_absolute_from_ini(
     return copy_resolved_or_original(out, out_size, joined);
 }
 
+bool app_options_path_absolute_from_ini(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size)
+{
+    return path_absolute_from_ini(options, path, out, out_size);
+}
+
 static size_t path_component_length(const char *path)
 {
     const char *slash;

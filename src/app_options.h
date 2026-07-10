@@ -95,6 +95,13 @@ bool app_options_path_relative_to_ini(
     const char *path,
     char *out,
     size_t out_size);
+/* Inverse of app_options_path_relative_to_ini: resolves a (possibly relative)
+   path against the INI file's directory into an absolute path. */
+bool app_options_path_absolute_from_ini(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size);
 bool app_options_symbol_files_absolute(
     const app_options *options,
     char *out,

@@ -12,6 +12,9 @@
 - Memory view virtual views are implemented.
 - Assembler UI integration is implemented.
 - Host file load/save UI is implemented.
+- In-app file browser has keyboard navigation/type-ahead and remembers a default
+  folder per browse slot (INI `[browse]`), editable on the Configure dialog's
+  Paths tab; the `snapshot` slot doubles as the unified quicksave folder.
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
 - The OS window title reflects live runtime state without the debugger UI being open: `c64m - Running`, `c64m - Paused (<reason>)` (reason text reuses `frontend_stop_reason_name()`, e.g. `BRK`, `breakpoint`, `step`, `reset`), or `c64m - Error`. Updated only on state/reason change in `run_main_loop()` (`src/main.c`) via the new `platform_window_set_title()`. See `docs/status/CPU_MACHINE.md` for the BRK auto-stop behavior that feeds the `BRK` reason.
@@ -191,8 +194,19 @@ UI behavior:
 
 ## Configuration UI
 
-- Configure dialog supports PAL/NTSC, display, turbo, quicksave folder, symbol,
-  and INI options.
+- Configure dialog has three tabs — Machine, Emulator, Paths — supporting
+  PAL/NTSC, display, turbo, symbol, and INI options.
+- The Paths tab (`frontend_draw_config_paths_tab`) exposes the six `[browse]`
+  default folders as editable, INI-relative fields, each with a `[...]` folder
+  picker, plus a "Save Paths Only" button that rewrites just the `[browse]`
+  section of the named INI (`app_options_save_paths_only`, via
+  `FRONTEND_DEBUGGER_INTENT_SAVE_PATHS_ONLY`); silent no-op with no INI. Fields
+  bind directly to the live `ui->browse_dirs`, so edits take effect on the next
+  browse immediately (not gated by OK/Cancel).
+- The former Emulator-tab "Quicksave Folder" is gone: the quicksave/quickload
+  shortcuts now use the `snapshot` browse slot, so one path serves both. The
+  legacy `[state] quicksave_folder` key is migrated into `[browse] snapshot` on
+  load and dropped on save.
 - Runtime config apply is implemented.
 - Video-standard changes reboot the runtime.
 - Invalid breakpoint INI entries are skipped while valid entries load.
@@ -236,13 +250,26 @@ UI behavior:
   purpose-specific default extension (e.g. `.c64state`) when missing, and
   requires a second Save click to overwrite an existing file
   (`frontend_file_browser_commit_save`).
-- One dialog instance is reused for all 10 triggers via a `purpose` field
+- One dialog instance is reused for all triggers via a `purpose` field
   (reusing `frontend_debugger_intent_type`) plus an optional single
   `filter_extension` that hides non-matching regular files (directories always
   show): Load PRG/BAS dialog (no filter), Disk mount/add (`d64`), Config
   INI picker (`ini`), Config symbol-file picker (no filter), Assembler browse
   (no filter), Load/Save Bin browse (no filter), State Save As/Load
-  (`c64state`, save mode auto-appends it).
+  (`c64state`, save mode auto-appends it), plus the Paths-tab folder picker
+  (`CONFIG_PICK_PATH_DIALOG`).
+- Keyboard support: type-ahead incremental search (case-insensitive prefix match
+  with a 0.5 s sliding-window buffer that resets the search after a pause),
+  Up/Down (line), PageUp/PageDown (page), Home/End (and macOS Cmd+Up/Down) to
+  move the selection, and Enter to activate the highlighted entry. Type-ahead
+  jumps anchor the selection ~1/4 down the list; key navigation scrolls the
+  minimum needed to keep it visible. Scroll offset is computed in whole rows so
+  the last row is never partially clipped. SDL text input is kept enabled while
+  the dialog is open (`frontend_wants_text_input`).
+- Folder-select mode (`pick_dir`, set for `CONFIG_PICK_PATH_DIALOG`): the footer
+  button reads "Use This Folder" and commits the current directory instead of a
+  file; used by the Paths tab's per-row `[...]` buttons, routed back via
+  `frontend_set_picked_browse_dir`.
 - Round trip: a `*_BROWSE`/`*_DIALOG` intent now only calls
   `frontend_open_file_browser`; committing the dialog pushes a new
   `FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT` intent carrying
@@ -251,10 +278,18 @@ UI behavior:
   an inner switch on `file_browser_purpose`, running the same
   `runtime_client_*`/`app_disk_slot_*`/`frontend_set_*_path` logic each
   original case ran after its synchronous `choose_*_path` call used to return.
-- Known limitation: no keyboard row navigation (Up/Down/Enter-to-activate) yet
-  — mouse click/double-click and the Cancel/Open/Save buttons are the only
-  input path. No remembered per-purpose last-used directory; each open starts
-  from the process CWD. See `docs/status/DEFERRED.md`.
+- Remembered default folders: six slots (`frontend_browse_slot`:
+  `assembler`, `disk`, `program`, `basic`, `text`, `snapshot`) each remember the
+  last-used directory. Load/Save-Binary map to `program`/`basic`/`text` by the
+  dialog's Basic Program / Basic Text checkboxes; disk 8 & 9 share `disk`; state
+  save/load share `snapshot`. On a committed selection the slot records that
+  file's directory. `frontend_open_file_browser` seeds the browser from the slot
+  (falling back to the shell cwd). Folders are stored **relative to the INI
+  directory** (`app_options_path_relative_to_ini` /
+  `app_options_path_absolute_from_ini`) and resolved to absolute on open; paths
+  outside the INI tree fall back to absolute. `main.c` seeds the slots from
+  `options.browse_dirs[]` at startup and pulls them back before saving; keys live
+  in the INI `[browse]` section.
 
 ## Host load/save UI
 
@@ -289,10 +324,11 @@ UI behavior:
   error. Implemented in `src/util/basic_v2.c`.
 - State has Save As... and Load... buttons wired to runtime save/load state
   commands. Dropping a `.c64state` file loads it.
-- `Opt+Shift+>` quicksaves to the configured quicksave folder using a
-  content/timestamp filename; `Opt+Shift+<` quickloads the newest `.c64state`
-  there. Saved state files also restore the frontend keyboard-joystick
-  layout/port when the optional host metadata chunk is present.
+- `Opt+Shift+>` quicksaves to the `snapshot` browse folder (Configure → Paths,
+  read live from the frontend) using a content/timestamp filename;
+  `Opt+Shift+<` quickloads the newest `.c64state` there. Saved state files also
+  restore the frontend keyboard-joystick layout/port when the optional host
+  metadata chunk is present.
 
 ## Help UI
 

@@ -2498,6 +2498,11 @@ static void dispatch_debugger_intents(
                     "Select INI File", false, "ini", NULL, 0);
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG:
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG,
+                    "Select Folder", false, NULL, NULL, 0);
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
                 frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
                     "Select Symbol File", false, NULL, NULL, 0);
@@ -2696,6 +2701,10 @@ static void dispatch_debugger_intents(
                                 app_options_destroy(&selected);
                             }
                         }
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG:
+                        frontend_set_picked_browse_dir(ui, intent.file_browser_path);
                         break;
 
                     case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:

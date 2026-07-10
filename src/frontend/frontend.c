@@ -266,6 +266,7 @@ typedef struct frontend_config_dialog_state {
     bool previous_save_ini;
     bool save_ini_on_quit;
     char error[160];
+    int pending_browse_slot; /* Paths tab: slot whose folder a [...] pick targets */
 } frontend_config_dialog_state;
 
 typedef enum frontend_breakpoint_dialog_mode {
@@ -365,6 +366,7 @@ typedef struct frontend_file_browser_state {
     bool scroll_ensure_visible; /* reveal selection with minimal scroll (key nav) */
     float list_visible_h;       /* measured inner height of the list group, in px */
     int browse_slot;            /* frontend_browse_slot for this session, -1 = none */
+    bool pick_dir;              /* folder-select mode: commit the current directory */
 } frontend_file_browser_state;
 
 struct frontend {
@@ -1633,19 +1635,27 @@ static void frontend_draw_config_paths_tab(frontend *ui, struct nk_context *ctx)
     int i;
 
     nk_layout_row_dynamic(ctx, 18.0f, 1);
-    nk_label(ctx, "Default folder remembered per browse type:", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 16.0f, 1);
-    nk_label_colored(ctx, "(snapshot also serves as the quicksave folder)",
-        NK_TEXT_LEFT, nk_rgb(150, 170, 180));
+    nk_label(ctx, "Default browse paths", NK_TEXT_LEFT);
 
     for (i = 0; i < FRONTEND_BROWSE_SLOT_COUNT; ++i) {
-        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
-        nk_layout_row_push(ctx, 0.22f);
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+        nk_layout_row_push(ctx, 0.20f);
         nk_label(ctx, labels[i], NK_TEXT_LEFT);
-        nk_layout_row_push(ctx, 0.78f);
+        nk_layout_row_push(ctx, 0.66f);
         frontend_edit_replace(ctx, NK_EDIT_FIELD,
             ui->browse_dirs[i], (int)sizeof(ui->browse_dirs[i]), nk_filter_default);
+        nk_layout_row_push(ctx, 0.14f);
+        if (nk_button_label(ctx, "...")) {
+            ui->config_dialog.pending_browse_slot = i;
+            frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG);
+        }
         nk_layout_row_end(ctx);
+
+        if (i == FRONTEND_BROWSE_SLOT_SNAPSHOT) {
+            nk_layout_row_dynamic(ctx, 16.0f, 1);
+            nk_label_colored(ctx, "(snapshot also serves as the quicksave folder)",
+                NK_TEXT_LEFT, nk_rgb(150, 170, 180));
+        }
     }
 
     nk_layout_row_dynamic(ctx, 8.0f, 1);
@@ -1729,7 +1739,19 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_EMULATOR, "Emulator");
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_PATHS, "Paths");
 
-            nk_layout_row_dynamic(ctx, 250.0f, 1);
+            /* Grow the tab body to fill the space above the bottom controls (INI
+               row, Save-on-Quit, message line, OK/Cancel) so no dead space is left
+               and the tab content is not clipped. */
+            {
+                struct nk_rect cregion = nk_window_get_content_region(ctx);
+                float sp = ctx->style.window.spacing.y;
+                float pad = ctx->style.window.padding.y;
+                float other = 24.0f /*tabs*/ + 24.0f /*INI*/ + 20.0f /*save-on-quit*/
+                            + 18.0f /*message*/ + 24.0f /*OK/Cancel*/;
+                float group_h = cregion.h - other - 6.0f * sp - 2.0f * pad;
+                if (group_h < 120.0f) group_h = 120.0f;
+                nk_layout_row_dynamic(ctx, group_h, 1);
+            }
             if (nk_group_begin(ctx, "config-tab-body", NK_WINDOW_BORDER)) {
                 if (dialog->active_tab == FRONTEND_CONFIG_TAB_MACHINE) {
                     frontend_draw_config_machine_tab(dialog, ctx);
@@ -7702,18 +7724,40 @@ static int frontend_file_browser_slot_for(const frontend *ui, frontend_debugger_
             if (ui->save_bin_dialog.basic_text)    return FRONTEND_BROWSE_SLOT_TEXT;
             if (ui->save_bin_dialog.basic_program) return FRONTEND_BROWSE_SLOT_BASIC;
             return FRONTEND_BROWSE_SLOT_PROGRAM;
+        case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG:
+            return ui->config_dialog.pending_browse_slot;
         default:
             return -1;
     }
 }
 
-/* Records dlg's current directory as the remembered folder for its slot. Called
-   when a selection commits so the next open of the same slot reopens there. */
+/* Browse folders are stored and displayed relative to the INI file's directory
+   (the applied config carries the current INI path), so the INI stays portable
+   and the Paths tab shows short paths. Conversions fall back to the raw string
+   when no INI context is available. */
+static void frontend_browse_to_relative(const frontend *ui, const char *abs, char *out, size_t out_size)
+{
+    if (abs == NULL || abs[0] == '\0' ||
+            !app_options_path_relative_to_ini(&ui->config_dialog.original, abs, out, out_size)) {
+        snprintf(out, out_size, "%s", abs != NULL ? abs : "");
+    }
+}
+
+static void frontend_browse_to_absolute(const frontend *ui, const char *rel, char *out, size_t out_size)
+{
+    if (rel == NULL || rel[0] == '\0' ||
+            !app_options_path_absolute_from_ini(&ui->config_dialog.original, rel, out, out_size)) {
+        snprintf(out, out_size, "%s", rel != NULL ? rel : "");
+    }
+}
+
+/* Records dlg's current directory (relative to the INI) as the remembered folder
+   for its slot. Called when a selection commits so the next open reopens there. */
 static void frontend_file_browser_remember_dir(frontend *ui, const frontend_file_browser_state *dlg)
 {
     if (ui != NULL && dlg->browse_slot >= 0 && dlg->browse_slot < FRONTEND_BROWSE_SLOT_COUNT) {
-        snprintf(ui->browse_dirs[dlg->browse_slot], sizeof(ui->browse_dirs[dlg->browse_slot]),
-            "%s", dlg->current_dir);
+        frontend_browse_to_relative(ui, dlg->current_dir,
+            ui->browse_dirs[dlg->browse_slot], sizeof(ui->browse_dirs[dlg->browse_slot]));
     }
 }
 
@@ -7731,6 +7775,20 @@ const char *frontend_get_browse_dir(const frontend *ui, frontend_browse_slot slo
         return "";
     }
     return ui->browse_dirs[slot];
+}
+
+/* Stores a folder chosen via a Paths-tab [...] button into its pending slot,
+   converting to the INI-relative form used for display and persistence. */
+void frontend_set_picked_browse_dir(frontend *ui, const char *path)
+{
+    int slot;
+    if (ui == NULL || path == NULL) {
+        return;
+    }
+    slot = ui->config_dialog.pending_browse_slot;
+    if (slot >= 0 && slot < FRONTEND_BROWSE_SLOT_COUNT) {
+        frontend_browse_to_relative(ui, path, ui->browse_dirs[slot], sizeof(ui->browse_dirs[slot]));
+    }
 }
 
 void frontend_open_file_browser(
@@ -7761,17 +7819,26 @@ void frontend_open_file_browser(
         default_extension != NULL ? default_extension : "");
     dlg->disk_device = disk_device;
     dlg->selected = -1;
+    dlg->pick_dir = (purpose == FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG);
 
     if (save_mode && dlg->default_extension[0] != '\0') {
         snprintf(dlg->filename, sizeof(dlg->filename), "untitled.%s", dlg->default_extension);
     }
 
-    /* Prefer this slot's remembered folder; fall back to the shell cwd if it is
-       unset or no longer a directory. */
+    /* Prefer this slot's remembered folder (stored relative to the INI, so resolve
+       it back to absolute); fall back to the shell cwd if it is unset or no longer
+       a directory. */
     remembered = dlg->browse_slot >= 0 ? ui->browse_dirs[dlg->browse_slot] : "";
-    if (remembered[0] != '\0' && platform_fs_is_dir(remembered)) {
-        snprintf(dlg->current_dir, sizeof(dlg->current_dir), "%s", remembered);
-    } else if (!platform_fs_get_cwd(dlg->current_dir, sizeof(dlg->current_dir))) {
+    if (remembered[0] != '\0') {
+        char resolved[1024];
+        frontend_browse_to_absolute(ui, remembered, resolved, sizeof(resolved));
+        if (resolved[0] != '\0' && platform_fs_is_dir(resolved)) {
+            snprintf(dlg->current_dir, sizeof(dlg->current_dir), "%s", resolved);
+        } else {
+            remembered = "";
+        }
+    }
+    if (remembered[0] == '\0' && !platform_fs_get_cwd(dlg->current_dir, sizeof(dlg->current_dir))) {
         dlg->current_dir[0] = '\0';
     }
     frontend_file_browser_reload(dlg);
@@ -8140,8 +8207,14 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
         if (nk_button_label(ctx, "Cancel")) {
             dlg->open = false;
         }
-        if (nk_button_label(ctx, dlg->save_mode ? "Save" : "Open")) {
-            if (dlg->save_mode) {
+        if (nk_button_label(ctx, dlg->pick_dir ? "Use This Folder" :
+                (dlg->save_mode ? "Save" : "Open"))) {
+            if (dlg->pick_dir) {
+                /* Return the currently shown directory, not a file. */
+                frontend_push_file_browser_result_intent(ui, dlg->purpose,
+                    dlg->current_dir, dlg->disk_device);
+                dlg->open = false;
+            } else if (dlg->save_mode) {
                 frontend_file_browser_commit_save(ui, dlg);
             } else {
                 frontend_file_browser_activate(ui, dlg, dlg->selected);
@@ -8207,9 +8280,15 @@ static void frontend_draw_file_browser(frontend *ui, int width, int height)
                     sel_entry = &dlg->listing.entries[dlg->filtered[dlg->selected]];
                 }
                 /* A highlighted folder is always entered (like a double-click).
-                   Otherwise Enter mirrors the footer button: Save in save mode,
-                   Open/mount in open mode. */
-                if (dlg->save_mode && !(sel_entry != NULL && sel_entry->is_dir)) {
+                   Otherwise Enter mirrors the footer button: pick the folder in
+                   folder-select mode, Save in save mode, Open/mount otherwise. */
+                if (sel_entry != NULL && sel_entry->is_dir) {
+                    frontend_file_browser_activate(ui, dlg, dlg->selected);
+                } else if (dlg->pick_dir) {
+                    frontend_push_file_browser_result_intent(ui, dlg->purpose,
+                        dlg->current_dir, dlg->disk_device);
+                    dlg->open = false;
+                } else if (dlg->save_mode) {
                     frontend_file_browser_commit_save(ui, dlg);
                 } else {
                     frontend_file_browser_activate(ui, dlg, dlg->selected);
