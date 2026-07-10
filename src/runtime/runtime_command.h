@@ -74,11 +74,19 @@ typedef enum runtime_cpu_register {
     RUNTIME_CPU_REGISTER_STATUS
 } runtime_cpu_register;
 
+enum {
+    RUNTIME_RESET_PAUSED = 0,
+    RUNTIME_RESET_RUNNING = 1,
+    RUNTIME_RESET_PRESERVE_STATE = 2
+};
+
 typedef struct runtime_command {
     runtime_command_type type;
     union {
         struct {
             uint8_t detach_cartridge;
+            /* 0 = leave paused, 1 = resume, 2 = preserve runtime state. */
+            uint8_t resume_running;
         } reset;
 
         struct {
@@ -178,6 +186,7 @@ typedef struct runtime_command {
             uint32_t active_turbo_multiplier;
             uint8_t reset;
             uint8_t save_ini;
+            uint8_t resume_running;
         } apply_machine_config;
 
         struct {

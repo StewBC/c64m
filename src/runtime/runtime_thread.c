@@ -1082,7 +1082,10 @@ static bool runtime_reset_machine(runtime *rt) {
 }
 
 static void runtime_reset_command(runtime *rt, const runtime_command *command) {
-    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+    bool was_running = command != NULL &&
+        command->data.reset.resume_running != RUNTIME_RESET_PRESERVE_STATE ?
+        command->data.reset.resume_running == RUNTIME_RESET_RUNNING :
+        rt->exec_state == RUNTIME_EXEC_RUNNING;
 
     if (command != NULL && command->data.reset.detach_cartridge) {
         c64_detach_cartridge(&rt->machine);
@@ -1197,6 +1200,7 @@ static void runtime_load_symbol_files(runtime *rt) {
 
 static void runtime_apply_machine_config(runtime *rt, const runtime_command *command) {
     bool symbols_changed;
+    bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
 
     rt->machine_config = command->data.apply_machine_config.config;
     rt->save_ini = command->data.apply_machine_config.save_ini != 0;
@@ -1227,8 +1231,17 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     runtime_update_sid_sample_output(rt);
     runtime_update_video_output(rt);
     if (command->data.apply_machine_config.reset != 0) {
-        runtime_reset_machine(rt);
+        if (runtime_reset_machine(rt) &&
+            command->data.apply_machine_config.resume_running != 0) {
+            rt->exec_state = RUNTIME_EXEC_RUNNING;
+            rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+            runtime_reset_pacer(rt);
+            runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+        }
     } else {
+        if (was_running) {
+            rt->exec_state = RUNTIME_EXEC_RUNNING;
+        }
         runtime_publish_machine_state(rt);
     }
 }

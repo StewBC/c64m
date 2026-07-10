@@ -394,6 +394,7 @@ struct frontend {
     struct {
         bool open;
         bool unmount_cartridge;
+        bool resume_running;
     } reset_prompt;
     frontend_config_dialog_state config_dialog;
     frontend_breakpoint_dialog_state breakpoint_dialog;
@@ -5699,7 +5700,10 @@ static const char *frontend_disk_label(const frontend_debug_state *debug_state, 
     return "Mounted";
 }
 
-static bool frontend_push_reset_intent(frontend *ui, bool detach_cartridge)
+static bool frontend_push_reset_intent(
+    frontend *ui,
+    bool detach_cartridge,
+    bool resume_running)
 {
     size_t next;
 
@@ -5715,6 +5719,7 @@ static bool frontend_push_reset_intent(frontend *ui, bool detach_cartridge)
     memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
     ui->intents[ui->intent_write].type = FRONTEND_DEBUGGER_INTENT_MACHINE_RESET;
     ui->intents[ui->intent_write].machine_reset_detach_cartridge = detach_cartridge;
+    ui->intents[ui->intent_write].machine_reset_resume_running = resume_running;
     ui->intent_write = next;
     return true;
 }
@@ -5736,7 +5741,10 @@ static void frontend_draw_reset_prompt(frontend *ui, struct nk_context *ctx)
 
         nk_layout_row_dynamic(ctx, 26.0f, 2);
         if (nk_button_label(ctx, "Reset")) {
-            frontend_push_reset_intent(ui, ui->reset_prompt.unmount_cartridge);
+            frontend_push_reset_intent(
+                ui,
+                ui->reset_prompt.unmount_cartridge,
+                ui->reset_prompt.resume_running);
             ui->reset_prompt.open = false;
             nk_popup_close(ctx);
         }
@@ -5887,8 +5895,14 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
             /* A cartridge is attached; ask whether to unmount it on reset. */
             ui->reset_prompt.open = true;
             ui->reset_prompt.unmount_cartridge = true;
+            ui->reset_prompt.resume_running =
+                debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING;
         } else {
-            frontend_push_reset_intent(ui, false);
+            frontend_push_reset_intent(
+                ui,
+                false,
+                debug_state != NULL &&
+                    debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING);
         }
     }
 }

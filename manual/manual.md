@@ -42,7 +42,8 @@ configuration, window size, debugger layout, and breakpoints.
 
 Select PAL or NTSC in Configure or in the `[Video]` INI section. PAL uses 6569 timing
 (approximately 50 Hz); NTSC uses 6567 timing (approximately 60 Hz). Changing the video
-standard reboots the emulated machine. For a one-run override, use `--video PAL`,
+standard reboots the emulated machine. If it was running, it resumes after the reboot;
+if it was paused, it remains paused. For a one-run override, use `--video PAL`,
 `--video NTSC`, `-P`, or `-N`. The command-line choice overrides the INI setting.
 
 ### Disk Images
@@ -627,12 +628,13 @@ the newest `.c64state` in that folder.
 
 **[Configure...]** opens the Configure dialog (see **Configure**).
 
-**[Reset]** performs a hard reset of the emulated C64. Any pending PRG injection or
-assembler-queued run is cancelled. If a cartridge is attached, **[Reset]** first opens
-a prompt with an **Unmount cartridge on reset** checkbox (checked by default): leaving it
-checked resets to BASIC with the cartridge removed, while unchecking it keeps the
-cartridge so the reset re-runs it. When no cartridge is attached, Reset happens
-immediately with no prompt.
+**[Reset]** performs a hard reset of the emulated C64 and preserves its running state:
+it resumes automatically if it was running, or remains paused if it was stopped. Any
+pending PRG injection or assembler-queued run is cancelled. If a cartridge is attached,
+**[Reset]** first opens a prompt with an **Unmount cartridge on reset** checkbox (checked
+by default): leaving it checked resets to BASIC with the cartridge removed, while
+unchecking it keeps the cartridge so the reset re-runs it. When no cartridge is attached,
+Reset happens immediately with no prompt.
 
 ## Debugger
 
@@ -1221,8 +1223,8 @@ The tab is organized into three sections:
 
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. Change the layout
-here or with **Shift+Opt+M**. Changing Video reboots the emulated machine; other settings
-apply immediately.
+here or with **Shift+Opt+M**. Changing Video reboots the emulated machine while
+preserving its running state; other settings apply immediately.
 
 ### Paths
 

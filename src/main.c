@@ -2321,6 +2321,7 @@ static void sdl_c64_controllers_close(sdl_c64_controller_state *state, runtime_c
 static void dispatch_debugger_intents(
     runtime_client *client,
     frontend *ui,
+    const frontend_debug_state *debug_state,
     app_options *options,
     sdl_c64_controller_state *controller_state,
     frontend_joystick_input *kbd_joystick) {
@@ -2490,7 +2491,10 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_MACHINE_RESET:
-                sent = runtime_client_reset_ex(client, intent.machine_reset_detach_cartridge);
+                sent = runtime_client_reset_ex_with_resume(
+                    client,
+                    intent.machine_reset_detach_cartridge,
+                    intent.machine_reset_resume_running);
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG:
@@ -2532,7 +2536,9 @@ static void dispatch_debugger_intents(
                         options->ini_path,
                         absolute_symbol_files,
                         intent.config_result.needs_reboot,
-                        options->save_ini && !options->no_save_ini);
+                        options->save_ini && !options->no_save_ini,
+                        debug_state != NULL &&
+                            debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING);
                     frontend_set_config_state(ui, options);
                     frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
                     frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
@@ -3944,7 +3950,13 @@ static bool run_main_loop(
                 text_input_active = want_text_input;
             }
         }
-        dispatch_debugger_intents(client, ui, options, &controller_state, &kbd_joystick);
+        dispatch_debugger_intents(
+            client,
+            ui,
+            &debug_state,
+            options,
+            &controller_state,
+            &kbd_joystick);
         platform_window_present(window);
     }
     sdl_c64_controllers_close(&controller_state, client);

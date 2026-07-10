@@ -192,6 +192,7 @@ typedef struct frontend_debugger_intent {
     bool save_bin_is_basic_text;
     /* Machine reset */
     bool machine_reset_detach_cartridge;
+    bool machine_reset_resume_running;
     /* File browser result */
     frontend_debugger_intent_type file_browser_purpose;
     char file_browser_path[1024];

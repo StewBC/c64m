@@ -34,6 +34,10 @@ bool runtime_client_ping(runtime_client *client);
 bool runtime_client_quit(runtime_client *client);
 bool runtime_client_reset(runtime_client *client);
 bool runtime_client_reset_ex(runtime_client *client, bool detach_cartridge);
+bool runtime_client_reset_ex_with_resume(
+    runtime_client *client,
+    bool detach_cartridge,
+    bool resume_running);
 bool runtime_client_run(runtime_client *client);
 bool runtime_client_pause(runtime_client *client);
 bool runtime_client_step_cycle(runtime_client *client);
@@ -115,7 +119,8 @@ bool runtime_client_apply_machine_config(
     const char *ini_path,
     const char *symbol_files,
     bool reset,
-    bool save_ini);
+    bool save_ini,
+    bool resume_running);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memory_snapshot *out_snapshot);
 

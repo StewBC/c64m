@@ -14,6 +14,8 @@
   read-only `1541 Map 8` / `1541 Map 9` inspection modes.
 - Memory view virtual views are implemented.
 - Assembler UI integration is implemented.
+- Machine Reset preserves the runtime state at the time the UI reset is requested:
+  running machines resume after reset, while paused machines remain paused.
 - Shift+Opt+A assembles the configured source file globally, using the same
   settings and action as the Misc|Assembler Assemble button.
 - Shift+Opt+M toggles the live keyboard joystick layout between Numpad and WASD.

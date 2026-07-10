@@ -40,6 +40,25 @@ bool runtime_client_reset_ex(runtime_client *client, bool detach_cartridge) {
     }
 
     command.data.reset.detach_cartridge = detach_cartridge ? 1u : 0u;
+    command.data.reset.resume_running = RUNTIME_RESET_PRESERVE_STATE;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_reset_ex_with_resume(
+    runtime_client *client,
+    bool detach_cartridge,
+    bool resume_running) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_RESET,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.reset.detach_cartridge = detach_cartridge ? 1u : 0u;
+    command.data.reset.resume_running = resume_running ?
+        RUNTIME_RESET_RUNNING : RUNTIME_RESET_PAUSED;
     return message_queue_push(client->command_queue, &command);
 }
 
@@ -525,7 +544,8 @@ bool runtime_client_apply_machine_config(
     const char *ini_path,
     const char *symbol_files,
     bool reset,
-    bool save_ini) {
+    bool save_ini,
+    bool resume_running) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     };
@@ -556,6 +576,7 @@ bool runtime_client_apply_machine_config(
     }
     command.data.apply_machine_config.reset = reset ? 1u : 0u;
     command.data.apply_machine_config.save_ini = save_ini ? 1u : 0u;
+    command.data.apply_machine_config.resume_running = resume_running ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 
