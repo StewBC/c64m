@@ -27,7 +27,6 @@ typedef struct app_options {
     bool no_save_ini;
     int scroll_wheel_lines;
     char *ini_path;
-    char *quicksave_folder;
     app_disk_slot disk_slots[C64M_DRIVE_COUNT];
     char *breakpoint;
     char *turbo_multipliers;
@@ -84,6 +83,10 @@ typedef struct app_options {
 void app_options_init(app_options *options);
 bool app_options_load_startup(app_options *options, int argc, char **argv);
 bool app_options_save_shutdown(const app_options *options);
+/* Re-reads the named INI from disk and rewrites only the [browse] path keys from
+   options->browse_dirs, leaving every other setting intact. Silent no-op (returns
+   true) when there is no writable INI target. */
+bool app_options_save_paths_only(const app_options *options);
 bool app_options_copy(app_options *dest, const app_options *src);
 bool app_options_apply_ini_file(app_options *options, const char *path);
 bool app_options_set_string(char **target, const char *value);

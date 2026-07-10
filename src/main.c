@@ -220,17 +220,17 @@ static bool options_ini_dir(const app_options *options, char *out, size_t out_si
 
 static bool quicksave_folder_absolute(
     const app_options *options,
+    const char *folder,
     char *out,
     size_t out_size) {
-    const char *folder;
     char ini_dir[1024];
 
     if (out == NULL || out_size == 0) {
         return false;
     }
-    folder = (options != NULL && options->quicksave_folder != NULL &&
-              options->quicksave_folder[0] != '\0') ?
-        options->quicksave_folder : ".";
+    if (folder == NULL || folder[0] == '\0') {
+        folder = ".";
+    }
     if (path_is_absolute_local(folder)) {
         return snprintf(out, out_size, "%s", folder) < (int)out_size;
     }
@@ -338,7 +338,8 @@ static bool append_state_extension(char *path, size_t path_size) {
     return true;
 }
 
-static bool make_quicksave_path(const app_options *options, char *out, size_t out_size) {
+static bool make_quicksave_path(
+    const app_options *options, const char *snapshot_dir, char *out, size_t out_size) {
     char folder[1024];
     char stem[256];
     char filename[512];
@@ -346,7 +347,7 @@ static bool make_quicksave_path(const app_options *options, char *out, size_t ou
     struct tm tm_value;
     int suffix;
 
-    if (!quicksave_folder_absolute(options, folder, sizeof(folder))) {
+    if (!quicksave_folder_absolute(options, snapshot_dir, folder, sizeof(folder))) {
         return false;
     }
     sanitize_snapshot_stem(active_content_path(options), stem, sizeof(stem));
@@ -407,11 +408,12 @@ static bool make_quicksave_path(const app_options *options, char *out, size_t ou
     return false;
 }
 
-static bool find_newest_state_file(const app_options *options, char *out, size_t out_size) {
+static bool find_newest_state_file(
+    const app_options *options, const char *snapshot_dir, char *out, size_t out_size) {
     char folder[1024];
     bool found = false;
 
-    if (!quicksave_folder_absolute(options, folder, sizeof(folder))) {
+    if (!quicksave_folder_absolute(options, snapshot_dir, folder, sizeof(folder))) {
         return false;
     }
 #if defined(_WIN32)
@@ -489,10 +491,11 @@ static bool key_is_quickload_shortcut(const SDL_KeyboardEvent *key) {
     return key->keysym.sym == SDLK_LESS || key->keysym.sym == SDLK_COMMA;
 }
 
-static bool send_quicksave(runtime_client *client, const app_options *options) {
+static bool send_quicksave(runtime_client *client, const app_options *options, const frontend *ui) {
     char path[1200];
+    const char *snapshot_dir = frontend_get_browse_dir(ui, FRONTEND_BROWSE_SLOT_SNAPSHOT);
 
-    if (!make_quicksave_path(options, path, sizeof(path))) {
+    if (!make_quicksave_path(options, snapshot_dir, path, sizeof(path))) {
         SDL_Log("quicksave: failed to build snapshot path");
         return false;
     }
@@ -500,10 +503,11 @@ static bool send_quicksave(runtime_client *client, const app_options *options) {
     return runtime_client_save_state(client, path);
 }
 
-static bool send_quickload(runtime_client *client, const app_options *options) {
+static bool send_quickload(runtime_client *client, const app_options *options, const frontend *ui) {
     char path[1200];
+    const char *snapshot_dir = frontend_get_browse_dir(ui, FRONTEND_BROWSE_SLOT_SNAPSHOT);
 
-    if (!find_newest_state_file(options, path, sizeof(path))) {
+    if (!find_newest_state_file(options, snapshot_dir, path, sizeof(path))) {
         SDL_Log("quickload: no .c64state files found");
         return false;
     }
@@ -2550,6 +2554,20 @@ static void dispatch_debugger_intents(
                     "Select Assembler Source", false, NULL, NULL, 0);
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_SAVE_PATHS_ONLY:
+                /* Pull the live folders from the frontend, then rewrite only the
+                   [browse] keys in the named INI (leaving everything else). */
+                if (options != NULL) {
+                    int slot;
+                    for (slot = 0; slot < FRONTEND_BROWSE_SLOT_COUNT &&
+                             slot < APP_BROWSE_DIR_COUNT; ++slot) {
+                        const char *dir = frontend_get_browse_dir(ui, (frontend_browse_slot)slot);
+                        app_options_set_string(&options->browse_dirs[slot], dir[0] ? dir : NULL);
+                    }
+                    app_options_save_paths_only(options);
+                }
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN:
                 if (intent.assemble_rearm_oneshots) {
                     runtime_client_rearm_oneshot_breakpoints(client);
@@ -3744,10 +3762,10 @@ static bool run_main_loop(
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
                 } else if (key_is_quicksave_shortcut(&event.key)) {
-                    send_quicksave(client, options);
+                    send_quicksave(client, options, ui);
                     send_event_to_frontend = false;
                 } else if (key_is_quickload_shortcut(&event.key)) {
-                    send_quickload(client, options);
+                    send_quickload(client, options, ui);
                     send_event_to_frontend = false;
                 } else if ((event.key.keysym.sym == SDLK_0 ||
                             event.key.keysym.sym == SDLK_1 ||

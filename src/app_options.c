@@ -1007,6 +1007,9 @@ static bool apply_disk_spec(app_options *options, const char *spec)
 static const char *const browse_dir_keys[APP_BROWSE_DIR_COUNT] = {
     "assembler", "disk", "program", "basic", "text", "snapshot"
 };
+/* Index of the "snapshot" slot within browse_dir_keys / browse_dirs. Doubles as
+   the quicksave folder (see the frontend Paths tab). */
+#define APP_BROWSE_DIR_SNAPSHOT 5
 
 static void apply_config(app_options *options, config *cfg)
 {
@@ -1075,11 +1078,6 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->turbo_multipliers, value);
     }
-    value = config_get(cfg, "state", "quicksave_folder");
-    if (value != NULL && value[0] != '\0') {
-        replace_string(&options->quicksave_folder, value);
-    }
-
     value = config_get(cfg, "rom", "basic");
     if (value == NULL) {
         value = config_get(cfg, "roms", "basic");
@@ -1165,6 +1163,15 @@ static void apply_config(app_options *options, config *cfg)
         value = config_get(cfg, "browse", browse_dir_keys[i]);
         if (value != NULL && value[0] != '\0') {
             replace_string(&options->browse_dirs[i], value);
+        }
+    }
+    /* Migrate the pre-unification [state] quicksave_folder into the snapshot slot
+       when no [browse] snapshot is present. */
+    if (options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT] == NULL ||
+            options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT][0] == '\0') {
+        value = config_get(cfg, "state", "quicksave_folder");
+        if (value != NULL && value[0] != '\0') {
+            replace_string(&options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT], value);
         }
     }
 }
@@ -1413,7 +1420,6 @@ void app_options_init(app_options *options)
     memset(options, 0, sizeof(*options));
     options->use_ini = true;
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
-    replace_string(&options->quicksave_folder, ".");
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
     options->display_width = C64M_DEFAULT_DISPLAY_WIDTH;
@@ -1497,7 +1503,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
 
     if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
         !replace_string(&dest->ini_path, src->ini_path) ||
-        !replace_string(&dest->quicksave_folder, src->quicksave_folder) ||
         !replace_string(&dest->breakpoint, src->breakpoint) ||
         !replace_string(&dest->turbo_multipliers, src->turbo_multipliers) ||
         !replace_string(&dest->symbol_files, src->symbol_files) ||
@@ -1612,9 +1617,8 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
-    if (options->quicksave_folder != NULL && options->quicksave_folder[0] != '\0') {
-        config_set(cfg, "state", "quicksave_folder", options->quicksave_folder);
-    }
+    /* The snapshot folder is now [browse] snapshot; drop the legacy key. */
+    config_remove_prefix(cfg, "state", "quicksave_folder");
     if (options->symbol_files != NULL &&
         transform_symbol_files(options, options->symbol_files, false, relative_symbol_files, sizeof(relative_symbol_files))) {
         config_set(cfg, "config", "symbol_files", relative_symbol_files);
@@ -1701,6 +1705,40 @@ bool app_options_save_shutdown(const app_options *options)
     return ok;
 }
 
+bool app_options_save_paths_only(const app_options *options)
+{
+    config *cfg;
+    bool ok;
+    int i;
+
+    if (options == NULL || options->no_save_ini ||
+            options->ini_path == NULL || options->ini_path[0] == '\0') {
+        return true; /* nothing named to write to: silent no-op */
+    }
+
+    /* Re-read the file so we preserve every other setting, then overwrite only
+       the [browse] path keys. */
+    cfg = config_load(options->ini_path);
+    if (cfg == NULL) {
+        cfg = config_load(NULL);
+    }
+    if (cfg == NULL) {
+        return false;
+    }
+
+    for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
+        if (options->browse_dirs[i] != NULL && options->browse_dirs[i][0] != '\0') {
+            config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+        } else {
+            config_remove_prefix(cfg, "browse", browse_dir_keys[i]);
+        }
+    }
+
+    ok = config_save(cfg, options->ini_path);
+    config_destroy(cfg);
+    return ok;
+}
+
 void app_options_destroy(app_options *options)
 {
     int i;
@@ -1710,7 +1748,6 @@ void app_options_destroy(app_options *options)
     }
 
     free(options->ini_path);
-    free(options->quicksave_folder);
     free(options->breakpoint);
     free(options->turbo_multipliers);
     free(options->symbol_files);

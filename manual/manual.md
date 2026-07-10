@@ -623,9 +623,10 @@ joystick layout/port. The current v1 format stores references and hashes for ext
 content rather than embedding every ROM or media byte, so a snapshot is expected to be
 loaded with the same ROM files available.
 
-**Shift+Opt+>** quicksaves to the configured quicksave folder. Each quicksave creates a
-new timestamped `.c64state` file; existing quicksaves are not overwritten. **Shift+Opt+<**
-quickloads the newest `.c64state` in that folder.
+**Shift+Opt+>** quicksaves to the snapshot folder (Configure → Paths → `snapshot`,
+which defaults to the current directory). Each quicksave creates a new timestamped
+`.c64state` file; existing quicksaves are not overwritten. **Shift+Opt+<** quickloads
+the newest `.c64state` in that folder.
 
 ### Emulator Controls
 
@@ -1218,7 +1219,6 @@ The Configure dialog (opened from **[Configure...]** in the Machine tab) has two
 |----------------------|-------------------------------------------------|
 | Scroll Wheel Lines   | Number of rows scrolled per wheel click (1-100) |
 | Turbo Speeds         | Comma-separated multiplier list, e.g. `2,4,8,16` |
-| Quicksave Folder     | Folder used by Shift+Opt+> and Shift+Opt+< state shortcuts |
 | Symbol Files         | Comma-separated paths to symbol files loaded at startup |
 | Keyboard Joystick    | Tri-state port selector (Off / Port 1 / Port 2) and Numpad / WASD layout |
 | Auto-save INI on Quit| Save `c64m.ini` automatically when quitting     |
@@ -1226,6 +1226,25 @@ The Configure dialog (opened from **[Configure...]** in the Machine tab) has two
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. The layout can
 only be changed here. Applying the dialog takes effect immediately.
+
+### Paths
+
+The Paths tab holds the default folder the file browser remembers per browse type.
+Each field starts empty (the browser then opens at the shell's current directory) and
+updates as you pick files:
+
+| Field     | Used by                                                        |
+|-----------|----------------------------------------------------------------|
+| assembler | Select Assembler Source                                        |
+| disk      | Mount / Add Disk Image (drives 8 and 9 share this)             |
+| program   | Load PRG/BAS, and Load/Save Binary with no Basic checkbox      |
+| basic     | Load/Save Binary with **Basic Program** ticked                 |
+| text      | Load/Save Binary with **Basic Text** ticked                    |
+| snapshot  | Save/Load State — and the quicksave folder (Shift+Opt+> / <)   |
+
+Edits here take effect on the next browse immediately. **[Save Paths Only]** rewrites
+just these paths into the named INI file, leaving every other setting untouched; it is
+a silent no-op if no INI file is set.
 
 ### INI File
 
@@ -1276,11 +1295,22 @@ emulator removes comments.
 The port can also be set for one launch with `--kbdjoy <0|1|2>`, and the layout with
 `--kbdjoy-layout <numpad|wasd>`.
 
-### [state]
+### [browse]
 
-| Key                | Value                                      |
-|--------------------|--------------------------------------------|
-| `quicksave_folder` | Folder used for quicksave/quickload (`.` by default) |
+Default folders the file browser remembers per browse type (see the Configure
+dialog's Paths tab). Any missing key defaults to the shell's current directory.
+
+| Key         | Used by                                                   |
+|-------------|-----------------------------------------------------------|
+| `assembler` | Select Assembler Source                                   |
+| `disk`      | Mount / Add Disk Image (drives 8 and 9)                   |
+| `program`   | Load PRG/BAS and Load/Save Binary with no Basic checkbox  |
+| `basic`     | Load/Save Binary with Basic Program ticked                |
+| `text`      | Load/Save Binary with Basic Text ticked                   |
+| `snapshot`  | Save/Load State and the quicksave folder                  |
+
+The legacy `[state] quicksave_folder` key is read once and migrated into
+`[browse] snapshot` if the latter is absent.
 
 ### [Window]
 
@@ -1438,8 +1468,8 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Shift+Opt+1** | Assign the keyboard joystick to port 1 (press again to disable) |
 | **Shift+Opt+2** | Assign the keyboard joystick to port 2 (press again to disable) |
 | **Shift+Opt+0** | Disable the keyboard joystick on any port                       |
-| **Shift+Opt+>** | Quicksave state to the configured quicksave folder              |
-| **Shift+Opt+<** | Quickload the newest state from the configured quicksave folder |
+| **Shift+Opt+>** | Quicksave state to the snapshot folder (Configure -> Paths)     |
+| **Shift+Opt+<** | Quickload the newest state from the snapshot folder             |
 | **Cmd+Q**       | Quit (macOS)                                               |
 
 ### Paste and Clipboard

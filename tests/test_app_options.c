@@ -559,7 +559,9 @@ static void test_phase14_config_saved_to_ini(void) {
     options.remember = true;
     options.scroll_wheel_lines = 9;
     app_options_set_string(&options.turbo_multipliers, "5,10");
-    app_options_set_string(&options.quicksave_folder, "states");
+    /* browse_dirs[5] is the snapshot slot (see APP_BROWSE_DIR_SNAPSHOT); it also
+       serves as the quicksave folder after unification. */
+    app_options_set_string(&options.browse_dirs[5], "states");
     app_options_set_string(&options.symbol_files, "symbols/main.sym");
 
     if (!app_options_save_shutdown(&options)) {
@@ -587,7 +589,7 @@ static void test_phase14_config_saved_to_ini(void) {
     expect_bool("saved remember", 1, options.remember);
     expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
     expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);
-    expect_string("saved quicksave folder", "states", options.quicksave_folder);
+    expect_string("saved snapshot browse dir", "states", options.browse_dirs[5]);
     expect_string("saved symbol files", "symbols/main.sym", options.symbol_files);
 
     app_options_destroy(&options);

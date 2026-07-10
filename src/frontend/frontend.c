@@ -246,7 +246,8 @@ typedef enum frontend_active_view {
 
 typedef enum frontend_config_tab {
     FRONTEND_CONFIG_TAB_MACHINE = 0,
-    FRONTEND_CONFIG_TAB_EMULATOR
+    FRONTEND_CONFIG_TAB_EMULATOR,
+    FRONTEND_CONFIG_TAB_PATHS
 } frontend_config_tab;
 
 typedef enum frontend_ini_prompt_state {
@@ -1027,7 +1028,6 @@ static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *d
         frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
         frontend_config_reserve_string(&dialog->edited.video_filter, 64) &&
         frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
-        frontend_config_reserve_string(&dialog->edited.quicksave_folder, 1024) &&
         frontend_config_reserve_string(&dialog->edited.symbol_files, 1024) &&
         frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16);
 }
@@ -1470,10 +1470,6 @@ static bool frontend_config_validate(frontend_config_dialog_state *dialog)
         snprintf(dialog->error, sizeof(dialog->error), "INI file path is required");
         return false;
     }
-    if (dialog->edited.quicksave_folder == NULL || dialog->edited.quicksave_folder[0] == '\0') {
-        snprintf(dialog->error, sizeof(dialog->error), "Quicksave folder is required");
-        return false;
-    }
     dialog->error[0] = '\0';
     return true;
 }
@@ -1561,9 +1557,6 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     if (dialog->edited.symbol_files == NULL) {
         app_options_set_string(&dialog->edited.symbol_files, "");
     }
-    if (dialog->edited.quicksave_folder == NULL) {
-        app_options_set_string(&dialog->edited.quicksave_folder, ".");
-    }
 
     nk_layout_row_dynamic(ctx, 22.0f, 2);
     nk_label(ctx, "Scroll Wheel Speed", NK_TEXT_LEFT);
@@ -1578,18 +1571,6 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         NK_EDIT_FIELD,
         dialog->edited.turbo_multipliers,
         256,
-        nk_filter_default);
-    nk_layout_row_end(ctx);
-
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
-    nk_layout_row_push(ctx, 0.30f);
-    nk_label(ctx, "Quicksave Folder", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.70f);
-    frontend_edit_replace(
-        ctx,
-        NK_EDIT_FIELD,
-        dialog->edited.quicksave_folder,
-        1024,
         nk_filter_default);
     nk_layout_row_end(ctx);
 
@@ -1638,6 +1619,40 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "Add...")) {
         frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG);
+    }
+}
+
+/* Editable per-slot default folders for the file browser. These bind directly to
+   the live frontend paths (ui->browse_dirs), so an edit takes effect on the next
+   browse immediately; "Save Paths Only" persists just these to the named INI. */
+static void frontend_draw_config_paths_tab(frontend *ui, struct nk_context *ctx)
+{
+    static const char *const labels[FRONTEND_BROWSE_SLOT_COUNT] = {
+        "assembler", "disk", "program", "basic", "text", "snapshot"
+    };
+    int i;
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "Default folder remembered per browse type:", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 16.0f, 1);
+    nk_label_colored(ctx, "(snapshot also serves as the quicksave folder)",
+        NK_TEXT_LEFT, nk_rgb(150, 170, 180));
+
+    for (i = 0; i < FRONTEND_BROWSE_SLOT_COUNT; ++i) {
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
+        nk_layout_row_push(ctx, 0.22f);
+        nk_label(ctx, labels[i], NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.78f);
+        frontend_edit_replace(ctx, NK_EDIT_FIELD,
+            ui->browse_dirs[i], (int)sizeof(ui->browse_dirs[i]), nk_filter_default);
+        nk_layout_row_end(ctx);
+    }
+
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Save Paths Only")) {
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_SAVE_PATHS_ONLY);
     }
 }
 
@@ -1709,16 +1724,19 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
 
     if (nk_begin(ctx, "Configure", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
         if (!nk_window_is_closed(ctx, "Configure")) {
-            nk_layout_row_dynamic(ctx, 24.0f, 2);
+            nk_layout_row_dynamic(ctx, 24.0f, 3);
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_MACHINE, "Machine");
             frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_EMULATOR, "Emulator");
+            frontend_draw_config_tab_button(ui, FRONTEND_CONFIG_TAB_PATHS, "Paths");
 
             nk_layout_row_dynamic(ctx, 250.0f, 1);
             if (nk_group_begin(ctx, "config-tab-body", NK_WINDOW_BORDER)) {
                 if (dialog->active_tab == FRONTEND_CONFIG_TAB_MACHINE) {
                     frontend_draw_config_machine_tab(dialog, ctx);
-                } else {
+                } else if (dialog->active_tab == FRONTEND_CONFIG_TAB_EMULATOR) {
                     frontend_draw_config_emulator_tab(ui, dialog, ctx);
+                } else {
+                    frontend_draw_config_paths_tab(ui, ctx);
                 }
                 nk_group_end(ctx);
             }
