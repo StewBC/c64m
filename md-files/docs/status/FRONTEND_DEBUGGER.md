@@ -24,6 +24,14 @@
 - In-app file browser has keyboard navigation/type-ahead and remembers a default
   folder per browse slot (INI `[browse]`), editable on the Configure dialog's
   Paths tab; the `snapshot` slot doubles as the unified quicksave folder.
+- The Configure dialog's Paths tab also edits the ROM file endpoints (INI
+  `[roms]`): System, Kernal, Basic, Character, and 1541. A "Single Basic/Kernal
+  ROM" checkbox (INI `[roms] single_system`) selects the combined System ROM and
+  greys out the separate Basic/Kernal fields, or vice versa; Character and 1541
+  are always editable. ROM edits apply on OK by rebooting and reloading the ROM
+  set, and are persisted by both OK (full save) and "Save Paths Only". The
+  Configure dialog's Emulator tab adds an "Emulate 1541" checkbox (INI
+  `[disk] emulate_1541`) that applies live without a reboot.
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
 - The OS window title reflects live runtime state without the debugger UI being open: `c64m - Running`, `c64m - Paused (<reason>)` (reason text reuses `frontend_stop_reason_name()`, e.g. `BRK`, `breakpoint`, `step`, `reset`), or `c64m - Error`. Updated only on state/reason change in `run_main_loop()` (`src/main.c`) via the new `platform_window_set_title()`. See `docs/status/CPU_MACHINE.md` for the BRK auto-stop behavior that feeds the `BRK` reason.

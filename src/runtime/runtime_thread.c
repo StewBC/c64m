@@ -1230,6 +1230,20 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     c64_set_config(&rt->machine, &rt->machine_config);
     runtime_update_sid_sample_output(rt);
     runtime_update_video_output(rt);
+    if (command->data.apply_machine_config.reload_roms != 0) {
+        /* Empty strings become NULL so runtime_load_configured_roms skips them. */
+        const char *system_path = command->data.apply_machine_config.system_rom_path;
+        const char *basic_path = command->data.apply_machine_config.basic_rom_path;
+        const char *char_path = command->data.apply_machine_config.char_rom_path;
+        const char *kernal_path = command->data.apply_machine_config.kernal_rom_path;
+        const char *rom1541_path = command->data.apply_machine_config.rom1541_path;
+        runtime_replace_string(&rt->system_rom_path, system_path[0] != '\0' ? system_path : NULL);
+        runtime_replace_string(&rt->basic_rom_path, basic_path[0] != '\0' ? basic_path : NULL);
+        runtime_replace_string(&rt->char_rom_path, char_path[0] != '\0' ? char_path : NULL);
+        runtime_replace_string(&rt->kernal_rom_path, kernal_path[0] != '\0' ? kernal_path : NULL);
+        runtime_replace_string(&rt->rom1541_path, rom1541_path[0] != '\0' ? rom1541_path : NULL);
+        runtime_load_configured_roms(rt);
+    }
     if (command->data.apply_machine_config.reset != 0) {
         if (runtime_reset_machine(rt) &&
             command->data.apply_machine_config.resume_running != 0) {

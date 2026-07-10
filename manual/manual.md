@@ -1211,6 +1211,7 @@ The tab is organized into three sections:
 | Video             | Select `NTSC` or `PAL`; changes take effect on reboot |
 | Keyboard Joystick| Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
 | Turbo Speeds      | Comma-separated multiplier list, e.g. `2,4,8,16` |
+| Emulate 1541      | Route disk I/O through the real 1541 DOS ROM (needs a 1541 ROM); applies live |
 
 **UI**
 
@@ -1224,11 +1225,32 @@ The tab is organized into three sections:
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. Change the layout
 here or with **Shift+Opt+M**. Changing Video reboots the emulated machine while
-preserving its running state; other settings apply immediately.
+preserving its running state; Emulate 1541 and the other settings apply immediately.
 
 ### Paths
 
-The Paths tab holds the default folder the file browser remembers per browse type.
+The Paths tab has a **ROMs** section followed by the default browse folders.
+
+**ROMs** sets the ROM file paths (file endpoints, not folders). Each row has an edit box
+showing the path relative to the INI file's directory and a **[...]** button that opens a
+file picker:
+
+| Field     | ROM                                                            |
+|-----------|----------------------------------------------------------------|
+| System    | Combined 16 KB system ROM (BASIC + KERNAL)                     |
+| Kernal    | Separate 8 KB KERNAL ROM                                       |
+| Basic     | Separate 8 KB BASIC ROM                                        |
+| Character | 4 KB character ROM                                             |
+| 1541      | 16 KB 1541 DOS ROM (optional; enables Emulate 1541)           |
+
+The **Single Basic/Kernal ROM** checkbox chooses between the two supply modes. When
+ticked, the combined **System** ROM is used and the **Kernal** and **Basic** fields are
+disabled; when unticked, the separate **Kernal** and **Basic** ROMs are used and **System**
+is disabled. **Character** and **1541** are always available. Changing any ROM path (or the
+checkbox) reboots the emulated machine and reloads the ROM set when you press **[OK]**. ROM
+paths are saved by **[OK]** and by **[Save Paths Only]**.
+
+**Default browse paths** hold the folder the file browser remembers per browse type.
 Each field starts empty (the browser then opens in the current working directory) and
 updates as you pick files. Paths are shown and stored relative to the INI file's
 directory, and each row has a **[...]** button that opens a folder picker:
@@ -1242,10 +1264,11 @@ directory, and each row has a **[...]** button that opens a folder picker:
 | text      | Load/Save Binary with **Basic Text** ticked                    |
 | snapshot  | Save/Load State - and the quicksave folder (Shift+Opt+> / <)   |
 
-Edits here take effect on the next browse immediately. The folder picker's **[Use This
-Folder]** button selects the folder currently shown. **[Save Paths Only]** rewrites just
-these paths into the named INI file, leaving every other setting untouched; it is a
-silent no-op if no INI file is set.
+Edits to the browse folders take effect on the next browse immediately. The folder
+picker's **[Use This Folder]** button selects the folder currently shown. **[Save Paths
+Only]** rewrites just the ROM paths (and the Single Basic/Kernal ROM flag) and the browse
+folders into the named INI file, leaving every other setting untouched; it is a silent
+no-op if no INI file is set.
 
 ### INI File
 
@@ -1307,7 +1330,8 @@ dialog's Paths tab). Any missing key defaults to the current working directory.
 | `snapshot`  | Save/Load State and the quicksave folder                  |
 
 The legacy `[state] quicksave_folder` key is read once and migrated into
-`[browse] snapshot` if the latter is absent.
+`[browse] snapshot` if the latter is absent, then removed the next time c64m saves
+the INI (it no longer exists as a separate setting).
 
 ### [Window]
 
@@ -1333,6 +1357,11 @@ The legacy `[state] quicksave_folder` key is read once and migrated into
 | `char` or `character` | Path to character ROM (4096 bytes) |
 | `system`    | Path to combined system ROM (16384 bytes) |
 | `1541`      | Path to combined 1541 DOS ROM (16384 bytes) |
+| `single_system` | `true`/`false`; when true the combined `system` ROM supplies BASIC and KERNAL, and `basic`/`kernal` are ignored; when false the separate `basic`+`kernal` ROMs are used and `system` is ignored |
+
+If `single_system` is absent it is derived: a combined `system` ROM without a
+`basic`+`kernal` pair defaults to true, otherwise false. These paths and the flag are
+editable on the Configure dialog's Paths tab.
 
 If no ROM paths are specified, c64m searches for files named `basic`, `kernal`,
 `character`, `system`, and `1541` (with any extension) in `.`, `rom/`, and `roms/`.

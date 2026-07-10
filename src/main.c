@@ -694,6 +694,41 @@ static c64_config machine_config_from_options(const app_options *options) {
     return config;
 }
 
+/* Resolve which ROM paths actually load, honoring the single/separate flag: in
+   single mode the combined system ROM is used and the separate BASIC/KERNAL
+   paths are suppressed; in separate mode the reverse. Character and 1541 ROMs
+   are independent of the flag. Empty strings collapse to NULL (== "not set").
+   Any of the out pointers may be NULL. */
+static const char *nonempty_or_null(const char *s) {
+    return (s != NULL && s[0] != '\0') ? s : NULL;
+}
+
+static void effective_rom_paths(
+    const app_options *options,
+    const char **system_out,
+    const char **basic_out,
+    const char **char_out,
+    const char **kernal_out,
+    const char **rom1541_out) {
+    const char *system_path = NULL;
+    const char *basic_path = NULL;
+    const char *kernal_path = NULL;
+
+    if (options != NULL) {
+        if (options->rom_single_system) {
+            system_path = nonempty_or_null(options->system_rom_path);
+        } else {
+            basic_path = nonempty_or_null(options->basic_rom_path);
+            kernal_path = nonempty_or_null(options->kernal_rom_path);
+        }
+    }
+    if (system_out != NULL) *system_out = system_path;
+    if (basic_out != NULL) *basic_out = basic_path;
+    if (kernal_out != NULL) *kernal_out = kernal_path;
+    if (char_out != NULL) *char_out = options != NULL ? nonempty_or_null(options->char_rom_path) : NULL;
+    if (rom1541_out != NULL) *rom1541_out = options != NULL ? nonempty_or_null(options->rom1541_path) : NULL;
+}
+
 static runtime_config runtime_config_from_options(const app_options *options) {
     runtime_config config = {0};
 
@@ -2507,6 +2542,11 @@ static void dispatch_debugger_intents(
                     "Select Folder", false, NULL, NULL, 0);
                 break;
 
+            case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG:
+                frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG,
+                    "Select ROM File", false, NULL, NULL, 0);
+                break;
+
             case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
                 frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
                     "Select Symbol File", false, NULL, NULL, 0);
@@ -2526,9 +2566,17 @@ static void dispatch_debugger_intents(
                     *options = intent.config;
                     memset(&intent.config, 0, sizeof(intent.config));
                     options->save_ini = intent.config_result.save_ini_on_quit || options->remember;
+                    runtime_client_rom_paths rom_paths;
                     if (!app_options_symbol_files_absolute(options, absolute_symbol_files, sizeof(absolute_symbol_files))) {
                         snprintf(absolute_symbol_files, sizeof(absolute_symbol_files), "%s", options->symbol_files ? options->symbol_files : "");
                     }
+                    effective_rom_paths(
+                        options,
+                        &rom_paths.system_rom_path,
+                        &rom_paths.basic_rom_path,
+                        &rom_paths.char_rom_path,
+                        &rom_paths.kernal_rom_path,
+                        &rom_paths.rom1541_path);
                     sent = runtime_client_apply_machine_config(
                         client,
                         &machine_config,
@@ -2538,7 +2586,9 @@ static void dispatch_debugger_intents(
                         intent.config_result.needs_reboot,
                         options->save_ini && !options->no_save_ini,
                         debug_state != NULL &&
-                            debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING);
+                            debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING,
+                        &rom_paths,
+                        intent.config_result.roms_changed);
                     frontend_set_config_state(ui, options);
                     frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
                     frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
@@ -2575,6 +2625,7 @@ static void dispatch_debugger_intents(
                         const char *dir = frontend_get_browse_dir(ui, (frontend_browse_slot)slot);
                         app_options_set_string(&options->browse_dirs[slot], dir[0] ? dir : NULL);
                     }
+                    frontend_config_export_rom_paths(ui, options);
                     app_options_save_paths_only(options);
                 }
                 break;
@@ -2722,6 +2773,10 @@ static void dispatch_debugger_intents(
 
                     case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG:
                         frontend_set_picked_browse_dir(ui, intent.file_browser_path);
+                        break;
+
+                    case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG:
+                        frontend_set_picked_rom_path(ui, intent.file_browser_path);
                         break;
 
                     case FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG:
@@ -4072,11 +4127,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    runtime_cfg.basic_rom_path = options.basic_rom_path;
-    runtime_cfg.char_rom_path = options.char_rom_path;
-    runtime_cfg.kernal_rom_path = options.kernal_rom_path;
-    runtime_cfg.system_rom_path = options.system_rom_path;
-    runtime_cfg.rom1541_path = options.rom1541_path;
+    effective_rom_paths(
+        &options,
+        &runtime_cfg.system_rom_path,
+        &runtime_cfg.basic_rom_path,
+        &runtime_cfg.char_rom_path,
+        &runtime_cfg.kernal_rom_path,
+        &runtime_cfg.rom1541_path);
     runtime_cfg.ini_path = options.ini_path;
     if (app_options_symbol_files_absolute(&options, runtime_symbol_files, sizeof(runtime_symbol_files))) {
         runtime_cfg.symbol_files = runtime_symbol_files;

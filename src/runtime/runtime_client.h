@@ -112,6 +112,17 @@ bool runtime_client_paste_text(runtime_client *client, const char *text, size_t 
 bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length);
 bool runtime_client_paste_events(runtime_client *client, const paste_event_t *events, size_t count);
 bool runtime_client_cycle_turbo_speed(runtime_client *client);
+/* rom_paths, when non-NULL, carries the effective ROM file paths (any member may
+   be NULL/empty for "unset"); pass reload_roms=true to have the runtime re-read
+   them as part of this apply (requires reset to take visible effect). */
+typedef struct runtime_client_rom_paths {
+    const char *system_rom_path;
+    const char *basic_rom_path;
+    const char *char_rom_path;
+    const char *kernal_rom_path;
+    const char *rom1541_path;
+} runtime_client_rom_paths;
+
 bool runtime_client_apply_machine_config(
     runtime_client *client,
     const c64_config *config,
@@ -120,7 +131,9 @@ bool runtime_client_apply_machine_config(
     const char *symbol_files,
     bool reset,
     bool save_ini,
-    bool resume_running);
+    bool resume_running,
+    const runtime_client_rom_paths *rom_paths,
+    bool reload_roms);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memory_snapshot *out_snapshot);
 

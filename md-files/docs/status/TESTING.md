@@ -22,9 +22,16 @@
   rejection preserving live RAM, ROM hash mismatch rejection, and save after a
   one-cycle mid-instruction run.
 - Save-state frontend/config hooks: `tests/test_app_options.c` covers
-  `[state] quicksave_folder` save/reload persistence. Hotkeys, the in-app file
-  browser's Save As / Load flow, and `.c64state` drag/drop remain manual smoke
-  coverage.
+  `[state] quicksave_folder` migration into the snapshot browse slot. The legacy
+  key is now stripped on every save (both `app_options_save_shutdown` and
+  `app_options_save_paths_only`). Hotkeys, the in-app file browser's Save As /
+  Load flow, and `.c64state` drag/drop remain manual smoke coverage.
+- ROM config: `tests/test_app_options.c` covers the `[roms] single_system`
+  flag (derived default from present paths, explicit override, save/reload
+  round-trip) and `app_options_save_paths_only` writing ROM endpoints plus the
+  flag while stripping the retired `[state] quicksave_folder`. The Configure
+  dialog's ROM path fields, the Single-ROM checkbox gating, the "Emulate 1541"
+  checkbox, and reboot-on-ROM-change reload remain manual smoke coverage.
 - File browser directory listing: `tests/platform/test_platform_fs.c` covers
   `platform_fs_path_join` separator handling, `platform_fs_get_cwd`,
   `platform_fs_list_dir` on a missing directory (fails) and on a scratch

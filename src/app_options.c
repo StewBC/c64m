@@ -599,6 +599,15 @@ static bool discover_default_rom_paths(app_options *options)
         }
     }
 
+    {
+        /* Match the ini-load default: a lone combined system ROM means single-ROM
+           mode; a basic+kernal pair means separate. */
+        bool have_system = options->system_rom_path != NULL && options->system_rom_path[0] != '\0';
+        bool have_basic = options->basic_rom_path != NULL && options->basic_rom_path[0] != '\0';
+        bool have_kernal = options->kernal_rom_path != NULL && options->kernal_rom_path[0] != '\0';
+        options->rom_single_system = have_system && !(have_basic && have_kernal);
+    }
+
     return true;
 }
 
@@ -1019,6 +1028,33 @@ static const char *const browse_dir_keys[APP_BROWSE_DIR_COUNT] = {
    the quicksave folder (see the frontend Paths tab). */
 #define APP_BROWSE_DIR_SNAPSHOT 5
 
+/* Write the ROM file paths and the single/separate-ROM flag into cfg. Empty or
+   unset paths remove their key so a cleared field disappears from the INI. Shared
+   by the full-shutdown save and the "Save Paths Only" save. */
+static void config_write_rom_config(config *cfg, const app_options *options)
+{
+    struct {
+        const char *key;
+        const char *value;
+    } roms[] = {
+        { "basic", options->basic_rom_path },
+        { "character", options->char_rom_path },
+        { "kernal", options->kernal_rom_path },
+        { "system", options->system_rom_path },
+        { "1541", options->rom1541_path },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(roms) / sizeof(roms[0]); ++i) {
+        if (roms[i].value != NULL && roms[i].value[0] != '\0') {
+            config_set(cfg, "roms", roms[i].key, roms[i].value);
+        } else {
+            config_remove_prefix(cfg, "roms", roms[i].key);
+        }
+    }
+    config_set_bool(cfg, "roms", "single_system", options->rom_single_system);
+}
+
 static void apply_config(app_options *options, config *cfg)
 {
     const char *value;
@@ -1108,6 +1144,19 @@ static void apply_config(app_options *options, config *cfg)
     }
     if (value != NULL) {
         replace_string(&options->rom1541_path, value);
+    }
+
+    {
+        /* When the flag is absent, derive it: a lone combined system ROM implies
+           single-ROM mode; a basic+kernal pair (with or without system) implies
+           the separate-ROM mode. */
+        bool have_system = options->system_rom_path != NULL && options->system_rom_path[0] != '\0';
+        bool have_basic = options->basic_rom_path != NULL && options->basic_rom_path[0] != '\0';
+        bool have_kernal = options->kernal_rom_path != NULL && options->kernal_rom_path[0] != '\0';
+        bool default_single = have_system && !(have_basic && have_kernal);
+        options->rom_single_system = config_get_bool(
+            cfg, "roms", "single_system",
+            config_get_bool(cfg, "rom", "single_system", default_single));
     }
 
     options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
@@ -1461,6 +1510,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->no_save_ini = src->no_save_ini;
     dest->autorun = src->autorun;
     dest->emulate_1541 = src->emulate_1541;
+    dest->rom_single_system = src->rom_single_system;
     dest->audio_smoke = src->audio_smoke;
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
     dest->audio_record_duration_seconds = src->audio_record_duration_seconds;
@@ -1610,21 +1660,7 @@ bool app_options_save_shutdown(const app_options *options)
     config_remove_prefix(cfg, "Layout", "display_width");
     config_remove_prefix(cfg, "Layout", "display_height");
 
-    if (options->basic_rom_path != NULL) {
-        config_set(cfg, "roms", "basic", options->basic_rom_path);
-    }
-    if (options->char_rom_path != NULL) {
-        config_set(cfg, "roms", "character", options->char_rom_path);
-    }
-    if (options->kernal_rom_path != NULL) {
-        config_set(cfg, "roms", "kernal", options->kernal_rom_path);
-    }
-    if (options->system_rom_path != NULL) {
-        config_set(cfg, "roms", "system", options->system_rom_path);
-    }
-    if (options->rom1541_path != NULL) {
-        config_set(cfg, "roms", "1541", options->rom1541_path);
-    }
+    config_write_rom_config(cfg, options);
 
     config_remove_prefix(cfg, "disk", "");
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
@@ -1642,7 +1678,9 @@ bool app_options_save_shutdown(const app_options *options)
         }
     }
     if (options->emulate_1541) {
-        config_set_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
+        config_set_bool(cfg, "disk", "emulate_1541", true);
+    } else {
+        config_remove_prefix(cfg, "disk", "emulate_1541");
     }
 
     if (options->assembler_file != NULL && options->assembler_file[0] != '\0') {
@@ -1703,6 +1741,13 @@ bool app_options_save_paths_only(const app_options *options)
             config_remove_prefix(cfg, "browse", browse_dir_keys[i]);
         }
     }
+
+    /* ROM file paths are persisted here too, so "Save Paths Only" captures both
+       the browse folders and the ROM endpoints. */
+    config_write_rom_config(cfg, options);
+
+    /* The snapshot folder is now [browse] snapshot; drop the legacy key. */
+    config_remove_prefix(cfg, "state", "quicksave_folder");
 
     ok = config_save(cfg, options->ini_path);
     config_destroy(cfg);

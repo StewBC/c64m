@@ -187,6 +187,15 @@ typedef struct runtime_command {
             uint8_t reset;
             uint8_t save_ini;
             uint8_t resume_running;
+            /* When reload_roms is set the runtime replaces its ROM file paths with
+               these (empty == unset) and re-reads them before the reset, so ROM
+               path changes take effect on the same apply. */
+            uint8_t reload_roms;
+            char system_rom_path[RUNTIME_COMMAND_PATH_MAX];
+            char basic_rom_path[RUNTIME_COMMAND_PATH_MAX];
+            char char_rom_path[RUNTIME_COMMAND_PATH_MAX];
+            char kernal_rom_path[RUNTIME_COMMAND_PATH_MAX];
+            char rom1541_path[RUNTIME_COMMAND_PATH_MAX];
         } apply_machine_config;
 
         struct {

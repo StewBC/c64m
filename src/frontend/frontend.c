@@ -267,6 +267,7 @@ typedef struct frontend_config_dialog_state {
     bool save_ini_on_quit;
     char error[160];
     int pending_browse_slot; /* Paths tab: slot whose folder a [...] pick targets */
+    int pending_rom_slot;    /* Paths tab: ROM slot whose file a [...] pick targets */
 } frontend_config_dialog_state;
 
 typedef enum frontend_breakpoint_dialog_mode {
@@ -1012,6 +1013,29 @@ static void frontend_copy_text(char *out, size_t out_size, const char *value)
     snprintf(out, out_size, "%s", value != NULL ? value : "");
 }
 
+/* ROM edit slots on the Paths tab, in display order. */
+enum {
+    FRONTEND_CONFIG_ROM_SYSTEM = 0,
+    FRONTEND_CONFIG_ROM_KERNAL,
+    FRONTEND_CONFIG_ROM_BASIC,
+    FRONTEND_CONFIG_ROM_CHARACTER,
+    FRONTEND_CONFIG_ROM_1541,
+    FRONTEND_CONFIG_ROM_COUNT
+};
+
+/* Maps a ROM slot to the dialog's editable path buffer it binds to. */
+static char **frontend_config_rom_target(frontend_config_dialog_state *dialog, int slot)
+{
+    switch (slot) {
+        case FRONTEND_CONFIG_ROM_SYSTEM:    return &dialog->edited.system_rom_path;
+        case FRONTEND_CONFIG_ROM_KERNAL:    return &dialog->edited.kernal_rom_path;
+        case FRONTEND_CONFIG_ROM_BASIC:     return &dialog->edited.basic_rom_path;
+        case FRONTEND_CONFIG_ROM_CHARACTER: return &dialog->edited.char_rom_path;
+        case FRONTEND_CONFIG_ROM_1541:      return &dialog->edited.rom1541_path;
+        default:                            return NULL;
+    }
+}
+
 static bool frontend_config_reserve_string(char **target, size_t capacity)
 {
     char *buffer;
@@ -1040,7 +1064,12 @@ static bool frontend_config_prepare_edit_buffers(frontend_config_dialog_state *d
         frontend_config_reserve_string(&dialog->edited.video_standard, 16) &&
         frontend_config_reserve_string(&dialog->edited.turbo_multipliers, 256) &&
         frontend_config_reserve_string(&dialog->edited.symbol_files, 1024) &&
-        frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16);
+        frontend_config_reserve_string(&dialog->edited.keyboard_joystick_layout, 16) &&
+        frontend_config_reserve_string(&dialog->edited.system_rom_path, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.basic_rom_path, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.char_rom_path, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.kernal_rom_path, 1024) &&
+        frontend_config_reserve_string(&dialog->edited.rom1541_path, 1024);
 }
 
 static void frontend_config_dialog_reset(frontend_config_dialog_state *dialog)
@@ -1517,6 +1546,16 @@ static bool frontend_config_symbols_changed(const app_options *a, const app_opti
     return !frontend_string_equal(a->symbol_files, b->symbol_files);
 }
 
+static bool frontend_config_roms_changed(const app_options *a, const app_options *b)
+{
+    return a->rom_single_system != b->rom_single_system ||
+        !frontend_string_equal(a->system_rom_path, b->system_rom_path) ||
+        !frontend_string_equal(a->basic_rom_path, b->basic_rom_path) ||
+        !frontend_string_equal(a->char_rom_path, b->char_rom_path) ||
+        !frontend_string_equal(a->kernal_rom_path, b->kernal_rom_path) ||
+        !frontend_string_equal(a->rom1541_path, b->rom1541_path);
+}
+
 static void frontend_config_commit_ini_path(frontend_config_dialog_state *dialog)
 {
     const char *original;
@@ -1565,7 +1604,7 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
     }
 
-    nk_layout_row_dynamic(ctx, 132.0f, 1);
+    nk_layout_row_dynamic(ctx, 162.0f, 1);
     if (nk_group_begin(ctx, "machine-settings", NK_WINDOW_BORDER)) {
         nk_layout_row_dynamic(ctx, 18.0f, 1);
         nk_label(ctx, "Machine", NK_TEXT_LEFT);
@@ -1608,6 +1647,9 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         nk_layout_row_push(ctx, 0.70f);
         frontend_edit_replace(ctx, NK_EDIT_FIELD, dialog->edited.turbo_multipliers, 256, nk_filter_default);
         nk_layout_row_end(ctx);
+
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        frontend_checkbox_bool(ctx, "Emulate 1541", &dialog->edited.emulate_1541);
         nk_group_end(ctx);
     }
 
@@ -1647,15 +1689,76 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     }
 }
 
-/* Editable per-slot default folders for the file browser. These bind directly to
-   the live frontend paths (ui->browse_dirs), so an edit takes effect on the next
-   browse immediately; "Save Paths Only" persists just these to the named INI. */
-static void frontend_draw_config_paths_tab(frontend *ui, struct nk_context *ctx)
+/* One ROM path row: label, an edit box bound to the dialog's editable path
+   buffer, and a [...] button that opens a file picker for that slot. When
+   enabled is false the whole row is drawn disabled (read-only edit, inert
+   button) so the single/separate-ROM choice greys out the inapplicable paths. */
+static void frontend_draw_config_rom_row(
+    frontend *ui,
+    frontend_config_dialog_state *dialog,
+    struct nk_context *ctx,
+    int rom_slot,
+    const char *label,
+    bool enabled)
+{
+    char **target = frontend_config_rom_target(dialog, rom_slot);
+
+    if (target == NULL || *target == NULL) {
+        return;
+    }
+
+    if (!enabled) {
+        nk_widget_disable_begin(ctx);
+    }
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+    nk_layout_row_push(ctx, 0.20f);
+    nk_label(ctx, label, NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.66f);
+    frontend_edit_replace(
+        ctx,
+        enabled ? (nk_flags)NK_EDIT_FIELD : ((nk_flags)NK_EDIT_FIELD | NK_EDIT_READ_ONLY),
+        *target, 1024, nk_filter_default);
+    nk_layout_row_push(ctx, 0.14f);
+    if (nk_button_label(ctx, "...") && enabled) {
+        dialog->pending_rom_slot = rom_slot;
+        frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG);
+    }
+    nk_layout_row_end(ctx);
+
+    if (!enabled) {
+        nk_widget_disable_end(ctx);
+    }
+}
+
+/* ROM file endpoints (not folders) and the per-slot default browse folders. ROM
+   paths bind to the dialog's edited app_options and take effect on OK / are
+   persisted by "Save Paths Only"; browse folders bind to the live ui->browse_dirs
+   so an edit applies on the next browse immediately. */
+static void frontend_draw_config_paths_tab(frontend *ui, frontend_config_dialog_state *dialog, struct nk_context *ctx)
 {
     static const char *const labels[FRONTEND_BROWSE_SLOT_COUNT] = {
         "assembler", "disk", "program", "basic", "text", "snapshot"
     };
+    bool single = dialog->edited.rom_single_system;
     int i;
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "ROMs", NK_TEXT_LEFT);
+
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    frontend_checkbox_bool(ctx, "Single Basic/Kernal ROM", &dialog->edited.rom_single_system);
+
+    /* System supplies BASIC+KERNAL in single mode; the separate BASIC and KERNAL
+       paths take over otherwise. Character and 1541 are always editable. */
+    frontend_draw_config_rom_row(ui, dialog, ctx, FRONTEND_CONFIG_ROM_SYSTEM, "System", single);
+    frontend_draw_config_rom_row(ui, dialog, ctx, FRONTEND_CONFIG_ROM_KERNAL, "Kernal", !single);
+    frontend_draw_config_rom_row(ui, dialog, ctx, FRONTEND_CONFIG_ROM_BASIC, "Basic", !single);
+    frontend_draw_config_rom_row(ui, dialog, ctx, FRONTEND_CONFIG_ROM_CHARACTER, "Character", true);
+    frontend_draw_config_rom_row(ui, dialog, ctx, FRONTEND_CONFIG_ROM_1541, "1541", true);
+
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
 
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "Default browse paths", NK_TEXT_LEFT);
@@ -1778,7 +1881,7 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 if (dialog->active_tab == FRONTEND_CONFIG_TAB_EMULATOR) {
                     frontend_draw_config_emulator_tab(ui, dialog, ctx);
                 } else {
-                    frontend_draw_config_paths_tab(ui, ctx);
+                    frontend_draw_config_paths_tab(ui, dialog, ctx);
                 }
                 nk_group_end(ctx);
             }
@@ -1834,11 +1937,14 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
 
             nk_layout_row_dynamic(ctx, 24.0f, 2);
             if (nk_button_label(ctx, "OK") && frontend_config_validate(dialog)) {
+                bool roms_changed = frontend_config_roms_changed(&dialog->original, &dialog->edited);
                 frontend_config_apply_result result = {
                     .accepted = true,
-                    .needs_reboot = frontend_config_standard_changed(&dialog->original, &dialog->edited),
+                    .needs_reboot = frontend_config_standard_changed(&dialog->original, &dialog->edited) ||
+                        roms_changed,
                     .save_ini_on_quit = dialog->save_ini_on_quit,
                     .symbols_changed = frontend_config_symbols_changed(&dialog->original, &dialog->edited),
+                    .roms_changed = roms_changed,
                 };
                 if (frontend_push_config_apply_intent(ui, &dialog->edited, &result)) {
                     dialog->open = false;
@@ -7892,6 +7998,44 @@ void frontend_set_picked_browse_dir(frontend *ui, const char *path)
     if (slot >= 0 && slot < FRONTEND_BROWSE_SLOT_COUNT) {
         frontend_browse_to_relative(ui, path, ui->browse_dirs[slot], sizeof(ui->browse_dirs[slot]));
     }
+}
+
+/* Stores a ROM file chosen via a Paths-tab [...] button into the pending ROM
+   slot's editable buffer, converting to the INI-relative form used for display
+   and persistence. */
+void frontend_set_picked_rom_path(frontend *ui, const char *path)
+{
+    char **target;
+
+    if (ui == NULL || path == NULL) {
+        return;
+    }
+    target = frontend_config_rom_target(&ui->config_dialog, ui->config_dialog.pending_rom_slot);
+    if (target != NULL && *target != NULL) {
+        frontend_browse_to_relative(ui, path, *target, 1024);
+    }
+}
+
+/* Copies the config dialog's currently edited ROM paths and single/separate flag
+   into options. Used by "Save Paths Only" so ROM edits persist without requiring
+   the user to also press OK. No-op if the dialog was never populated. */
+void frontend_config_export_rom_paths(const frontend *ui, app_options *options)
+{
+    const frontend_config_dialog_state *dialog;
+
+    if (ui == NULL || options == NULL) {
+        return;
+    }
+    dialog = &ui->config_dialog;
+    if (!dialog->initialized) {
+        return;
+    }
+    app_options_set_string(&options->system_rom_path, dialog->edited.system_rom_path);
+    app_options_set_string(&options->basic_rom_path, dialog->edited.basic_rom_path);
+    app_options_set_string(&options->char_rom_path, dialog->edited.char_rom_path);
+    app_options_set_string(&options->kernal_rom_path, dialog->edited.kernal_rom_path);
+    app_options_set_string(&options->rom1541_path, dialog->edited.rom1541_path);
+    options->rom_single_system = dialog->edited.rom_single_system;
 }
 
 void frontend_open_file_browser(

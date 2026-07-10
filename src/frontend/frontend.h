@@ -129,6 +129,7 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK,
     FRONTEND_DEBUGGER_INTENT_SAVE_PATHS_ONLY,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG,
+    FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG,
     FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT
 } frontend_debugger_intent_type;
 
@@ -152,6 +153,7 @@ typedef struct frontend_config_apply_result {
     bool needs_reboot;
     bool save_ini_on_quit;
     bool symbols_changed;
+    bool roms_changed;
 } frontend_config_apply_result;
 
 typedef struct frontend_debugger_intent {
@@ -288,3 +290,5 @@ void frontend_set_browse_dir(frontend *ui, frontend_browse_slot slot, const char
 const char *frontend_get_browse_dir(const frontend *ui, frontend_browse_slot slot);
 /* Stores a folder picked via a Paths-tab [...] button into its pending slot. */
 void frontend_set_picked_browse_dir(frontend *ui, const char *path);
+void frontend_set_picked_rom_path(frontend *ui, const char *path);
+void frontend_config_export_rom_paths(const frontend *ui, app_options *options);

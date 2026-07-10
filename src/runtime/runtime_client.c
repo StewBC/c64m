@@ -545,7 +545,9 @@ bool runtime_client_apply_machine_config(
     const char *symbol_files,
     bool reset,
     bool save_ini,
-    bool resume_running) {
+    bool resume_running,
+    const runtime_client_rom_paths *rom_paths,
+    bool reload_roms) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     };
@@ -577,6 +579,24 @@ bool runtime_client_apply_machine_config(
     command.data.apply_machine_config.reset = reset ? 1u : 0u;
     command.data.apply_machine_config.save_ini = save_ini ? 1u : 0u;
     command.data.apply_machine_config.resume_running = resume_running ? 1u : 0u;
+    command.data.apply_machine_config.reload_roms = reload_roms ? 1u : 0u;
+    if (rom_paths != NULL) {
+        snprintf(command.data.apply_machine_config.system_rom_path,
+                 sizeof(command.data.apply_machine_config.system_rom_path),
+                 "%s", rom_paths->system_rom_path != NULL ? rom_paths->system_rom_path : "");
+        snprintf(command.data.apply_machine_config.basic_rom_path,
+                 sizeof(command.data.apply_machine_config.basic_rom_path),
+                 "%s", rom_paths->basic_rom_path != NULL ? rom_paths->basic_rom_path : "");
+        snprintf(command.data.apply_machine_config.char_rom_path,
+                 sizeof(command.data.apply_machine_config.char_rom_path),
+                 "%s", rom_paths->char_rom_path != NULL ? rom_paths->char_rom_path : "");
+        snprintf(command.data.apply_machine_config.kernal_rom_path,
+                 sizeof(command.data.apply_machine_config.kernal_rom_path),
+                 "%s", rom_paths->kernal_rom_path != NULL ? rom_paths->kernal_rom_path : "");
+        snprintf(command.data.apply_machine_config.rom1541_path,
+                 sizeof(command.data.apply_machine_config.rom1541_path),
+                 "%s", rom_paths->rom1541_path != NULL ? rom_paths->rom1541_path : "");
+    }
     return message_queue_push(client->command_queue, &command);
 }
 

@@ -40,6 +40,10 @@ typedef struct app_options {
     char *kernal_rom_path;
     char *system_rom_path;
     char *rom1541_path;
+    /* When true, the combined 16 KB system ROM (system_rom_path) supplies both
+       BASIC and KERNAL; when false, the separate basic_rom_path + kernal_rom_path
+       are used instead. character_rom and rom1541 are always independent. */
+    bool rom_single_system;
     char *crt_path;
     char *prg_path;
     char *basic_path;

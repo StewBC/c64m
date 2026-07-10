@@ -568,6 +568,98 @@ static void test_phase14_config_saved_to_ini(void) {
     remove("test_phase14_save.ini");
 }
 
+static void test_rom_single_system_flag(void) {
+    app_options options;
+    char *argv[] = { "test_app_options", "--inifile", "test_single_rom.ini" };
+    FILE *file;
+
+    /* No flag key, but basic+kernal+system all present: defaults to separate. */
+    write_ini("test_single_rom.ini");
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "load_startup failed\n");
+        exit(1);
+    }
+    expect_bool("default single flag with basic+kernal", 0, options.rom_single_system);
+    app_options_destroy(&options);
+
+    /* Explicit flag overrides the derived default. */
+    file = fopen("test_single_rom.ini", "w");
+    if (!file) {
+        fprintf(stderr, "failed to create ini\n");
+        exit(1);
+    }
+    fputs("[roms]\nbasic=roms/basic.rom\nkernal=roms/kernal.rom\nsystem=roms/64c.rom\n"
+          "single_system=1\n", file);
+    fclose(file);
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "load_startup failed\n");
+        exit(1);
+    }
+    expect_bool("explicit single_system flag", 1, options.rom_single_system);
+
+    /* Round-trip: flip it off and confirm it persists. */
+    options.rom_single_system = false;
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "save_shutdown failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+    if (!file_contains("test_single_rom.ini", "single_system=false")) {
+        fprintf(stderr, "single_system=false was not saved\n");
+        exit(1);
+    }
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "reload failed\n");
+        exit(1);
+    }
+    expect_bool("saved single_system flag", 0, options.rom_single_system);
+    app_options_destroy(&options);
+    remove("test_single_rom.ini");
+}
+
+static void test_save_paths_only_roms_and_quicksave(void) {
+    app_options options;
+    char *argv[] = { "test_app_options", "--inifile", "test_paths_only.ini" };
+    FILE *file;
+
+    /* Legacy ini carrying the retired [state] quicksave_folder plus a system ROM. */
+    file = fopen("test_paths_only.ini", "w");
+    if (!file) {
+        fprintf(stderr, "failed to create ini\n");
+        exit(1);
+    }
+    fputs("[state]\nquicksave_folder=old_states\n"
+          "[roms]\nsystem=roms/64c.rom\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "load_startup failed\n");
+        exit(1);
+    }
+    /* Edit ROM endpoints the way the Paths tab would, then Save Paths Only. */
+    app_options_set_string(&options.char_rom_path, "roms/chars.rom");
+    options.rom_single_system = true;
+    if (!app_options_save_paths_only(&options)) {
+        fprintf(stderr, "save_paths_only failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (file_contains("test_paths_only.ini", "quicksave_folder")) {
+        fprintf(stderr, "quicksave_folder was not stripped by save_paths_only\n");
+        exit(1);
+    }
+    if (!file_contains("test_paths_only.ini", "character=roms/chars.rom")) {
+        fprintf(stderr, "ROM path was not saved by save_paths_only\n");
+        exit(1);
+    }
+    if (!file_contains("test_paths_only.ini", "single_system=true")) {
+        fprintf(stderr, "single_system flag was not saved by save_paths_only\n");
+        exit(1);
+    }
+    remove("test_paths_only.ini");
+}
+
 static void test_symbol_files_are_relative_to_ini(void) {
     app_options options;
     char cwd[1024];
@@ -1050,6 +1142,8 @@ int main(void) {
     test_video_standard_command_line_overrides();
     test_config_turbo_speeds_ignores_runtime_turbo();
     test_phase14_config_saved_to_ini();
+    test_rom_single_system_flag();
+    test_save_paths_only_roms_and_quicksave();
     test_symbol_files_are_relative_to_ini();
     test_audio_record_options();
     test_control_port_option();
