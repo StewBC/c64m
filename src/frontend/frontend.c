@@ -1,5 +1,6 @@
 #include "frontend.h"
 
+#include "frontend_input.h"
 #include "help_view.h"
 #include "nuklear_config.h"
 #include "nuklear_sdl.h"
@@ -714,6 +715,15 @@ static void frontend_draw_symbol_lookup(frontend *ui, int width, int height);
 static void frontend_open_symbol_lookup(frontend *ui, bool from_memory);
 static void frontend_symbol_lookup_commit(frontend *ui);
 static void frontend_draw_file_browser(frontend *ui, int width, int height);
+static bool frontend_push_load_bin_execute_intent(
+    frontend *ui,
+    const char *path,
+    uint16_t address,
+    bool use_file_address,
+    bool reset_first,
+    bool is_basic,
+    bool is_basic_text);
+static bool frontend_commit_load_bin_dialog(frontend *ui);
 
 static void frontend_push_breakpoint_id_intent(
     frontend *ui,
@@ -7273,6 +7283,19 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         }
     }
 
+    if (ui->load_bin_dialog.open && !ui->file_browser.open &&
+        event->type == SDL_KEYDOWN &&
+        event->key.repeat == 0 &&
+        (event->key.keysym.sym == SDLK_RETURN ||
+         event->key.keysym.sym == SDLK_KP_ENTER)) {
+        if (frontend_input_has_option_modifier(&event->key)) {
+            frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE);
+        } else {
+            frontend_commit_load_bin_dialog(ui);
+        }
+        return;
+    }
+
     if (ui->symbol_lookup.open && event->type == SDL_KEYDOWN && event->key.repeat == 0) {
         SDL_Keycode sk = event->key.keysym.sym;
         frontend_symbol_lookup_state *dlg = &ui->symbol_lookup;
@@ -7461,6 +7484,39 @@ static bool frontend_push_load_bin_execute_intent(
     ui->intents[ui->intent_write].load_bin_is_basic = is_basic;
     ui->intents[ui->intent_write].load_bin_is_basic_text = is_basic_text;
     ui->intent_write = next;
+    return true;
+}
+
+static bool frontend_commit_load_bin_dialog(frontend *ui)
+{
+    frontend_load_bin_dialog_state *dlg;
+    uint16_t address;
+
+    if (ui == NULL || !ui->load_bin_dialog.open) {
+        return false;
+    }
+
+    dlg = &ui->load_bin_dialog;
+    if (dlg->path[0] == '\0') {
+        snprintf(dlg->error, sizeof(dlg->error), "No file selected");
+        return false;
+    }
+    if (!dlg->use_file_address && !dlg->basic_text &&
+        !frontend_parse_hex16_text(dlg->address_buf, &address)) {
+        snprintf(dlg->error, sizeof(dlg->error), "Invalid address (XXXX hex required)");
+        return false;
+    }
+
+    if (dlg->use_file_address || dlg->basic_text) {
+        address = 0;
+    }
+    if (!frontend_push_load_bin_execute_intent(
+            ui, dlg->path, address,
+            dlg->use_file_address, dlg->reset_first,
+            dlg->basic_program, dlg->basic_text)) {
+        return false;
+    }
+    dlg->open = false;
     return true;
 }
 
@@ -8560,7 +8616,6 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
     struct nk_context *ctx;
     struct nk_rect bounds;
     nk_flags edit_flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD;
-    uint16_t address;
 
     if (ui == NULL || !ui->load_bin_dialog.open || ui->ctx == NULL) {
         return;
@@ -8636,21 +8691,7 @@ static void frontend_draw_load_bin_dialog(frontend *ui, int width, int height)
                 dlg->open = false;
             }
             if (nk_button_label(ctx, "OK")) {
-                if (dlg->path[0] == '\0') {
-                    snprintf(dlg->error, sizeof(dlg->error), "No file selected");
-                } else if (!dlg->use_file_address && !dlg->basic_text &&
-                           !frontend_parse_hex16_text(dlg->address_buf, &address)) {
-                    snprintf(dlg->error, sizeof(dlg->error), "Invalid address (XXXX hex required)");
-                } else {
-                    if (dlg->use_file_address || dlg->basic_text) {
-                        address = 0;
-                    }
-                    frontend_push_load_bin_execute_intent(
-                        ui, dlg->path, address,
-                        dlg->use_file_address, dlg->reset_first,
-                        dlg->basic_program, dlg->basic_text);
-                    dlg->open = false;
-                }
+                frontend_commit_load_bin_dialog(ui);
             }
         } else {
             dlg->open = false;

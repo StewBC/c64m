@@ -574,6 +574,11 @@ Selecting a `.T64` file extracts the first loadable tape-container entry and loa
 through the PRG-style reset/inject path. The raw binary options in this dialog do not
 apply to `.T64` files.
 
+The Load dialog is keyboard-driven: **Return** (or keypad Return) performs the same
+action as **[OK]** when the Name field is nonempty, including the normal address
+validation. **Opt+Return** opens **Browse...**. Once the file browser is open, it is the
+active dialog, so typing selects a file and **Return** opens the selected file.
+
 **Basic Text** loads a plain-text BASIC listing — the kind you get from a `LIST`,
 or an ASCII `.bas` file — rather than a tokenized PRG. c64m tokenizes the source on
 the host exactly as the C64 would, writes the program to memory at `$0801`, and sets
