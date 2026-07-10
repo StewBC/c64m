@@ -113,6 +113,38 @@ static void step_machine_cycles(c64_t *machine, size_t count) {
     }
 }
 
+/* Phase 0 timing-fixture sample. Keep this test-only: it records the observable
+   machine boundary that later Phi2-scheduler phases must preserve, without
+   exposing live machine state to runtime or frontend. */
+typedef struct timing_sample {
+    uint64_t master_cycle_before;
+    uint64_t master_cycle_after;
+    uint64_t cpu_cycles_before;
+    uint64_t cpu_cycles_after;
+    uint32_t raster_line_before;
+    uint32_t cycle_in_line_before;
+    bool ba_before;
+    bool pending_before;
+    size_t elapsed_before;
+} timing_sample;
+
+static void capture_timing_step(c64_t *machine, timing_sample *sample) {
+    char error[256];
+
+    sample->master_cycle_before = machine->clock.cycle;
+    sample->cpu_cycles_before = machine->clock.cpu_cycles;
+    sample->raster_line_before = machine->vic.timing.raster_line;
+    sample->cycle_in_line_before = machine->vic.timing.cycle_in_line;
+    sample->ba_before = vicii_ba_active(&machine->vic, machine->clock.cycle);
+    sample->pending_before = machine->pending_cpu_trace_active;
+    sample->elapsed_before = machine->pending_cpu_elapsed;
+
+    expect_true("captured step cycle", c64_step_cycle(machine, error, sizeof(error)));
+
+    sample->master_cycle_after = machine->clock.cycle;
+    sample->cpu_cycles_after = machine->clock.cpu_cycles;
+}
+
 static c64_cpu_snapshot snapshot(const c64_t *machine) {
     c64_cpu_snapshot out;
     c64_copy_cpu_snapshot(machine, &out);
@@ -559,6 +591,46 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_true("lda trace still pending", machine.pending_cpu_trace_active);
 }
 
+static void test_timing_fixture_records_pending_read_stall(void) {
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    timing_sample sample;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1234] = 0x5a;
+
+    step_machine_cycles(&machine, 3); /* leave the LDA data read pending */
+    machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 2u;
+
+    capture_timing_step(&machine, &sample);
+    expect_true("fixture begins with pending instruction", sample.pending_before);
+    expect_true("fixture sees ba low", sample.ba_before);
+    expect_u64("fixture master cycle advances during stall",
+        sample.master_cycle_before + 1u, sample.master_cycle_after);
+    expect_u64("fixture CPU is held during stalled read",
+        sample.cpu_cycles_before, sample.cpu_cycles_after);
+    expect_u64("fixture pending elapsed unchanged during stall",
+        sample.elapsed_before, machine.pending_cpu_elapsed);
+
+    capture_timing_step(&machine, &sample);
+    expect_true("fixture still sees ba low", sample.ba_before);
+    expect_u64("fixture second stalled master cycle advances",
+        sample.master_cycle_before + 1u, sample.master_cycle_after);
+    expect_u64("fixture second stalled CPU remains held",
+        sample.cpu_cycles_before, sample.cpu_cycles_after);
+
+    capture_timing_step(&machine, &sample);
+    expect_true("fixture ba releases before resumed read", !sample.ba_before);
+    expect_u64("fixture resumed CPU advances", sample.cpu_cycles_before + 1u,
+        sample.cpu_cycles_after);
+    expect_u8("fixture resumed read reaches accumulator", 0x5a, snapshot(&machine).a);
+}
+
 static void test_sei_cancels_cli_irq_defer(void) {
     static const uint8_t program[] = {
         0x58,       /* CLI */
@@ -699,6 +771,7 @@ int main(void) {
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
     test_ba_stalls_pending_read_cycle();
+    test_timing_fixture_records_pending_read_stall();
     test_sei_cancels_cli_irq_defer();
     test_runtime_run_instructions();
     return 0;
