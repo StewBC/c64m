@@ -266,3 +266,39 @@ Baseline verification passed on 2026-07-10:
 The next Phase 0 slice is to replace the synthetic BA window in that fixture
 with fixtures driven by an actual bad line and each PAL/NTSC sprite-BA group,
 then record the CPU event trace alongside raster position.
+
+Phase 0 follow-up completed on 2026-07-10:
+
+- A real PAL badline fixture starts a CPU instruction on VIC cycle 12, proves
+  the first CPU event completes before BA assertion, then proves 43 subsequent
+  master cycles advance while the pending CPU read is held.
+- PAL and NTSC sprite-0 fixtures lock the different late BA assertion cycles
+  (PAL 54, NTSC 56) and their six-cycle windows.
+- A PAL sprite-3 fixture locks the cross-line assertion at cycle 60 of line
+  N-1 and proves the held read remains pending after raster line N begins.
+
+These are still baseline fixtures for the current BA-window implementation.
+They do not yet provide a per-cycle VIC fetch log or distinguish CPU opcode,
+operand, dummy, and data reads. That is the remaining Phase 0/Phase 1 handoff.
+
+## Phase 1 progress (2026-07-10)
+
+The trace now carries a semantic access kind from the 6510 helper that issued
+the bus callback. The initial vocabulary is: opcode fetch, operand read, data
+read/write, dummy read, RMW dummy write, stack read/write, and vector read.
+This metadata is observational only; it does not alter the existing BA decision
+or CPU execution order.
+
+The first regression set proves the tags for:
+
+- `STA abs`: opcode fetch, two operand reads, and data write.
+- `PHP`: opcode fetch, dummy read, and stack write.
+- `BRK`: opcode fetch, padding-byte operand read, three stack writes, and the
+  two IRQ-vector reads.
+- `ASL abs`: data read, RMW dummy write of the old value, and final data write.
+
+The helper audit is deliberately incomplete: direct reads in some instruction
+helpers, especially immediate and indexed forms, still inherit the generic
+data-read tag. The next Phase 1 slice is to route those through named operand
+and dummy helpers, then add page-crossing, branch, pull/RTI, IRQ, and NMI
+fixtures before the trace is used to change scheduler behavior.

@@ -887,6 +887,7 @@ static c64_cpu_bus_event *c64_trace_append_event(
     offset64 = machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle;
     event->cycle_offset = offset64 > 0xffu ? 0xffu : (uint8_t)offset64;
     event->kind = kind;
+    event->access_kind = machine->cpu.bus_access_kind;
     event->address = address;
     event->value = value;
     event->is_io = c64_cpu_address_is_io(machine, address) ? 1u : 0u;

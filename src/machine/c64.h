@@ -40,6 +40,7 @@ typedef enum c64_cpu_bus_event_kind {
 typedef struct c64_cpu_bus_event {
     uint8_t cycle_offset;
     c64_cpu_bus_event_kind kind;
+    c6510_bus_access_kind access_kind;
     uint16_t address;
     uint8_t value;
     uint8_t is_io;

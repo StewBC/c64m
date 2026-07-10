@@ -8,11 +8,43 @@
 #define CYCLE(m)     do { (m)->cpu.cycles++; } while(0)
 
 static inline uint8_t read_from_memory(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_DATA_READ;
     return m->read(m->user, address);
 }
 
 static inline void write_to_memory(C6510 *m, uint16_t address, uint8_t value) {
+    m->bus_access_kind = C6510_BUS_ACCESS_DATA_WRITE;
     m->write(m->user, address, value);
+}
+
+static inline uint8_t read_opcode(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_OPCODE_FETCH;
+    return m->read(m->user, address);
+}
+
+static inline uint8_t read_operand(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_OPERAND_READ;
+    return m->read(m->user, address);
+}
+
+static inline uint8_t read_dummy(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_DUMMY_READ;
+    return m->read(m->user, address);
+}
+
+static inline uint8_t read_stack(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_STACK_READ;
+    return m->read(m->user, address);
+}
+
+static inline void write_stack(C6510 *m, uint16_t address, uint8_t value) {
+    m->bus_access_kind = C6510_BUS_ACCESS_STACK_WRITE;
+    m->write(m->user, address, value);
+}
+
+static inline uint8_t read_vector(C6510 *m, uint16_t address) {
+    m->bus_access_kind = C6510_BUS_ACCESS_VECTOR_READ;
+    return m->read(m->user, address);
 }
 
 static inline uint8_t read_from_memory_debug(C6510 *m, uint16_t address) {
@@ -74,11 +106,11 @@ static inline uint8_t pull(C6510 *m) {
     if(++m->cpu.sp >= 0x200) {
         m->cpu.sp = 0x100;
     }
-    return read_from_memory(m, m->cpu.sp);
+    return read_stack(m, m->cpu.sp);
 }
 
 static inline void push(C6510 *m, uint8_t value) {
-    write_to_memory(m, m->cpu.sp, value);
+    write_stack(m, m->cpu.sp, value);
     if(--m->cpu.sp < 0x100) {
         m->cpu.sp += 0x100;
     }
@@ -137,7 +169,7 @@ static inline void ah_read_a16_sl2al(C6510 *m) {
 }
 
 static inline void ah_read_pc(C6510 *m) {
-    m->cpu.address_hi = read_from_memory(m, m->cpu.pc);
+    m->cpu.address_hi = read_operand(m, m->cpu.pc);
     m->cpu.pc++;
     CYCLE(m);
 }
@@ -148,19 +180,19 @@ static inline void al_from_stack(C6510 *m) {
 }
 
 static inline void al_read_pc(C6510 *m) {
-    m->cpu.address_lo = read_from_memory(m, m->cpu.pc);
+    m->cpu.address_lo = read_operand(m, m->cpu.pc);
     m->cpu.address_hi = 0;
     m->cpu.pc++;
     CYCLE(m);
 }
 
 static inline void branch(C6510 *m) {
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     CYCLE(m);
     uint8_t lo = m->cpu.address_lo;
     m->cpu.address_lo += m->cpu.scratch_lo;
     if((lo + (int8_t)m->cpu.scratch_lo) & 0x100) {
-        read_from_memory(m, m->cpu.address_16);
+        read_dummy(m, m->cpu.address_16);
         CYCLE(m);
     }
     m->cpu.pc += (int8_t)m->cpu.scratch_lo;
@@ -187,19 +219,19 @@ static inline void pc_lo_to_stack(C6510 *m) {
 }
 
 static inline void read_a16_ind_x(C6510 *m) {
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     m->cpu.address_lo += m->cpu.X;
     CYCLE(m);
 }
 
 static inline void read_a16_ind_y(C6510 *m) {
-    read_from_memory(m, m->cpu.address_16);
+    read_dummy(m, m->cpu.address_16);
     m->cpu.address_lo += m->cpu.Y;
     CYCLE(m);
 }
 
 static inline void read_sp(C6510 *m) {
-    read_from_memory(m, m->cpu.sp);
+    read_dummy(m, m->cpu.sp);
     CYCLE(m);
 }
 
@@ -209,7 +241,8 @@ static inline void sl_read_a16(C6510 *m) {
 }
 
 static inline void sl_write_a16(C6510 *m) {
-    write_to_memory(m, m->cpu.address_16, m->cpu.scratch_lo);
+    m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+    m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
     CYCLE(m);
 }
 
@@ -428,12 +461,12 @@ static inline void mrw(C6510 *m) {
 }
 
 static inline void read_pc_1(C6510 *m) {
-    read_from_memory(m, m->cpu.pc - 1);
+    read_dummy(m, m->cpu.pc - 1);
     CYCLE(m);
 }
 
 static inline void read_pc(C6510 *m) {
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     CYCLE(m);
 }
 
@@ -459,10 +492,16 @@ static inline void aixr_sel(C6510 *m) {
 }
 
 // IRQ
-static inline void c6510_irq(C6510 *m) {
-    m->cpu.pc = 0xFFFE;
-    a(m);
+static inline void c6510_read_interrupt_vector(C6510 *m, uint16_t vector) {
+    m->cpu.address_lo = read_vector(m, vector);
+    CYCLE(m);
+    m->cpu.address_hi = read_vector(m, (uint16_t)(vector + 1u));
+    CYCLE(m);
     m->cpu.pc = m->cpu.address_16;
+}
+
+static inline void c6510_irq(C6510 *m) {
+    c6510_read_interrupt_vector(m, 0xFFFEu);
     m->cpu.I = 1;
     if(m->cpu.class == CPU_65c02) {
         m->cpu.D = 0;
@@ -490,7 +529,7 @@ static inline uint8_t c6510_take_irq_if_pending(C6510 *m) {
     }
 
     m->cpu.opcode_pc = m->cpu.pc;
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     CYCLE(m);
     read_sp(m);
     pc_hi_to_stack(m);
@@ -503,9 +542,7 @@ static inline uint8_t c6510_take_irq_if_pending(C6510 *m) {
 }
 
 static inline void c6510_nmi(C6510 *m) {
-    m->cpu.pc = 0xFFFA;
-    a(m);
-    m->cpu.pc = m->cpu.address_16;
+    c6510_read_interrupt_vector(m, 0xFFFAu);
     m->cpu.I = 1;
     if(m->cpu.class == CPU_65c02) {
         m->cpu.D = 0;
@@ -522,7 +559,7 @@ static inline uint8_t c6510_take_nmi_if_pending(C6510 *m) {
     }
 
     m->cpu.opcode_pc = m->cpu.pc;
-    read_from_memory(m, m->cpu.pc);
+    read_dummy(m, m->cpu.pc);
     CYCLE(m);
     read_sp(m);
     pc_hi_to_stack(m);
@@ -725,9 +762,7 @@ static inline void bvs(C6510 *m) {
 }
 
 static inline void c6510_brk(C6510 *m) {
-    m->cpu.pc = 0xFFFE;
-    a(m);
-    m->cpu.pc = m->cpu.address_16;
+    c6510_read_interrupt_vector(m, 0xFFFEu);
     if(m->cpu.class == CPU_6502) {
         // Interrupt flag on at break
         m->cpu.flags |= 0b00000100;

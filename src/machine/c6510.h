@@ -56,6 +56,22 @@ typedef uint8_t (*c6510_read_fn)(void *user, uint16_t address);
 typedef void (*c6510_write_fn)(void *user, uint16_t address, uint8_t value);
 typedef uint8_t (*c6510_irq_pending_fn)(void *user);
 typedef uint8_t (*c6510_nmi_pending_fn)(void *user);
+
+/* Semantic role of the access currently being issued through the memory
+   callbacks. This is trace metadata only: it does not change CPU execution or
+   bus ownership. */
+typedef enum c6510_bus_access_kind {
+    C6510_BUS_ACCESS_DATA_READ = 0,
+    C6510_BUS_ACCESS_DATA_WRITE,
+    C6510_BUS_ACCESS_OPCODE_FETCH,
+    C6510_BUS_ACCESS_OPERAND_READ,
+    C6510_BUS_ACCESS_DUMMY_READ,
+    C6510_BUS_ACCESS_RMW_DUMMY_WRITE,
+    C6510_BUS_ACCESS_STACK_READ,
+    C6510_BUS_ACCESS_STACK_WRITE,
+    C6510_BUS_ACCESS_VECTOR_READ
+} c6510_bus_access_kind;
+
 typedef struct C6510 {
     CPU cpu;
     void *user;
@@ -63,6 +79,7 @@ typedef struct C6510 {
     c6510_write_fn write;
     c6510_irq_pending_fn irq_pending;
     c6510_nmi_pending_fn nmi_pending;
+    c6510_bus_access_kind bus_access_kind;
 } C6510;
 
 typedef enum {

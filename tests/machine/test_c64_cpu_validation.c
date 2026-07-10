@@ -88,9 +88,27 @@ static void copy_to_basic(c64_rom_set *roms, uint16_t address, const uint8_t *pr
 }
 
 static void reset_machine(c64_t *machine, const c64_rom_set *roms) {
+    c64_config config = { 0 };
     char error[256];
 
     c64_init(machine);
+    config.video_standard = C64_VIDEO_STANDARD_NTSC;
+    c64_set_config(machine, &config);
+    expect_true("install synthetic ROMs", c64_install_roms(machine, roms, error, sizeof(error)));
+    expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
+}
+
+static void reset_machine_standard(
+    c64_t *machine,
+    const c64_rom_set *roms,
+    c64_video_standard standard)
+{
+    c64_config config = { 0 };
+    char error[256];
+
+    c64_init(machine);
+    config.video_standard = standard;
+    c64_set_config(machine, &config);
     expect_true("install synthetic ROMs", c64_install_roms(machine, roms, error, sizeof(error)));
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
 }
@@ -444,19 +462,93 @@ static void test_sta_abs_bus_event_trace(void) {
     expect_u16("trace opcode pc", (uint16_t)(TEST_RESET_VECTOR + 2), trace.opcode_pc);
     expect_u64("trace total cycles", 4, trace.total_cycles);
     expect_u8("opcode fetch kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[0].kind);
+    expect_u8("opcode fetch access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
     expect_u8("opcode fetch offset", 0, trace.events[0].cycle_offset);
     expect_u16("opcode fetch address", (uint16_t)(TEST_RESET_VECTOR + 2), trace.events[0].address);
     expect_u8("addr lo kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[1].kind);
+    expect_u8("addr lo access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
     expect_u8("addr lo offset", 1, trace.events[1].cycle_offset);
     expect_u16("addr lo address", (uint16_t)(TEST_RESET_VECTOR + 3), trace.events[1].address);
     expect_u8("addr hi kind", C64_CPU_BUS_EVENT_READ, (uint8_t)trace.events[2].kind);
+    expect_u8("addr hi access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[2].access_kind);
     expect_u8("addr hi offset", 2, trace.events[2].cycle_offset);
     expect_u16("addr hi address", (uint16_t)(TEST_RESET_VECTOR + 4), trace.events[2].address);
     expect_u8("sta write kind", C64_CPU_BUS_EVENT_WRITE, (uint8_t)trace.events[3].kind);
+    expect_u8("sta write access", C6510_BUS_ACCESS_DATA_WRITE,
+        (uint8_t)trace.events[3].access_kind);
     expect_u8("sta write offset", 3, trace.events[3].cycle_offset);
     expect_u16("sta write address", 0x1234, trace.events[3].address);
     expect_u8("sta write value", 0x5a, trace.events[3].value);
     expect_u8("sta write not io", 0, trace.events[3].is_io);
+}
+
+static void test_cpu_trace_tags_dummy_stack_and_vector_accesses(void) {
+    static const uint8_t program[] = {
+        0x08,             /* PHP */
+        0x00, 0xea        /* BRK, padding byte */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("php trace events", 3, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("php opcode access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
+    expect_u8("php dummy access", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("php stack write access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[2].access_kind);
+
+    step_machine(&machine, 1);
+    expect_u64("brk trace events", 7, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("brk opcode access", C6510_BUS_ACCESS_OPCODE_FETCH,
+        (uint8_t)trace.events[0].access_kind);
+    expect_u8("brk padding operand access", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("brk PC high stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("brk PC low stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("brk flags stack access", C6510_BUS_ACCESS_STACK_WRITE,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u8("brk vector low access", C6510_BUS_ACCESS_VECTOR_READ,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u8("brk vector high access", C6510_BUS_ACCESS_VECTOR_READ,
+        (uint8_t)trace.events[6].access_kind);
+}
+
+static void test_cpu_trace_tags_rmw_accesses(void) {
+    static const uint8_t program[] = {
+        0x0e, 0x34, 0x12  /* ASL $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1234] = 0x41u;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    expect_u64("asl trace events", 6, c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("asl data read access", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8("asl dummy write access", C6510_BUS_ACCESS_RMW_DUMMY_WRITE,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u8("asl final write access", C6510_BUS_ACCESS_DATA_WRITE,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u8("asl result", 0x82u, machine.bus.ram[0x1234]);
 }
 
 static void test_sta_d020_applies_at_event_cycle(void) {
@@ -631,6 +723,143 @@ static void test_timing_fixture_records_pending_read_stall(void) {
     expect_u8("fixture resumed read reaches accumulator", 0x5a, snapshot(&machine).a);
 }
 
+static void test_timing_fixture_records_real_badline_stall(void) {
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    timing_sample sample;
+    uint64_t held_cpu_cycles;
+    size_t i;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_standard(&machine, &roms, C64_VIDEO_STANDARD_PAL);
+    machine.bus.ram[0x1234] = 0x5a;
+
+    /* Begin an instruction on the documented PAL badline BA-assert cycle.
+       The first CPU cycle runs, then vicii_step_cycle() asserts BA for the
+       remaining 43 cycles of the current 44-cycle window. */
+    vicii_write_register(&machine.vic, 0xd011, 0x13u);
+    machine.vic.timing.raster_line = 0x33u;
+    machine.vic.timing.cycle_in_line = 12u;
+
+    capture_timing_step(&machine, &sample);
+    expect_u64("badline fixture starts at cycle 12", 12, sample.cycle_in_line_before);
+    expect_true("badline fixture BA high before VIC assertion", !sample.ba_before);
+    expect_true("badline fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+
+    held_cpu_cycles = machine.clock.cpu_cycles;
+    for (i = 0; i < 43u; i++) {
+        capture_timing_step(&machine, &sample);
+        expect_true("badline fixture BA stays low", sample.ba_before);
+        expect_u64("badline fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
+    }
+
+    capture_timing_step(&machine, &sample);
+    expect_true("badline fixture BA releases", !sample.ba_before);
+    expect_u64("badline fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
+    step_machine_cycles(&machine, 2);
+    expect_u8("badline fixture instruction completes", 0x5a, snapshot(&machine).a);
+}
+
+static void test_timing_fixture_records_sprite_ba_stall(
+    c64_video_standard standard,
+    uint32_t ba_assert_cycle,
+    const char *prefix)
+{
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    timing_sample sample;
+    uint64_t held_cpu_cycles;
+    size_t i;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_standard(&machine, &roms, standard);
+    machine.bus.ram[0x1234] = 0x5a;
+    vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite BA only. */
+    vicii_write_register(&machine.vic, 0xd015, 0x01u);
+    machine.vic.sprite_active[0] = true;
+    machine.vic.timing.raster_line = 100u;
+    machine.vic.timing.cycle_in_line = ba_assert_cycle;
+
+    capture_timing_step(&machine, &sample);
+    expect_u64(prefix, ba_assert_cycle, sample.cycle_in_line_before);
+    expect_true("sprite fixture BA high before VIC assertion", !sample.ba_before);
+    expect_true("sprite fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+
+    held_cpu_cycles = machine.clock.cpu_cycles;
+    for (i = 0; i < 5u; i++) {
+        capture_timing_step(&machine, &sample);
+        expect_true("sprite fixture BA stays low", sample.ba_before);
+        expect_u64("sprite fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
+    }
+
+    capture_timing_step(&machine, &sample);
+    expect_true("sprite fixture BA releases", !sample.ba_before);
+    expect_u64("sprite fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
+}
+
+static void test_timing_fixture_records_pal_sprite_ba_stall(void) {
+    test_timing_fixture_records_sprite_ba_stall(
+        C64_VIDEO_STANDARD_PAL,
+        54u,
+        "PAL sprite fixture starts at PAL sprite-0 BA cycle");
+}
+
+static void test_timing_fixture_records_ntsc_sprite_ba_stall(void) {
+    test_timing_fixture_records_sprite_ba_stall(
+        C64_VIDEO_STANDARD_NTSC,
+        56u,
+        "NTSC sprite fixture starts at NTSC sprite-0 BA cycle");
+}
+
+static void test_timing_fixture_records_cross_line_sprite_ba_stall(void) {
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    timing_sample sample;
+    uint64_t held_cpu_cycles;
+    bool saw_next_line = false;
+    size_t i;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_standard(&machine, &roms, C64_VIDEO_STANDARD_PAL);
+    machine.bus.ram[0x1234] = 0x5a;
+    vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite BA only. */
+    vicii_write_register(&machine.vic, 0xd015, 0x08u);
+    vicii_write_register(&machine.vic, 0xd007, 49u);
+    machine.vic.timing.raster_line = 49u;
+    machine.vic.timing.cycle_in_line = 60u;
+
+    /* Sprite 3 asserts on line N-1 for its line-N fetch. */
+    capture_timing_step(&machine, &sample);
+    expect_u64("cross-line fixture starts at sprite-3 assert", 60,
+        sample.cycle_in_line_before);
+    expect_true("cross-line fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+
+    held_cpu_cycles = machine.clock.cpu_cycles;
+    for (i = 0; i < 5u; i++) {
+        capture_timing_step(&machine, &sample);
+        saw_next_line = saw_next_line || sample.raster_line_before == 50u;
+        expect_true("cross-line fixture BA stays low", sample.ba_before);
+        expect_u64("cross-line fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
+    }
+    expect_true("cross-line fixture spans into next raster line", saw_next_line);
+
+    capture_timing_step(&machine, &sample);
+    expect_true("cross-line fixture BA releases", !sample.ba_before);
+    expect_u64("cross-line fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
+}
+
 static void test_sei_cancels_cli_irq_defer(void) {
     static const uint8_t program[] = {
         0x58,       /* CLI */
@@ -766,12 +995,18 @@ int main(void) {
     test_page_wrap();
     test_banking_affects_execution();
     test_sta_abs_bus_event_trace();
+    test_cpu_trace_tags_dummy_stack_and_vector_accesses();
+    test_cpu_trace_tags_rmw_accesses();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
     test_ba_stalls_pending_read_cycle();
     test_timing_fixture_records_pending_read_stall();
+    test_timing_fixture_records_real_badline_stall();
+    test_timing_fixture_records_pal_sprite_ba_stall();
+    test_timing_fixture_records_ntsc_sprite_ba_stall();
+    test_timing_fixture_records_cross_line_sprite_ba_stall();
     test_sei_cancels_cli_irq_defer();
     test_runtime_run_instructions();
     return 0;

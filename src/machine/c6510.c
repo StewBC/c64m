@@ -62,7 +62,7 @@ size_t c6510_step(C6510 *m) {
     }
     m->cpu.opcode_pc = m->cpu.pc;
     m->cpu.opcode_active = 1;
-    uint8_t opcode = read_from_memory(m, m->cpu.pc);
+    uint8_t opcode = read_opcode(m, m->cpu.pc);
     CYCLE(m);
     m->cpu.pc++;
     switch(opcode) {
