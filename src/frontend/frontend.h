@@ -225,8 +225,6 @@ typedef struct frontend_layout_state {
     float split_display_right;
     float split_top_bottom;
     float split_memory_misc;
-    int display_width;
-    int display_height;
 } frontend_layout_state;
 
 typedef struct frontend_assembler_options {

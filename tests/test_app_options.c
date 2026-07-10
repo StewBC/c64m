@@ -133,8 +133,6 @@ static void write_window_layout_ini(const char *path) {
     fputs("split_display_right=0.7\n", file);
     fputs("split_top_bottom=0.6\n", file);
     fputs("split_memory_misc=0.4\n", file);
-    fputs("display_width=500\n", file);
-    fputs("display_height=360\n", file);
     fclose(file);
 }
 
@@ -374,8 +372,6 @@ static void test_window_layout_from_ini(void) {
     expect_float_near("split display right", 0.7f, options.layout_split_display_right);
     expect_float_near("split top bottom", 0.6f, options.layout_split_top_bottom);
     expect_float_near("split memory misc", 0.4f, options.layout_split_memory_misc);
-    expect_int("layout display width", 500, options.layout_display_width);
-    expect_int("layout display height", 360, options.layout_display_height);
 
     app_options_destroy(&options);
     remove("test_window_layout.ini");
@@ -400,8 +396,6 @@ static void test_window_layout_saved_to_ini(void) {
     options.layout_split_display_right = 0.65f;
     options.layout_split_top_bottom = 0.52f;
     options.layout_split_memory_misc = 0.48f;
-    options.layout_display_width = 420;
-    options.layout_display_height = 300;
 
     if (!app_options_save_shutdown(&options)) {
         fprintf(stderr, "app_options_save_shutdown failed\n");
@@ -419,8 +413,6 @@ static void test_window_layout_saved_to_ini(void) {
     expect_float_near("saved split display right", 0.65f, options.layout_split_display_right);
     expect_float_near("saved split top bottom", 0.52f, options.layout_split_top_bottom);
     expect_float_near("saved split memory misc", 0.48f, options.layout_split_memory_misc);
-    expect_int("saved layout display width", 420, options.layout_display_width);
-    expect_int("saved layout display height", 300, options.layout_display_height);
 
     app_options_destroy(&options);
     remove("test_window_layout_save.ini");

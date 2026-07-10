@@ -4196,8 +4196,6 @@ int main(int argc, char **argv) {
     layout_state.split_display_right = options.layout_split_display_right;
     layout_state.split_top_bottom = options.layout_split_top_bottom;
     layout_state.split_memory_misc = options.layout_split_memory_misc;
-    layout_state.display_width = options.layout_display_width;
-    layout_state.display_height = options.layout_display_height;
     frontend_set_layout_state(ui, &layout_state);
     frontend_set_config_state(ui, &options);
     frontend_set_disk_queue(ui, 8, &options.disk_slots[8]);
@@ -4272,8 +4270,6 @@ int main(int argc, char **argv) {
     options.layout_split_display_right = layout_state.split_display_right;
     options.layout_split_top_bottom = layout_state.split_top_bottom;
     options.layout_split_memory_misc = layout_state.split_memory_misc;
-    options.layout_display_width = layout_state.display_width;
-    options.layout_display_height = layout_state.display_height;
     {
         frontend_assembler_options asm_opts;
         char assembler_path[1024];

@@ -197,8 +197,6 @@ The debugger splitter layout is saved separately:
 split_display_right
 split_top_bottom
 split_memory_misc
-display_width
-display_height
 ```
 
 `--nosaveini` disables shutdown persistence.

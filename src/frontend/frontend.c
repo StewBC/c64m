@@ -1736,9 +1736,9 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 struct nk_rect cregion = nk_window_get_content_region(ctx);
                 float sp = ctx->style.window.spacing.y;
                 float pad = ctx->style.window.padding.y;
-                float other = 24.0f /*tabs*/ + 24.0f /*INI*/ + 18.0f /*message*/
-                            + 24.0f /*OK/Cancel*/;
-                float group_h = cregion.h - other - 5.0f * sp - 2.0f * pad;
+                float other = 24.0f /*tabs*/ + 24.0f /*INI*/ + 20.0f /*save once*/
+                            + 18.0f /*message*/ + 24.0f /*OK/Cancel*/;
+                float group_h = cregion.h - other - 6.0f * sp - 2.0f * pad;
                 if (group_h < 120.0f) group_h = 120.0f;
                 nk_layout_row_dynamic(ctx, group_h, 1);
             }
@@ -1784,6 +1784,13 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 frontend_push_simple_intent(ui, FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG);
             }
             nk_layout_row_end(ctx);
+
+            nk_layout_row_dynamic(ctx, 20.0f, 1);
+            if (dialog->edited.no_save_ini) {
+                nk_label(ctx, "Saving disabled", NK_TEXT_LEFT);
+            } else {
+                frontend_checkbox_bool(ctx, "Save INI file on Quit", &dialog->save_ini_on_quit);
+            }
 
             if (dialog->error[0] != '\0') {
                 nk_layout_row_dynamic(ctx, 18.0f, 1);
@@ -6915,12 +6922,6 @@ void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state)
     if (state->split_memory_misc > 0.0f) {
         ui->layout.split_memory_misc = state->split_memory_misc;
     }
-    if (state->display_width > 0) {
-        ui->layout.display_px_w = state->display_width;
-    }
-    if (state->display_height > 0) {
-        ui->layout.display_px_h = state->display_height;
-    }
 }
 
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state)
@@ -6932,8 +6933,6 @@ void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state)
     out_state->split_display_right = ui->layout.split_display_right;
     out_state->split_top_bottom = ui->layout.split_top_bottom;
     out_state->split_memory_misc = ui->layout.split_memory_misc;
-    out_state->display_width = ui->layout.display_px_w;
-    out_state->display_height = ui->layout.display_px_h;
 }
 
 void frontend_debug_min_window_size(const frontend *ui, int *out_min_w, int *out_min_h)

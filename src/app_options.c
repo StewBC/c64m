@@ -1064,11 +1064,6 @@ static void apply_config(app_options *options, config *cfg)
         cfg, "Layout", "split_top_bottom", options->layout_split_top_bottom);
     options->layout_split_memory_misc = config_get_float(
         cfg, "Layout", "split_memory_misc", options->layout_split_memory_misc);
-    options->layout_display_width = config_get_int(
-        cfg, "Layout", "display_width", options->layout_display_width);
-    options->layout_display_height = config_get_int(
-        cfg, "Layout", "display_height", options->layout_display_height);
-
     value = config_get(cfg, "config", "turbo_speeds");
     if (value != NULL) {
         replace_string(&options->turbo_multipliers, value);
@@ -1425,8 +1420,6 @@ void app_options_init(app_options *options)
     options->layout_split_display_right = C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT;
     options->layout_split_top_bottom = C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM;
     options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
-    options->layout_display_width = C64M_DEFAULT_LAYOUT_DISPLAY_WIDTH;
-    options->layout_display_height = C64M_DEFAULT_LAYOUT_DISPLAY_HEIGHT;
     options->assembler_auto_run = false;
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
@@ -1477,8 +1470,6 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->layout_split_display_right = src->layout_split_display_right;
     dest->layout_split_top_bottom = src->layout_split_top_bottom;
     dest->layout_split_memory_misc = src->layout_split_memory_misc;
-    dest->layout_display_width = src->layout_display_width;
-    dest->layout_display_height = src->layout_display_height;
 
     dest->assembler_auto_run = src->assembler_auto_run;
     dest->assembler_reset_first = src->assembler_reset_first;
@@ -1616,8 +1607,8 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_float(cfg, "Layout", "split_display_right", options->layout_split_display_right);
     config_set_float(cfg, "Layout", "split_top_bottom", options->layout_split_top_bottom);
     config_set_float(cfg, "Layout", "split_memory_misc", options->layout_split_memory_misc);
-    config_set_int(cfg, "Layout", "display_width", options->layout_display_width);
-    config_set_int(cfg, "Layout", "display_height", options->layout_display_height);
+    config_remove_prefix(cfg, "Layout", "display_width");
+    config_remove_prefix(cfg, "Layout", "display_height");
 
     if (options->basic_rom_path != NULL) {
         config_set(cfg, "roms", "basic", options->basic_rom_path);

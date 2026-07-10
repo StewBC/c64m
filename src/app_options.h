@@ -4,8 +4,6 @@
 #include <stddef.h>
 
 #define C64M_DRIVE_COUNT 16
-#define C64M_DEFAULT_LAYOUT_DISPLAY_WIDTH 384
-#define C64M_DEFAULT_LAYOUT_DISPLAY_HEIGHT 272
 
 /* Remembered file-browser default folders, one per browse slot. The order and
    count must match frontend_browse_slot in frontend/frontend.h. */
@@ -37,8 +35,6 @@ typedef struct app_options {
     float layout_split_display_right;
     float layout_split_top_bottom;
     float layout_split_memory_misc;
-    int layout_display_width;
-    int layout_display_height;
     char *basic_rom_path;
     char *char_rom_path;
     char *kernal_rom_path;

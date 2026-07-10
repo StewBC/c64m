@@ -1231,7 +1231,7 @@ The tab is organized into three sections:
 | Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
 | Symbol Files      | Add symbol files and display the comma-separated list of selected files |
 
-**Auto-save INI on Quit** saves `c64m.ini` automatically when quitting.
+**Auto-save INI on Quit** enables persistent automatic saving of the configuration.
 
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. The layout can
@@ -1262,8 +1262,9 @@ silent no-op if no INI file is set.
 ### INI File
 
 The INI file path is shown in the Configure dialog with a **Browse...** button. Changing
-the path prompts to parse the selected file immediately. Save-on-quit behavior is
-controlled by the **Auto-save INI on Quit** checkbox.
+the path prompts to parse the selected file immediately. **Save INI file on Quit** is a
+one-time save request for the current configuration. **Auto-save INI on Quit** enables
+persistent save-on-quit behavior by writing `Save=yes` under `[config]`.
 
 **[OK]** applies all changes immediately. **[Cancel]** discards them.
 
