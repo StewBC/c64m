@@ -298,6 +298,22 @@ target_link_libraries(test_c64_real_1541_load PRIVATE
 
 add_test(NAME c64_real_1541_load COMMAND test_c64_real_1541_load)
 
+add_executable(test_c64_robocop_g64
+    tests/machine/test_c64_robocop_g64.c
+)
+
+target_compile_features(test_c64_robocop_g64 PRIVATE c_std_99)
+
+target_compile_definitions(test_c64_robocop_g64 PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_c64_robocop_g64 PRIVATE
+    machine
+)
+
+add_test(NAME c64_robocop_g64 COMMAND test_c64_robocop_g64)
+
 add_executable(test_frontend_input
     tests/frontend/test_frontend_input.c
 )

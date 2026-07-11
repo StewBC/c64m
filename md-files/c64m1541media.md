@@ -24,7 +24,7 @@ matrix expansion, not a new subsystem.
 | M4 Port A write | **Done (hybrid)** | Port A + PCR write-gate flux path live; DOS WRITE jobs still intercept to D64 then `poke_sector` GCR |
 | M5 Format | **Done (hybrid)** | FORMT EXECUTE still erases D64 track then `rebuild_track` GCR |
 | M6 G64 | **Done (read-only v1)** | `tools/g64`, mount via runtime, media attach; WRITE → protect |
-| M7 Fast-loader matrix | **Done (v1)** | Matrix documented; G64 first-file LOAD automated; RUN/secondary still open |
+| M7 Fast-loader matrix | **Done (v1+)** | Matrix documented; G64 first-file LOAD automated; Robocop multi-stage load-to-game PASS |
 | M8 Harden | **Done** | Idle flux skip; density selection; G64 WPROT; Hardware tab 1541 view; manual/README; save-state flux deferred |
 
 ### M4/M5 hybrid note
@@ -54,34 +54,34 @@ Rules for this matrix:
 | Intercept baseline | D64 GALENCIA | PASS | n/a | Job intercept, no media |
 | Media D64 stock | D64 GALENCIA | PASS | not claimed | Physical GCR READ; automated |
 | Media D64 SAVE | D64 blank | n/a | SAVE PASS | Hybrid WRITE; automated |
-| Media G64 first file | Robocop (Data East 1987) G64 | PASS | **FAIL (in progress)** | See post-bootstrap notes below |
+| Media G64 first file | Robocop (Data East 1987) G64 | PASS | **PASS (load-to-game)** | Automated: `test_c64_robocop_g64`; play not claimed |
 | Media G64 write | any G64 | n/a | WRITE/FORMT → protect | Read-only v1 |
 
-### Post-bootstrap diagnosis (Robocop G64, ongoing)
+### Robocop G64 multi-stage (resolved)
 
 Control-port tooling: `get-drive-cpu <8|9>`, `get-memory … drive8|drive9`.
 
-Observed after `LOAD"*"` + RUN (autorun `-a`):
+Path: `LOAD"*"` / bootstrap → `LOAD"FAST",8,1` → `JSR $7000` (dual-bit install) →
+`LOAD"LOAD1",8,1` → decrypt / M-W/M-E → stage-3 track-12 gap table → XOR payload →
+game init at `$8000+`. VICE oracle for `fast` / `load1` file bytes.
 
-1. C64 bootstrap at `$0819` does stock `LOAD` of `FAS*`, `JSR $7000`, another `LOAD`, then `JMP $8000`.
-2. Drive M-E `$0162` **does run** (checksum over `$0300/$0400` matches `$CA`; `$0197=$0A`).
-3. **Bug fixed:** G64 `EXECUTE` jobs (`$E0`) were completed as write-protect, so buffer code never ran. On G64, EXECUTE now falls through to the ROM (buffer jump). Format still hybrid-intercepted on D64 only.
-4. After that fix, C64 reaches **`$8000` and hits `BRK` at `$800F`** (`stop=brk`). Drive often at ROM `$C1C1` (clear `$0200` loop) with motor on, track ~18.
-5. `$8000` starts `LDY #0 / LDA $2A / EOR $800C,Y / STA $800C,Y / CPX #$D0 / … / BRK` with `$2A=0`, `Y=0` — looks like a **broken/corrupt decrypt stub**.
-6. **VICE oracle (x64sc loads this G64):** `c1541 -attach …g64 -extract` gives reference PRGs. Directory: `robocop`, `fast`→`$7000`, `load1`→`$0E40` (large), plus `a`–`f`.
-7. **Stock media GCR is good:** c64m `LOAD"FAST",8,1` → `$7000` **byte-identical** to VICE extract of `fast`.
-8. **Secondary is corrupt:** VICE `load1` at `$8000` is `A0 00 A9 1A 59 0C 80 99 0C 80 C8 D0 …` (`LDA #$1A` / `INY`). c64m after full RUN path has `A0 00 A5 2A … E0 D0 …` then BRK. So the custom path after `JSR $7000` (M-W/M-E + bitbang / or the following `LOAD"LOAD1"` under patched protocol) is wrong — not the disk image.
-9. **`fast` patches ILOAD** (`$0330` → `$0A08`): subsequent `LOAD"LOAD1"` is custom bitbang, not stock DOS. Stock `LOAD"FAST"` is already byte-identical to VICE.
-10. **Drive Phi2 micro-step:** `c1541_advance_one_cycle` prefers `c6510_micro_*` so multi-cycle `$1800` stores write on the last cycle. Stock media `LOAD"FAST"` remains **byte-identical** to VICE; unit G64/D64 LOADs pass.
-11. **IEC settle pipeline:** bus-visible drive IEC outputs are a **2-stage pipeline** of VIA ORB/DDRB (sampled post-CPU each cycle). Peers (C64) see a 2-cycle settle; the drive’s own `$1800` input sense uses **immediate** self-pull so bitbang “wait for host” loops do not false-trigger on delayed echo. Depth 0/1 ≈ **1.78%** residual; depth 2 ≈ **1.63%** (best of 0–3).
-12. **Custom ILOAD path (FAST → patch `$0330`→`$0A08` → `LOAD"LOAD1"`):** dual-bit receive at `$0A72` / drive send at `$0309`. Vs VICE `load1` extract:
-    - load address `$0E40` correct; transfer completes
-    - **`$8000` first 32 bytes: 0 mismatches** (decrypt stub exact)
-    - full file **0 / 61880** mismatches (VICE-identical)
-13. **`$D012` CPU-visible phase:** ILOAD pre-badline wait; CPU-visible raster is internal+1; badline/BA use internal `raster_line`.
-14. **1541 freeze during C64 BA/AEC:** host chips step; 1541 does not — dual-bit patterns hold across RDY freeze. Applies to mid-instruction stalls **and** inter-instruction waits (BA asserted before the next opcode fetch). Stock media LOAD / FAST stay VICE-identical.
-15. **Badline BA release = 3** (sprites stay at RELEASE=2): one extra post-steal cycle on character-fetch BA only, so dual-bit resume samples do not land on a released bus.
-16. **Still left:** headless RUN / post-decrypt / playability not claimed (load path itself matches VICE).
+**Shared fixes that unblocked load-to-game** (no title hacks):
+
+| Area | Mechanism |
+|---|---|
+| G64 EXECUTE | `$E0` falls through to ROM on G64 (not write-protect) |
+| Drive Phi2 | Micro-step so multi-cycle `$1800` writes hit last cycle |
+| IEC settle | 2-stage bus-visible pipeline; immediate self-pull on drive sense |
+| Dual-bit ILOAD | BA freeze mid- and inter-instruction; badline BA release = 3 |
+| VIA2 T1 during custom RAM | Suppress idle T1 IRQs so stage-3 is not abandoned to `$F99C` |
+| Stage-3 gap table | Long post-sync GCR align + 2-byte dual-BVC skip at first `$030D` |
+
+**Gap-table align detail:** protection measures 16 inter-sync lengths and requires
+them equal. After SO/byte-phase lock the sampler typically catches every other
+SYNC (data marks). Aligning to the first *short* (header) gap made entry 0
+differ; `c1541_media_align_after_sync` prefers a post-sync that precedes a
+**long** gap, and at first `$030D` (`$85==0`) skips two GCR bytes to match the
+dual BVC at `$0304`/`$0307`. Automated in `tests/machine/test_c64_robocop_g64.c`.
 
 **How to smoke Robocop (human):**
 
@@ -93,24 +93,12 @@ Use the project `c64m.ini` (or equivalent) with `emulate_1541=1`, `media_1541=1`
 and ROM paths set. Optional: `--control-port PORT` to observe with
 `get-cpu` / `get-memory` / `get-disk-status` after load.
 
-**Optional control-port observe (after UI or headless launch with your ini):**
-
-```text
-hello
-get-disk-status 8
-get-drive-cpu 8
-wait-frame 100 60000
-get-cpu
-get-memory $0801 64 map
-get-memory $0160 64 drive8
-```
-
 Do not use a scratch ini missing ROM/`emulate_1541` keys — that yields
 `?DEVICE NOT PRESENT` and is not a media-path failure.
 
 ### What M7 does *not* finish
 
-- Making Robocop (or any protected/commercial multi-stage title) fully playable
+- Claiming full playthrough / every protected commercial title
 - Pure Port A job WRITE capture (still hybrid)
 - G64 write-back
 - Exhaustive loader catalogue
