@@ -15,6 +15,16 @@
 - CPU microcycle migration additionally covers direct/indexed ALU and compare,
   `BIT`, `(zp,X)` and `(zp),Y` reads/stores, indexed RMW dummy writes, and the
   NMOS `JMP (addr)` page-wrap read sequence.
+- Stable undocumented CPU migration covers SLO/RLA/SRE/RRA/DCP/ISC semantics,
+  LAX and SAX, plus normal-versus-PAL-bad-line trace equivalence for SLO, LAX,
+  SAX, and DCP representatives. The unstable chip-dependent unofficial forms
+  remain compatibility-replay behavior rather than being asserted as accurate.
+- Migrated-family contention validation runs representative absolute,
+  zero-page-indexed, absolute-indexed, `(zp,X)`, `(zp),Y`, `BIT`, indexed-RMW,
+  indirect-store, and indirect-JMP forms both normally and through the PAL
+  bad-line baseline. It requires identical architectural results and bus-event
+  shape, with only absolute event cycles delayed. Separate tests prove pending
+  store and RMW write phases continue while BA is low.
 - CPU/VIC timing baselines: `md-files/timing-baselines/PAL_NTSC_CURRENT.md`
   records the current PAL/NTSC fixture signatures and links each one to its
   executable machine test. These are regression baselines, not yet

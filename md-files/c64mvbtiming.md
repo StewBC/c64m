@@ -400,9 +400,37 @@ The Phase 4 checklist is therefore:
 |---|---|---|
 | Documented NMOS 6502/6510 opcodes | Yes | Complete |
 | IRQ/NMI entry and BRK | Yes | Complete |
-| Practical undocumented opcode families | No | Compatibility replay pending trace gates |
+| Stable practical undocumented families (SLO/RLA/SRE/RRA/DCP/ISC/LAX/SAX) | Yes | Trace-gated |
+| Chip-dependent undocumented forms (XAA/AHX/SHX/SHY/TAS/LAS/LAX #imm/JAM) | No | Compatibility replay retained |
 | Reset sequence | N/A | Machine reset path, not an executing opcode |
 
-This closes only the documented-opcode portion of Phase 4. It does not make the
-VIC-II fetch schedule complete or retire compatibility replay for practical
-undocumented opcodes.
+This closes the documented portion and the stable practical-undocumented slice
+of Phase 4. It does not make the VIC-II fetch schedule complete or claim
+chip-revision accuracy for unstable undocumented opcodes.
+
+### Stable undocumented-opcode migration (2026-07-11)
+
+The resumable Phi2 executor now handles the stable unofficial opcode families
+used by compact C64 software: SLO, RLA, SRE, RRA, DCP, ISC/ISB, LAX, and SAX.
+Composite RMW instructions retain their NMOS sequence of effective-memory read,
+old-value dummy write, then modified final write before applying their combined
+ALU operation. Tests validate family semantics and compare normal versus PAL
+bad-line traces for representative direct, indirect-X, and indirect-Y forms.
+
+The unstable bus/chip-dependent unofficial operations remain intentionally on
+compatibility replay. That boundary is explicit: migration here improves BA
+interleaving without falsely claiming revision-independent results.
+
+### Migrated-family BA validation (2026-07-11)
+
+The migrated documented addressing families now have a PAL bad-line regression
+gate in addition to their normal expected bus traces. For each representative
+family, the gate compares normal and BA-contended execution for identical CPU
+state, memory result, opcode PC, bus-event type/access/address/value, and CPU
+cycle offset. BA may delay only the event's absolute machine cycle. The fixture
+uses the current-model PAL baseline (raster `$33`, cycle 12), and separately
+asserts that pending store and RMW write phases are allowed to proceed while BA
+is low.
+
+This validates the current model's contention behavior; it is not a claim that
+the resulting timings are yet validated against a specific VIC-II revision.

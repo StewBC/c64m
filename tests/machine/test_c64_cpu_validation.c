@@ -169,6 +169,134 @@ static c64_cpu_snapshot snapshot(const c64_t *machine) {
     return out;
 }
 
+static void expect_cpu_snapshots_equal(
+    const char *name,
+    const c64_cpu_snapshot *expected,
+    const c64_cpu_snapshot *actual)
+{
+    expect_u16(name, expected->pc, actual->pc);
+    expect_u8(name, expected->a, actual->a);
+    expect_u8(name, expected->x, actual->x);
+    expect_u8(name, expected->y, actual->y);
+    expect_u8(name, expected->sp, actual->sp);
+    expect_u8(name, expected->p, actual->p);
+}
+
+/* The PAL current-model timing baseline defines bad-line BA assertion at
+   raster $33/cycle 12.  Keep this setup shared by migrated-family validation
+   so the contention path exercises the documented fixture, not a synthetic
+   BA flag. */
+static void arm_pal_badline_fixture(c64_t *machine) {
+    vicii_write_register(&machine->vic, 0xd011, 0x13u);
+    machine->vic.timing.raster_line = 0x33u;
+    machine->vic.timing.cycle_in_line = 12u;
+}
+
+static void expect_contended_trace_matches_normal(
+    const char *name,
+    const c64_cpu_instruction_trace *normal,
+    const c64_cpu_instruction_trace *contended)
+{
+    size_t i;
+    bool delayed = false;
+
+    expect_u16(name, normal->opcode_pc, contended->opcode_pc);
+    expect_u64(name, normal->event_count, contended->event_count);
+    expect_u64(name, normal->total_cycles, contended->total_cycles);
+    for (i = 0; i < normal->event_count; i++) {
+        const c64_cpu_bus_event *expected = &normal->events[i];
+        const c64_cpu_bus_event *actual = &contended->events[i];
+
+        expect_u8(name, expected->cycle_offset, actual->cycle_offset);
+        expect_u8(name, (uint8_t)expected->kind, (uint8_t)actual->kind);
+        expect_u8(name, (uint8_t)expected->access_kind, (uint8_t)actual->access_kind);
+        expect_u16(name, expected->address, actual->address);
+        expect_u8(name, expected->value, actual->value);
+        expect_u8(name, expected->is_io, actual->is_io);
+        expect_u8(name, expected->record_write_history, actual->record_write_history);
+        expect_true(name, actual->absolute_cycle >= expected->absolute_cycle);
+        if (actual->absolute_cycle > expected->absolute_cycle) {
+            delayed = true;
+        }
+    }
+    expect_true(name, delayed);
+}
+
+static void seed_migrated_family_memory(c64_t *machine) {
+    machine->bus.ram[0x0010] = 0x01u;
+    machine->bus.ram[0x0011] = 0x01u;
+    machine->bus.ram[0x0024] = 0x34u;
+    machine->bus.ram[0x0025] = 0x12u;
+    machine->bus.ram[0x0030] = 0xffu;
+    machine->bus.ram[0x0031] = 0x12u;
+    machine->bus.ram[0x1234] = 0x01u;
+    machine->bus.ram[0x1235] = 0xc0u;
+    machine->bus.ram[0x1200] = 0xaau;
+    machine->bus.ram[0x1300] = 0x01u;
+    machine->bus.ram[0x20ff] = 0x10u;
+    machine->bus.ram[0x2000] = 0xe1u;
+}
+
+static void validate_migrated_family_on_pal_badline(
+    const char *name,
+    const uint8_t *program,
+    size_t program_size,
+    size_t setup_instructions,
+    uint16_t expected_pc,
+    uint8_t expected_a,
+    uint16_t expected_memory_address,
+    uint8_t expected_memory_value)
+{
+    c64_rom_set roms;
+    c64_t normal;
+    c64_t contended;
+    c64_cpu_snapshot normal_cpu;
+    c64_cpu_snapshot contended_cpu;
+    c64_cpu_instruction_trace normal_trace;
+    c64_cpu_instruction_trace contended_trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, program_size);
+    reset_machine_standard(&normal, &roms, C64_VIDEO_STANDARD_PAL);
+    reset_machine_standard(&contended, &roms, C64_VIDEO_STANDARD_PAL);
+    seed_migrated_family_memory(&normal);
+    seed_migrated_family_memory(&contended);
+    c64_set_cpu_trace_enabled(&normal, true);
+    c64_set_cpu_trace_enabled(&contended, true);
+
+    step_machine(&normal, setup_instructions);
+    step_machine(&contended, setup_instructions);
+    /* Keep the non-contended execution at the same raster position. */
+    vicii_write_register(&normal.vic, 0xd011, 0x03u);
+    normal.vic.timing.raster_line = 0x33u;
+    normal.vic.timing.cycle_in_line = 12u;
+    arm_pal_badline_fixture(&contended);
+
+    step_machine(&normal, 1);
+    /* c64_step_instruction() deliberately finishes an already-active micro
+       instruction before starting its requested step.  This fixture needs to
+       preserve the opcode-fetch boundary, so complete the active instruction
+       through the public cycle API instead. */
+    contended.instruction_complete = false;
+    step_machine_cycles(&contended, 1); /* opcode fetch; VIC asserts BA. */
+    while (!contended.instruction_complete) {
+        step_machine_cycles(&contended, 1);
+    }
+
+    normal_cpu = snapshot(&normal);
+    contended_cpu = snapshot(&contended);
+    expect_cpu_snapshots_equal(name, &normal_cpu, &contended_cpu);
+    expect_u16(name, expected_pc, normal_cpu.pc);
+    expect_u8(name, expected_a, normal_cpu.a);
+    expect_u8(name, expected_memory_value,
+        c64_bus_read(&normal.bus, expected_memory_address));
+    expect_u8(name, expected_memory_value,
+        c64_bus_read(&contended.bus, expected_memory_address));
+    c64_debug_copy_last_cpu_trace(&normal, &normal_trace);
+    c64_debug_copy_last_cpu_trace(&contended, &contended_trace);
+    expect_contended_trace_matches_normal(name, &normal_trace, &contended_trace);
+}
+
 static void test_reset_vector(void) {
     c64_rom_set roms;
     c64_t machine;
@@ -1020,6 +1148,178 @@ static void test_microcycle_indexed_rmw_and_indirect_jump_trace(void) {
     expect_u16("indirect jump destination", 0xe110u, snapshot(&machine).pc);
 }
 
+static void test_migrated_families_match_normal_trace_under_pal_badline(void) {
+    static const uint8_t absolute_read[] = {
+        0xa9, 0x40,       /* LDA #$40 */
+        0x6d, 0x34, 0x12  /* ADC $1234 */
+    };
+    static const uint8_t zero_page_indexed_read[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0x75, 0x0f        /* ADC $0f,X */
+    };
+    static const uint8_t absolute_indexed_read[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0x7d, 0xff, 0x12  /* ADC $12ff,X */
+    };
+    static const uint8_t x_indirect_read[] = {
+        0xa2, 0x04,       /* LDX #$04 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0x61, 0x20        /* ADC ($20,X) */
+    };
+    static const uint8_t indirect_y_read[] = {
+        0xa0, 0x01,       /* LDY #$01 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0x71, 0x30        /* ADC ($30),Y */
+    };
+    static const uint8_t absolute_bit[] = {
+        0xa9, 0x40,       /* LDA #$40 */
+        0x2c, 0x35, 0x12  /* BIT $1235 */
+    };
+    static const uint8_t indexed_rmw[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xfe, 0xff, 0x12  /* INC $12ff,X */
+    };
+    static const uint8_t indirect_y_store[] = {
+        0xa0, 0x01,       /* LDY #$01 */
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x91, 0x30        /* STA ($30),Y */
+    };
+    static const uint8_t indirect_jump[] = {
+        0x6c, 0xff, 0x20  /* JMP ($20ff), NMOS page-wrap high byte */
+    };
+
+    validate_migrated_family_on_pal_badline("absolute read under badline",
+        absolute_read, sizeof(absolute_read), 1, 0xe005u, 0x41u, 0x1234u, 0x01u);
+    validate_migrated_family_on_pal_badline("zero-page indexed read under badline",
+        zero_page_indexed_read, sizeof(zero_page_indexed_read), 2, 0xe006u,
+        0x41u, 0x0010u, 0x01u);
+    validate_migrated_family_on_pal_badline("absolute indexed read under badline",
+        absolute_indexed_read, sizeof(absolute_indexed_read), 2, 0xe007u,
+        0x41u, 0x1300u, 0x01u);
+    validate_migrated_family_on_pal_badline("x-indirect read under badline",
+        x_indirect_read, sizeof(x_indirect_read), 2, 0xe006u, 0x41u, 0x1234u, 0x01u);
+    validate_migrated_family_on_pal_badline("indirect-y read under badline",
+        indirect_y_read, sizeof(indirect_y_read), 2, 0xe006u, 0x41u, 0x1300u, 0x01u);
+    validate_migrated_family_on_pal_badline("absolute BIT under badline",
+        absolute_bit, sizeof(absolute_bit), 1, 0xe005u, 0x40u, 0x1235u, 0xc0u);
+    validate_migrated_family_on_pal_badline("indexed RMW under badline",
+        indexed_rmw, sizeof(indexed_rmw), 1, 0xe005u, 0x00u, 0x1300u, 0x02u);
+    validate_migrated_family_on_pal_badline("indirect-y store under badline",
+        indirect_y_store, sizeof(indirect_y_store), 2, 0xe006u, 0x5au, 0x1300u, 0x5au);
+    validate_migrated_family_on_pal_badline("indirect jump under badline",
+        indirect_jump, sizeof(indirect_jump), 0, 0xe110u, 0x00u, 0x20ffu, 0x10u);
+}
+
+static void test_practical_undocumented_microcycle_semantics(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x01, 0x18, 0x07, 0x10, /* LDA #1; CLC; SLO $10 */
+        0xa9, 0xff, 0x18, 0x27, 0x11, /* LDA #ff; CLC; RLA $11 */
+        0xa9, 0x80, 0x18, 0x47, 0x12, /* LDA #80; CLC; SRE $12 */
+        0xa9, 0x10, 0x18, 0x67, 0x13, /* LDA #10; CLC; RRA $13 */
+        0xa9, 0x40, 0xc7, 0x14,       /* LDA #40; DCP $14 */
+        0xa9, 0x40, 0x38, 0xe7, 0x15, /* LDA #40; SEC; ISC $15 */
+        0xa7, 0x20,                   /* LAX $20 */
+        0xa9, 0x5a, 0xa2, 0x0f, 0x87, 0x21 /* LDA; LDX; SAX $21 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x0010] = 0x80u;
+    machine.bus.ram[0x0011] = 0x80u;
+    machine.bus.ram[0x0012] = 0x01u;
+    machine.bus.ram[0x0013] = 0x02u;
+    machine.bus.ram[0x0014] = 0x41u;
+    machine.bus.ram[0x0015] = 0x0fu;
+    machine.bus.ram[0x0020] = 0x80u;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 3);
+    expect_u8("SLO writes shifted value", 0x00u, machine.bus.ram[0x0010]);
+    expect_u8("SLO ORs accumulator", 0x01u, snapshot(&machine).a);
+    expect_u8("SLO carry", 1u, machine.cpu.cpu.C);
+    step_machine(&machine, 3);
+    expect_u8("RLA writes rotated value", 0x00u, machine.bus.ram[0x0011]);
+    expect_u8("RLA ANDs accumulator", 0x00u, snapshot(&machine).a);
+    expect_u8("RLA carry", 1u, machine.cpu.cpu.C);
+    step_machine(&machine, 3);
+    expect_u8("SRE writes shifted value", 0x00u, machine.bus.ram[0x0012]);
+    expect_u8("SRE XORs accumulator", 0x80u, snapshot(&machine).a);
+    step_machine(&machine, 3);
+    expect_u8("RRA writes rotated value", 0x01u, machine.bus.ram[0x0013]);
+    expect_u8("RRA adds accumulator", 0x11u, snapshot(&machine).a);
+    step_machine(&machine, 2);
+    expect_u8("DCP decrements memory", 0x40u, machine.bus.ram[0x0014]);
+    expect_u8("DCP compare sets zero", 1u, machine.cpu.cpu.Z);
+    step_machine(&machine, 3);
+    expect_u8("ISC increments memory", 0x10u, machine.bus.ram[0x0015]);
+    expect_u8("ISC subtracts accumulator", 0x30u, snapshot(&machine).a);
+    step_machine(&machine, 1);
+    expect_u8("LAX accumulator", 0x80u, snapshot(&machine).a);
+    expect_u8("LAX index", 0x80u, snapshot(&machine).x);
+    step_machine(&machine, 3);
+    expect_u8("SAX stores A and X", 0x0au, machine.bus.ram[0x0021]);
+}
+
+static void test_practical_undocumented_families_match_badline_trace(void) {
+    static const uint8_t slo_absolute[] = {
+        0xa9, 0x01,       /* LDA #$01 */
+        0x0f, 0x34, 0x12  /* SLO $1234 */
+    };
+    static const uint8_t lax_x_indirect[] = {
+        0xa2, 0x04,       /* LDX #$04 */
+        0xa3, 0x20        /* LAX ($20,X) */
+    };
+    static const uint8_t sax_x_indirect[] = {
+        0xa9, 0x5f,       /* LDA #$5f */
+        0xa2, 0x04,       /* LDX #$04 */
+        0x83, 0x20        /* SAX ($20,X) */
+    };
+    static const uint8_t dcp_indirect_y[] = {
+        0xa0, 0x01,       /* LDY #$01 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0xd3, 0x30        /* DCP ($30),Y */
+    };
+
+    validate_migrated_family_on_pal_badline("SLO absolute under badline",
+        slo_absolute, sizeof(slo_absolute), 1, 0xe005u, 0x03u, 0x1234u, 0x02u);
+    validate_migrated_family_on_pal_badline("LAX x-indirect under badline",
+        lax_x_indirect, sizeof(lax_x_indirect), 1, 0xe004u, 0x01u, 0x1234u, 0x01u);
+    validate_migrated_family_on_pal_badline("SAX x-indirect under badline",
+        sax_x_indirect, sizeof(sax_x_indirect), 2, 0xe006u, 0x5fu, 0x1234u, 0x04u);
+    validate_migrated_family_on_pal_badline("DCP indirect-y under badline",
+        dcp_indirect_y, sizeof(dcp_indirect_y), 2, 0xe006u, 0x40u, 0x1300u, 0x00u);
+}
+
+static void test_migrated_rmw_writes_proceed_while_ba_is_low(void) {
+    static const uint8_t program[] = {
+        0xee, 0x34, 0x12  /* INC $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    uint64_t before_cpu_cycles;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1234] = 0x41u;
+
+    step_machine_cycles(&machine, 4); /* opcode, operands, and data read */
+    machine.vic.timing.ba_low_until_abs = machine.clock.cycle + 1000u;
+    before_cpu_cycles = machine.clock.cpu_cycles;
+
+    step_machine_cycles(&machine, 1); /* NMOS old-value dummy write */
+    expect_u8("BA permits RMW dummy write", 0x41u, c64_bus_read(&machine.bus, 0x1234));
+    expect_u64("BA RMW dummy write advances CPU", before_cpu_cycles + 1u,
+        machine.clock.cpu_cycles);
+    step_machine_cycles(&machine, 1); /* final modified write */
+    expect_u8("BA permits RMW final write", 0x42u, c64_bus_read(&machine.bus, 0x1234));
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -1519,10 +1819,14 @@ int main(void) {
     test_microcycle_indexed_read_operation_trace();
     test_microcycle_indirect_read_write_trace();
     test_microcycle_indexed_rmw_and_indirect_jump_trace();
+    test_migrated_families_match_normal_trace_under_pal_badline();
+    test_practical_undocumented_microcycle_semantics();
+    test_practical_undocumented_families_match_badline_trace();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
+    test_migrated_rmw_writes_proceed_while_ba_is_low();
     test_ba_stalls_pending_read_cycle();
     test_instruction_and_cycle_step_share_ba_arbiter();
     test_timing_fixture_records_pending_read_stall();

@@ -333,8 +333,74 @@ size_t c6510_step(C6510 *m) {
     return m->cpu.cycles - start_cycle;
 }
 
+/* Stable NMOS unofficial opcodes used by C64 software.  Deliberately exclude
+   the data-bus/chip-dependent forms (XAA, AHX, SHX, SHY, TAS, LAS, LAX #imm)
+   and JAM: their compatibility executor remains the explicit fallback. */
+static bool c6510_micro_is_practical_undocumented(uint8_t opcode) {
+    switch (opcode) {
+    /* SLO, RLA, SRE, RRA, DCP, ISC: (zp,X), zp, abs, (zp),Y, zp,X, abs,Y, abs,X. */
+    case UND_03: case UND_07: case UND_0F: case UND_13: case UND_17: case UND_1B: case UND_1F:
+    case UND_23: case UND_27: case UND_2F: case UND_33: case UND_37: case UND_3B: case UND_3F:
+    case UND_43: case UND_47: case UND_4F: case UND_53: case UND_57: case UND_5B: case UND_5F:
+    case UND_63: case UND_67: case UND_6F: case UND_73: case UND_77: case UND_7B: case UND_7F:
+    case UND_C3: case UND_C7: case UND_CF: case UND_D3: case UND_D7: case UND_DB: case UND_DF:
+    case UND_E3: case UND_E7: case UND_EF: case UND_F3: case UND_F7: case UND_FB: case UND_FF:
+    /* LAX and SAX, excluding unstable LAX #imm. */
+    case UND_A3: case UND_A7: case UND_AF: case UND_B3: case UND_B7: case UND_BF:
+    case UND_83: case UND_87: case UND_8F: case UND_97:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool c6510_micro_is_undocumented_rmw(uint8_t opcode) {
+    switch (opcode) {
+    case UND_03: case UND_07: case UND_0F: case UND_13: case UND_17: case UND_1B: case UND_1F:
+    case UND_23: case UND_27: case UND_2F: case UND_33: case UND_37: case UND_3B: case UND_3F:
+    case UND_43: case UND_47: case UND_4F: case UND_53: case UND_57: case UND_5B: case UND_5F:
+    case UND_63: case UND_67: case UND_6F: case UND_73: case UND_77: case UND_7B: case UND_7F:
+    case UND_C3: case UND_C7: case UND_CF: case UND_D3: case UND_D7: case UND_DB: case UND_DF:
+    case UND_E3: case UND_E7: case UND_EF: case UND_F3: case UND_F7: case UND_FB: case UND_FF:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool c6510_micro_is_lax(uint8_t opcode) {
+    return opcode == UND_A3 || opcode == UND_A7 || opcode == UND_AF ||
+           opcode == UND_B3 || opcode == UND_B7 || opcode == UND_BF;
+}
+
+typedef enum c6510_undocumented_mode {
+    C6510_UND_MODE_X_IND,
+    C6510_UND_MODE_ZP,
+    C6510_UND_MODE_ABS,
+    C6510_UND_MODE_IND_Y,
+    C6510_UND_MODE_ZP_INDEXED,
+    C6510_UND_MODE_ABS_Y,
+    C6510_UND_MODE_ABS_X
+} c6510_undocumented_mode;
+
+static c6510_undocumented_mode c6510_micro_undocumented_mode(uint8_t opcode) {
+    switch (opcode & 0x1fu) {
+    case 0x03u: return C6510_UND_MODE_X_IND;
+    case 0x07u: return C6510_UND_MODE_ZP;
+    case 0x0fu: return C6510_UND_MODE_ABS;
+    case 0x13u: return C6510_UND_MODE_IND_Y;
+    case 0x17u: return C6510_UND_MODE_ZP_INDEXED;
+    case 0x1bu: return C6510_UND_MODE_ABS_Y;
+    default:    return C6510_UND_MODE_ABS_X;
+    }
+}
+
 bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     assert(m);
+
+    if (c6510_micro_is_practical_undocumented(opcode)) {
+        return true;
+    }
 
     switch (opcode) {
     case NOP:
@@ -563,6 +629,56 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
         if (m->micro_phase == 1) return C6510_BUS_ACCESS_DUMMY_READ;
         if (m->micro_phase < 5) return C6510_BUS_ACCESS_STACK_WRITE;
         return C6510_BUS_ACCESS_VECTOR_READ;
+    }
+
+    if (c6510_micro_is_practical_undocumented(m->micro_opcode)) {
+        c6510_undocumented_mode mode =
+            c6510_micro_undocumented_mode(m->micro_opcode);
+        bool rmw = c6510_micro_is_undocumented_rmw(m->micro_opcode);
+        bool lax = c6510_micro_is_lax(m->micro_opcode);
+
+        if (m->micro_phase == 1) return C6510_BUS_ACCESS_OPERAND_READ;
+        switch (mode) {
+        case C6510_UND_MODE_X_IND:
+            if (m->micro_phase == 2) return C6510_BUS_ACCESS_DUMMY_READ;
+            if (m->micro_phase < 5) return C6510_BUS_ACCESS_DATA_READ;
+            if (!rmw) return lax ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE;
+            return m->micro_phase == 5 ? C6510_BUS_ACCESS_DATA_READ :
+                (m->micro_phase == 6 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE);
+        case C6510_UND_MODE_ZP:
+            if (m->micro_phase == 2) return lax ? C6510_BUS_ACCESS_DATA_READ :
+                (rmw ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE);
+            return m->micro_phase == 3 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE;
+        case C6510_UND_MODE_ABS:
+            if (m->micro_phase < 3) return C6510_BUS_ACCESS_OPERAND_READ;
+            if (m->micro_phase == 3) return lax ? C6510_BUS_ACCESS_DATA_READ :
+                (rmw ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE);
+            return m->micro_phase == 4 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE;
+        case C6510_UND_MODE_IND_Y:
+            if (m->micro_phase < 4) return C6510_BUS_ACCESS_DATA_READ;
+            if (m->micro_phase == 4) {
+                return lax && !m->micro_branch_taken ? C6510_BUS_ACCESS_DATA_READ :
+                    C6510_BUS_ACCESS_DUMMY_READ;
+            }
+            if (!rmw) return lax ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE;
+            return m->micro_phase == 5 ? C6510_BUS_ACCESS_DATA_READ :
+                (m->micro_phase == 6 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE);
+        case C6510_UND_MODE_ZP_INDEXED:
+            if (m->micro_phase == 2) return C6510_BUS_ACCESS_DUMMY_READ;
+            if (m->micro_phase == 3) return lax ? C6510_BUS_ACCESS_DATA_READ :
+                (rmw ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE);
+            return m->micro_phase == 4 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE;
+        case C6510_UND_MODE_ABS_Y:
+        case C6510_UND_MODE_ABS_X:
+            if (m->micro_phase < 3) return C6510_BUS_ACCESS_OPERAND_READ;
+            if (m->micro_phase == 3) {
+                return lax && !m->micro_branch_taken ? C6510_BUS_ACCESS_DATA_READ :
+                    C6510_BUS_ACCESS_DUMMY_READ;
+            }
+            if (!rmw) return lax ? C6510_BUS_ACCESS_DATA_READ : C6510_BUS_ACCESS_DATA_WRITE;
+            if (m->micro_phase == 4) return C6510_BUS_ACCESS_DATA_READ;
+            return m->micro_phase == 5 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE;
+        }
     }
 
     switch (m->micro_opcode) {
@@ -822,6 +938,45 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
 static uint8_t c6510_micro_rmw_value(C6510 *m) {
     uint8_t value = m->cpu.scratch_lo;
 
+    if (c6510_micro_is_undocumented_rmw(m->micro_opcode)) {
+        switch (m->micro_opcode & 0xe0u) {
+        case 0x00u: /* SLO = ASL then ORA */
+            m->cpu.C = (value & 0x80u) != 0;
+            value <<= 1;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A | value));
+            break;
+        case 0x20u: { /* RLA = ROL then AND */
+            uint8_t carry = (value & 0x80u) != 0;
+            value = (uint8_t)((value << 1) | m->cpu.C);
+            m->cpu.C = carry;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A & value));
+            break;
+        }
+        case 0x40u: /* SRE = LSR then EOR */
+            m->cpu.C = value & 0x01u;
+            value >>= 1;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A ^ value));
+            break;
+        case 0x60u: { /* RRA = ROR then ADC */
+            uint8_t carry = value & 0x01u;
+            value = (uint8_t)((value >> 1) | (m->cpu.C << 7));
+            m->cpu.C = carry;
+            add_value_to_accumulator(m, value);
+            break;
+        }
+        case 0xc0u: /* DCP = DEC then CMP */
+            value--;
+            compare_bytes(m, m->cpu.A, value);
+            break;
+        default: /* ISC = INC then SBC */
+            value++;
+            subtract_value_from_accumulator(m, value);
+            break;
+        }
+        m->cpu.scratch_hi = value;
+        return value;
+    }
+
     switch (m->micro_opcode) {
     case ASL_zpg:
     case ASL_abs:
@@ -962,6 +1117,207 @@ static bool c6510_micro_uses_y_index(uint8_t opcode) {
     }
 }
 
+static void c6510_micro_set_lax(C6510 *m, uint8_t value) {
+    m->cpu.A = value;
+    set_register_to_value(m, &m->cpu.X, value);
+}
+
+/* Execute one post-fetch cycle of the stable practical undocumented set.
+   These opcodes share the NMOS bus templates of their documented cousins;
+   only the final register/memory operation differs. */
+static bool c6510_micro_step_practical_undocumented(C6510 *m) {
+    c6510_undocumented_mode mode = c6510_micro_undocumented_mode(m->micro_opcode);
+    bool rmw = c6510_micro_is_undocumented_rmw(m->micro_opcode);
+    bool lax = c6510_micro_is_lax(m->micro_opcode);
+    uint8_t value;
+
+    if (m->micro_phase == 1) {
+        m->cpu.scratch_lo = read_operand(m, m->cpu.pc);
+        CYCLE(m);
+        m->cpu.pc++;
+        m->micro_phase++;
+        return false;
+    }
+
+    switch (mode) {
+    case C6510_UND_MODE_ZP:
+        if (m->micro_phase == 2) {
+            m->cpu.address_lo = m->cpu.scratch_lo;
+            m->cpu.address_hi = 0;
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            if (lax) c6510_micro_set_lax(m, read_from_memory(m, m->cpu.address_16));
+            else write_to_memory(m, m->cpu.address_16, (uint8_t)(m->cpu.A & m->cpu.X));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 3) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+
+    case C6510_UND_MODE_ZP_INDEXED:
+        if (m->micro_phase == 2) {
+            (void)read_dummy(m, m->cpu.scratch_lo);
+            m->cpu.address_lo = (uint8_t)(m->cpu.scratch_lo + (lax ? m->cpu.Y : m->cpu.X));
+            m->cpu.address_hi = 0;
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 3) {
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            if (lax) c6510_micro_set_lax(m, read_from_memory(m, m->cpu.address_16));
+            else write_to_memory(m, m->cpu.address_16, (uint8_t)(m->cpu.A & m->cpu.X));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 4) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+
+    case C6510_UND_MODE_ABS:
+        if (m->micro_phase == 2) {
+            m->cpu.address_lo = m->cpu.scratch_lo;
+            m->cpu.address_hi = read_operand(m, m->cpu.pc);
+            CYCLE(m); m->cpu.pc++; m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 3) {
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            if (lax) c6510_micro_set_lax(m, read_from_memory(m, m->cpu.address_16));
+            else write_to_memory(m, m->cpu.address_16, (uint8_t)(m->cpu.A & m->cpu.X));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 4) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+
+    case C6510_UND_MODE_X_IND:
+        if (m->micro_phase == 2) {
+            (void)read_dummy(m, m->cpu.scratch_lo);
+            m->micro_target = (uint8_t)(m->cpu.scratch_lo + m->cpu.X);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 3) {
+            m->cpu.address_lo = read_from_memory(m, m->micro_target);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 4) {
+            m->cpu.address_hi = read_from_memory(m, (uint8_t)(m->micro_target + 1u));
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 5) {
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            if (lax) c6510_micro_set_lax(m, read_from_memory(m, m->cpu.address_16));
+            else write_to_memory(m, m->cpu.address_16, (uint8_t)(m->cpu.A & m->cpu.X));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 6) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+
+    case C6510_UND_MODE_IND_Y:
+        if (m->micro_phase == 2) {
+            m->cpu.address_lo = read_from_memory(m, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 3) {
+            uint16_t base;
+            m->cpu.address_hi = read_from_memory(m, (uint8_t)(m->cpu.scratch_lo + 1u));
+            CYCLE(m);
+            base = m->cpu.address_16;
+            m->micro_target = (uint16_t)(base + m->cpu.Y);
+            m->micro_branch_taken = (uint16_t)m->cpu.address_lo + m->cpu.Y > 0xffu;
+            m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 4) {
+            if (lax && !m->micro_branch_taken) {
+                m->micro_phase++;
+                return c6510_micro_step_practical_undocumented(m);
+            }
+            (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
+                                            (m->micro_target & 0x00ffu)));
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 5) {
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->micro_target);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            c6510_micro_set_lax(m, read_from_memory(m, m->micro_target));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 6) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->micro_target, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->micro_target, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+
+    case C6510_UND_MODE_ABS_Y:
+    case C6510_UND_MODE_ABS_X:
+        if (m->micro_phase == 2) {
+            uint16_t base;
+            uint8_t index = mode == C6510_UND_MODE_ABS_Y ? m->cpu.Y : m->cpu.X;
+            m->cpu.address_lo = m->cpu.scratch_lo;
+            m->cpu.address_hi = read_operand(m, m->cpu.pc);
+            CYCLE(m); m->cpu.pc++;
+            base = m->cpu.address_16;
+            m->micro_target = (uint16_t)(base + index);
+            m->micro_branch_taken = (uint16_t)m->cpu.address_lo + index > 0xffu;
+            m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 3) {
+            if (lax && !m->micro_branch_taken) {
+                m->micro_phase++;
+                return c6510_micro_step_practical_undocumented(m);
+            }
+            (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
+                                            (m->micro_target & 0x00ffu)));
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        if (m->micro_phase == 4) {
+            if (rmw) {
+                m->cpu.scratch_lo = read_from_memory(m, m->micro_target);
+                CYCLE(m); m->micro_phase++; return false;
+            }
+            c6510_micro_set_lax(m, read_from_memory(m, m->micro_target));
+            CYCLE(m); return true;
+        }
+        if (m->micro_phase == 5) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->micro_target, m->cpu.scratch_lo);
+            CYCLE(m); m->micro_phase++; return false;
+        }
+        write_to_memory(m, m->micro_target, c6510_micro_rmw_value(m));
+        CYCLE(m); return true;
+    }
+    return false;
+}
+
 bool c6510_micro_step(C6510 *m) {
     uint8_t value;
 
@@ -1008,6 +1364,13 @@ bool c6510_micro_step(C6510 *m) {
         m->cpu.pc++;
         m->micro_phase = 1;
         return false;
+    }
+
+    if (c6510_micro_is_practical_undocumented(m->micro_opcode)) {
+        if (!c6510_micro_step_practical_undocumented(m)) {
+            return false;
+        }
+        goto micro_complete;
     }
 
     switch (m->micro_opcode) {
@@ -1934,6 +2297,7 @@ bool c6510_micro_step(C6510 *m) {
         break;
     }
 
+micro_complete:
     m->cpu.opcode_active = 0;
     m->micro_active = 0;
     m->micro_phase = 0;
@@ -1951,6 +2315,28 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
     }
     if (m->micro_phase == 0) {
         return 1;
+    }
+    if (c6510_micro_is_practical_undocumented(m->micro_opcode)) {
+        c6510_undocumented_mode mode =
+            c6510_micro_undocumented_mode(m->micro_opcode);
+        bool rmw = c6510_micro_is_undocumented_rmw(m->micro_opcode);
+        bool lax = c6510_micro_is_lax(m->micro_opcode);
+        size_t total_cycles;
+
+        switch (mode) {
+        case C6510_UND_MODE_ZP: total_cycles = rmw ? 5u : 3u; break;
+        case C6510_UND_MODE_ZP_INDEXED: total_cycles = rmw ? 6u : 4u; break;
+        case C6510_UND_MODE_ABS: total_cycles = rmw ? 6u : 4u; break;
+        case C6510_UND_MODE_X_IND: total_cycles = rmw ? 8u : 6u; break;
+        case C6510_UND_MODE_IND_Y:
+            total_cycles = rmw ? 8u : (lax && !m->micro_branch_taken ? 5u : 6u);
+            break;
+        case C6510_UND_MODE_ABS_Y:
+            total_cycles = rmw ? 7u : (lax && !m->micro_branch_taken ? 4u : 5u);
+            break;
+        default: total_cycles = 7u; break;
+        }
+        return total_cycles > m->micro_phase ? total_cycles - m->micro_phase : 0;
     }
 
     switch (m->micro_opcode) {

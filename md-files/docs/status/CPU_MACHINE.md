@@ -12,9 +12,10 @@
 - The resumable CPU path now covers every documented NMOS 6502/6510 opcode and
   addressing form: immediate, zero-page, indexed zero-page, absolute, indexed
   absolute, `(zp,X)`, `(zp),Y`, branches, stack/control flow, indexed RMW, and
-  indirect JMP page-wrap behavior. IRQ/NMI entry also uses this path. Implemented
-  practical-undocumented opcode families remain on compatibility
-  instruction-trace/replay pending their own trace gates.
+  indirect JMP page-wrap behavior. IRQ/NMI entry also uses this path. The stable
+  practical undocumented families SLO, RLA, SRE, RRA, DCP, ISC/ISB, LAX, and SAX
+  now also use resumable bus templates; electrically unstable forms remain on
+  compatibility instruction-trace/replay.
 
 ## 6510 / undocumented opcodes
 
@@ -31,6 +32,13 @@
   - XAA/ANE
   - unstable `LAX #imm`
   - JAM/KIL
+- The resumable migration includes stable composite-RMW forms in all their NMOS
+  addressing forms, plus stable LAX/SAX reads and stores. It preserves operand,
+  pointer, page-cross dummy-read, data-read, old-value dummy-write, and final
+  write cycles. PAL bad-line gates compare their normal and BA-contended traces.
+- XAA/ANE, AHX/SHA, SHX, SHY, TAS/SHS, LAS, and unstable `LAX #imm` remain on
+  compatibility replay because their results depend on chip revision and bus
+  state that c64m does not yet model. JAM/KIL remains deliberately non-resumable.
 - C64 wrapper routes all CPU reads/writes through the machine bus.
 - BA stalls use traced read/write events, so undocumented RMW/store opcodes follow the same integration path as official opcodes.
 - CPU traces distinguish opcode fetches, operands, data, dummy cycles, RMW
