@@ -755,11 +755,12 @@ static void c1541_run_cpu_one_cycle(c1541 *drive) {
     }
 
     /* First inter-sync gap sample after JSR $F50A: $030D with $85 still 0.
-       Realign so that measurement is a full gap ($8D), not a partial ($7B)
-       from mid-sector phase — stage-3 self-checks 16 equal gap lengths. */
+       Align onto a long (data-block) post-sync and skip the two GCR bytes the
+       dual BVC at $0304/$0307 already consumed — stage-3 self-checks 16 equal
+       gap lengths; without the skip, entry 0 is two bytes long. */
     if (drive->media.enabled && drive->cpu.cpu.pc == 0x030Du &&
         drive->ram[0x85] == 0) {
-        c1541_media_align_after_sync(drive);
+        c1541_media_align_after_sync_skip(drive, 2u);
     }
 
     /* Intercept disk jobs before the ROM waits for unmodelled GCR hardware.

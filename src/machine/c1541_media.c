@@ -548,13 +548,26 @@ static int slot_is_writable(c1541 *drive) {
     return (slot != NULL && slot->mounted && slot->writable) ? 1 : 0;
 }
 
-/* Place the head on the first data bit after a SYNC mark so inter-sync gap
-   measurements start on a full gap (not mid-sector). */
+/* Place the head on the first data bit after a SYNC that precedes a long
+   inter-sync gap (data block), not a short header gap.
+
+   Mid-sector seek phase makes the first measured gap a partial; aligning to
+   any post-sync fixes that. But stage-3 self-checks need 16 *equal* gaps, and
+   after SO/byte-phase lock the sampler typically only catches every other SYNC
+   (data marks). Starting on a short header gap makes entry 0 differ from the
+   rest; starting on a long data gap makes all 16 match. */
 static void media_align_after_sync(c1541_media *m) {
     c1541_track *tr = current_track(m);
     uint32_t nbits;
     uint32_t i;
     uint16_t sh = 0;
+    uint32_t posts[64];
+    uint16_t post_sh[64];
+    int npost = 0;
+    int k;
+    uint32_t best_pos;
+    uint16_t best_sh;
+    const uint32_t long_gap_min = 512u; /* header gaps ~170 bits; data ~2700 */
 
     m->bits_in_byte = 0;
     m->byte_ready = 0;
@@ -566,25 +579,47 @@ static void media_align_after_sync(c1541_media *m) {
         return;
     }
     nbits = (uint32_t)tr->length * 8u;
-    for (i = 0; i < nbits; i++) {
+
+    for (i = 0; i < nbits && npost < 64; ) {
         int bit = track_bit(tr, i);
         sh = (uint16_t)(((sh << 1) | (bit & 1)) & 0x3FFu);
+        i++;
         if (sh != 0x3FFu) {
             continue;
         }
-        while (i + 1u < nbits) {
-            int b2 = track_bit(tr, i + 1u);
+        /* Consume rest of this sync run; first non-1 is post-sync data. */
+        while (i < nbits) {
+            int b2 = track_bit(tr, i);
             sh = (uint16_t)(((sh << 1) | (b2 & 1)) & 0x3FFu);
             i++;
             if (sh != 0x3FFu) {
-                m->head_bit_pos = i;
-                m->shift10 = sh;
-                m->in_sync = 0;
-                return;
+                posts[npost] = i - 1u; /* first data bit (already in sh) */
+                post_sh[npost] = sh;
+                npost++;
+                break;
             }
         }
+    }
+    if (npost == 0) {
         return;
     }
+
+    best_pos = posts[0];
+    best_sh = post_sh[0];
+    for (k = 0; k < npost; k++) {
+        uint32_t a = posts[k];
+        uint32_t b = posts[(k + 1) % npost];
+        uint32_t gap = (b >= a) ? (b - a) : (nbits - a + b);
+        if (gap >= long_gap_min) {
+            best_pos = a;
+            best_sh = post_sh[k];
+            break;
+        }
+    }
+
+    m->head_bit_pos = best_pos;
+    m->shift10 = best_sh;
+    m->in_sync = 0;
 }
 
 void c1541_media_align_after_sync(struct c1541 *drive) {
@@ -592,6 +627,34 @@ void c1541_media_align_after_sync(struct c1541 *drive) {
         return;
     }
     media_align_after_sync(&drive->media);
+}
+
+/* Like align_after_sync, then skip skip_bytes GCR bytes (for dual-BVC pre-roll). */
+void c1541_media_align_after_sync_skip(struct c1541 *drive, unsigned skip_bytes) {
+    c1541_media *m;
+    c1541_track *tr;
+    uint32_t nbits;
+
+    if (drive == NULL || !drive->media.enabled || !drive->media.tracks_valid) {
+        return;
+    }
+    media_align_after_sync(&drive->media);
+    if (skip_bytes == 0) {
+        return;
+    }
+    m = &drive->media;
+    tr = current_track(m);
+    if (tr == NULL || tr->data == NULL || tr->length <= 0) {
+        return;
+    }
+    nbits = (uint32_t)tr->length * 8u;
+    m->head_bit_pos = (m->head_bit_pos + (uint32_t)skip_bytes * 8u) % nbits;
+    m->bits_in_byte = 0;
+    m->byte_ready = 0;
+    m->shifting_byte = 0;
+    /* shift10/in_sync will resync from flux on subsequent bit clocks */
+    m->shift10 = 0;
+    m->in_sync = 0;
 }
 
 static void sample_disk_via_outputs(c1541 *drive) {
