@@ -77,11 +77,11 @@ Observed after `LOAD"*"` + RUN (autorun `-a`):
 12. **Custom ILOAD path (FAST → patch `$0330`→`$0A08` → `LOAD"LOAD1"`):** dual-bit receive at `$0A72` / drive send at `$0309`. Vs VICE `load1` extract:
     - load address `$0E40` correct; transfer completes
     - **`$8000` first 32 bytes: 0 mismatches** (decrypt stub exact)
-    - full file **1 / 61880** residual (`$9F1A`: `07`→`F7` in `STA $079E` high byte)
+    - full file **0 / 61880** mismatches (VICE-identical)
 13. **`$D012` CPU-visible phase:** ILOAD pre-badline wait; CPU-visible raster is internal+1; badline/BA use internal `raster_line`.
-14. **1541 freeze during C64 BA/AEC:** host chips step; 1541 does not — dual-bit patterns hold across RDY freeze. Stock media LOAD / FAST stay VICE-identical.
+14. **1541 freeze during C64 BA/AEC:** host chips step; 1541 does not — dual-bit patterns hold across RDY freeze. Applies to mid-instruction stalls **and** inter-instruction waits (BA asserted before the next opcode fetch). Stock media LOAD / FAST stay VICE-identical.
 15. **Badline BA release = 3** (sprites stay at RELEASE=2): one extra post-steal cycle on character-fetch BA only, so dual-bit resume samples do not land on a released bus.
-16. **Still left:** wipe the last 1 dual-bit byte; headless RUN / post-decrypt / playability not claimed.
+16. **Still left:** headless RUN / post-decrypt / playability not claimed (load path itself matches VICE).
 
 **How to smoke Robocop (human):**
 

@@ -1127,6 +1127,17 @@ static void c64_step_micro_cycle(c64_t *machine) {
     }
 }
 
+/* Host chips only: CPU is held by BA/AEC so freeze the 1541 as well. Dual-bit
+   IEC loaders sample DD00 across multi-instruction windows; if the drive kept
+   running while the host waited between opcodes, the bit stream races ahead. */
+static void c64_step_host_freeze_1541(c64_t *machine) {
+    c64_step_vic(machine);
+    c64_step_cia1(machine);
+    c64_step_cia2(machine);
+    c64_step_sid(machine);
+    machine->clock.cycle++;
+}
+
 static bool c64_step_cycle_internal(c64_t *machine) {
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
         (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine))) {
@@ -1136,9 +1147,15 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         return true;
     }
 
-    if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
-        vicii_aec_active(&machine->vic) &&
-        vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
+    if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active) {
+        if (!vicii_aec_active(&machine->vic) ||
+            !vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
+            /* Between instructions BA/AEC holds the 6510, but previously we still
+               advanced the 1541 via the bare cycle path — same dual-bit race as a
+               mid-instruction stall. Freeze the drive until the host can fetch. */
+            c64_step_host_freeze_1541(machine);
+            return true;
+        }
         if (!c64_prepare_micro_instruction(machine)) {
             c64_prepare_deferred_cpu_trace(machine);
         }
@@ -1148,23 +1165,14 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
             c64_step_micro_cycle(machine);
         } else {
-            /* BA/AEC stall: host only. Freeze 1541 so dual-bit IEC holds. */
-            c64_step_vic(machine);
-            c64_step_cia1(machine);
-            c64_step_cia2(machine);
-            c64_step_sid(machine);
-            machine->clock.cycle++;
+            c64_step_host_freeze_1541(machine);
         }
         return true;
     }
 
     if (machine->pending_cpu_trace_active) {
         if (c64_cpu_cycle_stalled_by_vic_pins(machine)) {
-            c64_step_vic(machine);
-            c64_step_cia1(machine);
-            c64_step_cia2(machine);
-            c64_step_sid(machine);
-            machine->clock.cycle++;
+            c64_step_host_freeze_1541(machine);
             return true;
         }
         c64_apply_pending_cpu_events_at_elapsed(machine);
