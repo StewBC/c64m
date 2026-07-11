@@ -9364,11 +9364,30 @@ static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int he
     nk_end(ctx);
 }
 
+/* Sample the top-left pixel of the displayed crop. That pixel is always in the
+   border region, so it gives the current border colour to extend into the
+   letterbox/pillar bars. Purely cosmetic: it is not tied to raster timing, so
+   tracking whatever colour sits at that corner each frame is fine even when a
+   program flips the border colour rapidly. */
+static void frontend_border_fill_color(const c64_frame *frame, Uint8 *r, Uint8 *g, Uint8 *b)
+{
+    int crop_y = frontend_display_crop_y_for_frame(frame);
+    size_t index = (size_t)crop_y * (size_t)C64_FRAME_WIDTH + (size_t)FRONTEND_DISPLAY_CROP_X;
+    uint32_t pixel = frame->pixels[index];
+
+    *r = (Uint8)((pixel >> 16) & 0xffu);
+    *g = (Uint8)((pixel >> 8) & 0xffu);
+    *b = (Uint8)(pixel & 0xffu);
+}
+
 static void frontend_render_display_only(frontend *ui)
 {
     int width = 0;
     int height = 0;
     SDL_Rect dest;
+    Uint8 border_r = 0;
+    Uint8 border_g = 0;
+    Uint8 border_b = 0;
 
     if (ui == NULL || ui->display_texture == NULL || !ui->has_frame) {
         return;
@@ -9376,6 +9395,13 @@ static void frontend_render_display_only(frontend *ui)
 
     platform_window_get_size(ui->window, &width, &height);
     dest = frontend_fit_rect(0, 0, width, height, FRONTEND_DISPLAY_CROP_W, FRONTEND_DISPLAY_CROP_H);
+
+    /* Extend the border colour into the letterbox/pillar bars instead of leaving
+       the black window clear. The opaque C64 image is copied on top afterwards. */
+    frontend_border_fill_color(&ui->current_frame, &border_r, &border_g, &border_b);
+    SDL_SetRenderDrawColor(ui->renderer, border_r, border_g, border_b, 255);
+    SDL_RenderFillRect(ui->renderer, NULL);
+
     {
         SDL_Rect src = {
             FRONTEND_DISPLAY_CROP_X,
