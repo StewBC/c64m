@@ -72,7 +72,7 @@ game init at `$8000+`. VICE oracle for `fast` / `load1` file bytes.
 | G64 EXECUTE | `$E0` falls through to ROM on G64 (not write-protect) |
 | Drive Phi2 | Micro-step so multi-cycle `$1800` writes hit last cycle |
 | IEC settle | 2-stage bus-visible pipeline; immediate self-pull on drive sense |
-| Dual-bit ILOAD | BA freeze mid- and inter-instruction; badline BA release = 3 |
+| Dual-bit ILOAD | Freeze 1541 only while host PC is in custom ILOAD `$0A00–$0BFF`; badline BA release = 3; CPU-visible `$D012` is true raster (no +1 fudge) |
 | VIA2 T1 during custom RAM | Suppress idle T1 IRQs so stage-3 is not abandoned to `$F99C` |
 | Stage-3 gap table | Long post-sync GCR align + 2-byte dual-BVC skip at first `$030D` |
 

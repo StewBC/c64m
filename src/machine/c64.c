@@ -1127,15 +1127,34 @@ static void c64_step_micro_cycle(c64_t *machine) {
     }
 }
 
-/* Host chips only: CPU is held by BA/AEC so freeze the 1541 as well. Dual-bit
-   IEC loaders sample DD00 across multi-instruction windows; if the drive kept
-   running while the host waited between opcodes, the bit stream races ahead. */
-static void c64_step_host_freeze_1541(c64_t *machine) {
-    c64_step_vic(machine);
-    c64_step_cia1(machine);
-    c64_step_cia2(machine);
-    c64_step_sid(machine);
-    machine->clock.cycle++;
+/*
+ * Host BA/AEC stall handling for the 1541.
+ *
+ * Real hardware: the drive never freezes for C64 BA. Dual-bit ILOAD receivers
+ * (e.g. Robocop FAST → $0A08) avoid sampling across BA via $D012 waits; when a
+ * residual BA still hits mid-window we must hold the drive bitbang or IEC races.
+ *
+ * Only freeze the 1541 while the host PC is in the custom ILOAD dual-bit band
+ * ($0A00–$0BFF). Everywhere else (raster effects, stage-3 GCR measure, stock
+ * code) the drive keeps running. Do not fudge CPU-visible $D012 — that breaks
+ * raster-exact titles (DK arcade venetian reveal).
+ */
+static int c64_in_dual_bit_iload(const c64_t *machine) {
+    uint16_t pc = machine->cpu.cpu.pc;
+    return pc >= 0x0A00u && pc < 0x0C00u;
+}
+
+static void c64_step_host_ba_stall(c64_t *machine) {
+    if (machine->config.emulate_1541 && c64_in_dual_bit_iload(machine)) {
+        c64_step_vic(machine);
+        c64_step_cia1(machine);
+        c64_step_cia2(machine);
+        c64_step_sid(machine);
+        machine->clock.cycle++;
+        return;
+    }
+    /* 6510 held; 1541 continues (media + drive CPU + VIAs). */
+    c64_advance_one_cycle(machine);
 }
 
 static bool c64_step_cycle_internal(c64_t *machine) {
@@ -1150,10 +1169,8 @@ static bool c64_step_cycle_internal(c64_t *machine) {
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active) {
         if (!vicii_aec_active(&machine->vic) ||
             !vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
-            /* Between instructions BA/AEC holds the 6510, but previously we still
-               advanced the 1541 via the bare cycle path — same dual-bit race as a
-               mid-instruction stall. Freeze the drive until the host can fetch. */
-            c64_step_host_freeze_1541(machine);
+            /* Between instructions BA/AEC holds the 6510 only. */
+            c64_step_host_ba_stall(machine);
             return true;
         }
         if (!c64_prepare_micro_instruction(machine)) {
@@ -1165,14 +1182,14 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
             c64_step_micro_cycle(machine);
         } else {
-            c64_step_host_freeze_1541(machine);
+            c64_step_host_ba_stall(machine);
         }
         return true;
     }
 
     if (machine->pending_cpu_trace_active) {
         if (c64_cpu_cycle_stalled_by_vic_pins(machine)) {
-            c64_step_host_freeze_1541(machine);
+            c64_step_host_ba_stall(machine);
             return true;
         }
         c64_apply_pending_cpu_events_at_elapsed(machine);
@@ -1227,8 +1244,7 @@ static uint8_t c64_deferred_io_read(const c64_t *machine, uint16_t address, uint
             }
 
             abs_cycle = (uint64_t)machine->vic.timing.cycle_in_line + offset_cycles;
-            /* Match vicii_read_register: CPU-visible raster is internal + 1. */
-            raster = machine->vic.timing.raster_line + 1u + (uint32_t)(abs_cycle / cpl);
+            raster = machine->vic.timing.raster_line + (uint32_t)(abs_cycle / cpl);
             if (lpf != 0) {
                 raster %= lpf;
             }

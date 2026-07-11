@@ -1717,8 +1717,8 @@ static void test_vicii_debug_read_raster(void) {
         vicii_step_cycle(&v, NULL, (uint64_t)i);
     }
 
-    /* CPU-visible $D012 is internal raster_line + 1 (see vicii_read_register). */
-    expect_u8("d012 debug returns live raster low", 2, vicii_debug_read_register(&v, 0xd012));
+    /* $D012 must return the live raster line low byte, not 0 */
+    expect_u8("d012 debug returns live raster low", 1, vicii_debug_read_register(&v, 0xd012));
 
     /* registers[0x12] is never written by the VIC internally so it stays 0 */
     expect_u8("registers[12] still holds compare value", 0, v.registers[0x12]);
