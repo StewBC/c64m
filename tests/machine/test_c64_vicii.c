@@ -1355,6 +1355,7 @@ static void test_sprite5_ba_window_within_line(void) {
 
 static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     vicii v;
+    vicii ntsc;
     char error[256];
     uint64_t abs;
 
@@ -1373,6 +1374,20 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     (void)advance_vicii(&v, 0, 58u); /* process PAL sprite-0 fetch cycle 57 */
     expect_u8("sprite fetch schedule", VICII_BUS_ACCESS_SPRITE,
         (uint8_t)vicii_bus_access(&v));
+
+    expect_true("ntsc vicii init", vicii_init(&ntsc, error, sizeof(error)));
+    vicii_set_video_standard(&ntsc, VICII_VIDEO_STANDARD_NTSC);
+    vicii_write_register(&ntsc, 0xd011, 0x13u);
+    ntsc.timing.raster_line = 0x33u;
+    abs = advance_vicii(&ntsc, 0, 16u); /* process cycles 0 through 15 */
+    expect_u8("ntsc badline c-access schedule", VICII_BUS_ACCESS_C,
+        (uint8_t)vicii_bus_access(&ntsc));
+
+    setup_sprite_ba_test_for_standard(
+        &ntsc, error, VICII_VIDEO_STANDARD_NTSC, 100u, 0x01u);
+    (void)advance_vicii(&ntsc, 0, 60u); /* process NTSC sprite-0 fetch cycle 59 */
+    expect_u8("ntsc sprite fetch schedule", VICII_BUS_ACCESS_SPRITE,
+        (uint8_t)vicii_bus_access(&ntsc));
 }
 
 /* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */

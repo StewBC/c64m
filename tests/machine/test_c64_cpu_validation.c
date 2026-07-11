@@ -854,6 +854,172 @@ static void test_microcycle_indexed_zero_page_trace(void) {
     expect_u8("indexed zero-page value", 0x5au, snapshot(&machine).a);
 }
 
+static void test_microcycle_absolute_read_operation_trace(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x40,       /* LDA #$40 */
+        0x6d, 0x34, 0x12, /* ADC $1234 */
+        0x2c, 0x35, 0x12, /* BIT $1235 */
+        0x24, 0x10        /* BIT $10 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1234] = 0x01u;
+    machine.bus.ram[0x1235] = 0xc0u;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 2);
+    expect_u64("absolute adc trace events", 4,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("absolute adc low operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("absolute adc high operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8("absolute adc data access", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("absolute adc data address", 0x1234u, trace.events[3].address);
+    expect_u8("absolute adc result", 0x41u, snapshot(&machine).a);
+
+    step_machine(&machine, 1);
+    expect_u8("absolute bit negative flag", 1u, machine.cpu.cpu.N);
+    expect_u8("absolute bit overflow flag", 1u, machine.cpu.cpu.V);
+    expect_u8("absolute bit clears zero", 0u, machine.cpu.cpu.Z);
+
+    machine.bus.ram[0x0010] = 0x80u;
+    step_machine(&machine, 1);
+    expect_u8("zero-page bit negative flag", 1u, machine.cpu.cpu.N);
+    expect_u8("zero-page bit clears overflow", 0u, machine.cpu.cpu.V);
+    expect_u8("zero-page bit sets zero", 1u, machine.cpu.cpu.Z);
+}
+
+static void test_microcycle_indexed_read_operation_trace(void) {
+    static const uint8_t program[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xa9, 0x40,       /* LDA #$40 */
+        0x7d, 0xff, 0x12  /* ADC $12ff,X */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1200] = 0xffu;
+    machine.bus.ram[0x1300] = 0x01u;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 3);
+    expect_u64("indexed adc trace events", 5,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("indexed adc page-cross dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("indexed adc page-cross dummy address", 0x1200u, trace.events[3].address);
+    expect_u8("indexed adc final data", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u16("indexed adc final data address", 0x1300u, trace.events[4].address);
+    expect_u8("indexed adc result", 0x41u, snapshot(&machine).a);
+}
+
+static void test_microcycle_indirect_read_write_trace(void) {
+    static const uint8_t program[] = {
+        0xa2, 0x04,       /* LDX #$04 */
+        0xa1, 0x20,       /* LDA ($20,X) */
+        0xa0, 0x01,       /* LDY #$01 */
+        0x71, 0x30,       /* ADC ($30),Y */
+        0x91, 0x30        /* STA ($30),Y */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x0024] = 0x34u;
+    machine.bus.ram[0x0025] = 0x12u;
+    machine.bus.ram[0x1234] = 0x40u;
+    machine.bus.ram[0x0030] = 0xffu;
+    machine.bus.ram[0x0031] = 0x12u;
+    machine.bus.ram[0x1200] = 0xffu;
+    machine.bus.ram[0x1300] = 0x01u;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 2);
+    expect_u64("x-indirect load trace events", 6,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("x-indirect dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("x-indirect dummy address", 0x0020u, trace.events[2].address);
+    expect_u16("x-indirect pointer low", 0x0024u, trace.events[3].address);
+    expect_u16("x-indirect pointer high", 0x0025u, trace.events[4].address);
+    expect_u16("x-indirect final data", 0x1234u, trace.events[5].address);
+    expect_u8("x-indirect loaded value", 0x40u, snapshot(&machine).a);
+
+    step_machine(&machine, 2);
+    expect_u64("indirect-y adc trace events", 6,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("indirect-y dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u16("indirect-y dummy address", 0x1200u, trace.events[4].address);
+    expect_u16("indirect-y final data", 0x1300u, trace.events[5].address);
+    expect_u8("indirect-y adc result", 0x41u, snapshot(&machine).a);
+
+    step_machine(&machine, 1);
+    expect_u64("indirect-y store trace events", 6,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("indirect-y store final access", C6510_BUS_ACCESS_DATA_WRITE,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u16("indirect-y store final address", 0x1300u, trace.events[5].address);
+    expect_u8("indirect-y store value", 0x41u, machine.bus.ram[0x1300]);
+}
+
+static void test_microcycle_indexed_rmw_and_indirect_jump_trace(void) {
+    static const uint8_t program[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xfe, 0xff, 0x12, /* INC $12ff,X */
+        0x6c, 0xff, 0x20  /* JMP ($20ff) */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1200] = 0xaau;
+    machine.bus.ram[0x1300] = 0x41u;
+    machine.bus.ram[0x20ff] = 0x10u;
+    machine.bus.ram[0x2000] = 0xe1u; /* NMOS indirect-JMP page-wrap high byte. */
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 2);
+    expect_u64("indexed rmw trace events", 7,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("indexed rmw dummy read", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("indexed rmw dummy read address", 0x1200u, trace.events[3].address);
+    expect_u8("indexed rmw data read", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[4].access_kind);
+    expect_u16("indexed rmw data read address", 0x1300u, trace.events[4].address);
+    expect_u8("indexed rmw dummy write", C6510_BUS_ACCESS_RMW_DUMMY_WRITE,
+        (uint8_t)trace.events[5].access_kind);
+    expect_u8("indexed rmw final write", C6510_BUS_ACCESS_DATA_WRITE,
+        (uint8_t)trace.events[6].access_kind);
+    expect_u8("indexed rmw result", 0x42u, machine.bus.ram[0x1300]);
+
+    step_machine(&machine, 1);
+    expect_u64("indirect jump trace events", 5,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u16("indirect jump pointer low", 0x20ffu, trace.events[3].address);
+    expect_u16("indirect jump wrapped pointer high", 0x2000u, trace.events[4].address);
+    expect_u16("indirect jump destination", 0xe110u, snapshot(&machine).pc);
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -1349,6 +1515,10 @@ int main(void) {
     test_microcycle_branch_page_cross_trace();
     test_microcycle_jsr_rts_trace();
     test_microcycle_indexed_zero_page_trace();
+    test_microcycle_absolute_read_operation_trace();
+    test_microcycle_indexed_read_operation_trace();
+    test_microcycle_indirect_read_write_trace();
+    test_microcycle_indexed_rmw_and_indirect_jump_trace();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();

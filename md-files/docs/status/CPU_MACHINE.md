@@ -9,13 +9,12 @@
 - Machine coordinates CPU bus events with VIC, CIA, and SID hooks.
 - Public instruction stepping and cycle stepping now use the same Phi2 arbiter,
   so both honor BA stalls and produce the same CPU/VIC timing result.
-- A resumable CPU path is active for a trace-gated subset of common instructions:
-  NOP, immediate and zero-page ALU/compare operations, zero-page and absolute
-  loads/stores (including X/Y-indexed zero page and absolute), zero-page and absolute
-  ASL/ROL/LSR/ROR/DEC/INC, absolute JMP,
-  conditional branches, register-transfer/increment/decrement/accumulator-shift
-  operations, JSR/RTS, PHA/PHP/PLA/PLP, RTI, BRK, and IRQ/NMI entry. Remaining
-  opcode families still use the compatibility instruction-trace/replay path.
+- The resumable CPU path now covers every documented NMOS 6502/6510 opcode and
+  addressing form: immediate, zero-page, indexed zero-page, absolute, indexed
+  absolute, `(zp,X)`, `(zp),Y`, branches, stack/control flow, indexed RMW, and
+  indirect JMP page-wrap behavior. IRQ/NMI entry also uses this path. Implemented
+  practical-undocumented opcode families remain on compatibility
+  instruction-trace/replay pending their own trace gates.
 
 ## 6510 / undocumented opcodes
 
@@ -233,7 +232,9 @@ Do not serialize:
 
 ## Tests / smoke checks
 
-- Local tests cover documented CPU execution, bus integration, trace timing, IRQ/NMI entry, banking, and BA read/write stalling.
+- Local tests cover documented CPU execution, bus integration, trace timing,
+  direct/indexed/indirect addressing, indirect-JMP wrap behavior, IRQ/NMI entry,
+  banking, and BA read/write stalling.
 - Local bus tests cover generic 8K/16K cartridge mapping, shadow-RAM writes,
   debugger Map visibility, detach, and reset persistence.
 - `tests/machine/test_c64_snapshot.c` covers machine snapshot size/write,

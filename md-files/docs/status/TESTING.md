@@ -12,6 +12,13 @@
   operand, data, dummy, RMW, stack, and vector cycles), instruction/cycle-step
   Phi2-arbiter parity under BA, IRQ/NMI entry, banking, I/O-under-RAM
   preservation, and BA read/write stalling.
+- CPU microcycle migration additionally covers direct/indexed ALU and compare,
+  `BIT`, `(zp,X)` and `(zp),Y` reads/stores, indexed RMW dummy writes, and the
+  NMOS `JMP (addr)` page-wrap read sequence.
+- CPU/VIC timing baselines: `md-files/timing-baselines/PAL_NTSC_CURRENT.md`
+  records the current PAL/NTSC fixture signatures and links each one to its
+  executable machine test. These are regression baselines, not yet
+  hardware-authoritative golden traces.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.

@@ -366,7 +366,43 @@ tested lead-window predicate. The schedule marker is the Phase 3 bridge toward
 individual fetch scheduling; idle g-accesses and per-byte sprite data accesses
 remain future work.
 
-The complete 43-test suite passes after these changes. Phase 4 remains active:
+The complete 46-test CTest suite passes after these changes. Phase 4 remains active:
 the remaining legal and practical-undocumented opcode families and complete VIC
 fetch scheduling have not migrated. Phase 5's full compatibility decision
 therefore cannot yet be closed honestly.
+
+## Current-model PAL/NTSC baseline (2026-07-10)
+
+Before further CPU-family or VIC-II schedule migration, the project now records
+its current PAL/NTSC timing fixtures in
+`timing-baselines/PAL_NTSC_CURRENT.md`. This is an evaluation baseline: it
+documents the current scheduler's observable signatures and points to their
+executable assertions, but does not label them as real-chip golden traces.
+
+The baseline covers the current bad-line and sprite BA ordering, PAL sprite-3
+cross-line behavior, PAL/NTSC sprite-0 differences, and a timed VIC register
+write. Any subsequent change to one of those signatures must update the fixture
+and baseline record together, with either a regression rationale or a cited
+hardware target.
+
+## Phase 4 documented-opcode migration (2026-07-10)
+
+The resumable Phi2 executor now gates every documented NMOS 6502/6510 opcode
+and addressing form. The final migration slice added direct and indexed
+ALU/compare operations, `BIT`, `(zp,X)` and `(zp),Y` reads/stores,
+zero-page/absolute indexed RMW operations, and NMOS indirect-JMP page-wrap
+behavior. Machine tests cover direct, indexed page-cross, indirect, indexed RMW,
+and indirect-JMP trace sequences.
+
+The Phase 4 checklist is therefore:
+
+| Family | Resumable path | Status |
+|---|---|---|
+| Documented NMOS 6502/6510 opcodes | Yes | Complete |
+| IRQ/NMI entry and BRK | Yes | Complete |
+| Practical undocumented opcode families | No | Compatibility replay pending trace gates |
+| Reset sequence | N/A | Machine reset path, not an executing opcode |
+
+This closes only the documented-opcode portion of Phase 4. It does not make the
+VIC-II fetch schedule complete or retire compatibility replay for practical
+undocumented opcodes.
