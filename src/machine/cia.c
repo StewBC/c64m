@@ -352,31 +352,34 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
     bool oneshot_for_uf;
 
     timer->underflow = false;
-    /* Sample oneshot before pipeline advance (FLIPOS: write after clock). */
+    /*
+     * Oneshot bit from a same-cycle CRA/CRB write is applied after this tick so
+     * underflow sees the pre-write oneshot state (FLIPOS set-at-t does not stop).
+     */
     oneshot_for_uf = timer->oneshot_effective;
     cia_timer_update_oneshot_pipe(timer);
 
     if ((control & CIA_CONTROL_START) == 0) {
         timer->start_delay = 0;
-        return;
+        goto apply_oneshot_write;
     }
 
     if (timer->start_delay > 0u) {
         timer->start_delay--;
-        return;
+        goto apply_oneshot_write;
     }
 
     if (control_reg == CIA_REG_CONTROL_A) {
         if (!cia_timer_a_should_count(c, control)) {
-            return;
+            goto apply_oneshot_write;
         }
     } else if (!cia_timer_b_should_count(c, control)) {
-        return;
+        goto apply_oneshot_write;
     }
 
     if (timer->skip_tick) {
         timer->skip_tick = false;
-        return;
+        goto apply_oneshot_write;
     }
 
     if (timer->counter <= 1u) {
@@ -388,10 +391,16 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
             c->registers[control_reg] =
                 (uint8_t)(c->registers[control_reg] & (uint8_t)~CIA_CONTROL_START);
         }
-        return;
+        goto apply_oneshot_write;
     }
 
     timer->counter--;
+
+apply_oneshot_write:
+    if (timer->oneshot_write_pending) {
+        cia_timer_write_oneshot(timer, timer->oneshot_write_value);
+        timer->oneshot_write_pending = false;
+    }
 }
 
 static uint8_t cia_read_port_b_pins(const cia *c) {
@@ -711,7 +720,9 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_a.start_delay = 0;
             }
-            cia_timer_write_oneshot(&c->timer_a, (value & CIA_CONTROL_ONESHOT) != 0);
+            /* Defer oneshot pipeline update until after this cycle's timer tick. */
+            c->timer_a.oneshot_write_value = (value & CIA_CONTROL_ONESHOT) != 0;
+            c->timer_a.oneshot_write_pending = true;
             return;
         }
         case CIA_REG_CONTROL_B: {
@@ -732,7 +743,8 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_b.start_delay = 0;
             }
-            cia_timer_write_oneshot(&c->timer_b, (value & CIA_CONTROL_ONESHOT) != 0);
+            c->timer_b.oneshot_write_value = (value & CIA_CONTROL_ONESHOT) != 0;
+            c->timer_b.oneshot_write_pending = true;
             return;
         }
         default:

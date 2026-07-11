@@ -29,6 +29,9 @@ typedef struct cia_timer {
     bool oneshot_effective;
     bool oneshot_pending;
     uint8_t oneshot_delay; /* cycles until pending applies: set=1, clear=2 */
+    /* Oneshot bit from CRA write applied after this cycle's timer clock. */
+    bool oneshot_write_pending;
+    bool oneshot_write_value;
 } cia_timer;
 
 typedef struct cia_tod {
