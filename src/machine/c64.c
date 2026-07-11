@@ -1834,6 +1834,13 @@ void c64_unmount_drive(c64_t *machine, uint8_t device) {
         return;
     }
 
+    /* Drop synthesised GCR tracks before freeing image bytes. */
+    if (device == 8) {
+        c1541_media_invalidate(&machine->drive8.media);
+    } else if (device == 9) {
+        c1541_media_invalidate(&machine->drive9.media);
+    }
+
     slot = &machine->drives[slot_index];
     free(slot->image_bytes);
     free(slot->entries);

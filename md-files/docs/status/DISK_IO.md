@@ -131,9 +131,11 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   (Phase 5): scratch (`S0:`), rename (`R0:`), validate (`V0`), initialize (`I`),
   format (`N0:name,id`), and `OPEN 15,8,15` status readback. Format is handled by
   a FORMT EXECUTE-job intercept that erases the track and lets the DOS write the
-  new BAM/directory. Still deferred: media-level write fidelity / G64, cross-drive
-  copy, and block/memory commands. In the KERNAL-trap world (`emulate_1541=0`)
-  there is no command/error channel (SAVE trap only).
+  new BAM/directory. Opt-in media path (`media_1541=1`) synthesises GCR tracks and
+  can satisfy physical READ without job intercept; WRITE/FORMT still intercept.
+  Still deferred: media-level write stream, G64, cross-drive copy, and
+  block/memory commands. In the KERNAL-trap world (`emulate_1541=0`) there is no
+  command/error channel (SAVE trap only).
 - Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps
   for T64 are not implemented. Current T64 support extracts the first loadable
   entry only through host load/drop paths.

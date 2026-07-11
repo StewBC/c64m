@@ -85,7 +85,15 @@ static uint8_t c1541_bus_read(void *user, uint16_t addr) {
     if (addr < 0x0800u) return drive->ram[addr];
     if (addr < 0x1000u) return drive->ram[addr & 0x07FFu];
     /* Check VIA #2 before VIA #1 — $1C00–$1FFF is a subset of $1800–$1FFF */
-    if (addr >= 0x1C00u && addr < 0x2000u) return via6522_read(&drive->via2, (uint8_t)(addr & 0x0Fu));
+    if (addr >= 0x1C00u && addr < 0x2000u) {
+        uint8_t reg = (uint8_t)(addr & 0x0Fu);
+        uint8_t value = via6522_read(&drive->via2, reg);
+        /* Port A ($1C01 / no-handshake $1C0F): consuming a GCR byte clears BYTE READY. */
+        if (reg == 0x01u || reg == 0x0Fu) {
+            c1541_media_on_port_a_read(drive);
+        }
+        return value;
+    }
     if (addr >= 0x1800u && addr < 0x2000u) return via6522_read(&drive->via1, (uint8_t)(addr & 0x0Fu));
     if (addr >= 0xC000u) return drive->rom[addr - 0xC000u];
     return 0xFFu;
@@ -296,6 +304,10 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
     command = (uint8_t)(raw & C1541_JOB_CMD_MASK);
     switch (command) {
         case C1541_JOB_CMD_READ:
+            /* Media mode: let the ROM run the physical GCR read against via2. */
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             c1541_complete_queued_job(
                 drive,
                 n,
@@ -304,9 +316,16 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
 
         case C1541_JOB_CMD_WRITE:
             c1541_complete_queued_job(drive, n, c1541_copy_job_buffer_to_sector(drive, n));
+            /* Sector image changed — resynthesise GCR tracks on next access. */
+            if (drive->media.enabled) {
+                c1541_media_invalidate(&drive->media);
+            }
             return 1;
 
         case C1541_JOB_CMD_VERIFY:
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             c1541_complete_queued_job(
                 drive,
                 n,
@@ -314,6 +333,9 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             return 1;
 
         case C1541_JOB_CMD_SEARCH:
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             if (!c1541_job_sector_offset(drive, n, &offset)) {
                 c1541_complete_queued_job(drive, n, C1541_JOB_ERROR);
             } else {
@@ -333,6 +355,9 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                DOS code write the fresh BAM + directory through normal WRITE jobs.
                The disk is marked dirty so the formatted result is persisted. */
             c1541_complete_queued_job(drive, n, c1541_format_track(drive, n));
+            if (drive->media.enabled) {
+                c1541_media_invalidate(&drive->media);
+            }
             return 1;
 
         default:
@@ -363,6 +388,9 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
     command = (uint8_t)(drive->ram[C1541_ZP_JOBS + n] & C1541_JOB_CMD_MASK);
     switch (command) {
         case C1541_JOB_CMD_READ:
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             if (!c1541_copy_sector_to_job_buffer(drive, n)) {
                 c1541_complete_job(drive, C1541_JOB_ERROR);
             } else {
@@ -372,13 +400,22 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
 
         case C1541_JOB_CMD_WRITE:
             c1541_complete_job(drive, c1541_copy_job_buffer_to_sector(drive, n));
+            if (drive->media.enabled) {
+                c1541_media_invalidate(&drive->media);
+            }
             return 1;
 
         case C1541_JOB_CMD_VERIFY:
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             c1541_complete_job(drive, C1541_JOB_OK);
             return 1;
 
         case C1541_JOB_CMD_SEARCH:
+            if (c1541_media_physical_read_active(drive)) {
+                return 0;
+            }
             track  = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
             sector = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
             drive->ram[0x0012u] = track;
@@ -396,6 +433,10 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
 static void c1541_satisfy_sector_read(c1541 *drive) {
     uint8_t n;
 
+    if (c1541_media_physical_read_active(drive)) {
+        return;
+    }
+
     n = drive->ram[C1541_ZP_JOBN];
     if (n >= C1541_JOB_MAX) {
         /* Job 5 is the command/error channel — never a READ.  Ignore. */
@@ -412,6 +453,13 @@ static void c1541_satisfy_sector_read(c1541 *drive) {
 }
 
 static void c1541_update_so(c1541 *drive) {
+    /* In media mode BYTE READY drives SO from c1541_media_step.  Do not also
+       pulse SO from VIA2 T1 PB7 free-run — that desynchronises the ROM's BVC
+       wait-for-byte loops. */
+    if (drive->media.enabled && drive->media.tracks_valid) {
+        drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
+        return;
+    }
     if (drive->via2.t1_pb7_state != drive->via2_t1_pb7_last) {
         drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
         c6510_set_overflow(&drive->cpu);
@@ -428,11 +476,13 @@ void c1541_init(c1541 *drive, c64_t *c64, int device_number) {
     drive->device_number = device_number;
     via6522_init(&drive->via1);
     via6522_init(&drive->via2);
+    c1541_media_init(&drive->media);
     c6510_init(&drive->cpu, drive, c1541_bus_read, c1541_bus_write);
     c6510_set_irq_pending_callback(&drive->cpu, c1541_irq_pending);
 }
 
 void c1541_destroy(c1541 *drive) {
+    c1541_media_free_tracks(&drive->media);
     memset(drive, 0, sizeof(c1541));
 }
 
@@ -440,6 +490,7 @@ void c1541_reset(c1541 *drive) {
     memset(drive->ram, 0, C1541_RAM_SIZE);
     via6522_reset(&drive->via1);
     via6522_reset(&drive->via2);
+    c1541_media_reset(&drive->media);
     /* Device address jumpers are serial VIA ($1800) Port B bits 5/6.
        The DOS ROM converts 00→device 8, 20→device 9, 40→device 10, 60→device 11. */
     if (drive->device_number == 9) {
@@ -507,12 +558,23 @@ void c1541_advance_one_cycle(c1541 *drive) {
 
     if (!drive->rom_loaded) return;
 
+    /* Opt-in media path follows the machine config (requires emulate_1541). */
+    if (drive->c64 != NULL) {
+        drive->media.enabled =
+            (drive->c64->config.emulate_1541 != 0 && drive->c64->config.media_1541 != 0) ? 1 : 0;
+    }
+
     /* 1. Step VIAs (may set IFR flags before CPU samples them). */
     via6522_step(&drive->via1);
     via6522_step(&drive->via2);
+
+    /* 2. Disk-controller media: motor/head/rotation/SYNC/Port A/BYTE READY→SO. */
+    c1541_media_step(drive);
+
+    /* 3. Timer1 PB7→SO remains for non-media / IEC bit-timing paths. */
     c1541_update_so(drive);
 
-    /* 2. Synchronise IEC bus: serial VIA outputs → C64 pull; C64 state → serial VIA inputs + CA1. */
+    /* 4. Synchronise IEC bus: serial VIA outputs → C64 pull; C64 state → serial VIA inputs + CA1. */
     c1541_update_iec_bus(drive);
 
     if (drive->cpu_cycles_remaining == 0) {
@@ -520,14 +582,16 @@ void c1541_advance_one_cycle(c1541 *drive) {
             c1541_satisfy_queued_jobs(drive);
         }
 
-        /* 3. Intercept disk jobs before the ROM waits for unmodelled GCR hardware. */
+        /* 5. Intercept disk jobs before the ROM waits for unmodelled GCR hardware.
+           When media mode has valid tracks, physical READ/SEARCH/VERIFY are not
+           intercepted so the ROM GCR path runs against via2. */
         if (drive->cpu.cpu.pc == C1541_ROM_PHYS_READ) {
             (void)c1541_satisfy_physical_job(drive);
         } else if (drive->cpu.cpu.pc == C1541_ROM_REED) {
             c1541_satisfy_sector_read(drive);
         }
 
-        /* 4. Execute one 6502 instruction, then spread its elapsed cycles over
+        /* 6. Execute one 6502 instruction, then spread its elapsed cycles over
            subsequent c1541_advance_one_cycle() calls.  c6510_step() is an
            instruction step, not a one-cycle step. */
         cycles = c6510_step(&drive->cpu);

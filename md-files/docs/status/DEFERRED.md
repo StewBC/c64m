@@ -48,16 +48,20 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   (C64IEC1541PHASE_4): SAVE, sequential/relative file writes, and BAM/directory
   updates persist to writable images while the drive ROM is active. D64 PRG SAVE
   is additionally supported through the compatibility KERNAL SAVE trap when the
-  1541 ROM is absent. Still deferred: track-level operations (format) and
-  media-level write fidelity (VIA #1 head / GCR / rotation) and G64.
+  1541 ROM is absent.
+- Opt-in media path (`[disk] media_1541=1`, see `c64m1541media.md` M0–M3): GCR
+  track synthesis from D64, rotation, SYNC, disk-controller VIA motor/stepper/WPS,
+  Port A GCR read, BYTE READY→SO. Physical READ/SEARCH/VERIFY can run without
+  job intercept. Still deferred: media-level **write** stream (M4), real FORMT
+  GCR (M5), G64 (M6), broad fast-loader matrix (M7).
 - DOS command channel (scratch/rename/format/validate/initialize) and the
   error/status channel work via the real 1541 ROM when `emulate_1541=1`
   (C64IEC1541PHASE_5). Format is handled by a FORMT EXECUTE-job intercept.
   Still deferred: media-level format fidelity, cross-drive copy (`C`), and
   block/memory-execute commands (`B-*`/`M-*`). In the KERNAL-trap world
   (`emulate_1541=0`) there is no command/error channel — SAVE trap only.
-- Fast loaders are not broadly validated; loaders that require unmodeled
-  disk-controller VIA motor/SYNC/head behavior or nonstandard drive ROM behavior may fail.
+- Fast loaders are not broadly validated; loaders that require unmodeled write
+  timing, G64-only layouts, or nonstandard drive ROM behavior may fail.
 - Devices beyond 8/9 are not implemented.
 - Full Commodore DOS pattern/type suffix semantics are not implemented.
 

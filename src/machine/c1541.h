@@ -2,6 +2,7 @@
 #define C1541_H
 
 #include "c6510.h"
+#include "c1541_media.h"
 #include "via6522.h"
 
 #include <stddef.h>
@@ -24,6 +25,7 @@ typedef struct c1541 {
     int      device_number; /* 8 or 9 */
     size_t   cpu_cycles_remaining;
     int      via2_t1_pb7_last;
+    c1541_media media;      /* GCR track rotation / disk-controller VIA */
 } c1541;
 
 void c1541_init(c1541 *drive, c64_t *c64, int device_number);

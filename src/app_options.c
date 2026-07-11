@@ -1160,6 +1160,7 @@ static void apply_config(app_options *options, config *cfg)
     }
 
     options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
+    options->media_1541 = config_get_bool(cfg, "disk", "media_1541", options->media_1541);
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1510,6 +1511,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->no_save_ini = src->no_save_ini;
     dest->autorun = src->autorun;
     dest->emulate_1541 = src->emulate_1541;
+    dest->media_1541 = src->media_1541;
     dest->rom_single_system = src->rom_single_system;
     dest->audio_smoke = src->audio_smoke;
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
@@ -1681,6 +1683,11 @@ bool app_options_save_shutdown(const app_options *options)
         config_set_bool(cfg, "disk", "emulate_1541", true);
     } else {
         config_remove_prefix(cfg, "disk", "emulate_1541");
+    }
+    if (options->media_1541) {
+        config_set_bool(cfg, "disk", "media_1541", true);
+    } else {
+        config_remove_prefix(cfg, "disk", "media_1541");
     }
 
     if (options->assembler_file != NULL && options->assembler_file[0] != '\0') {

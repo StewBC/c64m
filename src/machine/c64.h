@@ -81,6 +81,7 @@ typedef enum c64_iec_line {
 typedef struct c64_config {
     c64_video_standard video_standard;
     int emulate_1541;   /* 1 = route disk I/O through genuine 1541 ROM; 0 = KERNAL trap */
+    int media_1541;     /* 1 = GCR tracks/rotation/SYNC (opt-in media path) */
 } c64_config;
 
 /* Returns the master clock frequency in Hz for the given config.

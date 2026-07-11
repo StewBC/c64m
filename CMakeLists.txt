@@ -153,6 +153,30 @@ target_link_libraries(test_c1541 PRIVATE
 
 add_test(NAME c1541 COMMAND test_c1541)
 
+add_executable(test_c1541_gcr
+    tests/machine/test_c1541_gcr.c
+)
+
+target_compile_features(test_c1541_gcr PRIVATE c_std_99)
+
+target_link_libraries(test_c1541_gcr PRIVATE
+    machine
+)
+
+add_test(NAME c1541_gcr COMMAND test_c1541_gcr)
+
+add_executable(test_c1541_media
+    tests/machine/test_c1541_media.c
+)
+
+target_compile_features(test_c1541_media PRIVATE c_std_99)
+
+target_link_libraries(test_c1541_media PRIVATE
+    machine
+)
+
+add_test(NAME c1541_media COMMAND test_c1541_media)
+
 add_executable(test_c64_rom
     tests/machine/test_c64_rom.c
 )

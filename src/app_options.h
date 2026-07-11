@@ -60,6 +60,9 @@ typedef struct app_options {
     /* When true, disk I/O is routed through the genuine 1541 ROM (requires
        rom1541_path to be set); when false, KERNAL LOAD traps handle disk I/O. */
     bool emulate_1541;
+    /* When true (and emulate_1541), use GCR track rotation / disk-controller VIA
+       media path for physical reads instead of job-level sector intercept. */
+    bool media_1541;
     /* Assembler tab persistent state */
     char *assembler_file;
     char *assembler_address;

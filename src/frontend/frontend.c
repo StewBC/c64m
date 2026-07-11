@@ -1604,7 +1604,7 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
         app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
     }
 
-    nk_layout_row_dynamic(ctx, 162.0f, 1);
+    nk_layout_row_dynamic(ctx, 186.0f, 1);
     if (nk_group_begin(ctx, "machine-settings", NK_WINDOW_BORDER)) {
         nk_layout_row_dynamic(ctx, 18.0f, 1);
         nk_label(ctx, "Machine", NK_TEXT_LEFT);
@@ -1650,6 +1650,8 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
 
         nk_layout_row_dynamic(ctx, 22.0f, 1);
         frontend_checkbox_bool(ctx, "Emulate 1541", &dialog->edited.emulate_1541);
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        frontend_checkbox_bool(ctx, "1541 media (GCR)", &dialog->edited.media_1541);
         nk_group_end(ctx);
     }
 
