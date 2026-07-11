@@ -2219,6 +2219,38 @@ void c64_copy_sid_hardware_snapshot(const c64_t *machine, c64_sid_hardware_snaps
     out->sample_output_enabled = s->sample_output_enabled;
 }
 
+void c64_copy_1541_hardware_snapshot(
+    const c64_t *machine,
+    int device_number,
+    c64_1541_hardware_snapshot *out) {
+    const c1541 *drive;
+
+    assert(machine);
+    assert(out);
+    memset(out, 0, sizeof(*out));
+
+    if (device_number == 8) {
+        drive = &machine->drive8;
+    } else if (device_number == 9) {
+        drive = &machine->drive9;
+    } else {
+        return;
+    }
+
+    out->device_number = device_number;
+    out->rom_loaded = drive->rom_loaded;
+    out->media_enabled = drive->media.enabled;
+    out->tracks_valid = drive->media.tracks_valid;
+    out->from_g64 = drive->media.from_g64;
+    out->motor_on = drive->media.motor_on;
+    out->motor_ready = drive->media.motor_ready;
+    out->writing = drive->media.writing;
+    out->in_sync = drive->media.in_sync;
+    out->density = drive->media.density;
+    out->half_track = drive->media.half_track;
+    out->pc = drive->cpu.cpu.pc;
+}
+
 size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_trace *out) {
     assert(machine);
     assert(out);

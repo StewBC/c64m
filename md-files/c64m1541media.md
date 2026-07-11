@@ -25,7 +25,7 @@ matrix expansion, not a new subsystem.
 | M5 Format | **Done (hybrid)** | FORMT EXECUTE still erases D64 track then `rebuild_track` GCR |
 | M6 G64 | **Done (read-only v1)** | `tools/g64`, mount via runtime, media attach; WRITE → protect |
 | M7 Fast-loader matrix | **Done (v1)** | Matrix documented; G64 first-file LOAD automated; RUN/secondary still open |
-| M8 Harden | **Done (v1)** | Motor-off flux idle; density prefers VIA when programmed; G64 FORMT WPROT |
+| M8 Harden | **Done** | Idle flux skip; density selection; G64 WPROT; Hardware tab 1541 view; manual/README; save-state flux deferred |
 
 ### M4/M5 hybrid note
 

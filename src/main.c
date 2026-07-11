@@ -797,6 +797,8 @@ static void update_debug_state_from_event(
             debug_state->cia1_hardware = event->data.machine_state.cia1_hardware;
             debug_state->cia2_hardware = event->data.machine_state.cia2_hardware;
             debug_state->sid_hardware = event->data.machine_state.sid_hardware;
+            debug_state->drive8_hardware = event->data.machine_state.drive8_hardware;
+            debug_state->drive9_hardware = event->data.machine_state.drive9_hardware;
             debug_state->screen_ram_writes = event->data.machine_state.screen_ram_writes;
             debug_state->color_ram_writes = event->data.machine_state.color_ram_writes;
             debug_state->vic_register_writes = event->data.machine_state.vic_register_writes;

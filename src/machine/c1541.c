@@ -623,8 +623,10 @@ void c1541_advance_one_cycle(c1541 *drive) {
     via6522_step(&drive->via1);
     via6522_step(&drive->via2);
 
-    /* 2. Disk-controller media: motor/head/rotation/SYNC/Port A/BYTE READY→SO. */
-    c1541_media_step(drive);
+    /* 2. Disk-controller media (no-op when media_1541 is off). */
+    if (drive->media.enabled) {
+        c1541_media_step(drive);
+    }
 
     /* 3. Timer1 PB7→SO remains for non-media / IEC bit-timing paths. */
     c1541_update_so(drive);

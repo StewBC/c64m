@@ -52,9 +52,11 @@ correctly, but accuracy gaps remain.
   works through the compatibility KERNAL trap, and with 1541 emulation enabled
   (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS write path also handles
   SAVE, sequential/relative file writes, and the scratch/rename/validate/format command
-  and error channels. Still missing: media-level drive mechanics (GCR/SYNC/head/motor,
-  G64), cross-drive copy, block/memory-execute commands, devices beyond 8 and 9, and fast
-  loaders that depend on unmodeled disk mechanics.
+  and error channels. Optional media path (`[disk] media_1541=1`) adds GCR track
+  rotation/SYNC/head/motor and read-only G64 mounts for stock loads; multi-stage
+  commercial/fast-loader titles are not broadly claimed. Still missing: pure media-level
+  write fidelity, G64 write-back, cross-drive copy, block/memory-execute commands,
+  devices beyond 8 and 9, and broad fast-loader playthroughs.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
   last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 

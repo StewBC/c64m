@@ -6573,6 +6573,66 @@ static void frontend_draw_hardware_sid(
     frontend_hardware_label_value(ctx, "Readback", value);
 }
 
+static void frontend_draw_hardware_1541_one(
+    struct nk_context *ctx,
+    const char *name,
+    const c64_1541_hardware_snapshot *d)
+{
+    char value[160];
+    int track;
+    int half;
+
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, name, NK_TEXT_LEFT);
+
+    if (d == NULL || !d->rom_loaded) {
+        frontend_hardware_label_value(ctx, "ROM", "not loaded");
+        return;
+    }
+
+    track = d->half_track / 2;
+    half = d->half_track & 1;
+    snprintf(
+        value,
+        sizeof(value),
+        "PC $%04X  media %s  tracks %s%s",
+        d->pc,
+        d->media_enabled ? "on" : "off",
+        d->tracks_valid ? "valid" : "none",
+        d->from_g64 ? " (G64)" : "");
+    frontend_hardware_label_value(ctx, "State", value);
+
+    snprintf(
+        value,
+        sizeof(value),
+        "track %d%s  half %d  dens %d  motor %s%s  sync %s  write %s",
+        track,
+        half ? ".5" : ".0",
+        d->half_track,
+        d->density,
+        d->motor_on ? "on" : "off",
+        d->motor_ready ? "/ready" : "",
+        d->in_sync ? "yes" : "no",
+        d->writing ? "yes" : "no");
+    frontend_hardware_label_value(ctx, "Mechanics", value);
+}
+
+static void frontend_draw_hardware_1541(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug_state)
+{
+    if (debug_state == NULL || !debug_state->has_hardware) {
+        nk_layout_row_dynamic(ctx, 18.0f, 1);
+        nk_label(ctx, "No 1541 snapshot", NK_TEXT_LEFT);
+        return;
+    }
+
+    frontend_draw_hardware_1541_one(ctx, "Device 8", &debug_state->drive8_hardware);
+    nk_layout_row_dynamic(ctx, 8.0f, 1);
+    nk_spacing(ctx, 1);
+    frontend_draw_hardware_1541_one(ctx, "Device 9", &debug_state->drive9_hardware);
+}
+
 static void frontend_draw_hardware_counters(
     struct nk_context *ctx,
     const frontend_debug_state *debug_state)
@@ -6746,7 +6806,11 @@ static void frontend_draw_misc_hardware(frontend *ui, const frontend_debug_state
         frontend_draw_hardware_sid(ctx, debug_state);
         nk_tree_pop(ctx);
     }
-    if (nk_tree_push_id(ctx, NK_TREE_TAB, "Counters", NK_MAXIMIZED, 5)) {
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "1541", NK_MAXIMIZED, 5)) {
+        frontend_draw_hardware_1541(ctx, debug_state);
+        nk_tree_pop(ctx);
+    }
+    if (nk_tree_push_id(ctx, NK_TREE_TAB, "Counters", NK_MAXIMIZED, 6)) {
         frontend_draw_hardware_counters(ctx, debug_state);
         nk_tree_pop(ctx);
     }

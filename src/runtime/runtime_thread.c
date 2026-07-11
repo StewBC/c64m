@@ -412,6 +412,8 @@ static void runtime_publish_machine_state(runtime *rt) {
     c64_cia_hardware_snapshot cia1_hardware;
     c64_cia_hardware_snapshot cia2_hardware;
     c64_sid_hardware_snapshot sid_hardware;
+    c64_1541_hardware_snapshot drive8_hardware;
+    c64_1541_hardware_snapshot drive9_hardware;
 
     c64_copy_machine_snapshot(&rt->machine, &snapshot);
     event.data.machine_state.cycle = snapshot.cycle;
@@ -470,10 +472,14 @@ static void runtime_publish_machine_state(runtime *rt) {
     c64_copy_cia_hardware_snapshot(&rt->machine, 1, &cia1_hardware);
     c64_copy_cia_hardware_snapshot(&rt->machine, 2, &cia2_hardware);
     c64_copy_sid_hardware_snapshot(&rt->machine, &sid_hardware);
+    c64_copy_1541_hardware_snapshot(&rt->machine, 8, &drive8_hardware);
+    c64_copy_1541_hardware_snapshot(&rt->machine, 9, &drive9_hardware);
     event.data.machine_state.vicii_hardware = vicii_hardware;
     event.data.machine_state.cia1_hardware = cia1_hardware;
     event.data.machine_state.cia2_hardware = cia2_hardware;
     event.data.machine_state.sid_hardware = sid_hardware;
+    event.data.machine_state.drive8_hardware = drive8_hardware;
+    event.data.machine_state.drive9_hardware = drive9_hardware;
 
     runtime_publish_event(rt, &event);
 }

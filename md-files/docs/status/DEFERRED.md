@@ -38,7 +38,8 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - Cartridge INI persistence, detach UI/status, cartridge RAM/flash writes, and
   freezer buttons are deferred.
 - Save-state CLI, self-contained snapshot embedding, cross-version migration, and
-  full 1541 CPU/VIA/drive-side state capture are deferred.
+  full 1541 CPU/VIA/drive-side state capture (including media GCR track buffers)
+  are deferred.
 - Debugger disassembler still renders undocumented opcode bytes as `.BYTE` rather than illegal-opcode mnemonics.
 - No local Harte corpus or harness is present.
 

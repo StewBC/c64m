@@ -165,6 +165,8 @@ typedef struct runtime_machine_snapshot {
     c64_cia_hardware_snapshot cia1_hardware;
     c64_cia_hardware_snapshot cia2_hardware;
     c64_sid_hardware_snapshot sid_hardware;
+    c64_1541_hardware_snapshot drive8_hardware;
+    c64_1541_hardware_snapshot drive9_hardware;
 } runtime_machine_snapshot;
 
 typedef struct runtime_memory_snapshot {

@@ -1212,6 +1212,7 @@ The tab is organized into three sections:
 | Keyboard Joystick| Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
 | Turbo Speeds      | Comma-separated multiplier list, e.g. `2,4,8,16` |
 | Emulate 1541      | Route disk I/O through the real 1541 DOS ROM (needs a 1541 ROM); applies live |
+| 1541 media (GCR)  | When Emulate 1541 is on: GCR tracks, rotation, SYNC, motor/head; enables G64 |
 
 **UI**
 
@@ -1225,7 +1226,8 @@ The tab is organized into three sections:
 The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
 **Shift+Opt+2** assignment; either place can change the active port. Change the layout
 here or with **Shift+Opt+M**. Changing Video reboots the emulated machine while
-preserving its running state; Emulate 1541 and the other settings apply immediately.
+preserving its running state; Emulate 1541, 1541 media (GCR), and the other settings
+apply immediately.
 
 ### Paths
 
@@ -1373,11 +1375,12 @@ Paths may be absolute or relative to the directory containing the INI file.
 
 | Key | Value                                                            |
 |-----|------------------------------------------------------------------|
-| `8` | D64 image or comma-separated list of images for device 8        |
-| `9` | D64 image or comma-separated list of images for device 9        |
+| `8` | D64/G64 image or comma-separated list of images for device 8    |
+| `9` | D64/G64 image or comma-separated list of images for device 9    |
 | `8_writable` | Parallel `0`/`1` list for device 8 images; omitted means read-only |
 | `9_writable` | Parallel `0`/`1` list for device 9 images; omitted means read-only |
 | `emulate_1541` | `true`/`false`; when true and a 1541 ROM is loaded, route disk LOADs through real IEC/1541 emulation |
+| `media_1541` | `true`/`false`; when true with `emulate_1541`, use GCR media path (rotation/SYNC/head); needed for G64 |
 
 Example - single disk:
 
@@ -2126,18 +2129,24 @@ references.
 When `[disk] emulate_1541=1` is set and a combined 16 K 1541 DOS ROM is loaded through
 `[roms] 1541`, the trap is disabled for devices 8/9 and KERNAL LOAD proceeds over the
 emulated IEC bus. The 1541 model runs the drive 6502, two VIA 6522s, the standard DOS
-2.6 ROM serial handlers, ATN/CLK/DATA open-collector signaling, ATN acknowledge, and
-ROM-level D64 sector reads. The disk-controller VIA mechanics are intentionally
-abstracted: ROM READ/SEARCH jobs are satisfied from the mounted D64 image rather than
-from a simulated stepper motor, GCR stream, or SYNC signal. This supports standard
-KERNAL disk loads and disk autorun. Writes to a writable image are handled at the same
-job-dispatch altitude: SAVE, sequential/relative file writes, and BAM/directory updates
-persist through the drive's WRITE job, and the DOS command channel (scratch, rename,
-validate, initialize, and a FORMT-job-intercepted format) and the `OPEN 15,8,15`
-error/status channel work through the real ROM. When the 1541 ROM is absent, SAVE falls
-back to the compatibility KERNAL trap. Media-level write fidelity (GCR/SYNC/head/motor),
-cross-drive copy, block/memory-execute commands, and unvalidated fast-loader mechanics
-remain out of scope.
+2.6 ROM serial handlers, ATN/CLK/DATA open-collector signaling, and ATN acknowledge.
+
+Without `media_1541`, disk-controller mechanics are abstracted: ROM READ/SEARCH jobs
+are satisfied from the mounted D64 image (job intercept) rather than a rotating GCR
+stream. Writes use the same job-dispatch path. The DOS command channel (scratch, rename,
+validate, initialize, FORMT-job-intercepted format) and `OPEN 15,8,15` work through the
+real ROM.
+
+With `[disk] media_1541=1` as well, the emulator synthesises GCR tracks from D64 (or
+attaches read-only G64 track dumps), models motor/stepper/SYNC/BYTE READY, and lets
+stock DOS physical READ run against the flux path. D64 WRITE/FORMT still use a hybrid
+job intercept plus GCR track poke/rebuild. G64 mounts are read-only. Multi-stage
+commercial loaders and pure media-level write fidelity are not broadly claimed; see
+`md-files/c64m1541media.md` for the compatibility matrix.
+
+When the 1541 ROM is absent, SAVE falls back to the compatibility KERNAL trap.
+Cross-drive copy, block/memory-execute edge cases, and devices beyond 8/9 remain out of
+scope.
 
 ### Joystick
 

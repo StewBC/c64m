@@ -33,6 +33,8 @@ typedef struct frontend_debug_state {
     c64_cia_hardware_snapshot cia1_hardware;
     c64_cia_hardware_snapshot cia2_hardware;
     c64_sid_hardware_snapshot sid_hardware;
+    c64_1541_hardware_snapshot drive8_hardware;
+    c64_1541_hardware_snapshot drive9_hardware;
     runtime_disk_status_snapshot disk_status[2];
     runtime_call_stack_snapshot call_stack;
     uint64_t frame_number;

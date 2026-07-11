@@ -295,6 +295,22 @@ typedef struct c64_sid_voice_hardware_snapshot {
     bool test;
 } c64_sid_voice_hardware_snapshot;
 
+/* Lightweight 1541 media/mechanics view (no track flux payload). */
+typedef struct c64_1541_hardware_snapshot {
+    int device_number;
+    int rom_loaded;
+    int media_enabled;
+    int tracks_valid;
+    int from_g64;
+    int motor_on;
+    int motor_ready;
+    int writing;
+    int in_sync;
+    int density;
+    int half_track; /* 2 = track 1.0; odd = half-track */
+    uint16_t pc;
+} c64_1541_hardware_snapshot;
+
 typedef struct c64_sid_hardware_snapshot {
     c64_sid_voice_hardware_snapshot voices[3];
     uint16_t filter_cutoff;
@@ -453,6 +469,10 @@ void c64_copy_memory_banking_snapshot(const c64_t *machine, c64_memory_banking_s
 void c64_copy_vicii_hardware_snapshot(const c64_t *machine, c64_vicii_hardware_snapshot *out);
 void c64_copy_cia_hardware_snapshot(const c64_t *machine, unsigned cia_index, c64_cia_hardware_snapshot *out);
 void c64_copy_sid_hardware_snapshot(const c64_t *machine, c64_sid_hardware_snapshot *out);
+void c64_copy_1541_hardware_snapshot(
+    const c64_t *machine,
+    int device_number,
+    c64_1541_hardware_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
