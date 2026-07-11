@@ -27,10 +27,10 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - FLAG (ICR bit 4), serial SDR/CNT/SP shift (ICR bit 3), PC handshake, delayed
   interrupt-line model, and **Option-2 CPU wiring** (`cia_interrupt_line` drives
   CIA #1 IRQ and CIA #2 NMI edge) are implemented (`C64MFULL_CIA.md`).
-- **Corpus / remaining fidelity:** VICE + hardware reference under
-  `md-files/corpus/cia-timing/`. Still deferred: c64m PRG-level corpus runner,
-  cycle-stamped dual-emulator logs, explicit 6526 vs 6526A vs 8521 variant
-  policy, and sub-cycle SP/CNT analog edge timing.
+- **Corpus / remaining fidelity:** VICE + hardware reference and c64m PRG runner
+  under `md-files/corpus/cia-timing/` (`run_c64m.sh`). Still deferred: greening
+  the c64m priority FAIL matrix, cycle-stamped dual-emulator logs, explicit
+  6526 vs 6526A vs 8521 variant policy, and sub-cycle SP/CNT analog edge timing.
 - The FLAG/SP/PC machine-side seams are not yet wired to concrete peripherals
   (cassette FLAG, RS-232, user-port handshake); tape (`.TAP`) and RS-232 work
   will consume them.

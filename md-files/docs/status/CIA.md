@@ -60,11 +60,13 @@
 ## Known limitations / deferred
 
 - CPU-visible one-cycle interrupt delay is wired (Option-2 Phase 4). Remaining
-  fidelity work: full PRG-level c64m runs against the VICE corpus, cycle-stamped
-  dual-emulator event logs for hard races, and explicit 6526 vs 6526A vs 8521
-  variant policy. See `md-files/corpus/cia-timing/`.
-- Corpus tools: `tools/cia-timing-corpus/`; VICE baselines green on priority /
-  lorenz-cia / cia-core. c64m does not yet autostart those PRGs in CI.
+  fidelity work: greening the c64m PRG corpus matrix, cycle-stamped dual-emulator
+  event logs for hard races, and explicit 6526 vs 6526A vs 8521 variant policy.
+  See `md-files/corpus/cia-timing/`.
+- Corpus tools: `tools/cia-timing-corpus/` (`run_x64sc.sh`, `run_c64m.sh`).
+  VICE baselines green on priority/lorenz-cia/cia-core. c64m priority first
+  matrix: **8 PASS / 21 FAIL / 2 OTHER** (`results/c64m-priority-latest.tsv`);
+  harness uses `$D7FF` debugcart + keyboard-buffer RUN (no mid-race ICR polls).
 - 6526 vs 6526A vs 8521 chip-variant policy is not modeled yet (corpus runs both
   `-ciamodel 0` and `1` as separate cases).
 - Serial timing models one bit per two Timer A underflows; sub-cycle SP/CNT

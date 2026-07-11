@@ -307,6 +307,28 @@ static void test_combined_system_rom(void) {
     expect_u8("system kernal visible", 0xea, c64_bus_read(&bus, 0xe000));
 }
 
+static void test_debugcart_d7ff(void) {
+    c64_bus_t bus;
+
+    c64_bus_init(&bus);
+    /* CPU port default keeps I/O visible so $D7xx is open I/O. */
+    bus.cpu_port_data = 0x37;
+    expect_true("debugcart off by default", !bus.debugcart_hit);
+
+    c64_bus_write(&bus, 0xd7ff, 0x00);
+    expect_true("no hit when disabled", !bus.debugcart_hit);
+
+    bus.debugcart_enabled = true;
+    c64_bus_write(&bus, 0xd7ff, 0x00);
+    expect_true("hit on pass write", bus.debugcart_hit);
+    expect_u8("pass value", 0x00, bus.debugcart_value);
+
+    bus.debugcart_hit = false;
+    c64_bus_write(&bus, 0xd7ff, 0xff);
+    expect_true("hit on fail write", bus.debugcart_hit);
+    expect_u8("fail value", 0xff, bus.debugcart_value);
+}
+
 int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
@@ -319,5 +341,6 @@ int main(void) {
     test_reset_vector();
     test_cartridge_survives_reset();
     test_combined_system_rom();
+    test_debugcart_d7ff();
     return 0;
 }

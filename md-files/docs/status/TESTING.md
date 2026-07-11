@@ -52,11 +52,13 @@
   IRQ/NMI entry waiting for that delayed pin (Option-2 Phase 4). All in
   `tests/machine/test_c64_cia.c`.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.
-- CIA interrupt-timing corpus (external VICE baselines, not ctest): see
-  `md-files/corpus/cia-timing/`. Re-run with
+- CIA interrupt-timing corpus (not full ctest gate): see
+  `md-files/corpus/cia-timing/`. VICE:
   `./tools/cia-timing-corpus/run_x64sc.sh priority|lorenz-cia|cia-core` after
-  `fetch.sh`. Latest baselines: priority 31/31, lorenz-cia 40/40, cia-core
-  66/66 PASS on local `x64sc` 3.10.
+  `fetch.sh` (priority 31/31, lorenz-cia 40/40, cia-core 66/66 on `x64sc` 3.10).
+  c64m: build `run_c64m_cia_corpus`, then
+  `./tools/cia-timing-corpus/run_c64m.sh priority` (first matrix 8/31 PASS;
+  debugcart unit coverage in `test_c64_bus`).
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing, `assemble`/`find-symbol` parsing, plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
 - Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.
 - Cartridge detach on program load and reset: `tests/runtime/test_runtime_crt.c` loads a CRT, confirms ROML/ROMH map at `$8000`/`$A000`, then loads a PRG and confirms `$8000` no longer reads cartridge ROM (the program boots instead). It then re-attaches the CRT and checks that `runtime_client_reset_ex(client, false)` keeps the cartridge mapped while `runtime_client_reset_ex(client, true)` detaches it.

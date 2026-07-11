@@ -500,3 +500,9 @@ void c64_debug_write_cpu_map(c64_t *machine, uint16_t address, uint8_t value);
 void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value);
 c64_memory_visibility c64_memory_visibility_at(const c64_t *machine, uint16_t address);
 size_t c64_debug_copy_last_cpu_trace(const c64_t *machine, c64_cpu_instruction_trace *out);
+
+/* VICE-compatible debugcart at $D7FF (testbench exit code). Disabled by default. */
+void c64_set_debugcart_enabled(c64_t *machine, bool enabled);
+void c64_clear_debugcart(c64_t *machine);
+bool c64_debugcart_hit(const c64_t *machine);
+uint8_t c64_debugcart_value(const c64_t *machine);

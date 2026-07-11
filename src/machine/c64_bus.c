@@ -109,6 +109,13 @@ static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
 }
 
 static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
+    /* Debugcart (VICE testbench): write to $D7FF records exit code ($00 pass, $FF fail). */
+    if (address == 0xd7ffu && bus->debugcart_enabled) {
+        bus->debugcart_hit = true;
+        bus->debugcart_value = value;
+        return;
+    }
+
     if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
         vicii_write_register(bus->vic, address, value);
         bus->vic_register_writes++;

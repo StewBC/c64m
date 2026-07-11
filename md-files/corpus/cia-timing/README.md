@@ -32,6 +32,7 @@ observing it.
 |------|------|
 | `tools/cia-timing-corpus/fetch.sh` | Clone VICE-testprogs + c64ciaTests into `external/cia-timing-corpus/` |
 | `tools/cia-timing-corpus/run_x64sc.sh` | Run suites under local `x64sc` (debugcart exit codes) |
+| `tools/cia-timing-corpus/run_c64m.c` / `run_c64m.sh` | Same convention on c64m (`build/run_c64m_cia_corpus`) |
 | `external/cia-timing-corpus/VICE-testprogs/` | Upstream PRGs (gitignored clone) |
 | `external/cia-timing-corpus/c64ciaTests/` | Same tests + real-hardware notes (gitignored clone) |
 | `md-files/corpus/cia-timing/results/` | Logged VICE baselines (checked in) |
@@ -91,9 +92,12 @@ If hardware and VICE disagree, prefer hardware and record the disagreement.
 
 # full CIA/ tree from c64-testlist.in (long; includes TOD/SDR matrix)
 ./tools/cia-timing-corpus/run_x64sc.sh cia
+
+# c64m (requires: cmake --build build --target run_c64m_cia_corpus)
+./tools/cia-timing-corpus/run_c64m.sh priority
 ```
 
-Results land in `md-files/corpus/cia-timing/results/x64sc-<suite>-<UTC>.tsv`.
+Results land in `md-files/corpus/cia-timing/results/{x64sc,c64m}-<suite>-*.tsv`.
 
 TSV columns:
 

@@ -1,0 +1,32 @@
+status	exit	cia_model	path	prg	timeout	notes	runner
+FAIL	255	0	general/Lorenz-2.15/src	cia1tb123.prg	20000000	timer B write race CIA1 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	general/Lorenz-2.15/src	cia2tb123.prg	20000000	timer B write race CIA2 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	general/Lorenz-2.15/src	cia1tb123.prg	20000000	timer B write race CIA1 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	general/Lorenz-2.15/src	cia2tb123.prg	20000000	timer B write race CIA2 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	general/Lorenz-2.15/src	icr01.prg	20000000	ICR read/set race old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	general/Lorenz-2.15/src	icr01new.prg	20000000	ICR read/set race new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	general/Lorenz-2.15/src	imr.prg	20000000	IMR / interrupt mask old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	general/Lorenz-2.15/src	flipos.prg	20000000	flipos old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	general/Lorenz-2.15/src	flipos.prg	20000000	flipos new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	CIA/irqdelay	irqdelay.prg	7000000	1-cycle IRQ delay detect old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	CIA/irqdelay	irqdelay-new.prg	7000000	1-cycle IRQ delay detect new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	CIA/irqdelay	irqdelay-oneshot.prg	7000000	oneshot IRQ delay old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	CIA/irqdelay	irqdelay-oneshot-new.prg	7000000	oneshot IRQ delay new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+OTHER	10	0	CIA/irqdelay	irqdelay2.prg	9000000	irqdelay2 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+OTHER	10	1	CIA/irqdelay	irqdelay2-new.prg	9000000	irqdelay2 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	default	CIA/irqdelay	irqdelay-cia1.prg	10000000	CIA1 delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia2.prg	10000000	CIA2 delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	default	CIA/irqdelay	irqdelay-cia1-oneshot.prg	10000000	CIA1 oneshot delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia2-oneshot.prg	10000000	CIA2 oneshot delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	CIA/irqdelay	irqdelay-cia1-4-old.prg	10000000	CIA1-4 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	CIA/irqdelay	irqdelay-cia1-4-new.prg	10000000	CIA1-4 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	CIA/irqdelay	irqdelay-cia1-oneshot-4-old.prg	10000000	CIA1 oneshot-4 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	CIA/irqdelay	irqdelay-cia1-oneshot-4-new.prg	10000000	CIA1 oneshot-4 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia2-4.prg	10000000	CIA2-4	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia2-oneshot-4.prg	10000000	CIA2 oneshot-4	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	0	CIA/dd0dtest	dd0dtest.prg	100000000	CIA2 ICR race old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	1	CIA/dd0dtest	dd0dtest.prg	100000000	CIA2 ICR race new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	default	CIA/reload0	reload0a.prg	20000000	reload0a	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+FAIL	255	default	CIA/reload0	reload0b.prg	20000000	reload0b	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus

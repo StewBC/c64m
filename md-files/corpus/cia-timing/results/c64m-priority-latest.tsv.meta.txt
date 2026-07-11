@@ -1,0 +1,7 @@
+suite=priority
+runner=/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+started_utc=20260711T232832Z
+host=Darwin stefans-mini.lan 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:27:52 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8112 arm64
+finished_utc=20260711T232849Z
+total=31 pass=8 fail=21 timeout=0 missing=0 other=2
+note=c64m does not select 6526 vs 8521 yet; cia_model column is documentary

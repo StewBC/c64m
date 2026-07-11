@@ -2502,3 +2502,28 @@ void c64_debug_write_ram(c64_t *machine, uint16_t address, uint8_t value) {
         machine->bus.screen_ram_writes++;
     }
 }
+
+void c64_set_debugcart_enabled(c64_t *machine, bool enabled) {
+    assert(machine);
+    machine->bus.debugcart_enabled = enabled;
+    if (!enabled) {
+        machine->bus.debugcart_hit = false;
+        machine->bus.debugcart_value = 0;
+    }
+}
+
+void c64_clear_debugcart(c64_t *machine) {
+    assert(machine);
+    machine->bus.debugcart_hit = false;
+    machine->bus.debugcart_value = 0;
+}
+
+bool c64_debugcart_hit(const c64_t *machine) {
+    assert(machine);
+    return machine->bus.debugcart_hit;
+}
+
+uint8_t c64_debugcart_value(const c64_t *machine) {
+    assert(machine);
+    return machine->bus.debugcart_value;
+}

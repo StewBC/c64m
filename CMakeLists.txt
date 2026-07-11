@@ -487,6 +487,20 @@ target_link_libraries(profile_c64_hotloop PRIVATE
     machine
 )
 
+add_executable(run_c64m_cia_corpus
+    tools/cia-timing-corpus/run_c64m.c
+)
+
+target_compile_features(run_c64m_cia_corpus PRIVATE c_std_99)
+
+target_compile_definitions(run_c64m_cia_corpus PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(run_c64m_cia_corpus PRIVATE
+    machine
+)
+
 add_executable(profile_runtime_hotloop
     tools/profile_runtime_hotloop.c
 )

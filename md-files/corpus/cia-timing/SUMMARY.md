@@ -12,6 +12,7 @@ Method: autostart PRG + `-debugcart` + `-limitcycles` (no mid-race ICR polling).
 | **priority** (Tier 1) | `results/x64sc-priority-latest.tsv` | **31/31 PASS** |
 | **lorenz-cia** | `results/x64sc-lorenz-cia-latest.tsv` | **40/40 PASS** |
 | **cia-core** | `results/x64sc-cia-core-latest.tsv` | **66/66 PASS** |
+| **c64m priority** | `results/c64m-priority-latest.tsv` | **8 PASS / 21 FAIL / 2 OTHER** |
 
 Priority includes: Lorenz `cia1tb123`/`cia2tb123`, `icr01`/`icr01new`, `imr`,
 `flipos`, `oneshot` (old+new where applicable), full `CIA/irqdelay/*` list,
@@ -20,6 +21,15 @@ Priority includes: Lorenz `cia1tb123`/`cia2tb123`, `icr01`/`icr01new`, `imr`,
 Lorenz-cia uses **official** cycle limits from VICE `c64-testlist.in` (e.g.
 `cia1ta` = 190M cycles — 20M was a false TIMEOUT).
 
+### c64m priority notes (first run after Option-2 wiring)
+
+- Harness: `build/run_c64m_cia_corpus` + `$D7FF` debugcart, BASIC keyboard-buffer RUN.
+- No mid-race ICR polling.
+- c64m does not yet select old vs new CIA models; the `cia_model` column is documentary.
+- Pattern: several **new**-CIA irqdelay variants and **CIA2** irqdelay cases PASS;
+  classic Lorenz races (`cia1tb123`, `icr01`, `oneshot`, …) and **old**-CIA irqdelay
+  still FAIL. That is the work queue for further timing fidelity — not a harness bug.
+
 ## How to reproduce
 
 ```bash
@@ -27,6 +37,10 @@ Lorenz-cia uses **official** cycle limits from VICE `c64-testlist.in` (e.g.
 ./tools/cia-timing-corpus/run_x64sc.sh priority
 ./tools/cia-timing-corpus/run_x64sc.sh lorenz-cia
 ./tools/cia-timing-corpus/run_x64sc.sh cia-core
+
+# c64m (build run_c64m_cia_corpus first)
+cmake --build build --target run_c64m_cia_corpus
+./tools/cia-timing-corpus/run_c64m.sh priority
 ```
 
 ## For the Option-2 Phase 4 agent

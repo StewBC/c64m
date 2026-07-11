@@ -67,6 +67,10 @@ struct c64_bus_t {
     uint8_t cartridge_exrom;
     uint8_t cartridge_game;
     c64_cartridge_mode cartridge_mode;
+    /* VICE-compatible debugcart ($D7FF write exits test with value). Opt-in. */
+    bool debugcart_enabled;
+    bool debugcart_hit;
+    uint8_t debugcart_value;
 };
 
 void c64_bus_init(c64_bus_t *bus);
