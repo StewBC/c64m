@@ -311,9 +311,65 @@ static void test_real_1541_media_save_small_prg(void) {
     }
 }
 
+static void mount_raw_g64(c64_t *machine, const char *name) {
+    char path[512];
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+
+    snprintf(path, sizeof(path), "%s/assets/disks/%s", C64M_SOURCE_DIR, name);
+    expect_true("read g64", read_file(path, &bytes, &size) != 0);
+    expect_true(
+        "mount g64",
+        c64_mount_g64(machine, 8, bytes, size, name) == C64_DRIVE_STATUS_OK);
+    free(bytes);
+}
+
+/*
+ * M7 baseline: commercial G64 first-file LOAD through media path.
+ * Does NOT claim RUN / secondary custom-loader success (see matrix).
+ */
+static void test_real_1541_media_g64_star_load_returns(void) {
+    c64_t machine;
+    uint16_t end;
+
+    install_real_roms_ex(&machine, 1);
+    mount_raw_g64(&machine, "robocop[data_east_1987](ntsc)(alt)(!).g64");
+    step_cycles(&machine, 2500000u);
+
+    expect_true("g64 media tracks valid", machine.drive8.media.tracks_valid != 0);
+    expect_true("from_g64", machine.drive8.media.from_g64 != 0);
+
+    setup_load_call(&machine, "*");
+    step_cycles(&machine, 200000000u);
+
+    if (machine.cpu.cpu.pc != (uint16_t)(TEST_RETURN_ADDRESS + 1u)) {
+        fprintf(stderr,
+            "g64 media LOAD did not return: pc=%04X p=%02X cycle=%llu d8pc=%04X "
+            "ht=%d mot=%d/%d from_g64=%d\n",
+            machine.cpu.cpu.pc,
+            machine.cpu.cpu.flags,
+            (unsigned long long)machine.clock.cycle,
+            machine.drive8.cpu.cpu.pc,
+            machine.drive8.media.half_track,
+            machine.drive8.media.motor_on,
+            machine.drive8.media.motor_ready,
+            machine.drive8.media.from_g64);
+        fail("g64 media LOAD did not return");
+    }
+    if ((machine.cpu.cpu.flags & 0x01u) != 0) {
+        fail("g64 media LOAD returned carry set");
+    }
+
+    end = (uint16_t)machine.cpu.cpu.X | ((uint16_t)machine.cpu.cpu.Y << 8);
+    if (end <= 0x0801u || machine.bus.ram[0x0801u] == 0) {
+        fail("g64 media LOAD did not populate BASIC memory");
+    }
+}
+
 int main(void) {
     test_real_1541_star_load_returns();
     test_real_1541_media_star_load_returns();
     test_real_1541_media_save_small_prg();
+    test_real_1541_media_g64_star_load_returns();
     return 0;
 }

@@ -3,9 +3,10 @@
 ## Automated coverage called out by status
 
 - SID: 63 tests in `tests/machine/test_sid.c` covering registers, voice behavior, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, audio-flow smoke, and per-standard rate tables (PAL bit-identical lock, NTSC clock-scaling, envelope absolute-time preservation).
-- 1541 media (M0–M6): `test_c1541_gcr`, `test_g64` (parse/reject),
-  `test_c1541_media` (D64/G64 track build, mount G64 read-only, mechanics),
-  `test_c64_real_1541_load` media LOAD/SAVE.
+- 1541 media (M0–M8): `test_c1541_gcr`, `test_g64`, `test_c1541_media`,
+  `test_c64_real_1541_load` (intercept LOAD; media D64 LOAD/SAVE; **G64 Robocop
+  first-file LOAD*** only — RUN/secondary not asserted). Matrix:
+  `c64m1541media.md` § M7.
 - Runtime audio scheduler: tests verify sample-count accounting and absence of batch-sized identical-sample SID runs.
 - CPU: local tests cover documented CPU execution, typed bus traces (opcode,
   operand, data, dummy, RMW, stack, and vector cycles), instruction/cycle-step

@@ -374,9 +374,17 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
 
         case C1541_JOB_CMD_EXECUTE: {
             /* Hybrid format: erase D64 track sectors, rebuild that track's GCR
-               image, then let the ROM rewrite BAM/directory via WRITE jobs. */
+               image, then let the ROM rewrite BAM/directory via WRITE jobs.
+               G64 mounts remain read-only. */
             uint8_t fr;
             uint8_t trk;
+            const c64_drive_slot *slot;
+
+            slot = c64_get_drive_slot(drive->c64, drive->device_number);
+            if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+                c1541_complete_queued_job(drive, n, C1541_JOB_WRITE_PROT);
+                return 1;
+            }
 
             fr = c1541_format_track(drive, n);
             if (fr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {

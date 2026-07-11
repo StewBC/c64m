@@ -681,11 +681,27 @@ void c1541_media_step(c1541 *drive) {
         }
     }
 
+    /*
+     * Flux clock only while the spindle is up. Stepper/WPS/write-gate still
+     * sample every cycle above. When motor is off, skip the bit loop entirely
+     * (common dual-drive idle case).
+     */
     if (m->motor_ready && m->tracks_valid) {
         tr = current_track(m);
-        cpb = c1541_gcr_cycles_per_byte(m->density);
-        if (tr != NULL && (drive->via2.ddrb & 0x60u) != 0x60u) {
+        /*
+         * Bit rate: prefer VIA DS0/DS1 when both are outputs (software-selected
+         * zone — required by loaders that retune density). Otherwise use the
+         * track's native G64/D64 zone density.
+         */
+        if ((drive->via2.ddrb & 0x60u) == 0x60u) {
+            cpb = c1541_gcr_cycles_per_byte(m->density);
+        } else if (tr != NULL && tr->density >= 0 && tr->density <= 3) {
             cpb = c1541_gcr_cycles_per_byte(tr->density);
+        } else {
+            cpb = c1541_gcr_cycles_per_byte(m->density);
+        }
+        if (cpb < 1) {
+            cpb = 26;
         }
 
         m->bit_acc += 8u;

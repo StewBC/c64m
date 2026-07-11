@@ -2,7 +2,8 @@
 
 ## Status of this document
 
-**M0–M6 IMPLEMENTED (opt-in).** M7–M8 remain planned.
+**M0–M8 IMPLEMENTED (opt-in).** Further title-by-title loader work is ongoing
+matrix expansion, not a new subsystem.
 
 | Field | Value |
 |---|---|
@@ -23,8 +24,8 @@
 | M4 Port A write | **Done (hybrid)** | Port A + PCR write-gate flux path live; DOS WRITE jobs still intercept to D64 then `poke_sector` GCR |
 | M5 Format | **Done (hybrid)** | FORMT EXECUTE still erases D64 track then `rebuild_track` GCR |
 | M6 G64 | **Done (read-only v1)** | `tools/g64`, mount via runtime, media attach; WRITE → protect |
-| M7 Fast-loader matrix | Pending | |
-| M8 Harden / default | Pending | |
+| M7 Fast-loader matrix | **Done (v1)** | Matrix documented; G64 first-file LOAD automated; RUN/secondary still open |
+| M8 Harden | **Done (v1)** | Motor-off flux idle; density prefers VIA when programmed; G64 FORMT WPROT |
 
 ### M4/M5 hybrid note
 
@@ -37,6 +38,56 @@ GCR under the head; D64 mirror never updated). Shipped approach:
 3. **FORMT EXECUTE** — erase D64 track + rebuild track GCR (`rebuild_track`).
 4. **Port A flux write** still runs (PCR CB2 write gate + bit clock) for
    non-job / future pure-physical work and keeps BYTE READY correct.
+
+### M7 compatibility matrix (v1)
+
+Rules for this matrix:
+
+- **LOAD\*** means stock KERNAL/DOS `LOAD"*",8` of the first directory PRG via
+  media path (`emulate_1541=1`, `media_1541=1`, 1541 ROM present).
+- **RUN/secondary** means post-bootstrap behaviour (custom drive code, fast
+  loaders, multi-file, protection). Not claimed unless listed PASS.
+- Prefer fixing **shared** mechanisms over per-title hacks.
+
+| Title / path | Image | LOAD* | RUN / secondary | Notes |
+|---|---|---|---|---|
+| Intercept baseline | D64 GALENCIA | PASS | n/a | Job intercept, no media |
+| Media D64 stock | D64 GALENCIA | PASS | not claimed | Physical GCR READ; automated |
+| Media D64 SAVE | D64 blank | n/a | SAVE PASS | Hybrid WRITE; automated |
+| Media G64 first file | Robocop (Data East 1987) G64 | PASS | **FAIL (expected)** | Custom loader after bootstrap; human + automated LOAD* |
+| Media G64 write | any G64 | n/a | WRITE/FORMT → protect | Read-only v1 |
+
+**How to smoke Robocop (human):**
+
+```text
+./build/c64m -a -d '8=./assets/disks/robocop[data_east_1987](ntsc)(alt)(!).g64'
+```
+
+Use the project `c64m.ini` (or equivalent) with `emulate_1541=1`, `media_1541=1`,
+and ROM paths set. Optional: `--control-port PORT` to observe with
+`get-cpu` / `get-memory` / `get-disk-status` after load.
+
+**Optional control-port observe (after UI or headless launch with your ini):**
+
+```text
+hello
+get-disk-status 8
+wait-frame 100 60000
+get-cpu
+get-memory $0801 64 map
+```
+
+Do not use a scratch ini missing ROM/`emulate_1541` keys — that yields
+`?DEVICE NOT PRESENT` and is not a media-path failure.
+
+### What M7 does *not* finish
+
+- Making Robocop (or any protected/commercial multi-stage title) fully playable
+- Pure Port A job WRITE capture (still hybrid)
+- G64 write-back
+- Exhaustive loader catalogue
+
+Expand the matrix as titles are tried; fix only shared media/VIA/timing gaps.
 
 ---
 
