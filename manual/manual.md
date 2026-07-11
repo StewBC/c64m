@@ -1021,7 +1021,7 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.macro name [args]`    | Define a macro with optional parameter list                  |
 | `.endmacro`             | End of macro definition                                      |
 | `.local name`           | Macro-local label; expanded to a unique name at call time    |
-| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `file=`/`dest=` redirect the scope's output to a separate file (command-line `c64masm` only) |
+| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `name` may be a bare identifier or a quoted identifier (`"name"`). `file=`/`dest=` redirect the scope's output to a separate file (command-line `c64masm` only) |
 | `.endscope`             | Close the innermost scope (and end any output redirect)     |
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
@@ -1076,7 +1076,15 @@ start:
 ```
 
 Use `::` at the start of a name to resolve from the root scope. Labels in different
-scopes do not collide. Anonymous scopes (`.scope` without a name) are useful inside
+scopes do not collide.
+
+A scope name may be written bare (`.scope game`) or quoted (`.scope "game"`); the two
+forms are equivalent. Quoting is allowed for symmetry with `.segdef`, but because a
+scope name is used in `::` qualified references (`game::start`), a quoted name must
+still be a legal identifier -- it cannot contain spaces or other non-identifier
+characters.
+
+Anonymous scopes (`.scope` without a name) are useful inside
 loops to prevent iteration labels from clashing:
 
 ```

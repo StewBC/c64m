@@ -67,6 +67,22 @@ static int identifier_char(int c) {
     return isalnum((unsigned char)c) || c == '_';
 }
 
+// True when name is a legal identifier (identifier_start followed by
+// identifier_char). Used to validate a quoted .scope name: scope names take part
+// in :: qualified symbol resolution, so they must be referenceable identifiers
+// even when written in quotes.
+static int name_is_identifier(const char *name, int len) {
+    if(len <= 0 || !identifier_start((unsigned char)name[0])) {
+        return 0;
+    }
+    for(int i = 1; i < len; i++) {
+        if(!identifier_char((unsigned char)name[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static char *copy_token_string(ASSEMBLER *as) {
     if(as->token.type != TOKEN_STR) {
         asm_err(as, ASM_ERR_RESOLVE, "Expected quoted file name");
@@ -962,11 +978,19 @@ static void dot_scope(ASSEMBLER *as) {
     if(token_is_line_end(as)) {
         name_len = snprintf(anon_name, sizeof(anon_name), "anon_%04X", ++as->active_scope->anon_scope_id);
         name = anon_name;
-    } else if(as->token.type == TOKEN_VAR) {
+    } else if(as->token.type == TOKEN_VAR || as->token.type == TOKEN_STR) {
+        // A quoted name is accepted for symmetry with .segdef, but it must still be
+        // a legal identifier: the name feeds :: qualified symbol resolution, and the
+        // tokenizer cannot express a reference through a name that contains spaces or
+        // other non-identifier characters.
         name = as->token.name;
         name_len = (int)as->token.name_length;
         if(symbol_has_scope_path(name, name_len)) {
             asm_err(as, ASM_ERR_DEFINE, "The name %.*s is scoped and not allowed as a scope name", name_len, name);
+            return;
+        }
+        if(!name_is_identifier(name, name_len)) {
+            asm_err(as, ASM_ERR_RESOLVE, ".scope name must be an identifier");
             return;
         }
         next_token(as);

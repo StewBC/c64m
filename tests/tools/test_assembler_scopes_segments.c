@@ -92,6 +92,45 @@ static int test_scopes_and_procs(void)
     return failures;
 }
 
+static int test_quoted_scope_name(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    const uint8_t expected[] = {
+        0x33,
+        0x01, 0x08
+    };
+    /* A quoted scope name is equivalent to the bare identifier and stays
+       referenceable through :: qualified lookup. */
+    const char *source =
+        ".scope \"Alpha\"\n"
+        "start:\n"
+        "    .byte $33\n"
+        ".endscope\n"
+        ".word Alpha::start\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) != ASM_OK) {
+        fprintf(stderr, "quoted scope name assembly failed with %zu errors\n", log.log_array.items);
+        failures++;
+    }
+    if (memcmp(&mem.memory[0x0801], expected, sizeof(expected)) != 0) {
+        fprintf(stderr, "quoted scope name output mismatch\n");
+        failures++;
+    }
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+
+    return failures;
+}
+
 static int test_segments(void)
 {
     char path[128];
@@ -140,6 +179,7 @@ static int test_scope_segment_errors(void)
         {"top-level endscope", ".endscope\n"},
         {"top-level endproc", ".endproc\n"},
         {"missing segment", ".segment \"NOPE\"\n"},
+        {"quoted non-identifier scope name", ".scope \"bad name\"\n.endscope\n"},
     };
     int failures = 0;
 
@@ -171,6 +211,7 @@ int main(void)
     int failures = 0;
 
     failures += test_scopes_and_procs();
+    failures += test_quoted_scope_name();
     failures += test_segments();
     failures += test_scope_segment_errors();
 
