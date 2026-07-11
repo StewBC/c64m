@@ -1247,7 +1247,8 @@ static void test_d018_no_phase_g_masking(void) {
  * All sprite BA tests use PAL video standard (63 cycles/line) and DEN=0 so
  * that no bad lines fire and only sprite BA windows affect the predicate.
  *
- * Cycle schedule reference (0-based, from vicii_pal_sprite_ba_assert[]):
+ * Cycle schedule reference (0-based, derived three cycles before each PAL
+ * sprite-data slot):
  *   Each assert opens a 6-cycle window [assert, assert+6).
  *   sprite 0: BA assert cycle 54, window [54, 60)
  *   sprite 1: BA assert cycle 56, window [56, 62)
@@ -1349,7 +1350,7 @@ static void test_sprite5_ba_window_within_line(void) {
     expect_true("sprite5 ba open at abs 6", vicii_ba_active(&v, abs));
     abs = step_vicii(&v, abs);
 
-    /* abs=7: window expired (sprite_ba_low_until_abs = 1+6 = 7). */
+    /* abs=7: the schedule-derived window has expired. */
     expect_true("sprite5 ba closed at abs 7", !vicii_ba_active(&v, abs));
 }
 
@@ -1384,6 +1385,8 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
         (uint8_t)vicii_bus_access(&v));
     expect_u8("sprite pointer schedule", VICII_BUS_ACCESS_SPRITE_POINTER,
         (uint8_t)vicii_bus_access_phi1(&v));
+    expect_u64("sprite BA derives into unified expiry", 0u,
+        v.timing.sprite_ba_low_until_abs);
     (void)advance_vicii(&v, 58u, 1u); /* process PAL sprite-0 second data cycle */
     expect_u8("sprite data Phi1 schedule", VICII_BUS_ACCESS_SPRITE_DATA,
         (uint8_t)vicii_bus_access_phi1(&v));
@@ -1477,7 +1480,7 @@ static void test_6sprite_ba_early_and_late_windows(void) {
         expect_true("6spr late ba union", vicii_ba_active(&v, abs));
         abs = step_vicii(&v, abs);
     }
-    /* abs=64: sprite_ba_low_until_abs=64 (set by sprite 2: 58+6=64). */
+    /* abs=64: the schedule-derived sprite-2 window has expired. */
     expect_true("6spr late ba closed at abs 64", !vicii_ba_active(&v, abs));
 }
 
@@ -1593,7 +1596,7 @@ static void test_sprite3_cross_line_ba(void) {
 
     expect_true("sprite3 ba not yet at abs 60", !vicii_ba_active(&v, abs));
 
-    /* Step at cycle 60: vicii_sprite_dma_next_line(3) fires, sprite_ba_low_until_abs=66. */
+    /* Step at cycle 60: next-line sprite-3 data is three cycles ahead. */
     abs = step_vicii(&v, abs);
     /* abs=61 */
     expect_true("sprite3 ba asserted at abs 61", vicii_ba_active(&v, abs));
@@ -1628,7 +1631,7 @@ static void test_sprite4_cross_line_ba(void) {
 
     expect_true("sprite4 ba not yet at abs 62", !vicii_ba_active(&v, abs));
 
-    /* Step at cycle 62: sprite_ba_low_until_abs set to 62+6=68. */
+    /* Step at cycle 62: next-line sprite-4 data is three cycles ahead. */
     abs = step_vicii(&v, abs);
     /* abs=63: end of PAL line, cycle_in_line wraps to 0, raster_line=71 */
     expect_true("sprite4 ba asserted at abs 63", vicii_ba_active(&v, abs));

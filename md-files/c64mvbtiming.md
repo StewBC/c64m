@@ -424,10 +424,10 @@ interleaving without falsely claiming revision-independent results.
 ### Complete VIC fetch schedule (2026-07-11)
 
 The VIC-II now schedules character/color c-accesses, graphics and idle accesses,
-sprite pointers, and sprite-data accesses on explicit Phi1/Phi2 slots. Existing
-BA fixtures remain unchanged: BA still follows the established PAL/NTSC
-lead-window predicate, so this slice makes fetch work observable and ordered
-without claiming a new hardware-derived BA policy. The live renderer continues
+sprite pointers, and sprite-data accesses on explicit Phi1/Phi2 slots. BA is
+derived from the scheduled Phi2 accesses with the established three-cycle lead
+and two-cycle release margin; separate PAL/NTSC sprite BA-assert tables are
+gone. The live renderer continues
 to pre-latch a complete sprite row before drawing a line, while the scheduled
 pointer/data reads preserve the authoritative timing order.
 

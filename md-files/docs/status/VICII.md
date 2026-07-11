@@ -12,8 +12,8 @@
 - PAL and NTSC sprite BA stealing are implemented.
 - The VIC-II has an explicit per-cycle, two-phase fetch schedule: Phi1 selects
   graphics/idle/sprite-pointer work and Phi2 selects bad-line c-access or
-  sprite-data work. BA continues to use the existing tested lead-window
-  predicate; it is not yet derived from individual scheduled accesses.
+  sprite-data work. BA is derived directly from the scheduled Phi2 accesses:
+  three-cycle lead time and the tested two-cycle release margin.
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 

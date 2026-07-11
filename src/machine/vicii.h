@@ -57,10 +57,11 @@ typedef struct vicii_timing {
     /* Phase A additions */
     uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
 
-    /* Phase H: BA represented as absolute-cycle expiry so cross-line sprite
-       windows (sprites 3 and 4) are handled correctly without line-relative math. */
-    uint64_t ba_low_until_abs;        /* abs cycle at which bad-line BA expires */
-    uint64_t sprite_ba_low_until_abs; /* abs cycle at which sprite BA expires */
+    /* BA is one schedule-derived absolute expiry. The legacy sprite field is
+       retained in the serialized layout but is no longer read by the live BA
+       predicate. */
+    uint64_t ba_low_until_abs;
+    uint64_t sprite_ba_low_until_abs;
 } vicii_timing;
 
 typedef struct c64_vicii_snapshot {
