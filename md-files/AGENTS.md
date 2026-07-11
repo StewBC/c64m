@@ -40,6 +40,8 @@ In scope for the current milestone:
 - SID audio emulation sufficient for recognizable C64 sound.
 - Host audio output infrastructure using SDL without violating dependency rules.
 - NTSC sprite BA timing parity with the existing PAL path.
+- Cycle-level VIC-II AEC/RDY pin behavior derived from the scheduled Phi2 bus
+  accesses, including the 6510 read/write arbitration consequences.
 - Audit and, if needed, implementation of practical 6510 undocumented opcode
   coverage used by ordinary C64 software.
 - CIA #2 NMI verification if documentation or tests disagree about current
@@ -69,7 +71,6 @@ Explicitly out of scope for the current milestone:
 - CIA FLAG, PC pulse, and handshake lines unless needed by a specific accepted
   in-scope test.
 - VIC-II light pen.
-- Exact RDY/AEC sub-cycle CPU pin timing.
 - Last-byte-on-bus open-bus behavior.
 - Bit-perfect SID filter or SID chip variant modeling.
 - SID 8580 support or runtime SID variant switching.

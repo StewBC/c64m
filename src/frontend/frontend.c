@@ -6563,10 +6563,12 @@ static void frontend_draw_hardware_vicii(
     snprintf(
         value,
         sizeof(value),
-        "display %s  bad-line %s  BA %s",
+        "display %s  bad-line %s  BA %s  AEC %s  RDY %s",
         frontend_bool_text(vic->display_state),
         frontend_bool_text(vic->bad_line),
-        frontend_bool_text(vic->ba_active));
+        frontend_bool_text(vic->ba_active),
+        frontend_bool_text(vic->aec_active),
+        frontend_bool_text(vic->rdy_active));
     frontend_hardware_label_value(ctx, "State", value);
 
     snprintf(value, sizeof(value), "VC %u  VCBASE %u  RC %u", vic->vc, vic->vc_base, vic->rc);

@@ -1419,6 +1419,47 @@ static void test_ba_allows_pending_write_cycle(void) {
     expect_true("sta trace complete", !machine.pending_cpu_trace_active && !machine.cpu.micro_active);
 }
 
+static void test_aec_blocks_pending_write_during_vic_phi2(void) {
+    static const uint8_t program[] = {
+        0xa9, 0x5a,       /* LDA #$5a */
+        0x8d, 0x34, 0x12  /* STA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    uint64_t before_cpu_cycles;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_standard(&machine, &roms, C64_VIDEO_STANDARD_PAL);
+
+    step_machine_cycles(&machine, 2); /* LDA #$5a */
+    step_machine_cycles(&machine, 3); /* STA opcode and address reads */
+    expect_true("AEC fixture has STA write pending",
+        machine.pending_cpu_trace_active || machine.cpu.micro_active);
+
+    /* Put the pending write on a real bad-line c-access. RDY is not forced
+       here: AEC alone must keep the CPU off the Phi2 bus. */
+    vicii_write_register(&machine.vic, 0xd011, 0x13u);
+    machine.vic.timing.raster_line = 0x33u;
+    machine.vic.timing.cycle_in_line = 15u;
+    before_cpu_cycles = machine.clock.cpu_cycles;
+
+    expect_true("AEC low at c-access", !vicii_aec_active(&machine.vic));
+    expect_true("RDY remains high without a preceding BA lead",
+        vicii_rdy_active(&machine.vic, machine.clock.cycle));
+    step_machine_cycles(&machine, 1);
+    expect_u8("AEC blocks pending write", 0x00u, c64_bus_read(&machine.bus, 0x1234));
+    expect_u64("AEC blocks CPU cycle", before_cpu_cycles, machine.clock.cpu_cycles);
+
+    /* At cycle 55 the c-access run is over and both pins permit the write. */
+    machine.vic.timing.cycle_in_line = 55u;
+    step_machine_cycles(&machine, 1);
+    expect_u8("AEC release completes pending write", 0x5au,
+        c64_bus_read(&machine.bus, 0x1234));
+    expect_u64("AEC release advances CPU", before_cpu_cycles + 1u,
+        machine.clock.cpu_cycles);
+}
+
 static void test_ba_stalls_pending_read_cycle(void) {
     static const uint8_t program[] = {
         0xad, 0x34, 0x12  /* LDA $1234 */
@@ -1907,6 +1948,7 @@ int main(void) {
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();
     test_ba_allows_pending_write_cycle();
+    test_aec_blocks_pending_write_during_vic_phi2();
     test_migrated_rmw_writes_proceed_while_ba_is_low();
     test_ba_stalls_pending_read_cycle();
     test_cpu_vic_pal_ntsc_interaction_traces();

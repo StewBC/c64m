@@ -8,8 +8,9 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 - Cycle-perfect video timing is not complete. The current Phi2 arbiter and
   resumable CPU subset improve BA-visible timing, and the VIC-II now schedules
   character, graphics, idle, sprite-pointer, and sprite-data fetch types. BA
-  is derived from the scheduled CPU-visible Phi2 accesses, but electrical
-  RDY/AEC sub-cycle detail remains outside this model.
+  is derived from the scheduled CPU-visible Phi2 accesses. AEC/RDY are modeled
+  at cycle granularity; analog/half-cycle electrical detail remains outside this
+  model.
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered for the region
@@ -19,7 +20,7 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   software needs is still not claimed. The dkarcade2016 PAL "expose" reveal is
   fixed (sprite BA window = 6 cycles + deferred `$D012` projection); see
   [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
-- Exact RDY/AEC sub-cycle CPU pin timing is deferred.
+- Exact analog or half-cycle RDY/AEC waveform timing is deferred.
 
 ## CIA
 
@@ -87,4 +88,4 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 ## Timing
 
 - Cycle-perfect video/audio timing is not complete.
-- Exact RDY/AEC sub-cycle CPU pin timing is not modeled.
+- Exact analog or half-cycle RDY/AEC waveform behavior is not modeled.

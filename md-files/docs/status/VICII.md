@@ -23,9 +23,10 @@
 - VIC, CIA, and SID hooks advance to timestamped CPU bus events before visible side effects.
 - Live frame publication uses completed live VIC-II frame buffers.
 - Snapshot rendering remains only as fallback/debug before a live frame exists.
-- Bad Line BA and sprite-fetch BA both stall CPU reads using CPU event read/write classification.
-- CPU writes continue where allowed.
-- AEC is intentionally not modeled as emulator state. BA is the stall predicate.
+- BA/RDY is the early warning that holds CPU read cycles; AEC falls only when
+  the VIC owns an actual scheduled Phi2 slot.
+- CPU writes may continue during BA/RDY-only lead/release cycles, but AEC-low
+  blocks every CPU bus access, including writes.
 - VIC memory reads are bank-aware through CIA #2 port A.
 - Character ROM is visible only in VIC banks 0 and 2 at the normal ranges.
 - `$D011` DEN=0 blanks the visible display and border color to `$D021`, while preserving sprite visibility and collision behavior.
@@ -58,7 +59,9 @@
   deferred free-run reads of `$D011`/`$D012` to the bus-access cycle offset.
   See [../../C64MVICIIEXNEXT_UPD.md](../../C64MVICIIEXNEXT_UPD.md).
 - C64MENH Phase 2 added per-standard NTSC sprite BA timing.
-- Sprite BA now selects a PAL 6569 or NTSC 6567R8 BA-assert table from the machine video standard.
+- Sprite data slots select PAL 6569 or NTSC 6567R8 timing tables; the common
+  scheduler derives BA/RDY lead and release from those slots rather than using
+  an independent BA-assert table.
 - Vertical border compares are raster-line numbers and are identical for PAL
   (6569) and NTSC (6567): top/bottom 51/251 for RSEL=1 and 55/247 for RSEL=0.
   Only the total line count differs, not the display-window position, so the
@@ -84,13 +87,14 @@
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered outside the vertical display window (opened-border pictures); it is a per-mode approximation, not a full cycle-exact idle sequencer.
 - Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
-- Exact RDY/AEC sub-cycle CPU pin timing is deferred.
+- AEC/RDY are cycle-level signal states, not an analog or half-cycle waveform
+  simulation.
 - The renderer's sprite-row pre-latch remains an implementation pipeline rather
   than a literal representation of the previous-line DMA latch. The bus schedule
   itself performs the pointer/data accesses in their cycle slots.
-- Sprite BA window is 6 cycles per assert (not 5). That length is required for
-  the `samples/dkarcade2016.prg` PAL stable-raster reveal to stay locked to the
-  raster (matches VICE x64sc `$D001` multiplex at r53/c~30 and r272/c~36).
+- A single sprite's derived BA/RDY interval remains six cycles where required
+  for the `samples/dkarcade2016.prg` PAL stable-raster reveal (matches VICE
+  x64sc `$D001` multiplex at r53/c~30 and r272/c~36).
 
 ## Tests / smoke checks
 

@@ -1644,24 +1644,59 @@ static void test_sprite4_cross_line_ba(void) {
     expect_true("sprite4 ba closed at abs 68", !vicii_ba_active(&v, abs));
 }
 
-/* Phase H test 7: AEC absence — verify no AEC-named symbols exist.
-   This is enforced by the build: the codebase has no vicii_aec_active(),
-   no aec field, and no AEC snapshot surface.  The test confirms indirectly
-   by exercising vicii_ba_active() as the sole stall predicate. */
-static void test_aec_absent_ba_is_sole_stall_predicate(void) {
+static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     vicii v;
     char error[256];
-    uint64_t abs;
 
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x13u); /* DEN=1, YSCROLL=3 */
     v.timing.raster_line = 0x33u;
 
-    abs = 0;
-    abs = advance_vicii(&v, abs, 13u); /* step through cycle 12 (BA asserted) */
-    /* abs=13: bad-line BA window open via vicii_ba_active only */
-    expect_true("ba active via sole predicate", vicii_ba_active(&v, abs));
+    /* BA/RDY goes low three cycles before the first c-access, while AEC
+       remains high until the actual cycle-15 Phi2 bus takeover. */
+    v.timing.cycle_in_line = 12u;
+    vicii_step_cycle(&v, NULL, 12u);
+    expect_true("badline RDY low during BA lead", !vicii_rdy_active(&v, 12u));
+    expect_true("badline AEC high during BA lead", vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 15u;
+    vicii_step_cycle(&v, NULL, 15u);
+    expect_true("badline RDY low during c-access", !vicii_rdy_active(&v, 15u));
+    expect_true("badline AEC low during c-access", !vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 55u;
+    vicii_step_cycle(&v, NULL, 55u);
+    expect_true("badline RDY remains low for release margin", !vicii_rdy_active(&v, 55u));
+    expect_true("badline AEC releases after c-access", vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 56u;
+    vicii_step_cycle(&v, NULL, 56u);
+    expect_true("badline RDY releases", vicii_rdy_active(&v, 56u));
+    expect_true("badline AEC remains high", vicii_aec_active(&v));
+
+    vicii_reset(&v);
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    vicii_write_register(&v, 0xd011, 0x03u); /* DEN=0: sprite DMA only. */
+    vicii_write_register(&v, 0xd015, 0x01u);
+    v.timing.raster_line = 100u;
+    v.sprite_active[0] = true;
+    v.sprite_visible[0] = true;
+
+    v.timing.cycle_in_line = 54u;
+    vicii_step_cycle(&v, NULL, 54u);
+    expect_true("sprite RDY low during BA lead", !vicii_rdy_active(&v, 54u));
+    expect_true("sprite AEC high during BA lead", vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 57u;
+    vicii_step_cycle(&v, NULL, 57u);
+    expect_true("sprite RDY low during data", !vicii_rdy_active(&v, 57u));
+    expect_true("sprite AEC low during data", !vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 60u;
+    vicii_step_cycle(&v, NULL, 60u);
+    expect_true("sprite RDY releases", vicii_rdy_active(&v, 60u));
+    expect_true("sprite AEC releases", vicii_aec_active(&v));
 }
 
 static void test_vicii_debug_read_raster(void) {
@@ -2189,7 +2224,7 @@ int main(void) {
     test_inactive_sprites_no_ba();
     test_sprite3_cross_line_ba();
     test_sprite4_cross_line_ba();
-    test_aec_absent_ba_is_sole_stall_predicate();
+    test_aec_rdy_pin_transitions_follow_schedule();
     test_vicii_debug_read_raster();
     test_vicii_debug_read_d011_raster_bit8();
     test_vicii_debug_read_collision_no_clear();

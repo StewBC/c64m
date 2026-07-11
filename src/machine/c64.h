@@ -246,6 +246,8 @@ typedef struct c64_vicii_hardware_snapshot {
     bool display_state;
     bool bad_line;
     bool ba_active;
+    bool aec_active;
+    bool rdy_active;
     uint16_t vc;
     uint16_t vc_base;
     uint8_t rc;

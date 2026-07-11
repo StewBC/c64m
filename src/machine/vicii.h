@@ -29,8 +29,7 @@ typedef enum vicii_video_standard {
     VICII_VIDEO_STANDARD_PAL
 } vicii_video_standard;
 
-/* The VIC-II bus operation scheduled for the current Phi2 cycle. This is
-   machine-internal timing evidence; it deliberately does not expose AEC. */
+/* The VIC-II bus operation scheduled for the current Phi2 cycle. */
 typedef enum vicii_bus_access_kind {
     VICII_BUS_ACCESS_NONE = 0,
     VICII_BUS_ACCESS_C,
@@ -53,6 +52,8 @@ typedef struct vicii_timing {
     vicii_video_standard standard;
     vicii_bus_access_kind bus_access;      /* Phi2: CPU-visible VIC work. */
     vicii_bus_access_kind bus_access_phi1; /* Phi1: VIC-private bus work. */
+    bool aec_active;                       /* AEC high: CPU owns Phi2 bus. */
+    bool rdy_active;                       /* RDY high: CPU reads may advance. */
 
     /* Phase A additions */
     uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
@@ -128,6 +129,8 @@ void vicii_set_pixel_output_enabled(vicii *v, bool enabled);
 bool vicii_pixel_output_enabled(const vicii *v);
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
+bool vicii_aec_active(const vicii *v);
+bool vicii_rdy_active(const vicii *v, uint64_t abs_cycle);
 vicii_bus_access_kind vicii_bus_access(const vicii *v);
 vicii_bus_access_kind vicii_bus_access_phi1(const vicii *v);
 void vicii_destroy(vicii *v);

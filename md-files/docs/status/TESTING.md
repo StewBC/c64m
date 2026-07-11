@@ -32,6 +32,9 @@
 - Combined CPU/VIC traces execute `LDA $1234` through PAL bad-line, PAL
   sprite-0, NTSC sprite-0, and PAL sprite-3 cross-line conditions, asserting
   opcode/operand/data absolute cycles, BA release, and raster-line progression.
+- AEC/RDY tests distinguish the BA/RDY lead and release from actual Phi2 VIC
+  ownership for bad-line and sprite-data slots, and prove AEC blocks a pending
+  CPU write while BA/RDY-only time still permits one.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot

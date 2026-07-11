@@ -181,6 +181,8 @@ void vicii_reset(vicii *v) {
     v->timing.raster_compare          = 0;
     v->timing.ba_low_until_abs        = 0;
     v->timing.sprite_ba_low_until_abs = 0;
+    v->timing.aec_active              = true;
+    v->timing.rdy_active              = true;
     v->irq_status                = 0;
     v->irq_enable                = 0;
     memset(v->video_matrix, 0, sizeof(v->video_matrix));
@@ -975,6 +977,17 @@ static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
     return false;
 }
 
+static bool vicii_sprite_dma_current_line(const vicii *v, int n) {
+    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
+    uint8_t spr_y = v->registers[1 + n * 2];
+
+    if (v->sprite_visible[n] || v->sprite_active[n]) {
+        return true;
+    }
+    return ((enable >> n) & 1u) != 0u &&
+        v->timing.raster_line == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame;
+}
+
 static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {
     return v->timing.standard == VICII_VIDEO_STANDARD_PAL ?
         vicii_pal_sprite_fetch_cycle :
@@ -1015,7 +1028,7 @@ static void vicii_schedule_bus_access(vicii *v, uint32_t cycle) {
     if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
         v->timing.bus_access_phi1 = second_cycle ?
             VICII_BUS_ACCESS_SPRITE_DATA : VICII_BUS_ACCESS_SPRITE_POINTER;
-        if (v->sprite_visible[sprite] || v->sprite_active[sprite]) {
+        if (vicii_sprite_dma_current_line(v, sprite)) {
             v->timing.bus_access = VICII_BUS_ACCESS_SPRITE_DATA;
         }
         return;
@@ -1056,7 +1069,20 @@ static bool vicii_phi2_access_scheduled_after(
     }
     (void)second_cycle;
     return next_line ? vicii_sprite_dma_next_line(v, sprite) :
-        (v->sprite_visible[sprite] || v->sprite_active[sprite]);
+        vicii_sprite_dma_current_line(v, sprite);
+}
+
+static bool vicii_phi2_access_scheduled_now(const vicii *v) {
+    uint32_t cycle = v->timing.cycle_in_line;
+    int sprite;
+    bool second_cycle;
+
+    if ((v->bad_line || vicii_is_bad_line(v)) &&
+        cycle >= VICII_CACCESS_FIRST_CYCLE && cycle <= VICII_CACCESS_LAST_CYCLE) {
+        return true;
+    }
+    return vicii_sprite_slot(v, cycle, &sprite, &second_cycle) &&
+        vicii_sprite_dma_current_line(v, sprite);
 }
 
 static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs_cycle) {
@@ -1230,6 +1256,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     vicii_schedule_bus_access(v, cycle);
     vicii_derive_ba_from_schedule(v, cycle, abs_cycle);
+    v->timing.aec_active = !vicii_phi2_access_scheduled_now(v);
+    v->timing.rdy_active = !vicii_ba_active(v, abs_cycle);
     vicii_execute_scheduled_fetches(v, bus, cycle);
 
     if (v->pixel_output_enabled) {
@@ -1297,6 +1325,16 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {
     assert(v);
     return abs_cycle < v->timing.ba_low_until_abs;
+}
+
+bool vicii_aec_active(const vicii *v) {
+    assert(v);
+    return !vicii_phi2_access_scheduled_now(v);
+}
+
+bool vicii_rdy_active(const vicii *v, uint64_t abs_cycle) {
+    assert(v);
+    return !vicii_ba_active(v, abs_cycle);
 }
 
 vicii_bus_access_kind vicii_bus_access(const vicii *v) {

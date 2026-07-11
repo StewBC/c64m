@@ -46,9 +46,10 @@ The current implementation is not a blank slate:
 - `c64_t` owns a monotonic machine cycle and advances devices to timestamped
   CPU bus events.
 - VIC-II bus-visible writes are applied before the VIC advances that cycle.
-- Bad-line and sprite BA are represented as absolute-cycle low windows and
-  feed one `vicii_ba_active()` predicate.
-- PAL and NTSC have separate sprite-BA assert tables.
+- BA/RDY is derived from scheduled Phi2 VIC accesses into one absolute-cycle
+  low interval and feeds one `vicii_ba_active()` predicate.
+- PAL and NTSC have separate sprite data-slot tables; a shared lead/release
+  rule derives the corresponding BA/RDY interval.
 - The CPU core remains instruction-oriented. For an instruction needing
   contention handling, the machine can execute against a frozen device world,
   then replay its recorded bus events (`C64_CPU_BUS_MODE_DEFER_WRITES`).
@@ -75,9 +76,10 @@ Every emulated Phi2 cycle has this order:
 5. Advance VIC-II, CIA, SID, and CPU state exactly once for the completed
    Phi2 cycle, publishing no live pointers outside `machine/`.
 
-The exact CPU write/RDY and dummy-read rules are to be established by trace
-fixtures before being generalized. Do not treat BA-low as a blanket instruction
-stall or infer an unmeasured rule from an unrelated opcode.
+The cycle-level rule is now explicit: RDY low holds CPU reads, while AEC low
+denies the Phi2 bus to every CPU access. Thus a write may complete in a BA/RDY
+lead or release cycle only while AEC remains high. Analog or half-cycle pin
+waveforms remain outside this model.
 
 ## Phases
 

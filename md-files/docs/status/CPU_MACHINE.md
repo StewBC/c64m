@@ -40,7 +40,10 @@
   compatibility replay because their results depend on chip revision and bus
   state that c64m does not yet model. JAM/KIL remains deliberately non-resumable.
 - C64 wrapper routes all CPU reads/writes through the machine bus.
-- BA stalls use traced read/write events, so undocumented RMW/store opcodes follow the same integration path as official opcodes.
+- The arbiter models BA/RDY and AEC separately: RDY freezes reads during the
+  VIC lead/release interval; AEC prevents all CPU bus accesses in a scheduled
+  VIC Phi2 slot. This preserves legal writes in BA-only cycles without allowing
+  them to overlap an actual VIC bus takeover.
 - CPU traces distinguish opcode fetches, operands, data, dummy cycles, RMW
   dummy writes, stack accesses, and vector reads. Mid-instruction snapshots are
   rejected for either the replay or resumable execution path.

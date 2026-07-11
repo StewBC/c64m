@@ -1012,8 +1012,14 @@ static bool c64_pending_cpu_elapsed_has_write_event(const c64_t *machine) {
     return false;
 }
 
-static bool c64_cpu_cycle_stalled_by_ba(const c64_t *machine) {
-    if (!vicii_ba_active(&machine->vic, machine->clock.cycle)) {
+static bool c64_cpu_cycle_stalled_by_vic_pins(const c64_t *machine) {
+    /* AEC low means the VIC owns the actual Phi2 bus slot: no CPU access,
+       including writes, may occur. RDY is BA's early warning and freezes CPU
+       read cycles; a 6510 write may still finish while AEC remains high. */
+    if (!vicii_aec_active(&machine->vic)) {
+        return true;
+    }
+    if (vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
         return false;
     }
 
@@ -1081,12 +1087,15 @@ static bool c64_prepare_micro_instruction(c64_t *machine) {
     return true;
 }
 
-static bool c64_micro_cycle_stalled_by_ba(const c64_t *machine) {
+static bool c64_micro_cycle_stalled_by_vic_pins(const c64_t *machine) {
     c6510_bus_access_kind kind;
 
     assert(machine);
 
-    if (!vicii_ba_active(&machine->vic, machine->clock.cycle)) {
+    if (!vicii_aec_active(&machine->vic)) {
+        return true;
+    }
+    if (vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
         return false;
     }
 
@@ -1128,14 +1137,15 @@ static bool c64_step_cycle_internal(c64_t *machine) {
     }
 
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
-        !vicii_ba_active(&machine->vic, machine->clock.cycle)) {
+        vicii_aec_active(&machine->vic) &&
+        vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
         if (!c64_prepare_micro_instruction(machine)) {
             c64_prepare_deferred_cpu_trace(machine);
         }
     }
 
     if (machine->cpu.micro_active) {
-        if (!c64_micro_cycle_stalled_by_ba(machine)) {
+        if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
             c64_step_micro_cycle(machine);
         } else {
             c64_advance_one_cycle(machine);
@@ -1143,7 +1153,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         return true;
     }
 
-    if (machine->pending_cpu_trace_active && !c64_cpu_cycle_stalled_by_ba(machine)) {
+    if (machine->pending_cpu_trace_active && !c64_cpu_cycle_stalled_by_vic_pins(machine)) {
         c64_apply_pending_cpu_events_at_elapsed(machine);
         c64_advance_one_cycle(machine);
         machine->pending_cpu_elapsed++;
@@ -2200,6 +2210,8 @@ void c64_copy_vicii_hardware_snapshot(const c64_t *machine, c64_vicii_hardware_s
     out->display_state = v->display_state;
     out->bad_line = v->bad_line;
     out->ba_active = vicii_ba_active(v, machine->clock.cycle);
+    out->aec_active = vicii_aec_active(v);
+    out->rdy_active = vicii_rdy_active(v, machine->clock.cycle);
     out->vc = v->vc;
     out->vc_base = v->vc_base;
     out->rc = v->rc;
