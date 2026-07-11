@@ -40,7 +40,15 @@
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
   format v2 carries the added sprite-pointer latch state.
-- CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
+- CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE
+  isolation, ICR read side effects, and debugger-safe peeks. The C64MFULL pin/
+  serial work adds: FLAG negative-edge -> ICR bit 4 with mask/read-clear and CIA
+  #2 NMI; serial output (eight MSB-first bits on SP via Timer A, ICR bit 3),
+  serial input (eight CNT-clocked SP bits into SDR) and CIA #2 serial NMI; the PC
+  handshake pulse (one cycle low after a CPU-visible PRB access, not on debug
+  peeks); and the delayed `cia_interrupt_line` asserting one cycle behind
+  `cia_irq_pending` and deasserting one cycle after an ICR read. All in
+  `tests/machine/test_c64_cia.c`.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing, `assemble`/`find-symbol` parsing, plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
 - Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.

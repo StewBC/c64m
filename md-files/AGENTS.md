@@ -67,9 +67,11 @@ Explicitly out of scope for the current milestone:
 - 1541-family variants such as 1571.
 - Cross-drive copy and Commodore DOS block/memory commands not covered by the
   current ROM/job-intercept implementation.
-- Full CIA cycle-level accuracy and sub-Phi2 timing.
-- CIA FLAG, PC pulse, and handshake lines unless needed by a specific accepted
-  in-scope test.
+- Bit-exact 6526 cycle/race timing at the CPU-integration level and sub-Phi2
+  timing, and 6526/6526A/8521 chip-variant policy. (CIA FLAG, serial SDR/CNT/SP,
+  the PC handshake pulse, and a conservative CIA-internal delayed interrupt-line
+  model are now IN scope and implemented; see `C64MFULL_CIA.md` and
+  `docs/status/CIA.md`.)
 - VIC-II light pen.
 - Last-byte-on-bus open-bus behavior.
 - Bit-perfect SID filter or SID chip variant modeling.

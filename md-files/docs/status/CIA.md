@@ -2,9 +2,13 @@
 
 ## Current implementation
 
-- CIA is complete through Phase G.
+- CIA is complete through Phase G, plus the full-accuracy pin/serial work from
+  `C64MFULL_CIA.md` Phases 1-4 (FLAG, serial SDR/CNT/SP, PC handshake, and a
+  conservative delayed interrupt-line model).
 - CIA #1 and CIA #2 routing are implemented.
 - Timers, ICR, IRQ/NMI behavior, keyboard, joystick, RESTORE, CIA #2 VIC bank control, IEC port pins, TOD, and alarm are implemented.
+- FLAG external interrupt input (ICR bit 4), the serial shift register (SDR /
+  CNT / SP, ICR bit 3), and the PC handshake pulse are implemented.
 
 ## Important invariants
 
@@ -14,7 +18,8 @@
 - Timer latch/live counters, force-load strobe, one-shot/continuous modes, CNT and cascade sources, and PB6/PB7 output behavior are modeled.
 - ICR masks and flags are separate.
 - Normal ICR reads clear reported flags.
-- Debugger peeks do not clear ICR or TOD state.
+- Debugger peeks do not clear ICR or TOD state, and do not advance serial shift
+  state or pulse the PC handshake line.
 - CIA #1 drives CPU IRQ.
 - CIA #2 drives the CPU NMI edge latch.
 - RESTORE remains a separate one-shot NMI source.
@@ -22,30 +27,67 @@
 - Joystick port state has two host input sources: SDL game controllers and the host keyboard (see `docs/status/FRONTEND_DEBUGGER.md`). Both are combined in the frontend and delivered through `c64_set_joystick`; the CIA side is unchanged.
 - CIA #2 handles VIC bank selection and IEC ATN/CLK/DATA open-collector line modeling.
 - TOD uses BCD tenths/seconds/minutes/hours, 12-hour AM/PM, 50/60 Hz source policy, coherent read latch, and alarm ICR source.
+- FLAG is negative-edge triggered: a high->low transition on `cia_set_flag_line`
+  raises ICR bit 4. Holding FLAG low does not re-raise without a new edge.
+- Serial output is clocked by Timer A underflows (one bit per two underflows,
+  MSB first); serial input is clocked by external CNT edges (`cia_pulse_cnt`
+  sampling the SP line via `cia_set_sp_line`). Either direction sets ICR bit 3
+  after eight bits.
+- The PC line pulses low for the one cycle following a CPU-visible PRB read or
+  write, then returns high (`cia_pc_line`).
+- `cia_irq_pending` reports the immediate latched ICR (flags & mask) state and
+  continues to drive the validated CPU IRQ/NMI path. `cia_interrupt_line` is a
+  separate delayed output pin (asserts/deasserts one cycle behind the latched
+  state), modeling the 6526 interrupt delay for cycle-accurate consumers WITHOUT
+  changing CPU-observable timing.
 
 ## Recent changes
 
+- C64MFULL Phases 1-4 added FLAG, serial SDR/CNT/SP, PC handshake, and a
+  conservative delayed interrupt-line abstraction. New public CIA API:
+  `cia_set_flag_line`, `cia_set_sp_line`, `cia_pc_line`, `cia_interrupt_line`.
+  Serial output is deterministic and Timer-A driven; ICR bits 3 (serial) and 4
+  (FLAG) now have event generation, not just reserved mask/flag storage.
 - C64MENH Phase 1 reconciled CIA #2 NMI status.
 - Current code and tests confirm that CIA #1 interrupt output routes to CPU IRQ.
 - Current code and tests confirm that CIA #2 enabled-pending interrupt output routes to CPU NMI callback through an edge latch.
 - CPU NMI sampling occurs at instruction entry before IRQ.
-- Older `C64MCIA.md` text was updated to remove the stale claim that CIA #2 NMI was not wired.
 
 ## Known limitations / deferred
 
-- Full CIA accuracy and pin/race-level timing are deferred.
-- Exact sub-cycle pin behavior is not modeled.
+- Bit-exact 6526 cycle/race timing at the CPU-integration level is deferred.
+  The delayed `cia_interrupt_line` is a CIA-internal model; the CPU IRQ/NMI path
+  still consumes the immediate `cia_irq_pending` to preserve the validated
+  timing used by loaders and raster code. Full cycle-exact re-timing would
+  require a VICE-derived CIA interrupt-timing reference corpus as the acceptance
+  gate (see `C64MFULL_CIA.md` Phase 4).
+- 6526 vs 6526A vs 8521 chip-variant policy is not modeled.
+- Serial timing models one bit per two Timer A underflows; sub-cycle SP/CNT
+  analog edge timing is not modeled.
+- The new FLAG/SP/PC lines expose machine-side seams (`cia_set_flag_line`,
+  `cia_set_sp_line`, `cia_pc_line`) but are not yet wired to concrete C64
+  peripherals (cassette FLAG, RS-232, user-port handshake). Tape (`.TAP`) and
+  RS-232 work will drive them.
 
 ## Tests / smoke checks
 
 - Confirm normal CIA ICR reads clear reported flags.
-- Confirm debugger-safe CIA peeks do not clear ICR or TOD state.
+- Confirm debugger-safe CIA peeks do not clear ICR or TOD state, do not advance
+  serial shift state, and do not pulse PC.
 - Confirm CIA #1 IRQ pending can remain pending without CPU IRQ entry while the CPU interrupt-disable flag is set.
 - Confirm RESTORE still behaves independently from CIA #2 NMI.
+- Confirm a FLAG high->low edge sets ICR bit 4, respects the mask, and can raise
+  CIA #2 NMI; a held-low FLAG does not re-raise.
+- Confirm serial output shifts eight bits MSB-first on SP with Timer A timing and
+  sets ICR bit 3; serial input shifts eight CNT-clocked bits into SDR and can
+  raise CIA #2 NMI.
+- Confirm the PC line pulses low for one cycle after a CPU-visible PRB access.
+- Confirm `cia_interrupt_line` asserts one cycle behind `cia_irq_pending` and
+  deasserts one cycle after an ICR read clears the flag.
 
 ## Files likely involved
 
 - `src/machine/cia*`
 - `src/machine/c64*`
 - `src/runtime/*`
-- CIA and interrupt tests under `tests/`
+- CIA and interrupt tests under `tests/` (`tests/machine/test_c64_cia.c`)

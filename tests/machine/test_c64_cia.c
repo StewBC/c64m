@@ -15,12 +15,15 @@ enum {
     CIA_REG_TIMER_A_HI = 0x05,
     CIA_REG_TIMER_B_LO = 0x06,
     CIA_REG_TIMER_B_HI = 0x07,
+    CIA_REG_SDR = 0x0c,
     CIA_REG_ICR = 0x0d,
     CIA_REG_CONTROL_A = 0x0e,
     CIA_REG_CONTROL_B = 0x0f,
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
     CIA_INTERRUPT_TOD = 0x04,
+    CIA_INTERRUPT_SERIAL = 0x08,
+    CIA_INTERRUPT_FLAG = 0x10,
     TEST_RESET_VECTOR = 0xe000,
     TEST_IRQ_VECTOR = 0xe010,
     TEST_NMI_VECTOR = 0xe020,
@@ -997,6 +1000,220 @@ static void test_cpu_visible_timer_b_counts_down(void) {
     expect_u8_less_than("cpu-visible timer b low decremented", machine.cpu.cpu.A, 0x40);
 }
 
+static void test_cia_interrupt_line_delays_one_cycle_behind_pending(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_ICR, 0x81);       /* enable Timer A */
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x19); /* start + force-load + one-shot */
+
+    cia_step_cycle(&c); /* counter 1 -> 0 */
+    expect_false("no pending before underflow", cia_irq_pending(&c));
+    expect_false("pin low before underflow", cia_interrupt_line(&c));
+
+    cia_step_cycle(&c); /* underflow: flag latches immediately, pin delayed */
+    expect_true("pending immediately after underflow", cia_irq_pending(&c));
+    expect_false("pin still low the cycle of underflow", cia_interrupt_line(&c));
+
+    cia_step_cycle(&c); /* pin catches up one cycle later */
+    expect_true("pin asserts one cycle after pending", cia_interrupt_line(&c));
+    expect_true("pending remains latched", cia_irq_pending(&c));
+}
+
+static void test_cia_interrupt_line_deasserts_one_cycle_after_icr_read(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_ICR, 0x81);
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x19); /* one-shot */
+
+    cia_step_cycle(&c); /* -> 0 */
+    cia_step_cycle(&c); /* underflow */
+    cia_step_cycle(&c); /* pin asserts */
+    expect_true("pin asserted", cia_interrupt_line(&c));
+    expect_true("pending set", cia_irq_pending(&c));
+
+    /* Reading ICR clears the latched flag immediately; the pin lingers a cycle. */
+    (void)cia_read_register(&c, CIA_REG_ICR);
+    expect_false("pending cleared immediately by icr read", cia_irq_pending(&c));
+    expect_true("pin still asserted same cycle as read", cia_interrupt_line(&c));
+
+    cia_step_cycle(&c);
+    expect_true("pin lingers one cycle after read", cia_interrupt_line(&c));
+
+    cia_step_cycle(&c);
+    expect_false("pin deasserts one cycle after read", cia_interrupt_line(&c));
+}
+
+static void test_cia_pc_pulses_on_prb_access(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    expect_true("pc high after reset", cia_pc_line(&c));
+
+    /* CPU-visible PRB write drives PC low for exactly one cycle. */
+    cia_write_register(&c, CIA_REG_PORT_B, 0x00);
+    cia_step_cycle(&c);
+    expect_false("pc low cycle after prb write", cia_pc_line(&c));
+    cia_step_cycle(&c);
+    expect_true("pc returns high after prb write pulse", cia_pc_line(&c));
+
+    /* CPU-visible PRB read also drives PC low for one cycle. */
+    (void)cia_read_register(&c, CIA_REG_PORT_B);
+    cia_step_cycle(&c);
+    expect_false("pc low cycle after prb read", cia_pc_line(&c));
+    cia_step_cycle(&c);
+    expect_true("pc returns high after prb read pulse", cia_pc_line(&c));
+
+    /* Debug-safe PRB peeks must not pulse PC. */
+    (void)cia_debug_read_register(&c, CIA_REG_PORT_B);
+    cia_step_cycle(&c);
+    expect_true("debug prb peek does not pulse pc", cia_pc_line(&c));
+
+    /* PRA access must not pulse PC. */
+    (void)cia_read_register(&c, CIA_REG_PORT_A);
+    cia_step_cycle(&c);
+    expect_true("pra access does not pulse pc", cia_pc_line(&c));
+}
+
+static void test_cia_serial_output_shifts_eight_bits(void) {
+    cia c;
+    char error[256];
+    uint8_t received = 0;
+    int i;
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+
+    /* Timer A continuous, small latch so it underflows every two cycles. */
+    cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&c, CIA_REG_ICR, 0x88); /* enable serial source */
+    /* CRA: start (0x01) + serial output (0x40). */
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x41);
+
+    cia_write_register(&c, CIA_REG_SDR, 0xb5);
+    expect_u8("serial output armed 8 bits", 8, c.serial_out_bits);
+
+    /* Debug-safe reads must not advance shift state. */
+    (void)cia_debug_read_register(&c, CIA_REG_SDR);
+    expect_u8("debug read does not advance serial", 8, c.serial_out_bits);
+
+    /* One bit leaves SP every four cycles (two Timer A underflows), MSB first. */
+    for (i = 0; i < 8; ++i) {
+        step_cia_cycles(&c, 4);
+        received = (uint8_t)((received << 1) | (c.sp_output ? 1u : 0u));
+    }
+
+    expect_u8("serial output shifted msb-first byte", 0xb5, received);
+    expect_u8("serial complete after eight bits", 0, c.serial_out_bits);
+    expect_true("enabled serial source asserts line", cia_irq_pending(&c));
+    /* Timer A also latches its own flag while running; check the serial + summary
+     * bits without asserting the exact combined flag byte. */
+    expect_u8("serial icr flag reported",
+        (uint8_t)(CIA_INTERRUPT_SERIAL | 0x80u),
+        (uint8_t)(cia_debug_read_register(&c, CIA_REG_ICR) & (CIA_INTERRUPT_SERIAL | 0x80u)));
+}
+
+static void test_cia_serial_input_shifts_eight_bits(void) {
+    cia c;
+    char error[256];
+    const uint8_t pattern = 0x4e;
+    int i;
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_write_register(&c, CIA_REG_ICR, 0x88); /* enable serial source */
+    /* CRA serial-output bit clear selects input mode. */
+    cia_write_register(&c, CIA_REG_CONTROL_A, 0x00);
+
+    /* Feed eight bits MSB first, each clocked by a CNT edge. */
+    for (i = 7; i >= 0; --i) {
+        cia_set_sp_line(&c, ((pattern >> i) & 1u) != 0);
+        cia_pulse_cnt(&c);
+        cia_step_cycle(&c);
+    }
+
+    expect_u8("serial input latched byte", pattern, cia_read_register(&c, CIA_REG_SDR));
+    expect_true("enabled serial input asserts line", cia_irq_pending(&c));
+}
+
+static void test_cia2_serial_input_can_raise_nmi(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+    const uint8_t pattern = 0xa3;
+    int i;
+
+    reset_machine(&machine);
+    cia_write_register(&machine.cia2, CIA_REG_ICR, 0x88);
+    cia_write_register(&machine.cia2, CIA_REG_CONTROL_A, 0x00);
+
+    for (i = 7; i >= 0; --i) {
+        cia_set_sp_line(&machine.cia2, ((pattern >> i) & 1u) != 0);
+        cia_pulse_cnt(&machine.cia2);
+        cia_step_cycle(&machine.cia2);
+    }
+
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+
+    expect_u16("cia2 serial nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
+    expect_u64("cia2 serial nmi entry counted", 1, machine.cpu.cpu.nmi_entries);
+}
+
+static void test_cia_flag_edge_sets_icr_and_respects_mask(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+
+    /* Masked FLAG: edge sets the flag but does not assert the interrupt line. */
+    cia_set_flag_line(&c, false);
+    expect_u8("masked flag sets icr bit 4", CIA_INTERRUPT_FLAG,
+        cia_debug_read_register(&c, CIA_REG_ICR));
+    expect_false("masked flag does not assert line", cia_irq_pending(&c));
+
+    /* Clear the pending flag and re-arm the line high. */
+    (void)cia_read_register(&c, CIA_REG_ICR);
+    cia_set_flag_line(&c, true);
+
+    /* Enable FLAG and drive a high->low edge. */
+    cia_write_register(&c, CIA_REG_ICR, (uint8_t)(0x80u | CIA_INTERRUPT_FLAG));
+    cia_set_flag_line(&c, false);
+    expect_true("enabled flag edge asserts line", cia_irq_pending(&c));
+
+    /* Holding FLAG low must not re-raise without a new edge. */
+    (void)cia_read_register(&c, CIA_REG_ICR);
+    expect_false("icr read clears flag", cia_irq_pending(&c));
+    cia_set_flag_line(&c, false);
+    expect_false("held-low flag does not re-raise", cia_irq_pending(&c));
+
+    /* A fresh high->low edge raises it again. */
+    cia_set_flag_line(&c, true);
+    cia_set_flag_line(&c, false);
+    expect_true("new flag edge asserts line again", cia_irq_pending(&c));
+}
+
+static void test_cia2_flag_line_can_raise_nmi(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+
+    reset_machine(&machine);
+    cia_write_register(&machine.cia2, CIA_REG_ICR, (uint8_t)(0x80u | CIA_INTERRUPT_FLAG));
+    cia_set_flag_line(&machine.cia2, false);
+
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+
+    expect_u16("cia2 flag nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
+    expect_u64("cia2 flag nmi entry counted", 1, machine.cpu.cpu.nmi_entries);
+}
+
 int main(void) {
     test_cia_reset_and_no_key_ports();
     test_cia_register_mirroring_and_ports();
@@ -1043,5 +1260,13 @@ int main(void) {
     test_cia_tod_read_latch_and_debug_peek();
     test_cia_tod_writes_alarm_and_sets_interrupt();
     test_cia2_tod_alarm_can_raise_nmi();
+    test_cia_interrupt_line_delays_one_cycle_behind_pending();
+    test_cia_interrupt_line_deasserts_one_cycle_after_icr_read();
+    test_cia_pc_pulses_on_prb_access();
+    test_cia_serial_output_shifts_eight_bits();
+    test_cia_serial_input_shifts_eight_bits();
+    test_cia2_serial_input_can_raise_nmi();
+    test_cia_flag_edge_sets_icr_and_respects_mask();
+    test_cia2_flag_line_can_raise_nmi();
     return 0;
 }

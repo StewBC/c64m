@@ -17,6 +17,7 @@ enum {
     CIA_REG_TOD_SECONDS = 0x09,
     CIA_REG_TOD_MINUTES = 0x0a,
     CIA_REG_TOD_HOURS = 0x0b,
+    CIA_REG_SDR = 0x0c,
     CIA_REG_ICR = 0x0d,
     CIA_REG_CONTROL_A = 0x0e,
     CIA_REG_CONTROL_B = 0x0f,
@@ -26,10 +27,13 @@ enum {
     CIA_CONTROL_ONESHOT = 0x08,
     CIA_CONTROL_FORCE_LOAD = 0x10,
     CIA_CONTROL_A_CNT_INPUT = 0x20,
+    CIA_CONTROL_A_SERIAL_OUT = 0x40,
     CIA_CONTROL_TOD_50HZ = 0x80,
     CIA_INTERRUPT_TIMER_A = 0x01,
     CIA_INTERRUPT_TIMER_B = 0x02,
     CIA_INTERRUPT_TOD = 0x04,
+    CIA_INTERRUPT_SERIAL = 0x08,
+    CIA_INTERRUPT_FLAG = 0x10,
     CIA_INTERRUPT_SOURCE_MASK = 0x1f,
 };
 
@@ -394,6 +398,8 @@ void cia_reset(cia *c) {
     c->port_input_user = port_input_user;
     c->timer_a.output_level = true;
     c->timer_b.output_level = true;
+    c->flag_line = true;
+    c->pc_line = true;
     c->tod.hours = 0x12;
     c->tod_alarm.hours = 0x12;
     c->tod_50hz_cycles = tod_50hz_cycles == 0 ? 100000u : tod_50hz_cycles;
@@ -420,13 +426,72 @@ void cia_set_tod_cycles(cia *c, uint64_t cycles_50hz, uint64_t cycles_60hz) {
     c->tod_60hz_cycles = cycles_60hz;
 }
 
+static void cia_step_serial(cia *c) {
+    uint8_t control = c->registers[CIA_REG_CONTROL_A];
+
+    if ((control & CIA_CONTROL_A_SERIAL_OUT) != 0) {
+        /* Output mode: shifting is clocked by Timer A underflows. CNT toggles on
+         * each underflow, so one bit leaves SP (MSB first) every two underflows. */
+        if (c->serial_out_bits == 0 || !c->timer_a.underflow) {
+            return;
+        }
+
+        c->serial_cnt_toggle = !c->serial_cnt_toggle;
+        if (c->serial_cnt_toggle) {
+            return;
+        }
+
+        c->sp_output = (c->serial_shift & 0x80u) != 0;
+        c->serial_shift = (uint8_t)(c->serial_shift << 1);
+        c->serial_out_bits--;
+        if (c->serial_out_bits == 0) {
+            cia_set_interrupt_source(c, CIA_INTERRUPT_SERIAL);
+            if (c->serial_pending) {
+                c->serial_shift = c->serial_pending_data;
+                c->serial_out_bits = 8;
+                c->serial_pending = false;
+            }
+        }
+        return;
+    }
+
+    /* Input mode: shifting is clocked by external CNT edges. Each edge samples SP
+     * (MSB first). After eight bits the byte latches into SDR and sets ICR. */
+    if (!c->cnt_pulse) {
+        return;
+    }
+
+    c->serial_shift = (uint8_t)((c->serial_shift << 1) | (c->sp_input ? 1u : 0u));
+    c->serial_in_count++;
+    if (c->serial_in_count >= 8u) {
+        c->registers[CIA_REG_SDR] = c->serial_shift;
+        c->serial_in_count = 0;
+        cia_set_interrupt_source(c, CIA_INTERRUPT_SERIAL);
+    }
+}
+
 void cia_step_cycle(cia *c) {
+    bool pending_now;
+
     assert(c);
 
     cia_reset_timer_output_pulses(c);
     cia_step_timer(c, &c->timer_a, CIA_REG_CONTROL_A, CIA_INTERRUPT_TIMER_A);
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
+    cia_step_serial(c);
     cia_step_tod(c);
+    /* The latched ICR state drives the interrupt output pin one cycle later, per
+     * the 6526 interrupt delay. cia_irq_pending() continues to report the
+     * immediate latched state used by the validated CPU IRQ/NMI path;
+     * interrupt_line models the delayed pin for cycle-accurate consumers and
+     * debugger visibility without altering CPU-observable timing. */
+    pending_now = (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
+    c->interrupt_line = c->interrupt_pending_latched;
+    c->interrupt_pending_latched = pending_now;
+    /* PC pulses low for the one cycle following a CPU-visible PRB access, then
+     * returns high. */
+    c->pc_line = !c->pc_pulse_request;
+    c->pc_pulse_request = false;
     c->cnt_pulse = false;
 }
 
@@ -434,6 +499,33 @@ void cia_pulse_cnt(cia *c) {
     assert(c);
 
     c->cnt_pulse = true;
+}
+
+void cia_set_flag_line(cia *c, bool level) {
+    assert(c);
+
+    if (c->flag_line && !level) {
+        cia_set_interrupt_source(c, CIA_INTERRUPT_FLAG);
+    }
+    c->flag_line = level;
+}
+
+void cia_set_sp_line(cia *c, bool level) {
+    assert(c);
+
+    c->sp_input = level;
+}
+
+bool cia_pc_line(const cia *c) {
+    assert(c);
+
+    return c->pc_line;
+}
+
+bool cia_interrupt_line(const cia *c) {
+    assert(c);
+
+    return c->interrupt_line;
 }
 
 uint8_t cia_read_register(cia *c, uint16_t addr) {
@@ -446,6 +538,7 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
         case CIA_REG_PORT_A:
             return cia_read_port_a_pins_internal(c);
         case CIA_REG_PORT_B:
+            c->pc_pulse_request = true;
             return cia_read_port_b_pins(c);
         case CIA_REG_TIMER_A_LO:
             return (uint8_t)(c->timer_a.counter & 0xffu);
@@ -484,6 +577,10 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
 
     reg = (uint8_t)(addr & 0x0fu);
     switch (reg) {
+        case CIA_REG_PORT_B:
+            c->registers[reg] = value;
+            c->pc_pulse_request = true;
+            return;
         case CIA_REG_TIMER_A_LO:
             c->registers[reg] = value;
             c->timer_a.latch = (uint16_t)((c->timer_a.latch & 0xff00u) | value);
@@ -517,6 +614,19 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
         case CIA_REG_TOD_MINUTES:
         case CIA_REG_TOD_HOURS:
             cia_write_tod_register(c, reg, value);
+            return;
+        case CIA_REG_SDR:
+            c->registers[reg] = value;
+            if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_A_SERIAL_OUT) != 0) {
+                if (c->serial_out_bits == 0) {
+                    c->serial_shift = value;
+                    c->serial_out_bits = 8;
+                    c->serial_cnt_toggle = false;
+                } else {
+                    c->serial_pending_data = value;
+                    c->serial_pending = true;
+                }
+            }
             return;
         case CIA_REG_ICR:
             c->icr_writes++;

@@ -15,7 +15,7 @@ The emulator currently includes:
 
 - Core C64 runtime: 6510 CPU, RAM/ROM/banking/address decode, reset/boot path, runtime command/event model, run/pause/reset, cycle/instruction stepping, and frame handoff.
 - VIC-II through Phase J, except light pen skipped.
-- CIA through Phase G, including CIA #1 IRQ, CIA #2 NMI, timers, ICR behavior, keyboard/joystick/RESTORE, CIA #2 VIC bank, IEC pins, TOD, and alarm.
+- CIA through Phase G plus the C64MFULL pin/serial work (FLAG, serial SDR/CNT/SP, PC handshake, delayed interrupt-line model), including CIA #1 IRQ, CIA #2 NMI, timers, ICR behavior, keyboard/joystick/RESTORE, CIA #2 VIC bank, IEC pins, TOD, and alarm.
 - SID functional audio plus SID improvement Phase 10 as the current measured baseline.
 - Runtime audio infrastructure with cycle-stepped sample production, SDL output, recording, smoke tone, turbo mute, and overrun/underrun counters.
 - Debugger/config/frontend UI through the documented phases, including hardware view, memory/disassembly source modes, virtual memory views, assembler tab, help UI, host load/save UI, and modal input isolation.
@@ -51,6 +51,7 @@ The emulator currently includes:
   remain deferred. See
   `docs/status/CPU_MACHINE.md`.
 - CIA #2 NMI is wired to the CPU NMI edge latch. RESTORE remains a separate one-shot NMI source.
+- CIA full pin/serial accuracy (`md-files/C64MFULL_CIA.md`) is implemented through Phase 4: FLAG negative-edge interrupt (ICR bit 4, `cia_set_flag_line`), serial shift register (SDR/CNT/SP, ICR bit 3, `cia_set_sp_line` + `cia_pulse_cnt`, Timer-A-driven output), the PC handshake pulse (`cia_pc_line`), and a conservative delayed interrupt-line model (`cia_interrupt_line`) that is separate from the immediate `cia_irq_pending` still driving the CPU path. Phase 4 was scoped conservatively so no CPU-observable timing changed; bit-exact 6526 cycle/race timing and chip-variant policy remain deferred pending a VICE-derived reference corpus. The FLAG/SP/PC seams are not yet wired to concrete peripherals; tape (`.TAP`) and RS-232 will consume them. See `docs/status/CIA.md`.
 - VIC-II sprite BA timing now uses per-standard PAL 6569 and NTSC 6567R8 tables selected from machine video configuration.
 - Runtime audio production now advances from the cycle-stepping path, not from 1024-cycle batches.
 - Fixed PAL live-audio distortion: the runtime frame pacer was hardcoded to 60 fps, so PAL (~50 fps) emulated ~20% faster than wall-clock and over-ran the audio ring buffer, dropping samples. The pacer now paces to the active standard's real frame rate via `c64_config_cycles_per_frame()`. NTSC (~60 fps) was already correct and is unchanged. This also fixes PAL previously running ~20% fast in wall-clock. See `docs/status/AUDIO.md`.
