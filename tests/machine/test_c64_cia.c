@@ -664,6 +664,11 @@ static void test_cia_icr_masked_flags_and_mask_writes(void) {
     expect_u8("clear mask only clears selected timer a", 0x02, c.interrupt_mask);
     expect_true("timer b still asserts after timer a mask clear", cia_irq_pending(&c));
 
+    /* Lorenz IMR: clearing remaining mask must not clear latched IR / flags. */
+    cia_write_register(&c, CIA_REG_ICR, 0x7f);
+    expect_true("ir flip-flop survives full mask clear", cia_irq_pending(&c));
+    expect_u8("icr still reports flags|IR after mask clear", 0x83, cia_debug_read_register(&c, CIA_REG_ICR));
+
     expect_u8("normal read reports and clears flags", 0x83, cia_read_register(&c, CIA_REG_ICR));
     expect_false("icr read deasserts when flags clear", cia_irq_pending(&c));
     expect_u8("source flags cleared by read", 0x00, c.interrupt_flags);

@@ -65,10 +65,11 @@
   See `md-files/corpus/cia-timing/`.
 - Corpus tools: `tools/cia-timing-corpus/` (`run_x64sc.sh`, `run_c64m.sh`).
   VICE baselines green on priority/lorenz-cia/cia-core. c64m priority matrix:
-  **11 PASS / 18 FAIL / 2 OTHER** (`results/c64m-priority-latest.tsv`) after
-  Lorenz start-delay + underflow-on-1 pipeline. Timers: two Phi2 clocks after
-  START before counting; underflow reloads from latch and discards the next
-  count clock (phi2 sequence 2-1-2-2-…).
+  **11 PASS / 18 FAIL / 2 OTHER** (`results/c64m-priority-latest.tsv`).
+  Timer model: two Phi2 clocks after START before counting; underflow reloads
+  from latch and discards the next count clock; oneshot stop uses a delayed
+  effective bit (set delay 1, clear delay 2). IR flip-flop sets when flags&mask
+  and clears only on ICR read (clearing IMR does not clear IR).
 - 6526 vs 6526A vs 8521 chip-variant policy is not modeled yet (corpus runs both
   `-ciamodel 0` and `1` as separate cases).
 - Serial timing models one bit per two Timer A underflows; sub-cycle SP/CNT

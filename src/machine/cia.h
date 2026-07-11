@@ -25,6 +25,10 @@ typedef struct cia_timer {
     uint8_t start_delay;
     /* After force-load or underflow reload, the next count clock is discarded. */
     bool skip_tick;
+    /* Effective oneshot for underflow (delayed vs CRA bit 3 / FLIPOS). */
+    bool oneshot_effective;
+    bool oneshot_pending;
+    uint8_t oneshot_delay; /* cycles until pending applies: set=1, clear=2 */
 } cia_timer;
 
 typedef struct cia_tod {
@@ -78,6 +82,8 @@ struct cia {
     bool pc_pulse_request;
     bool interrupt_line;
     bool interrupt_pending_latched;
+    /* Latched IR flip-flop: set when flags&mask, cleared only by ICR read. */
+    bool interrupt_ff;
 };
 
 bool cia_init(cia *c, char *error, size_t error_size);

@@ -266,6 +266,12 @@ static void cia_reset_timer_output_pulses(cia *c) {
     c->timer_b.pulse_active = false;
 }
 
+static void cia_update_interrupt_ff(cia *c) {
+    if ((c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0) {
+        c->interrupt_ff = true;
+    }
+}
+
 void cia_set_interrupt_source(cia *c, uint8_t source_mask) {
     uint8_t flag;
 
@@ -280,6 +286,27 @@ void cia_set_interrupt_source(cia *c, uint8_t source_mask) {
         c->interrupt_assertions++;
     }
     c->interrupt_flags |= flag;
+    cia_update_interrupt_ff(c);
+}
+
+static void cia_timer_update_oneshot_pipe(cia_timer *timer) {
+    if (timer->oneshot_delay == 0u) {
+        return;
+    }
+    timer->oneshot_delay--;
+    if (timer->oneshot_delay == 0u) {
+        timer->oneshot_effective = timer->oneshot_pending;
+    }
+}
+
+static void cia_timer_write_oneshot(cia_timer *timer, bool oneshot) {
+    if (oneshot == timer->oneshot_effective && timer->oneshot_delay == 0u) {
+        timer->oneshot_pending = oneshot;
+        return;
+    }
+    /* Lorenz FLIPOS: set oneshot takes effect in 1 cycle, clear in 2. */
+    timer->oneshot_pending = oneshot;
+    timer->oneshot_delay = oneshot ? 1u : 2u;
 }
 
 static bool cia_timer_a_should_count(const cia *c, uint8_t control) {
@@ -322,14 +349,18 @@ static void cia_timer_update_pb_output(cia_timer *timer, uint8_t control) {
 
 static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_t interrupt_flag) {
     uint8_t control = c->registers[control_reg];
+    bool oneshot_for_uf;
 
     timer->underflow = false;
+    /* Sample oneshot before pipeline advance (FLIPOS: write after clock). */
+    oneshot_for_uf = timer->oneshot_effective;
+    cia_timer_update_oneshot_pipe(timer);
+
     if ((control & CIA_CONTROL_START) == 0) {
         timer->start_delay = 0;
         return;
     }
 
-    /* Two clocks after start before any count (Lorenz); burns Phi2 while started. */
     if (timer->start_delay > 0u) {
         timer->start_delay--;
         return;
@@ -348,18 +379,14 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
         return;
     }
 
-    /*
-     * Phi2 continuous sequences read as 2-1-2-2-1-2 (no visible 0): underflow
-     * on the tick that would leave 0, reload from latch, and discard the next
-     * clock. Zero latch maps to 0xFFFF and still decrements normally until 1.
-     */
     if (timer->counter <= 1u) {
         timer->underflow = true;
         cia_set_interrupt_source(c, interrupt_flag);
         cia_timer_update_pb_output(timer, control);
         cia_reload_timer_from_run(timer);
-        if ((control & CIA_CONTROL_ONESHOT) != 0) {
-            c->registers[control_reg] = (uint8_t)(control & (uint8_t)~CIA_CONTROL_START);
+        if (oneshot_for_uf) {
+            c->registers[control_reg] =
+                (uint8_t)(c->registers[control_reg] & (uint8_t)~CIA_CONTROL_START);
         }
         return;
     }
@@ -507,11 +534,10 @@ void cia_step_cycle(cia *c) {
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
     cia_step_serial(c);
     cia_step_tod(c);
-    /* Latched ICR (flags & mask) drives the interrupt output pin one cycle
-     * later (6526 interrupt delay). cia_irq_pending() reports the immediate
-     * latched state; cia_interrupt_line() is the delayed pin that drives the
-     * CPU IRQ/NMI path (c64_cpu_irq_pending / c64_cpu_nmi_pending). */
-    pending_now = (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
+    /* IR flip-flop (set when flags&mask) drives the interrupt pin one cycle
+     * later. Clearing the mask does not clear the flip-flop — only ICR read. */
+    cia_update_interrupt_ff(c);
+    pending_now = c->interrupt_ff;
     c->interrupt_line = c->interrupt_pending_latched;
     c->interrupt_pending_latched = pending_now;
     /* PC pulses low for the one cycle following a CPU-visible PRB access, then
@@ -583,10 +609,12 @@ uint8_t cia_read_register(cia *c, uint16_t addr) {
             uint8_t flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
             uint8_t value = flags;
             c->icr_reads++;
-            if ((flags & c->interrupt_mask) != 0) {
+            /* Bit 7 follows the IR flip-flop (and live flags&mask). */
+            if (c->interrupt_ff || (flags & c->interrupt_mask) != 0) {
                 value |= 0x80u;
             }
             c->interrupt_flags &= (uint8_t)~flags;
+            c->interrupt_ff = false;
             c->timer_a.underflow = false;
             c->timer_b.underflow = false;
             return value;
@@ -662,20 +690,20 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
                 c->interrupt_mask &= (uint8_t)~(value & CIA_INTERRUPT_SOURCE_MASK);
             }
             c->registers[reg] = c->interrupt_mask;
+            /* Enabling a mask for an already-latched flag sets IR; clear does not. */
+            cia_update_interrupt_ff(c);
             return;
         case CIA_REG_CONTROL_A: {
             uint8_t old = c->registers[reg];
             bool was_running = (old & CIA_CONTROL_START) != 0;
             c->registers[reg] = (uint8_t)(value & (uint8_t)~CIA_CONTROL_FORCE_LOAD);
             if ((value & CIA_CONTROL_FORCE_LOAD) != 0) {
-                /* Skip next tick only if the timer was already counting. */
                 if (was_running) {
                     cia_reload_timer_from_run(&c->timer_a);
                 } else {
                     cia_reload_timer(&c->timer_a);
                 }
             }
-            /* Rising edge of START: two-cycle count delay (Lorenz). */
             if (!was_running && ((value & CIA_CONTROL_START) != 0)) {
                 c->timer_a.start_delay = 2;
                 c->timer_a.skip_tick = false;
@@ -683,6 +711,7 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_a.start_delay = 0;
             }
+            cia_timer_write_oneshot(&c->timer_a, (value & CIA_CONTROL_ONESHOT) != 0);
             return;
         }
         case CIA_REG_CONTROL_B: {
@@ -703,6 +732,7 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_b.start_delay = 0;
             }
+            cia_timer_write_oneshot(&c->timer_b, (value & CIA_CONTROL_ONESHOT) != 0);
             return;
         }
         default:
@@ -738,7 +768,7 @@ uint8_t cia_debug_read_register(const cia *c, uint16_t addr) {
             return cia_debug_read_tod_register(c, reg);
         case CIA_REG_ICR:
             flags = (uint8_t)(c->interrupt_flags & CIA_INTERRUPT_SOURCE_MASK);
-            if ((flags & c->interrupt_mask) != 0) {
+            if (c->interrupt_ff || (flags & c->interrupt_mask) != 0) {
                 return (uint8_t)(flags | 0x80u);
             }
             return flags;
@@ -756,7 +786,9 @@ uint8_t cia_read_port_a_pins(const cia *c) {
 bool cia_irq_pending(const cia *c) {
     assert(c);
 
-    return (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
+    /* True while the IR flip-flop is set (or live flags&mask before step). */
+    return c->interrupt_ff ||
+        (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
 }
 
 uint8_t cia_peek_port_a_output(const cia *c) {
