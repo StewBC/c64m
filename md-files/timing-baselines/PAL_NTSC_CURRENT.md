@@ -28,9 +28,9 @@ for following CPU cycles; this ordering is part of the current baseline.
 
 | Fixture | Current signature | Executable coverage |
 |---|---|---|
-| Bad line | c-access marker cycles 15 through 54; BA assertion is processed at cycle 12. The CPU cycle at 12 proceeds, followed by 43 held read attempts; the next eligible cycle resumes the pending read. | `test_timing_fixture_records_real_badline_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
-| Sprite 0 | BA assertion is processed at cycle 54. The current six-cycle window produces five following held read attempts, then resume. Sprite fetch marker is cycle 57. | `test_timing_fixture_records_pal_sprite_ba_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
-| Sprite 3 cross-line | BA assertion is processed at cycle 60 of line N-1 for the line-N fetch. The held read spans the raster-line rollover and resumes after the window. Sprite fetch marker is cycle 0 of line N. | `test_timing_fixture_records_cross_line_sprite_ba_stall` |
+| Bad line | c-access marker cycles 15 through 54; the schedule derives BA three cycles earlier at cycle 12. The CPU cycle at 12 proceeds, followed by 43 held read attempts; the next eligible cycle resumes the pending read. | `test_timing_fixture_records_real_badline_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
+| Sprite 0 | Sprite-data slots are cycles 57/58; the schedule derives BA at cycle 54. The resulting release margin produces five following held read attempts, then resume. | `test_timing_fixture_records_pal_sprite_ba_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
+| Sprite 3 cross-line | The schedule sees the line-N sprite-data slot three cycles ahead at cycle 60 of line N-1. The held read spans the raster-line rollover and resumes after the derived window. | `test_timing_fixture_records_cross_line_sprite_ba_stall` |
 | CPU write timing | `STA $D020` emits opcode fetch, two operand reads, then the write at instruction start plus 3 Phi2 cycles. VIC observes the register write at that bus-event cycle. | `test_sta_d020_applies_at_event_cycle` |
 
 PAL uses 63 cycles per line and 312 lines per frame.
@@ -39,9 +39,9 @@ PAL uses 63 cycles per line and 312 lines per frame.
 
 | Fixture | Current signature | Executable coverage |
 |---|---|---|
-| Bad line | The c-access marker and current bad-line BA sequence use the same documented cycle numbers as the PAL model: c-access marker cycles 15 through 54 and assertion processed at cycle 12. | `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
-| Sprite 0 | BA assertion is processed at cycle 56. The current six-cycle window produces five following held read attempts, then resume. Sprite fetch marker is cycle 59. | `test_timing_fixture_records_ntsc_sprite_ba_stall` |
-| Sprite fetch schedule | Sprite fetch marker cycles are 59, 61, 63, 0, 2, 4, 6, and 8 for sprites 0 through 7. | `vicii_ntsc_sprite_fetch_cycle`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
+| Bad line | The c-access schedule uses cycles 15 through 54; BA derives at cycle 12 from the future Phi2 c-access run. | `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
+| Sprite 0 | Sprite-data slots are cycles 59/60; BA derives at cycle 56 and the CPU resumes after the same schedule release rule. | `test_timing_fixture_records_ntsc_sprite_ba_stall` |
+| Sprite fetch schedule | Sprite pointer/data slot starts are 59, 61, 63, 0, 2, 4, 6, and 8 for sprites 0 through 7. | `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
 
 NTSC uses 65 cycles per line and 263 lines per frame.
 
@@ -53,3 +53,11 @@ NTSC uses 65 cycles per line and 263 lines per frame.
   value is a current-model regression baseline or a hardware-validated target.
 - A new fixture should name PAL or NTSC, the ROM/program bytes, the starting
   raster line/cycle, expected CPU result, and the relevant bus/BA signature.
+
+## Combined CPU/VIC interaction traces
+
+`test_cpu_vic_pal_ntsc_interaction_traces` executes `LDA $1234` through the
+actual CPU/VIC arbiter and asserts the absolute cycles of opcode, operand, and
+data events alongside raster progression. It covers PAL bad-line, PAL sprite-0,
+NTSC sprite-0, and PAL sprite-3 cross-line cases. These are current-model
+regression traces, not hardware-authoritative golden traces.

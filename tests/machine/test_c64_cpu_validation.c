@@ -1450,6 +1450,87 @@ static void test_ba_stalls_pending_read_cycle(void) {
     expect_true("lda trace still pending", machine.pending_cpu_trace_active || machine.cpu.micro_active);
 }
 
+static void run_cpu_vic_interaction_trace(
+    c64_video_standard standard,
+    uint32_t raster_line,
+    uint32_t cycle_in_line,
+    bool bad_line,
+    int sprite,
+    uint64_t expected_first_cycle,
+    uint64_t expected_data_cycle,
+    uint32_t expected_final_line)
+{
+    static const uint8_t program[] = {
+        0xad, 0x34, 0x12  /* LDA $1234 */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+    char name[96];
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine_standard(&machine, &roms, standard);
+    machine.bus.ram[0x1234] = 0x5au;
+    machine.clock.cycle = expected_first_cycle;
+    machine.vic.timing.raster_line = raster_line;
+    machine.vic.timing.cycle_in_line = cycle_in_line;
+
+    if (bad_line) {
+        vicii_write_register(&machine.vic, 0xd011, 0x13u);
+    } else {
+        vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite only. */
+        vicii_write_register(&machine.vic, 0xd015, (uint8_t)(1u << sprite));
+        machine.vic.sprite_active[sprite] = true;
+        machine.vic.sprite_visible[sprite] = true;
+    }
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    machine.instruction_complete = false;
+    step_machine_cycles(&machine, 1); /* opcode fetch, then VIC derives BA. */
+    while (!machine.instruction_complete) {
+        step_machine_cycles(&machine, 1);
+    }
+
+    c64_debug_copy_last_cpu_trace(&machine, &trace);
+    snprintf(name, sizeof(name), "%s interaction r%u/c%u",
+        standard == C64_VIDEO_STANDARD_PAL ? "PAL" : "NTSC",
+        raster_line, cycle_in_line);
+    expect_u64(name, 4u, trace.event_count);
+    expect_u64(name, expected_first_cycle, trace.events[0].absolute_cycle);
+    expect_u64(name, expected_data_cycle, trace.events[1].absolute_cycle);
+    expect_u64(name, expected_data_cycle + 1u, trace.events[2].absolute_cycle);
+    expect_u64(name, expected_data_cycle + 2u, trace.events[3].absolute_cycle);
+    expect_u8(name, C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8(name, C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u8(name, C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u8(name, 0x5au, snapshot(&machine).a);
+    expect_u64(name, expected_final_line, machine.vic.timing.raster_line);
+    expect_true(name, !vicii_ba_active(&machine.vic, machine.clock.cycle));
+}
+
+static void test_cpu_vic_pal_ntsc_interaction_traces(void) {
+    /* Bad-line C accesses: opcode at 12, then the first operand read at 56
+       after the schedule-derived C run [15,54] and release margin. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 0x33u, 12u, true, 0,
+        12u, 56u, 0x33u);
+
+    /* PAL sprite 0 data is scheduled at cycles 57/58; BA is derived at 54. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 54u, false, 0,
+        54u, 60u, 101u);
+
+    /* NTSC sprite 0 uses the 6567R8 slot at cycles 59/60; BA derives at 56. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_NTSC, 100u, 56u, false, 0,
+        56u, 62u, 101u);
+
+    /* PAL sprite 3 is the cross-line case: data is at line N+1/cycle 0/1. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 60u, false, 3,
+        60u, 66u, 101u);
+}
+
 static void test_instruction_and_cycle_step_share_ba_arbiter(void) {
     static const uint8_t program[] = {
         0xad, 0x34, 0x12  /* LDA $1234 */
@@ -1828,6 +1909,7 @@ int main(void) {
     test_ba_allows_pending_write_cycle();
     test_migrated_rmw_writes_proceed_while_ba_is_low();
     test_ba_stalls_pending_read_cycle();
+    test_cpu_vic_pal_ntsc_interaction_traces();
     test_instruction_and_cycle_step_share_ba_arbiter();
     test_timing_fixture_records_pending_read_stall();
     test_timing_fixture_records_real_badline_stall();
