@@ -212,6 +212,7 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
+    memset(v->sprite_pointer,  0, sizeof(v->sprite_pointer));
     memset(v->sprite_data,         0, sizeof(v->sprite_data));
     memset(v->sprite_line_enabled,    0, sizeof(v->sprite_line_enabled));
     memset(v->sprite_line_x,          0, sizeof(v->sprite_line_x));
@@ -410,25 +411,19 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
     return c;
 }
 
-static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
-    uint16_t vic_bank;
-    uint16_t screen_base;
+/* The line sequencer decides which sprites need DMA at cycle 0.  Their pointer
+   and three data bytes are fetched later at their scheduled Phi1/Phi2 slots;
+   do not batch those bus reads here. */
+static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
     uint8_t  enable;
     int      n;
 
     memset(v->sprite_visible, 0, sizeof(v->sprite_visible));
-
-    if (!bus) return;
-
-    vic_bank    = c64_bus_vic_bank_base(bus);
-    screen_base = (uint16_t)(((v->registers[0x18] >> 4) & 0x0Fu) * 0x0400u);
     enable      = v->registers[VICII_REG_SPR_ENABLE];
 
     for (n = 0; n < 8; n++) {
         uint8_t  spr_y    = v->registers[1 + n * 2];
         uint32_t raster_y = v->timing.raster_line;
-        bool     y_expand = (v->registers[VICII_REG_SPR_Y_EXPAND] >> n) & 1u;
-
         if ((enable >> n) & 1u) {
             if (raster_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
                 v->sprite_mc[n]       = 0;
@@ -440,35 +435,35 @@ static void vicii_fetch_sprites(vicii *v, const c64_bus_t *bus) {
             v->sprite_visible[n] = false;
         }
 
-        if (v->sprite_active[n]) {
-            uint8_t  mc = v->sprite_mc[n];
-            bool     advance_mc;
-            uint16_t ptr_addr;
-            uint8_t  pointer;
+        /* The live renderer consumes a complete row before the first display
+           pixels of this line are emitted. Keep that established latch timing
+           while the schedule below records the real split pointer/data slots;
+           a later renderer-pipeline change can retire this pre-latch without
+           changing the schedule or BA interface. */
+        if (bus && v->sprite_active[n]) {
+            uint8_t mc = v->sprite_mc[n];
+            bool advance_mc;
+            uint16_t vic_bank = c64_bus_vic_bank_base(bus);
+            uint16_t screen_base = (uint16_t)(((v->registers[0x18] >> 4) & 0x0fu) * 0x0400u);
+            uint16_t ptr_addr = (uint16_t)(vic_bank + screen_base + 0x03f8u + (uint16_t)n);
             uint16_t data_base;
 
-            if (y_expand) {
-                advance_mc             = v->sprite_y_exp_ff[n];
+            if ((v->registers[VICII_REG_SPR_Y_EXPAND] & (uint8_t)(1u << n)) != 0u) {
+                advance_mc = v->sprite_y_exp_ff[n];
                 v->sprite_y_exp_ff[n] ^= 1u;
             } else {
                 advance_mc = true;
             }
-
-            ptr_addr  = (uint16_t)((vic_bank + screen_base + 0x03F8u + (uint16_t)n) & 0xFFFFu);
-            pointer   = c64_bus_vic_read_ram(bus, ptr_addr);
-            data_base = (uint16_t)((vic_bank + (uint16_t)pointer * 64u) & 0xFFFFu);
-            v->sprite_data[n][0] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc)      & 0xFFFFu));
-            v->sprite_data[n][1] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 1u) & 0xFFFFu));
-            v->sprite_data[n][2] = c64_bus_vic_read_ram(bus, (uint16_t)((data_base + mc + 2u) & 0xFFFFu));
+            v->sprite_pointer[n] = c64_bus_vic_read_ram(bus, ptr_addr);
+            data_base = (uint16_t)(vic_bank + (uint16_t)v->sprite_pointer[n] * 64u);
+            v->sprite_data[n][0] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc));
+            v->sprite_data[n][1] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc + 1u));
+            v->sprite_data[n][2] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc + 2u));
             v->sprite_visible[n] = true;
-
             if (advance_mc) {
                 mc = (uint8_t)(mc + 3u);
-                if (mc >= 63u) {
-                    v->sprite_active[n] = false;
-                } else {
-                    v->sprite_mc[n] = mc;
-                }
+                if (mc >= 63u) v->sprite_active[n] = false;
+                else v->sprite_mc[n] = mc;
             }
         }
     }
@@ -1012,23 +1007,133 @@ static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {
         vicii_ntsc_sprite_fetch_cycle;
 }
 
-static void vicii_schedule_bus_access(vicii *v, uint32_t cycle) {
-    const uint32_t *sprite_fetch_cycle;
+static bool vicii_sprite_slot(const vicii *v, uint32_t cycle, int *out_sprite, bool *out_second_cycle) {
+    const uint32_t *fetch_cycle = vicii_sprite_fetch_cycle_table(v);
     int n;
 
+    for (n = 0; n < 8; n++) {
+        if (cycle == fetch_cycle[n]) {
+            *out_sprite = n;
+            *out_second_cycle = false;
+            return true;
+        }
+        if (cycle == fetch_cycle[n] + 1u) {
+            *out_sprite = n;
+            *out_second_cycle = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void vicii_schedule_bus_access(vicii *v, uint32_t cycle) {
+    int sprite;
+    bool second_cycle;
+
+    /* Phi1 is always VIC-owned. In display state it performs g-accesses; in
+       idle state it performs the documented fixed idle access. Sprite slots
+       replace those accesses with pointer/data work. Phi2 is CPU-visible only
+       for bad-line c-accesses and the first/third sprite data bytes. */
     v->timing.bus_access = VICII_BUS_ACCESS_NONE;
-    if (v->bad_line && cycle >= VICII_CACCESS_FIRST_CYCLE &&
-        cycle <= VICII_CACCESS_LAST_CYCLE) {
-        v->timing.bus_access = VICII_BUS_ACCESS_C;
+    v->timing.bus_access_phi1 = v->display_state ?
+        VICII_BUS_ACCESS_G : VICII_BUS_ACCESS_IDLE;
+
+    if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
+        (void)sprite;
+        v->timing.bus_access_phi1 = second_cycle ?
+            VICII_BUS_ACCESS_SPRITE_DATA : VICII_BUS_ACCESS_SPRITE_POINTER;
+        v->timing.bus_access = VICII_BUS_ACCESS_SPRITE_DATA;
         return;
     }
 
-    sprite_fetch_cycle = vicii_sprite_fetch_cycle_table(v);
-    for (n = 0; n < 8; n++) {
-        if (v->sprite_active[n] && cycle == sprite_fetch_cycle[n]) {
-            v->timing.bus_access = VICII_BUS_ACCESS_SPRITE;
-            return;
-        }
+    if (v->bad_line && cycle >= VICII_CACCESS_FIRST_CYCLE &&
+        cycle <= VICII_CACCESS_LAST_CYCLE) {
+        v->timing.bus_access = VICII_BUS_ACCESS_C;
+    }
+}
+
+static void vicii_fetch_c_access(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
+    uint32_t col = cycle - VICII_CACCESS_FIRST_CYCLE;
+    uint16_t screen_base;
+    uint16_t vc_col;
+
+    if (!bus || col >= VICII_TEXT_COLUMNS) return;
+    screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
+        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    vc_col = (uint16_t)((v->vc + col) & VICII_VC_MAX);
+    v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
+    v->color_line[col] = c64_bus_vic_read_color(bus, vc_col);
+}
+
+static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
+    uint16_t vic_bank;
+    uint16_t address;
+    uint32_t col;
+
+    if (!bus) return;
+    vic_bank = c64_bus_vic_bank_base(bus);
+    if (!v->display_state || cycle < VICII_CACCESS_FIRST_CYCLE ||
+        cycle > VICII_CACCESS_LAST_CYCLE) {
+        address = (uint16_t)(vic_bank +
+            ((v->registers[VICII_REG_CONTROL_1] & 0x40u) ? 0x39ffu : 0x3fffu));
+        (void)c64_bus_vic_read_ram(bus, address);
+        return;
+    }
+
+    col = cycle - VICII_CACCESS_FIRST_CYCLE;
+    if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
+        uint16_t bitmap_base = (uint16_t)(vic_bank +
+            ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+        address = (uint16_t)(bitmap_base + (((uint16_t)(v->vc_base + col) & 0x03ffu) << 3) + v->rc);
+        (void)c64_bus_vic_read_ram(bus, address);
+    } else {
+        uint16_t char_base = (uint16_t)(vic_bank +
+            ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+        uint8_t code = v->video_matrix[col];
+        if ((v->registers[VICII_REG_CONTROL_1] & 0x40u) != 0u) code &= 0x3fu;
+        (void)c64_bus_vic_read_char_glyph_at(bus, char_base, code, v->rc);
+    }
+}
+
+static void vicii_fetch_sprite_slot(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
+    int n;
+    bool second_cycle;
+    uint16_t vic_bank;
+    uint16_t screen_base;
+    uint16_t data_base;
+    uint8_t mc;
+
+    if (!bus || !vicii_sprite_slot(v, cycle, &n, &second_cycle)) return;
+    vic_bank = c64_bus_vic_bank_base(bus);
+    screen_base = (uint16_t)(((v->registers[VICII_REG_MEMORY_POINTER] >> 4) & 0x0fu) * 0x0400u);
+
+    if (!second_cycle) {
+        uint16_t ptr = (uint16_t)(vic_bank + screen_base + 0x03f8u + (uint16_t)n);
+        v->sprite_pointer[n] = c64_bus_vic_read_ram(bus, ptr);
+        if (!v->sprite_visible[n]) return;
+        mc = v->sprite_mc[n];
+        data_base = (uint16_t)(vic_bank + (uint16_t)v->sprite_pointer[n] * 64u);
+        (void)c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc));
+        return;
+    }
+
+    if (!v->sprite_visible[n]) return;
+    mc = v->sprite_mc[n];
+    data_base = (uint16_t)(vic_bank + (uint16_t)v->sprite_pointer[n] * 64u);
+    (void)c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc + 1u));
+    (void)c64_bus_vic_read_ram(bus, (uint16_t)(data_base + mc + 2u));
+}
+
+static void vicii_execute_scheduled_fetches(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
+    if (v->timing.bus_access_phi1 == VICII_BUS_ACCESS_SPRITE_POINTER ||
+        v->timing.bus_access_phi1 == VICII_BUS_ACCESS_SPRITE_DATA ||
+        v->timing.bus_access == VICII_BUS_ACCESS_SPRITE_DATA) {
+        vicii_fetch_sprite_slot(v, bus, cycle);
+        return;
+    }
+    vicii_fetch_g_or_idle_access(v, bus, cycle);
+    if (v->timing.bus_access == VICII_BUS_ACCESS_C) {
+        vicii_fetch_c_access(v, bus, cycle);
     }
 }
 
@@ -1096,11 +1201,12 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     if (cycle == 0) {
-        vicii_fetch_sprites(v, bus);
+        vicii_prepare_sprite_line(v, bus);
         vicii_latch_sprite_line_state(v);
     }
 
     vicii_schedule_bus_access(v, cycle);
+    vicii_execute_scheduled_fetches(v, bus, cycle);
 
     /* Bad-line BA: assert at cycle 12 for the 43-cycle c-access window (12-54
        inclusive). Window = [abs_cycle_at_12, abs_cycle_at_12 + 44). */
@@ -1226,6 +1332,11 @@ bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {
 vicii_bus_access_kind vicii_bus_access(const vicii *v) {
     assert(v);
     return v->timing.bus_access;
+}
+
+vicii_bus_access_kind vicii_bus_access_phi1(const vicii *v) {
+    assert(v);
+    return v->timing.bus_access_phi1;
 }
 
 void vicii_destroy(vicii *v) {

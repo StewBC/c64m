@@ -6,9 +6,10 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 - Light pen registers `$D013/$D014` are stubbed; Phase F was skipped.
 - Cycle-perfect video timing is not complete. The current Phi2 arbiter and
-  resumable CPU subset improve BA-visible timing, but not every CPU opcode or
-  VIC-II fetch type has migrated from compatibility replay to an interleaved
-  schedule.
+  resumable CPU subset improve BA-visible timing, and the VIC-II now schedules
+  character, graphics, idle, sprite-pointer, and sprite-data fetch types. BA
+  is still maintained by validated lead windows rather than derived directly
+  from every scheduled fetch.
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered for the region

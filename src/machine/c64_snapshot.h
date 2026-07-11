@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define C64_SNAPSHOT_MAGIC 0x63363453u
-#define C64_SNAPSHOT_VERSION 1u
+#define C64_SNAPSHOT_VERSION 2u
 
 typedef enum c64_snapshot_content_mode {
     C64_SNAPSHOT_CONTENT_REFERENCED = 1,

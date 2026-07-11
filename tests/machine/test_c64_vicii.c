@@ -1361,11 +1361,19 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
 
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    vicii_step_cycle(&v, NULL, 0u);
+    (void)advance_vicii(&v, 1u, 10u);
+    expect_u8("idle g-access schedule", VICII_BUS_ACCESS_IDLE,
+        (uint8_t)vicii_bus_access_phi1(&v));
+    vicii_reset(&v);
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x13u);
     v.timing.raster_line = 0x33u;
     abs = advance_vicii(&v, 0, 16u); /* process cycles 0 through 15 */
     expect_u8("badline c-access schedule", VICII_BUS_ACCESS_C,
         (uint8_t)vicii_bus_access(&v));
+    expect_u8("badline g-access schedule", VICII_BUS_ACCESS_G,
+        (uint8_t)vicii_bus_access_phi1(&v));
     abs = advance_vicii(&v, abs, 40u); /* process cycles 16 through 55 */
     expect_u8("post-badline c-access schedule", VICII_BUS_ACCESS_NONE,
         (uint8_t)vicii_bus_access(&v));
@@ -1373,6 +1381,13 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     setup_sprite_ba_test(&v, error, 100u, 0x01u);
     (void)advance_vicii(&v, 0, 58u); /* process PAL sprite-0 fetch cycle 57 */
     expect_u8("sprite fetch schedule", VICII_BUS_ACCESS_SPRITE,
+        (uint8_t)vicii_bus_access(&v));
+    expect_u8("sprite pointer schedule", VICII_BUS_ACCESS_SPRITE_POINTER,
+        (uint8_t)vicii_bus_access_phi1(&v));
+    (void)advance_vicii(&v, 58u, 1u); /* process PAL sprite-0 second data cycle */
+    expect_u8("sprite data Phi1 schedule", VICII_BUS_ACCESS_SPRITE_DATA,
+        (uint8_t)vicii_bus_access_phi1(&v));
+    expect_u8("sprite data Phi2 schedule", VICII_BUS_ACCESS_SPRITE_DATA,
         (uint8_t)vicii_bus_access(&v));
 
     expect_true("ntsc vicii init", vicii_init(&ntsc, error, sizeof(error)));
@@ -1388,6 +1403,8 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     (void)advance_vicii(&ntsc, 0, 60u); /* process NTSC sprite-0 fetch cycle 59 */
     expect_u8("ntsc sprite fetch schedule", VICII_BUS_ACCESS_SPRITE,
         (uint8_t)vicii_bus_access(&ntsc));
+    expect_u8("ntsc sprite pointer schedule", VICII_BUS_ACCESS_SPRITE_POINTER,
+        (uint8_t)vicii_bus_access_phi1(&ntsc));
 }
 
 /* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */

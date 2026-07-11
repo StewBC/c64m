@@ -10,9 +10,10 @@
 - Sprites are implemented, including priority, collisions, expansion, multicolor, sprite pointer/data fetch, and IRQs.
 - Open/unused register reads are implemented according to the current Phase G policy.
 - PAL and NTSC sprite BA stealing are implemented.
-- The VIC-II exposes its current machine-internal scheduled bus operation for
-  bad-line c-accesses and sprite fetch cycles. BA still uses the existing
-  lead-window predicate while the full fetch scheduler is expanded.
+- The VIC-II has an explicit per-cycle, two-phase fetch schedule: Phi1 selects
+  graphics/idle/sprite-pointer work and Phi2 selects bad-line c-access or
+  sprite-data work. BA continues to use the existing tested lead-window
+  predicate; it is not yet derived from individual scheduled accesses.
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 
@@ -30,6 +31,15 @@
 - `$D011` DEN=0 blanks the visible display and border color to `$D021`, while preserving sprite visibility and collision behavior.
 
 ## Recent changes
+
+- Fetch scheduling is now explicit for character/color c-accesses, graphics
+  g-accesses, idle g-accesses, sprite pointers, and sprite data. Bad-line
+  character/color latches are updated in their individual cycles, and sprite
+  pointer/data reads run in their PAL/NTSC slots (including the existing
+  cross-line sprite 3/4 layout). `vicii_bus_access()` reports Phi2 work and
+  `vicii_bus_access_phi1()` reports Phi1 work. The live renderer retains its
+  prior complete-row sprite latch as a presentation pipeline, avoiding a visual
+  regression while the scheduled reads become the timing authority.
 
 - Raster IRQ now re-triggers when `$D011`/`$D012` updates make the 9-bit compare
   equal the *current* raster mid-line (hardware behaviour). Previously IRQ was
@@ -75,6 +85,9 @@
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered outside the vertical display window (opened-border pictures); it is a per-mode approximation, not a full cycle-exact idle sequencer.
 - Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
 - Exact RDY/AEC sub-cycle CPU pin timing is deferred.
+- The renderer's sprite-row pre-latch remains an implementation pipeline rather
+  than a literal representation of the previous-line DMA latch. The bus schedule
+  itself performs the pointer/data accesses in their cycle slots.
 - Sprite BA window is 6 cycles per assert (not 5). That length is required for
   the `samples/dkarcade2016.prg` PAL stable-raster reveal to stay locked to the
   raster (matches VICE x64sc `$D001` multiplex at r53/c~30 and r272/c~36).

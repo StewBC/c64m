@@ -34,7 +34,13 @@ typedef enum vicii_video_standard {
 typedef enum vicii_bus_access_kind {
     VICII_BUS_ACCESS_NONE = 0,
     VICII_BUS_ACCESS_C,
-    VICII_BUS_ACCESS_SPRITE
+    VICII_BUS_ACCESS_G,
+    VICII_BUS_ACCESS_IDLE,
+    VICII_BUS_ACCESS_SPRITE_POINTER,
+    VICII_BUS_ACCESS_SPRITE_DATA,
+    /* Compatibility spelling for callers which only distinguished the old
+       coarse sprite fetch marker. Phi2 sprite work is sprite-data work. */
+    VICII_BUS_ACCESS_SPRITE = VICII_BUS_ACCESS_SPRITE_DATA
 } vicii_bus_access_kind;
 
 typedef struct vicii_timing {
@@ -45,7 +51,8 @@ typedef struct vicii_timing {
     uint64_t frame_number;
     bool     frame_complete;
     vicii_video_standard standard;
-    vicii_bus_access_kind bus_access;
+    vicii_bus_access_kind bus_access;      /* Phi2: CPU-visible VIC work. */
+    vicii_bus_access_kind bus_access_phi1; /* Phi1: VIC-private bus work. */
 
     /* Phase A additions */
     uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
@@ -87,6 +94,7 @@ struct vicii {
     bool     sprite_active[8];      /* sprite sequencer remains active for future lines */
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
+    uint8_t  sprite_pointer[8];     /* pointer fetched in the sprite p-access */
     uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes (committed to renderer) */
     bool     sprite_line_enabled[8]; /* display controls latched for the current raster line */
     uint16_t sprite_line_x[8];
@@ -120,6 +128,7 @@ bool vicii_pixel_output_enabled(const vicii *v);
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
 vicii_bus_access_kind vicii_bus_access(const vicii *v);
+vicii_bus_access_kind vicii_bus_access_phi1(const vicii *v);
 void vicii_destroy(vicii *v);
 
 uint8_t vicii_read_register(vicii *v, uint16_t addr);

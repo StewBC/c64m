@@ -30,6 +30,9 @@
   executable machine test. These are regression baselines, not yet
   hardware-authoritative golden traces.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
+- VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
+  c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
+  format v2 carries the added sprite-pointer latch state.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE isolation, ICR read side effects, and debugger-safe peeks.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing, `assemble`/`find-symbol` parsing, plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.

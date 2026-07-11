@@ -392,6 +392,7 @@ static void write_vic(snapshot_writer *w, const c64_t *m) {
     for (i = 0; i < 8; ++i) w_bool(w, v->sprite_active[i]);
     for (i = 0; i < 8; ++i) w_bool(w, v->sprite_visible[i]);
     for (i = 0; i < 8; ++i) w_bool(w, v->sprite_y_exp_ff[i]);
+    w_bytes(w, v->sprite_pointer, sizeof(v->sprite_pointer));
     for (i = 0; i < 8; ++i) {
         for (n = 0; n < 3; ++n) w_u8(w, v->sprite_data[i][n]);
     }
@@ -709,6 +710,7 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     for (i = 0; i < 8; ++i) v->sprite_active[i] = r_bool(r);
     for (i = 0; i < 8; ++i) v->sprite_visible[i] = r_bool(r);
     for (i = 0; i < 8; ++i) v->sprite_y_exp_ff[i] = r_bool(r);
+    r_bytes(r, v->sprite_pointer, sizeof(v->sprite_pointer));
     for (i = 0; i < 8; ++i) {
         for (n = 0; n < 3; ++n) v->sprite_data[i][n] = r_u8(r);
     }

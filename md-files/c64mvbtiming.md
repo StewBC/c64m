@@ -421,6 +421,16 @@ The unstable bus/chip-dependent unofficial operations remain intentionally on
 compatibility replay. That boundary is explicit: migration here improves BA
 interleaving without falsely claiming revision-independent results.
 
+### Complete VIC fetch schedule (2026-07-11)
+
+The VIC-II now schedules character/color c-accesses, graphics and idle accesses,
+sprite pointers, and sprite-data accesses on explicit Phi1/Phi2 slots. Existing
+BA fixtures remain unchanged: BA still follows the established PAL/NTSC
+lead-window predicate, so this slice makes fetch work observable and ordered
+without claiming a new hardware-derived BA policy. The live renderer continues
+to pre-latch a complete sprite row before drawing a line, while the scheduled
+pointer/data reads preserve the authoritative timing order.
+
 ### Migrated-family BA validation (2026-07-11)
 
 The migrated documented addressing families now have a PAL bad-line regression
