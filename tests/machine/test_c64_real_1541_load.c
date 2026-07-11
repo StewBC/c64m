@@ -198,6 +198,31 @@ static void test_real_1541_star_load_returns(void) {
     }
 }
 
+static void setup_save_call(c64_t *machine, const char *name, uint16_t start, uint16_t end) {
+    size_t length = strlen(name);
+    size_t i;
+
+    machine->cpu.cpu.pc = 0xffd8u;
+    machine->cpu.cpu.sp = 0x01fdu;
+    machine->bus.ram[0x01fe] = (uint8_t)(TEST_RETURN_ADDRESS & 0xffu);
+    machine->bus.ram[0x01ff] = (uint8_t)(TEST_RETURN_ADDRESS >> 8);
+    machine->cpu.cpu.A = 0xc1u;
+    machine->cpu.cpu.X = (uint8_t)(end & 0xffu);
+    machine->cpu.cpu.Y = (uint8_t)(end >> 8);
+    machine->cpu.cpu.flags |= 0x01u;
+
+    machine->bus.ram[0xc1u] = (uint8_t)(start & 0xffu);
+    machine->bus.ram[0xc2u] = (uint8_t)(start >> 8);
+    machine->bus.ram[0xbau] = 8;
+    machine->bus.ram[0xb9u] = 0;
+    machine->bus.ram[0xb7u] = (uint8_t)length;
+    machine->bus.ram[0xbbu] = (uint8_t)(TEST_FILENAME_BUFFER & 0xffu);
+    machine->bus.ram[0xbcu] = (uint8_t)(TEST_FILENAME_BUFFER >> 8);
+    for (i = 0; i < length; ++i) {
+        machine->bus.ram[TEST_FILENAME_BUFFER + i] = (uint8_t)name[i];
+    }
+}
+
 static void test_real_1541_media_star_load_returns(void) {
     c64_t machine;
     uint16_t end;
@@ -242,8 +267,53 @@ static void test_real_1541_media_star_load_returns(void) {
     }
 }
 
+static void test_real_1541_media_save_small_prg(void) {
+    c64_t machine;
+    uint8_t expected[] = {0x01, 0x08, 0x11, 0x22, 0x33, 0x44};
+    size_t i;
+
+    install_real_roms_ex(&machine, 1);
+    mount_raw_d64(&machine, "blank.d64");
+    expect_true("writable blank", c64_set_drive_writable(&machine, 8, true));
+    step_cycles(&machine, 2500000u);
+    expect_true("media tracks valid", machine.drive8.media.tracks_valid != 0);
+
+    for (i = 2; i < sizeof(expected); ++i) {
+        machine.bus.ram[0x0801u + (uint16_t)(i - 2u)] = expected[i];
+    }
+
+    setup_save_call(&machine, "SAVED", 0x0801u, 0x0805u);
+    step_cycles(&machine, 180000000u);
+
+    if (machine.cpu.cpu.pc != (uint16_t)(TEST_RETURN_ADDRESS + 1u)) {
+        fprintf(stderr,
+            "media SAVE did not return: pc=%04X a=%02X p=%02X cycle=%llu "
+            "d8pc=%04X d8ht=%d d8mot=%d/%d d8wr=%d d8jobs=%02X,%02X,%02X,%02X,%02X dirty=%d\n",
+            machine.cpu.cpu.pc,
+            machine.cpu.cpu.A,
+            machine.cpu.cpu.flags,
+            (unsigned long long)machine.clock.cycle,
+            machine.drive8.cpu.cpu.pc,
+            machine.drive8.media.half_track,
+            machine.drive8.media.motor_on,
+            machine.drive8.media.motor_ready,
+            machine.drive8.media.writing,
+            machine.drive8.ram[0], machine.drive8.ram[1], machine.drive8.ram[2],
+            machine.drive8.ram[3], machine.drive8.ram[4],
+            machine.drives[0].dirty ? 1 : 0);
+        fail("real 1541 media SAVE did not return");
+    }
+    if ((machine.cpu.cpu.flags & 0x01u) != 0) {
+        fail("real 1541 media SAVE returned carry set");
+    }
+    if (!machine.drives[0].dirty) {
+        fail("media SAVE did not mark disk dirty");
+    }
+}
+
 int main(void) {
     test_real_1541_star_load_returns();
     test_real_1541_media_star_load_returns();
+    test_real_1541_media_save_small_prg();
     return 0;
 }

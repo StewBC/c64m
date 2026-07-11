@@ -3,10 +3,10 @@
 ## Automated coverage called out by status
 
 - SID: 63 tests in `tests/machine/test_sid.c` covering registers, voice behavior, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, audio-flow smoke, and per-standard rate tables (PAL bit-identical lock, NTSC clock-scaling, envelope absolute-time preservation).
-- 1541 media (M0–M3): `test_c1541_gcr` (encode/decode, sector framing, zones),
+- 1541 media (M0–M5): `test_c1541_gcr` (encode/decode, sector framing, zones),
   `test_c1541_media` (D64 track build, stepper/head-stop, motor/SYNC/BYTE READY,
-  WPS, physical-read gate), and `test_c64_real_1541_load` media case
-  (`media_1541=1` `LOAD"*"` from GALENCIA without READ intercept).
+  WPS, write-gate mutate, dirty-track→D64 sync), and `test_c64_real_1541_load`
+  media cases (`media_1541=1` `LOAD"*"` from GALENCIA; small PRG SAVE to blank).
 - Runtime audio scheduler: tests verify sample-count accounting and absence of batch-sized identical-sample SID runs.
 - CPU: local tests cover documented CPU execution, typed bus traces (opcode,
   operand, data, dummy, RMW, stack, and vector cycles), instruction/cycle-step

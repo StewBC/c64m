@@ -22,6 +22,7 @@ typedef struct c1541_track {
     uint8_t *data;
     size_t length; /* GCR bytes */
     int density;   /* 0..3 zone used when synthesised */
+    int dirty;     /* 1 if GCR stream was written since last D64 sync */
 } c1541_track;
 
 typedef struct c1541_media {
@@ -46,6 +47,12 @@ typedef struct c1541_media {
     int byte_ready;
     int so_pulse; /* edge request for CPU SO */
 
+    /* Write path (DDRA all outputs). */
+    int writing;          /* 1 while Port A is write mode */
+    int write_bits_left;  /* remaining bits of current write byte (0 = need latch) */
+    uint8_t write_shift;  /* bits still to write, MSB first */
+    int last_write_bit;   /* held while waiting for next Port A write */
+
     c1541_track tracks[C1541_MEDIA_TRACK_COUNT];
     int tracks_valid;
     const uint8_t *built_from; /* image_bytes pointer used for last build */
@@ -68,8 +75,28 @@ void c1541_media_step(struct c1541 *drive);
 /* Called when the drive CPU reads disk-controller VIA Port A ($1C01). */
 void c1541_media_on_port_a_read(struct c1541 *drive);
 
+/* Called when the drive CPU writes disk-controller VIA Port A ($1C01). */
+void c1541_media_on_port_a_write(struct c1541 *drive, uint8_t value);
+
 /* True when media mode should satisfy physical READ via rotation (no intercept). */
 int c1541_media_physical_read_active(const struct c1541 *drive);
+
+/* True when media mode has valid tracks (Port A write path is live). */
+int c1541_media_physical_write_active(const struct c1541 *drive);
+
+/* Rewrite one standard sector's data block in the synthesised GCR track
+   (used by the hybrid WRITE intercept to keep flux coherent with D64). */
+int c1541_media_poke_sector(
+    struct c1541 *drive,
+    uint8_t track,
+    uint8_t sector,
+    const uint8_t data[256]);
+
+/* Rebuild one track's GCR from the mounted D64 image (after format erase). */
+int c1541_media_rebuild_track(struct c1541 *drive, uint8_t track);
+
+/* Decode dirty GCR tracks back into the mounted D64 image_bytes; marks dirty. */
+int c1541_media_sync_dirty_to_d64(struct c1541 *drive);
 
 /* Invalidate synthesised tracks (e.g. after mount/unmount). */
 void c1541_media_invalidate(c1541_media *m);

@@ -1834,10 +1834,12 @@ void c64_unmount_drive(c64_t *machine, uint8_t device) {
         return;
     }
 
-    /* Drop synthesised GCR tracks before freeing image bytes. */
+    /* Push dirty GCR back to the D64, then drop track buffers. */
     if (device == 8) {
+        (void)c1541_media_sync_dirty_to_d64(&machine->drive8);
         c1541_media_invalidate(&machine->drive8.media);
     } else if (device == 9) {
+        (void)c1541_media_sync_dirty_to_d64(&machine->drive9);
         c1541_media_invalidate(&machine->drive9.media);
     }
 

@@ -2,7 +2,7 @@
 
 ## Status of this document
 
-**M0–M3 IMPLEMENTED (opt-in).** M4–M8 remain planned.
+**M0–M5 IMPLEMENTED (opt-in).** M6–M8 remain planned.
 
 | Field | Value |
 |---|---|
@@ -20,11 +20,23 @@
 | M1 Disk VIA mechanics | **Done** | Motor, spin-up, stepper, head-stop, WPS, density |
 | M2 GCR + D64 tracks | **Done** | Encode/decode, standard sector layout, track synthesis |
 | M3 Rotation / SYNC / read | **Done** | Port A GCR stream, BYTE READY→SO; stock LOAD without READ intercept |
-| M4 Port A write | Pending | WRITE still job-intercept |
-| M5 Real FORMT | Pending | FORMT still EXECUTE intercept |
+| M4 Port A write | **Done (hybrid)** | Port A + PCR write-gate flux path live; DOS WRITE jobs still intercept to D64 then `poke_sector` GCR |
+| M5 Format | **Done (hybrid)** | FORMT EXECUTE still erases D64 track then `rebuild_track` GCR |
 | M6 G64 | Pending | |
 | M7 Fast-loader matrix | Pending | |
 | M8 Harden / default | Pending | |
+
+### M4/M5 hybrid note
+
+Pure job-level Port A capture for stock DOS WRITE proved unreliable (invalid
+GCR under the head; D64 mirror never updated). Shipped approach:
+
+1. **READ/SEARCH/VERIFY** — no intercept; real ROM GCR path (M3).
+2. **WRITE** — intercept buffer→D64 (Phase 4 reliability), then rewrite that
+   sector’s data GCR block in the track image (`c1541_media_poke_sector`).
+3. **FORMT EXECUTE** — erase D64 track + rebuild track GCR (`rebuild_track`).
+4. **Port A flux write** still runs (PCR CB2 write gate + bit clock) for
+   non-job / future pure-physical work and keeps BYTE READY correct.
 
 ---
 

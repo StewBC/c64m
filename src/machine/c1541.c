@@ -104,7 +104,12 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
     if (addr < 0x0800u) { drive->ram[addr] = value; return; }
     if (addr < 0x1000u) { drive->ram[addr & 0x07FFu] = value; return; }
     if (addr >= 0x1C00u && addr < 0x2000u) {
-        via6522_write(&drive->via2, (uint8_t)(addr & 0x0Fu), value);
+        uint8_t reg = (uint8_t)(addr & 0x0Fu);
+        via6522_write(&drive->via2, reg, value);
+        /* Port A write supplies the next GCR byte while the head is writing. */
+        if (reg == 0x01u || reg == 0x0Fu) {
+            c1541_media_on_port_a_write(drive, value);
+        }
         return;
     }
     if (addr >= 0x1800u && addr < 0x2000u) {
@@ -314,13 +319,26 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                 c1541_copy_sector_to_job_buffer(drive, n) ? C1541_JOB_OK : C1541_JOB_ERROR);
             return 1;
 
-        case C1541_JOB_CMD_WRITE:
-            c1541_complete_queued_job(drive, n, c1541_copy_job_buffer_to_sector(drive, n));
-            /* Sector image changed — resynthesise GCR tracks on next access. */
-            if (drive->media.enabled) {
+        case C1541_JOB_CMD_WRITE: {
+            /* Hybrid media write: persist the job buffer to the D64 (reliable),
+               then poke the matching GCR data block so media reads stay coherent.
+               Pure Port A flux capture remains for non-job code paths. */
+            uint8_t wr;
+            uint8_t trk, sec;
+            uint16_t buf_addr;
+
+            wr = c1541_copy_job_buffer_to_sector(drive, n);
+            if (wr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
+                trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+                sec = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
+                buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
+                (void)c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr]);
+            } else if (wr == C1541_JOB_OK && drive->media.enabled) {
                 c1541_media_invalidate(&drive->media);
             }
+            c1541_complete_queued_job(drive, n, wr);
             return 1;
+        }
 
         case C1541_JOB_CMD_VERIFY:
             if (c1541_media_physical_read_active(drive)) {
@@ -347,18 +365,22 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             }
             return 1;
 
-        case C1541_JOB_CMD_EXECUTE:
-            /* The DOS "NEW" command formats each track via an EXECUTE job that
-               runs the ROM's GCR FORMT routine against the (unmodelled) disk
-               mechanics.  We cannot GCR-format a D64 (it stores decoded sectors,
-               not tracks), so complete the job successfully and let the ROM's own
-               DOS code write the fresh BAM + directory through normal WRITE jobs.
-               The disk is marked dirty so the formatted result is persisted. */
-            c1541_complete_queued_job(drive, n, c1541_format_track(drive, n));
-            if (drive->media.enabled) {
+        case C1541_JOB_CMD_EXECUTE: {
+            /* Hybrid format: erase D64 track sectors, rebuild that track's GCR
+               image, then let the ROM rewrite BAM/directory via WRITE jobs. */
+            uint8_t fr;
+            uint8_t trk;
+
+            fr = c1541_format_track(drive, n);
+            if (fr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
+                trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+                (void)c1541_media_rebuild_track(drive, trk);
+            } else if (fr == C1541_JOB_OK && drive->media.enabled) {
                 c1541_media_invalidate(&drive->media);
             }
+            c1541_complete_queued_job(drive, n, fr);
             return 1;
+        }
 
         default:
             return 0;
@@ -398,12 +420,23 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
             }
             return 1;
 
-        case C1541_JOB_CMD_WRITE:
-            c1541_complete_job(drive, c1541_copy_job_buffer_to_sector(drive, n));
-            if (drive->media.enabled) {
+        case C1541_JOB_CMD_WRITE: {
+            uint8_t wr;
+            uint8_t trk, sec;
+            uint16_t buf_addr;
+
+            wr = c1541_copy_job_buffer_to_sector(drive, n);
+            if (wr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
+                trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
+                sec = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
+                buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
+                (void)c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr]);
+            } else if (wr == C1541_JOB_OK && drive->media.enabled) {
                 c1541_media_invalidate(&drive->media);
             }
+            c1541_complete_job(drive, wr);
             return 1;
+        }
 
         case C1541_JOB_CMD_VERIFY:
             if (c1541_media_physical_read_active(drive)) {
