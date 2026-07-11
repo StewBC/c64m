@@ -1148,12 +1148,25 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
             c64_step_micro_cycle(machine);
         } else {
-            c64_advance_one_cycle(machine);
+            /* BA/AEC stall: host only. Freeze 1541 so dual-bit IEC holds. */
+            c64_step_vic(machine);
+            c64_step_cia1(machine);
+            c64_step_cia2(machine);
+            c64_step_sid(machine);
+            machine->clock.cycle++;
         }
         return true;
     }
 
-    if (machine->pending_cpu_trace_active && !c64_cpu_cycle_stalled_by_vic_pins(machine)) {
+    if (machine->pending_cpu_trace_active) {
+        if (c64_cpu_cycle_stalled_by_vic_pins(machine)) {
+            c64_step_vic(machine);
+            c64_step_cia1(machine);
+            c64_step_cia2(machine);
+            c64_step_sid(machine);
+            machine->clock.cycle++;
+            return true;
+        }
         c64_apply_pending_cpu_events_at_elapsed(machine);
         c64_advance_one_cycle(machine);
         machine->pending_cpu_elapsed++;
