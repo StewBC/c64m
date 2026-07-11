@@ -1358,11 +1358,23 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
 
     reg = (uint8_t)(addr & 0x3fu);
     if (reg == VICII_REG_RASTER) {
-        return (uint8_t)(v->timing.raster_line & 0xffu);
+        /* CPU-visible raster is one line ahead of the internal counter.
+           Internal raster_line advances at end-of-line; dual-bit loaders that
+           guard $D012 against BA expect the VICE/hardware phase (empirically
+           +1 vs our internal counter). Badline/BA still use raster_line. */
+        uint32_t visible = v->timing.raster_line + 1u;
+        if (v->timing.lines_per_frame != 0u) {
+            visible %= v->timing.lines_per_frame;
+        }
+        return (uint8_t)(visible & 0xffu);
     }
     if (reg == VICII_REG_CONTROL_1) {
         uint8_t value = v->registers[reg] & 0x7fu;
-        if ((v->timing.raster_line & 0x100u) != 0) {
+        uint32_t visible = v->timing.raster_line + 1u;
+        if (v->timing.lines_per_frame != 0u) {
+            visible %= v->timing.lines_per_frame;
+        }
+        if ((visible & 0x100u) != 0) {
             value |= 0x80u;
         }
         return value;
@@ -1419,11 +1431,23 @@ uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr) {
 
     reg = (uint8_t)(addr & 0x3fu);
     if (reg == VICII_REG_RASTER) {
-        return (uint8_t)(v->timing.raster_line & 0xffu);
+        /* CPU-visible raster is one line ahead of the internal counter.
+           Internal raster_line advances at end-of-line; dual-bit loaders that
+           guard $D012 against BA expect the VICE/hardware phase (empirically
+           +1 vs our internal counter). Badline/BA still use raster_line. */
+        uint32_t visible = v->timing.raster_line + 1u;
+        if (v->timing.lines_per_frame != 0u) {
+            visible %= v->timing.lines_per_frame;
+        }
+        return (uint8_t)(visible & 0xffu);
     }
     if (reg == VICII_REG_CONTROL_1) {
         uint8_t value = v->registers[reg] & 0x7fu;
-        if ((v->timing.raster_line & 0x100u) != 0) {
+        uint32_t visible = v->timing.raster_line + 1u;
+        if (v->timing.lines_per_frame != 0u) {
+            visible %= v->timing.lines_per_frame;
+        }
+        if ((visible & 0x100u) != 0) {
             value |= 0x80u;
         }
         return value;

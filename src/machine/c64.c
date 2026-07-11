@@ -1206,7 +1206,8 @@ static uint8_t c64_deferred_io_read(const c64_t *machine, uint16_t address, uint
             }
 
             abs_cycle = (uint64_t)machine->vic.timing.cycle_in_line + offset_cycles;
-            raster = machine->vic.timing.raster_line + (uint32_t)(abs_cycle / cpl);
+            /* Match vicii_read_register: CPU-visible raster is internal + 1. */
+            raster = machine->vic.timing.raster_line + 1u + (uint32_t)(abs_cycle / cpl);
             if (lpf != 0) {
                 raster %= lpf;
             }

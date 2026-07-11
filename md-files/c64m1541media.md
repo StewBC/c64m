@@ -77,10 +77,10 @@ Observed after `LOAD"*"` + RUN (autorun `-a`):
 12. **Custom ILOAD path (FAST → patch `$0330`→`$0A08` → `LOAD"LOAD1"`):** dual-bit receive at `$0A72` / drive send at `$0309`. Vs VICE `load1` extract:
     - load address `$0E40` correct; transfer completes (pc returns)
     - **`$8000` first 32 bytes: 0 mismatches** (decrypt stub `A0 00 A9 1A …` exact)
-    - full file **~1008 / 61880 ≈ 1.63%** wrong; **~1002 are isolated `0xFF` holes** (max streak 1; stream stays aligned); ~6 are `0xAA`
-    - errors often recur with **gap 29** (raster/BA interaction candidate); not a 16-byte framing shift
-13. **Tried / rejected:** bulk write-at-end IEC latch (overcorrected); partial micro coverage (broke stock LOAD); nopping ILOAD raster wait (worse, 5.16%); stock `LOAD"LOAD1"` without FAST (hung / impractically slow).
-14. **Still left:** cut residual ~1.63% dual-bit misses (likely C64 raster/BA vs drive handshake edge cases) so full `load1` is byte-identical; then headless RUN / post-decrypt.
+    - full file **~8 / 61880 ≈ 0.01%** residual (was ~1.63% before `$D012` phase fix)
+13. **`$D012` CPU-visible phase:** ILOAD guards samples with `LDA $D012` / `SBC #(yscroll+$2F)` / wait when `(diff)&7==0` (line before badline). Residual isolated `0xFF` holes (~gap 29 ≈ badline period) collapsed when the CPU-visible raster was advanced by one vs the internal counter (`vicii_read_register` / deferred `$D011/$D012`). Badline/BA still use internal `raster_line`. Diagnostic equivalent: patching ILOAD `ADC #$2F`→`#$2E`.
+14. **Tried / rejected:** bulk write-at-end IEC latch (overcorrected); partial micro coverage (broke stock LOAD); nopping ILOAD raster wait (worse, 5.16%); stock `LOAD"LOAD1"` without FAST (hung / impractically slow); freeze 1541 during BA stall; BA prepare-before-CPU (broke stock LOAD).
+15. **Still left:** wipe last ~8 byte dual-bit misses; headless RUN / post-decrypt / playability not claimed.
 
 **How to smoke Robocop (human):**
 
