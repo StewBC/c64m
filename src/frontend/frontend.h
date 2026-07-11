@@ -252,6 +252,8 @@ bool frontend_wants_text_input(const frontend *ui);
 bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
+/* Force disk activity LEDs off (e.g. machine reset). */
+void frontend_clear_disk_activity_leds(frontend *ui);
 void frontend_open_help(frontend *ui, bool paused_by_help);
 bool frontend_close_help(frontend *ui);
 bool frontend_help_is_open(const frontend *ui);

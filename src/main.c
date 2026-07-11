@@ -1848,7 +1848,17 @@ static void poll_runtime_events(
         if (debug_state != NULL && debug_state->has_frame) {
             check_deferred_frame_wait(control, deferred, debug_state->frame_number);
         }
-        if (event.type == RUNTIME_EVENT_ERROR) {
+        if (event.type == RUNTIME_EVENT_RESET_COMPLETE) {
+            if (ui != NULL) {
+                frontend_clear_disk_activity_leds(ui);
+            }
+            if (debug_state != NULL) {
+                debug_state->drive8_hardware.activity_read_seq = 0;
+                debug_state->drive8_hardware.activity_write_seq = 0;
+                debug_state->drive9_hardware.activity_read_seq = 0;
+                debug_state->drive9_hardware.activity_write_seq = 0;
+            }
+        } else if (event.type == RUNTIME_EVENT_ERROR) {
             SDL_Log("runtime error: %s", event.data.error.message);
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_ERROR) {
             if (ui != NULL) {

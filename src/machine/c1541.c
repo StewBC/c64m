@@ -271,6 +271,7 @@ static uint8_t c1541_copy_job_buffer_to_sector(c1541 *drive, uint8_t n) {
     buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
     memcpy(slot->image_bytes + offset, &drive->ram[buf_addr], 256);
     slot->dirty = true;
+    slot->image_content_seq++;
     return C1541_JOB_OK;
 }
 
@@ -303,11 +304,24 @@ static uint8_t c1541_format_track(c1541 *drive, uint8_t n) {
 
     memset(slot->image_bytes + off0, 0, (size_t)sectors * 256);
     slot->dirty = true;
+    slot->image_content_seq++;
     return C1541_JOB_OK;
 }
 
 static void c1541_complete_queued_job(c1541 *drive, uint8_t n, uint8_t result) {
     drive->ram[C1541_ZP_JOBS + n] = result;
+}
+
+static void c1541_pulse_read_led(c1541 *drive) {
+    if (drive != NULL && drive->c64 != NULL) {
+        c64_disk_activity_read(drive->c64, drive->device_number);
+    }
+}
+
+static void c1541_pulse_write_led(c1541 *drive) {
+    if (drive != NULL && drive->c64 != NULL) {
+        c64_disk_activity_write(drive->c64, drive->device_number);
+    }
 }
 
 static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
@@ -326,6 +340,7 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             if (c1541_media_physical_read_active(drive)) {
                 return 0;
             }
+            c1541_pulse_read_led(drive);
             c1541_complete_queued_job(
                 drive,
                 n,
@@ -352,9 +367,17 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                 trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
                 sec = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
                 buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
-                (void)c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr]);
-            } else if (wr == C1541_JOB_OK && drive->media.enabled) {
+                if (!c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr])) {
+                    /* D64 advanced; GCR stale until rebuild. */
+                    c1541_media_invalidate(&drive->media);
+                }
+            } else if (wr == C1541_JOB_OK) {
+                /* Media off or non-physical path: drop GCR cache so a later
+                   media-on rebuild sees the updated D64. */
                 c1541_media_invalidate(&drive->media);
+            }
+            if (wr == C1541_JOB_OK) {
+                c1541_pulse_write_led(drive);
             }
             c1541_complete_queued_job(drive, n, wr);
             return 1;
@@ -364,6 +387,7 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             if (c1541_media_physical_read_active(drive)) {
                 return 0;
             }
+            c1541_pulse_read_led(drive);
             c1541_complete_queued_job(
                 drive,
                 n,
@@ -381,6 +405,7 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
                 sector = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
                 drive->ram[0x0012u] = track;
                 drive->ram[0x0013u] = sector;
+                c1541_pulse_read_led(drive);
                 c1541_complete_queued_job(drive, n, C1541_JOB_OK);
             }
             return 1;
@@ -404,9 +429,21 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             fr = c1541_format_track(drive, n);
             if (fr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
                 trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
-                (void)c1541_media_rebuild_track(drive, trk);
-            } else if (fr == C1541_JOB_OK && drive->media.enabled) {
+                if (!c1541_media_rebuild_track(drive, trk)) {
+                    c1541_media_invalidate(&drive->media);
+                } else {
+                    const c64_drive_slot *s = c64_get_drive_slot(drive->c64, drive->device_number);
+                    if (s != NULL) {
+                        drive->media.built_from = s->image_bytes;
+                        drive->media.built_size = s->image_size;
+                        drive->media.built_from_seq = s->image_content_seq;
+                    }
+                }
+            } else if (fr == C1541_JOB_OK) {
                 c1541_media_invalidate(&drive->media);
+            }
+            if (fr == C1541_JOB_OK) {
+                c1541_pulse_write_led(drive);
             }
             c1541_complete_queued_job(drive, n, fr);
             return 1;
@@ -446,6 +483,7 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
             if (!c1541_copy_sector_to_job_buffer(drive, n)) {
                 c1541_complete_job(drive, C1541_JOB_ERROR);
             } else {
+                c1541_pulse_read_led(drive);
                 c1541_complete_job(drive, C1541_JOB_OK);
             }
             return 1;
@@ -467,9 +505,14 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
                 trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
                 sec = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u + 1u];
                 buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
-                (void)c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr]);
-            } else if (wr == C1541_JOB_OK && drive->media.enabled) {
+                if (!c1541_media_poke_sector(drive, trk, sec, &drive->ram[buf_addr])) {
+                    c1541_media_invalidate(&drive->media);
+                }
+            } else if (wr == C1541_JOB_OK) {
                 c1541_media_invalidate(&drive->media);
+            }
+            if (wr == C1541_JOB_OK) {
+                c1541_pulse_write_led(drive);
             }
             c1541_complete_job(drive, wr);
             return 1;
@@ -518,6 +561,7 @@ static void c1541_satisfy_sector_read(c1541 *drive) {
         return;
     }
 
+    c1541_pulse_read_led(drive);
     /* Jump to read40: ROM loads A = #1 (success), falls into errr, marks job done. */
     drive->cpu.cpu.pc = C1541_ROM_READ40;
 }

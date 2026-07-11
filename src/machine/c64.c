@@ -24,7 +24,7 @@ enum {
     C64_CPU_BUS_MODE_IMMEDIATE = 0,
     C64_CPU_BUS_MODE_TIMED_IMMEDIATE,
     C64_CPU_BUS_MODE_DEFER_WRITES,
-    C64_CPU_BUS_MODE_ARBITER,
+    C64_CPU_BUS_MODE_ARBITER
 };
 
 static const uint8_t c64_d64_sectors_per_track[35] = {
@@ -36,6 +36,18 @@ static const uint8_t c64_d64_sectors_per_track[35] = {
 
 static uint8_t c64_iec_line_mask(uint8_t lines) {
     return (uint8_t)(lines & (C64_IEC_ATN | C64_IEC_CLK | C64_IEC_DATA));
+}
+
+static void c64_disk_activity_clear_all(c64_t *machine) {
+    size_t i;
+
+    if (machine == NULL) {
+        return;
+    }
+    for (i = 0; i < C64_DRIVE_SLOT_COUNT; ++i) {
+        machine->drives[i].led_read_seq = 0;
+        machine->drives[i].led_write_seq = 0;
+    }
 }
 
 static void c64_refresh_iec_external_pull(c64_t *machine) {
@@ -730,6 +742,7 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
             c64_kernal_load_return(machine, false, 0x05, 0);
             return true;
         }
+        c64_disk_activity_read(machine, (int)device);
         c64_kernal_load_return(machine, true, 0, end_address);
         return true;
     }
@@ -745,6 +758,7 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
         return true;
     }
 
+    c64_disk_activity_read(machine, (int)device);
     c64_kernal_load_return(machine, true, 0, end_address);
     return true;
 }
@@ -854,9 +868,19 @@ static bool c64_try_kernal_save_trap(c64_t *machine) {
     }
     memcpy(slot->image_bytes, written_bytes, written_size);
     slot->dirty = true;
+    slot->image_content_seq++;
     slot->last_result = C64_DRIVE_STATUS_OK;
     d64_image_destroy(image);
 
+    /* KERNAL trap may run with media caches still present from an earlier
+       media_1541 session; force rebuild when media is re-enabled. */
+    if (device == 8) {
+        c1541_media_invalidate(&machine->drive8.media);
+    } else if (device == 9) {
+        c1541_media_invalidate(&machine->drive9.media);
+    }
+
+    c64_disk_activity_write(machine, (int)device);
     c64_kernal_save_return(machine, true, 0);
     return true;
 }
@@ -1360,13 +1384,31 @@ void c64_init(c64_t *machine) {
 }
 
 void c64_set_config(c64_t *machine, const c64_config *config) {
+    int prev_media;
+    int next_media;
+
     assert(machine);
 
     if (config == NULL) {
         return;
     }
 
+    /* Media GCR is only active when both flags are on. Toggling either live can
+       leave a stale track cache that no longer matches the D64 (e.g. SAVEs done
+       with media off). Sync flux dirt out when leaving media, then drop tracks. */
+    prev_media = (machine->config.emulate_1541 != 0 && machine->config.media_1541 != 0) ? 1 : 0;
+    next_media = (config->emulate_1541 != 0 && config->media_1541 != 0) ? 1 : 0;
+
     machine->config = *config;
+
+    if (prev_media != next_media) {
+        if (prev_media && !next_media) {
+            (void)c1541_media_sync_dirty_to_d64(&machine->drive8);
+            (void)c1541_media_sync_dirty_to_d64(&machine->drive9);
+        }
+        c1541_media_invalidate(&machine->drive8.media);
+        c1541_media_invalidate(&machine->drive9.media);
+    }
 }
 
 bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size_t error_size) {
@@ -1447,6 +1489,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     c6510_reset(&machine->cpu);
     c1541_reset(&machine->drive8);
     c1541_reset(&machine->drive9);
+    c64_disk_activity_clear_all(machine);
     memset(&machine->clock, 0, sizeof(machine->clock));
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
     c64_trace_reset(&machine->last_cpu_trace);
@@ -1635,6 +1678,24 @@ c64_drive_slot *c64_get_drive_slot_mut(c64_t *machine, int device_number) {
     idx = c64_drive_slot_index((uint8_t)device_number);
     if (idx < 0) return NULL;
     return &machine->drives[idx];
+}
+
+void c64_disk_activity_read(c64_t *machine, int device_number) {
+    c64_drive_slot *slot = c64_get_drive_slot_mut(machine, device_number);
+
+    if (slot == NULL) {
+        return;
+    }
+    slot->led_read_seq++;
+}
+
+void c64_disk_activity_write(c64_t *machine, int device_number) {
+    c64_drive_slot *slot = c64_get_drive_slot_mut(machine, device_number);
+
+    if (slot == NULL) {
+        return;
+    }
+    slot->led_write_seq++;
 }
 
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled) {
@@ -2242,9 +2303,25 @@ void c64_copy_1541_hardware_snapshot(
     out->media_enabled = drive->media.enabled;
     out->tracks_valid = drive->media.tracks_valid;
     out->from_g64 = drive->media.from_g64;
-    out->motor_on = drive->media.motor_on;
-    out->motor_ready = drive->media.motor_ready;
-    out->writing = drive->media.writing;
+    /* Mechanics: media latches when enabled; otherwise sample VIA2 (PB2 motor,
+       DDRA=$FF + PCR CB2 $C0 write gate) for the Hardware tab. */
+    {
+        uint8_t orb = drive->via2.orb;
+        uint8_t ddrb = drive->via2.ddrb;
+        uint8_t ddra = drive->via2.ddra;
+        int motor = ((ddrb & 0x04u) != 0u && (orb & 0x04u) != 0u) ? 1 : 0;
+        int writing = (ddra == 0xFFu && (drive->via2.pcr & 0xE0u) == 0xC0u) ? 1 : 0;
+        const c64_drive_slot *slot =
+            (device_number == 8 || device_number == 9) ?
+            &machine->drives[device_number - C64_DRIVE_MIN_DEVICE] :
+            NULL;
+
+        out->motor_on = drive->media.enabled ? drive->media.motor_on : motor;
+        out->motor_ready = drive->media.enabled ? drive->media.motor_ready : motor;
+        out->writing = drive->media.enabled ? drive->media.writing : writing;
+        out->activity_read_seq = (slot != NULL) ? slot->led_read_seq : 0u;
+        out->activity_write_seq = (slot != NULL) ? slot->led_write_seq : 0u;
+    }
     out->in_sync = drive->media.in_sync;
     out->density = drive->media.density;
     out->half_track = drive->media.half_track;

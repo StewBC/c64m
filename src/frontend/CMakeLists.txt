@@ -21,6 +21,8 @@ add_custom_target(frontend_help_content DEPENDS "${C64M_HELP_CONTENT}")
 add_library(frontend STATIC
     c64_layout.c
     c64_layout.h
+    disk_led_data.c
+    disk_led_data.h
     frontend.c
     frontend.h
     frontend_input.c
@@ -60,6 +62,7 @@ target_link_libraries(frontend
         runtime
     PRIVATE
         c64m_tiny_regex
+        c64m_stb_image
         platform
         SDL2::SDL2
         tools

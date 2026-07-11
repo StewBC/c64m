@@ -389,6 +389,82 @@ static void test_mount_g64_readonly(void) {
     printf("PASS: test_mount_g64_readonly\n");
 }
 
+/* Regression: D64 writes while media is off must force GCR rebuild when media
+   returns. Previously ensure_tracks only keyed on image pointer/size, so a
+   media-on LOAD"$" could still show a directory from an older GCR cache. */
+static void test_media_rebuild_after_offline_d64_write(void) {
+    static c64_t c64;
+    c1541 *drive;
+    uint8_t *img = make_blank_d64();
+    c64_drive_slot *slot;
+    uint32_t seq_after_build;
+    int dir_sec = c1541_gcr_d64_sector_offset(18, 1); /* first directory sector */
+
+    c64_init(&c64);
+    c64.config.emulate_1541 = 1;
+    c64.config.media_1541 = 1;
+    if (c64_mount_d64_ex(
+            &c64, 8, img, 174848, NULL, 0, "scratch.d64", "", "", "", 0, true)
+        != C64_DRIVE_STATUS_OK) {
+        fail("mount d64");
+    }
+    free(img); /* machine owns a copy */
+
+    /* Use the machine-owned drive so c64_set_config invalidates the same media. */
+    drive = &c64.drive8;
+    drive->rom_loaded = 1;
+    drive->media.enabled = 1;
+
+    /* Build GCR while media is on. */
+    c1541_media_step(drive);
+    if (!drive->media.tracks_valid) fail("tracks after first step");
+    seq_after_build = drive->media.built_from_seq;
+    slot = c64_get_drive_slot_mut(&c64, 8);
+    if (slot == NULL || slot->image_content_seq != seq_after_build) {
+        fail("built seq matches slot after build");
+    }
+
+    /* Simulate media-off SAVE: mutate the live D64 and bump the content seq. */
+    slot->image_bytes[dir_sec] = 0xA5u;
+    slot->image_content_seq++;
+    slot->dirty = true;
+
+    /* Same pointer/size would previously skip rebuild — content seq must force it. */
+    if (drive->media.built_from == slot->image_bytes &&
+        drive->media.built_size == slot->image_size &&
+        drive->media.built_from_seq == slot->image_content_seq) {
+        fail("seq should differ after offline write");
+    }
+
+    c1541_media_step(drive);
+    if (!drive->media.tracks_valid) fail("tracks after rebuild step");
+    if (drive->media.built_from_seq != slot->image_content_seq) {
+        fail("built seq not updated after offline write rebuild");
+    }
+    if (drive->media.built_from_seq == seq_after_build) {
+        fail("built seq should advance after offline write");
+    }
+
+    /* Config toggle media off/on must also drop any cache (belt and braces). */
+    {
+        c64_config cfg = c64.config;
+        cfg.media_1541 = 0;
+        c64_set_config(&c64, &cfg);
+        if (drive->media.tracks_valid) fail("tracks should clear when media disabled");
+        cfg.media_1541 = 1;
+        c64_set_config(&c64, &cfg);
+        drive->media.enabled = 1; /* mirror c1541_advance_one_cycle enable latch */
+        c1541_media_step(drive);
+        if (!drive->media.tracks_valid) fail("tracks rebuild after re-enable");
+        if (drive->media.built_from_seq != slot->image_content_seq) {
+            fail("seq match after re-enable rebuild");
+        }
+    }
+
+    c64_unmount_drive(&c64, 8);
+    printf("PASS: test_media_rebuild_after_offline_d64_write\n");
+}
+
 int main(void) {
     test_build_from_d64();
     test_stepper_and_head_stop();
@@ -399,6 +475,7 @@ int main(void) {
     test_write_mode_mutates_track();
     test_build_from_g64();
     test_mount_g64_readonly();
+    test_media_rebuild_after_offline_d64_write();
     printf("All c1541_media tests passed.\n");
     return 0;
 }

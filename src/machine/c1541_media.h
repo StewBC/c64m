@@ -62,6 +62,9 @@ typedef struct c1541_media {
     int from_g64; /* 1 when built from a G64 image (no D64 sector mirror) */
     const uint8_t *built_from; /* image_bytes pointer used for last build */
     size_t built_size;
+    /* Matches c64_drive_slot.image_content_seq at last build/poke so offline
+       D64 writes (media off / KERNAL trap) force a rebuild when media returns. */
+    uint32_t built_from_seq;
 } c1541_media;
 
 void c1541_media_init(c1541_media *m);

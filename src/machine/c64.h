@@ -167,6 +167,11 @@ typedef struct c64_drive_slot {
     size_t image_size;
     c64_drive_directory_entry *entries;
     size_t entry_count;
+    /* UI disk LEDs: monotonic event counters; frontend holds on host time. */
+    uint32_t led_read_seq;
+    uint32_t led_write_seq;
+    /* Bumped whenever image_bytes content changes so GCR media caches rebuild. */
+    uint32_t image_content_seq;
 } c64_drive_slot;
 
 typedef enum c64_memory_visibility {
@@ -309,6 +314,10 @@ typedef struct c64_1541_hardware_snapshot {
     int density;
     int half_track; /* 2 = track 1.0; odd = half-track */
     uint16_t pc;
+    /* UI activity event counters (incremented on disk R/W). Frontend turns
+       LEDs on from seq changes and holds them for a short host-time window. */
+    uint32_t activity_read_seq;
+    uint32_t activity_write_seq;
 } c64_1541_hardware_snapshot;
 
 typedef struct c64_sid_hardware_snapshot {
@@ -463,6 +472,9 @@ bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable);
 void c64_unmount_drive(c64_t *machine, uint8_t device);
 void c64_unmount_all_drives(c64_t *machine);
 bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status);
+/* Pulse sticky disk activity LEDs (visible for ~0.35s after the last event). */
+void c64_disk_activity_read(c64_t *machine, int device_number);
+void c64_disk_activity_write(c64_t *machine, int device_number);
 void c64_copy_cpu_snapshot(const c64_t *machine, c64_cpu_snapshot *out);
 void c64_copy_machine_snapshot(const c64_t *machine, c64_machine_snapshot *out);
 void c64_copy_memory_banking_snapshot(const c64_t *machine, c64_memory_banking_snapshot *out);

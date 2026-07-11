@@ -46,6 +46,7 @@ void c1541_media_free_tracks(c1541_media *m) {
     m->from_g64 = 0;
     m->built_from = NULL;
     m->built_size = 0;
+    m->built_from_seq = 0;
 }
 
 void c1541_media_invalidate(c1541_media *m) {
@@ -193,6 +194,7 @@ int c1541_media_build_from_d64(
     m->from_g64 = 0;
     m->built_from = image_bytes;
     m->built_size = image_size;
+    m->built_from_seq = 0; /* ensure_tracks sets this from the live slot seq */
     m->head_bit_pos = 0;
     m->bit_acc = 0;
     m->shift10 = 0;
@@ -257,6 +259,7 @@ int c1541_media_build_from_g64(
     m->from_g64 = 1;
     m->built_from = image_bytes;
     m->built_size = image_size;
+    m->built_from_seq = 0; /* ensure_tracks sets this from the live slot seq */
     m->head_bit_pos = 0;
     m->bit_acc = 0;
     m->shift10 = 0;
@@ -531,9 +534,11 @@ int c1541_media_sync_dirty_to_d64(c1541 *drive) {
 
     if (any) {
         slot->dirty = true;
+        slot->image_content_seq++;
         /* Keep built_from coherent so ensure_tracks does not rebuild over writes. */
         m->built_from = slot->image_bytes;
         m->built_size = slot->image_size;
+        m->built_from_seq = slot->image_content_seq;
     }
     return any;
 }
@@ -634,6 +639,7 @@ static void update_disk_via_inputs(c1541 *drive) {
 static void ensure_tracks(c1541 *drive) {
     c1541_media *m = &drive->media;
     const c64_drive_slot *slot;
+    int ok = 0;
 
     if (!m->enabled) {
         return;
@@ -644,15 +650,21 @@ static void ensure_tracks(c1541 *drive) {
         return;
     }
 
+    /* Rebuild when the host image pointer/size changes OR when the D64 was
+       modified while media was off / via job intercept without a GCR poke. */
     if (m->tracks_valid && m->built_from == slot->image_bytes &&
-        m->built_size == slot->image_size) {
+        m->built_size == slot->image_size &&
+        m->built_from_seq == slot->image_content_seq) {
         return;
     }
 
     if (slot->image_kind == C64_DRIVE_IMAGE_G64) {
-        (void)c1541_media_build_from_g64(m, slot->image_bytes, slot->image_size);
+        ok = c1541_media_build_from_g64(m, slot->image_bytes, slot->image_size);
     } else if (slot->image_kind == C64_DRIVE_IMAGE_D64) {
-        (void)c1541_media_build_from_d64(m, slot->image_bytes, slot->image_size);
+        ok = c1541_media_build_from_d64(m, slot->image_bytes, slot->image_size);
+    }
+    if (ok) {
+        m->built_from_seq = slot->image_content_seq;
     }
 }
 
@@ -742,6 +754,14 @@ void c1541_media_step(c1541 *drive) {
     update_disk_via_inputs(drive);
 
     if (m->so_pulse) {
+        /* One GCR byte completed under the head — discrete transfer event for UI LEDs. */
+        if (drive->c64 != NULL) {
+            if (m->writing) {
+                c64_disk_activity_write(drive->c64, drive->device_number);
+            } else {
+                c64_disk_activity_read(drive->c64, drive->device_number);
+            }
+        }
         m->so_pulse = 0;
         c6510_set_overflow(&drive->cpu);
     }
@@ -837,6 +857,14 @@ int c1541_media_poke_sector(
     }
     memcpy(tr->data + off, gcr, C1541_GCR_DATA_ENC);
     tr->dirty = 0; /* already mirrored into D64 by the caller */
+    {
+        const c64_drive_slot *slot = c64_get_drive_slot(drive->c64, drive->device_number);
+        if (slot != NULL) {
+            m->built_from = slot->image_bytes;
+            m->built_size = slot->image_size;
+            m->built_from_seq = slot->image_content_seq;
+        }
+    }
     return 1;
 }
 

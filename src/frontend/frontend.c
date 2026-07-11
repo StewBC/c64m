@@ -7,9 +7,12 @@
 
 #include "c64_layout.h"
 #include "c64_pro_mono_font_data.h"
+#include "disk_led_data.h"
 #include "disasm_6502.h"
 #include "platform_fs.h"
 #include "symbol_table.h"
+
+#include "stb_image.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -25,6 +28,9 @@
 
 enum {
     FRONTEND_DEBUGGER_INTENT_CAPACITY = 32,
+    FRONTEND_DISK_LED_SIZE = 16,
+    /* Host-time LED hold after each activity event (ms). Independent of pause. */
+    FRONTEND_DISK_LED_HOLD_MS = 300,
     FRONTEND_DISPLAY_CROP_X = 8,
     /* Crop of the published frame. Origin and height cover both top-border
        title/score sprites (Galencia content from ~raster 29) and bottom-border
@@ -376,6 +382,13 @@ struct frontend {
     SDL_Renderer *renderer;
     struct nk_font *help_font;
     SDL_Texture *display_texture;
+    SDL_Texture *led_green_texture;
+    SDL_Texture *led_red_texture;
+    /* Disk LEDs: host-time hold armed when machine activity seq changes. */
+    uint32_t disk_led_seen_read_seq[2];
+    uint32_t disk_led_seen_write_seq[2];
+    uint64_t disk_led_read_until_ms;
+    uint64_t disk_led_write_until_ms;
     c64_frame current_frame;
     bool has_frame;
     c64_layout layout;
@@ -431,6 +444,141 @@ struct frontend {
 };
 
 static const nk_flags pane_flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR;
+
+static SDL_Texture *frontend_load_png_texture(
+    SDL_Renderer *renderer,
+    const unsigned char *png,
+    unsigned int png_len)
+{
+    int width = 0;
+    int height = 0;
+    int components = 0;
+    unsigned char *pixels;
+    SDL_Texture *texture;
+
+    if (renderer == NULL || png == NULL || png_len == 0u) {
+        return NULL;
+    }
+
+    pixels = stbi_load_from_memory(
+        png,
+        (int)png_len,
+        &width,
+        &height,
+        &components,
+        4);
+    if (pixels == NULL || width <= 0 || height <= 0) {
+        return NULL;
+    }
+
+    texture = SDL_CreateTexture(
+        renderer,
+        SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STATIC,
+        width,
+        height);
+    if (texture == NULL) {
+        stbi_image_free(pixels);
+        return NULL;
+    }
+
+    if (SDL_UpdateTexture(texture, NULL, pixels, width * 4) != 0) {
+        SDL_DestroyTexture(texture);
+        stbi_image_free(pixels);
+        return NULL;
+    }
+
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    stbi_image_free(pixels);
+    return texture;
+}
+
+void frontend_clear_disk_activity_leds(frontend *ui)
+{
+    if (ui == NULL) {
+        return;
+    }
+    ui->disk_led_seen_read_seq[0] = 0;
+    ui->disk_led_seen_read_seq[1] = 0;
+    ui->disk_led_seen_write_seq[0] = 0;
+    ui->disk_led_seen_write_seq[1] = 0;
+    ui->disk_led_read_until_ms = 0;
+    ui->disk_led_write_until_ms = 0;
+}
+
+static void frontend_update_disk_activity_leds(
+    frontend *ui,
+    const frontend_debug_state *debug_state)
+{
+    uint64_t now;
+    const c64_1541_hardware_snapshot *drives[2];
+    int i;
+
+    if (ui == NULL || debug_state == NULL || !debug_state->has_hardware) {
+        return;
+    }
+
+    now = SDL_GetTicks64();
+    drives[0] = &debug_state->drive8_hardware;
+    drives[1] = &debug_state->drive9_hardware;
+
+    for (i = 0; i < 2; ++i) {
+        if (drives[i]->activity_read_seq != ui->disk_led_seen_read_seq[i]) {
+            ui->disk_led_seen_read_seq[i] = drives[i]->activity_read_seq;
+            ui->disk_led_read_until_ms = now + (uint64_t)FRONTEND_DISK_LED_HOLD_MS;
+        }
+        if (drives[i]->activity_write_seq != ui->disk_led_seen_write_seq[i]) {
+            ui->disk_led_seen_write_seq[i] = drives[i]->activity_write_seq;
+            ui->disk_led_write_until_ms = now + (uint64_t)FRONTEND_DISK_LED_HOLD_MS;
+        }
+    }
+}
+
+static void frontend_draw_disk_activity_leds(
+    frontend *ui,
+    int width,
+    int height,
+    const frontend_debug_state *debug_state)
+{
+    bool read_active = false;
+    bool write_active = false;
+    uint64_t now;
+    SDL_Rect dest;
+
+    if (ui == NULL || ui->renderer == NULL) {
+        return;
+    }
+    if (width < FRONTEND_DISK_LED_SIZE || height < FRONTEND_DISK_LED_SIZE) {
+        return;
+    }
+
+    frontend_update_disk_activity_leds(ui, debug_state);
+
+    now = SDL_GetTicks64();
+    /* Host-time holds: expire even if the machine is paused or was reset mid-hold. */
+    write_active = (ui->disk_led_write_until_ms > now);
+    read_active = (ui->disk_led_read_until_ms > now);
+    /* Prefer exclusive colours when both arms overlap (write wins for red). */
+    if (write_active) {
+        read_active = false;
+    }
+
+    if (write_active && ui->led_red_texture != NULL) {
+        dest.x = width - (FRONTEND_DISK_LED_SIZE * 2);
+        dest.y = height - FRONTEND_DISK_LED_SIZE;
+        dest.w = FRONTEND_DISK_LED_SIZE;
+        dest.h = FRONTEND_DISK_LED_SIZE;
+        SDL_RenderCopy(ui->renderer, ui->led_red_texture, NULL, &dest);
+    }
+
+    if (read_active && ui->led_green_texture != NULL) {
+        dest.x = width - FRONTEND_DISK_LED_SIZE;
+        dest.y = height - FRONTEND_DISK_LED_SIZE;
+        dest.w = FRONTEND_DISK_LED_SIZE;
+        dest.h = FRONTEND_DISK_LED_SIZE;
+        SDL_RenderCopy(ui->renderer, ui->led_green_texture, NULL, &dest);
+    }
+}
 
 static bool frontend_any_dialog_open(const frontend *ui)
 {
@@ -7113,6 +7261,18 @@ frontend *frontend_create(platform_window *window)
     c64_layout_init(&ui->layout);
     help_view_init(&ui->help);
 
+    ui->led_green_texture = frontend_load_png_texture(
+        sdl_renderer,
+        led_green,
+        led_green_len);
+    ui->led_red_texture = frontend_load_png_texture(
+        sdl_renderer,
+        led_red,
+        led_red_len);
+    if (ui->led_green_texture == NULL || ui->led_red_texture == NULL) {
+        SDL_Log("frontend: failed to load disk activity LED textures");
+    }
+
     return ui;
 }
 
@@ -7413,6 +7573,12 @@ void frontend_destroy(frontend *ui)
 
     if (ui->display_texture != NULL) {
         SDL_DestroyTexture(ui->display_texture);
+    }
+    if (ui->led_green_texture != NULL) {
+        SDL_DestroyTexture(ui->led_green_texture);
+    }
+    if (ui->led_red_texture != NULL) {
+        SDL_DestroyTexture(ui->led_red_texture);
     }
 
     symbol_table_destroy(ui->symbol_table);
@@ -9217,8 +9383,14 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         ui->input_focus_initialized = true;
     }
 
+    platform_window_get_size(ui->window, &width, &height);
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
     if (!ui_visible && !help_view_is_open(&ui->help)) {
         frontend_render_display_only(ui);
+        frontend_draw_disk_activity_leds(ui, width, height, debug_state);
         return;
     }
 
@@ -9226,15 +9398,11 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         return;
     }
 
-    platform_window_get_size(ui->window, &width, &height);
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
     if (help_view_is_open(&ui->help)) {
         frontend_render_display_only(ui);
         help_view_render(ui->ctx, &ui->help, ui->help_font, width, height);
         nk_sdl_render(NK_ANTI_ALIASING_ON);
+        frontend_draw_disk_activity_leds(ui, width, height, debug_state);
         return;
     }
 
@@ -9299,6 +9467,7 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     }
 
     nk_sdl_render(NK_ANTI_ALIASING_ON);
+    frontend_draw_disk_activity_leds(ui, width, height, debug_state);
 }
 
 void frontend_open_help(frontend *ui, bool paused_by_help)
