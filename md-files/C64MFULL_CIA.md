@@ -30,19 +30,16 @@ FLAG/serial/handshake was stale and has been corrected). Future work such as
 Phase 1  FLAG external interrupt input .................. DONE
 Phase 2  Serial SDR/CNT/SP shift ....................... DONE
 Phase 3  PC pulse / handshake .......................... DONE
-Phase 4  Pin/race-level interrupt timing ............... DONE (conservative)
+Phase 4  Pin/race-level interrupt timing ............... DONE (Option 2 wired)
 Phase 5  Validation and documentation close-out ........ DONE
 ```
 
-Phase 4 was deliberately scoped as a **conservative refactor**: it adds a proper
-CIA-internal delayed interrupt-line abstraction (`cia_interrupt_line`) separate
-from the immediate latched `cia_irq_pending`, and unit-tests the one-cycle pin
-delay and the ICR read-clear deassert delay, WITHOUT changing CPU-observable
-timing. Bit-exact 6526 cycle/race timing at the CPU-integration level, and
-6526/6526A/8521 chip-variant policy, remain deferred: they need a VICE-derived
-CIA interrupt-timing reference corpus as the acceptance gate, which is not yet in
-place (the project's `c64_cpu_validation` corpus is the intended vehicle but is
-currently red on an unrelated VIC raster point).
+Phase 4 first landed as a **conservative refactor** (`cia_interrupt_line`
+separate from latched `cia_irq_pending`, unit-tested delay without changing
+CPU-visible timing). **Option 2 is now wired:** `c64_cpu_irq_pending` and
+`c64_cpu_nmi_pending` sample `cia_interrupt_line`. The VICE/hardware corpus
+under `md-files/corpus/cia-timing/` remains the external oracle for further
+race-level work (PRG runner, cycle-stamped logs, chip-variant policy).
 
 New public CIA API from this work: `cia_set_flag_line`, `cia_set_sp_line`,
 `cia_pc_line`, `cia_interrupt_line`. The FLAG/SP/PC machine-side seams are not

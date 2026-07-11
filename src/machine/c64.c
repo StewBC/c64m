@@ -1328,14 +1328,19 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
 
 static uint8_t c64_cpu_irq_pending(void *user) {
     c64_t *machine = user;
-    bool cia_irq = cia_irq_pending(&machine->cia1);
+    /* CPU-visible CIA #1 IRQ uses the delayed interrupt pin (6526 one-cycle
+     * delay), not the immediate ICR latched state. See C64MFULL_CIA Phase 4
+     * Option 2 and md-files/corpus/cia-timing/. */
+    bool cia_irq = cia_interrupt_line(&machine->cia1);
     bool vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
     return (cia_irq || vic_irq) ? 1u : 0u;
 }
 
 static uint8_t c64_cpu_nmi_pending(void *user) {
     c64_t *machine = user;
-    bool cia2_line = cia_irq_pending(&machine->cia2);
+    /* CIA #2 NMI edge is taken from the delayed pin so NMI timing matches the
+     * same one-cycle interrupt delay as CIA #1 IRQ. */
+    bool cia2_line = cia_interrupt_line(&machine->cia2);
     bool cia2_edge = cia2_line && !machine->cia2_nmi_line;
     bool pending = machine->restore_pending || cia2_edge;
     machine->cia2_nmi_line = cia2_line;

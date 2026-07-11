@@ -3,6 +3,13 @@
 These libraries are kept small and are intended to be wrapped by project-facing
 APIs under `src/util/` before broad use.
 
+## CIA timing corpus clones (not vendored into git)
+
+`external/cia-timing-corpus/VICE-testprogs/` and
+`external/cia-timing-corpus/c64ciaTests/` are fetched by
+`tools/cia-timing-corpus/fetch.sh` and gitignored. Agent docs and VICE result
+logs live under `md-files/corpus/cia-timing/`.
+
 ## Contents
 - `C64_TrueType_v1.2.1-STYLE`
   - Upstteam: <http://style64.org/c64-truetype>

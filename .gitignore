@@ -12,3 +12,6 @@ Testing/
 trace*.log
 TODO.txt
 !CMakeLists.txt
+# CIA timing corpus clones (fetch via tools/cia-timing-corpus/fetch.sh)
+external/cia-timing-corpus/VICE-testprogs/
+external/cia-timing-corpus/c64ciaTests/

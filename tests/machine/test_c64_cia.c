@@ -766,7 +766,13 @@ static void test_cia2_tod_alarm_can_raise_nmi(void) {
     cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x00);
     cia_write_register(&machine.cia2, CIA_REG_ICR, 0x84);
 
-    expect_true("tod nmi cycle", c64_step_cycle(&machine, error, sizeof(error)));
+    /* Alarm sets ICR on a TOD tick; delayed pin asserts on the following cycle. */
+    expect_true("tod nmi cycle (latch)", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("tod pending latched", cia_irq_pending(&machine.cia2));
+    if (!cia_interrupt_line(&machine.cia2)) {
+        expect_true("tod nmi cycle (pin delay)", c64_step_cycle(&machine, error, sizeof(error)));
+    }
+    expect_true("tod pin asserted", cia_interrupt_line(&machine.cia2));
     expect_true("tod nmi step instruction", c64_step_instruction(&machine, error, sizeof(error)));
     c64_copy_cpu_snapshot(&machine, &cpu);
     expect_u16("tod cia2 nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
@@ -804,8 +810,14 @@ static void test_cia1_timer_irq_reaches_cpu_irq_vector(void) {
     cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
     cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
     cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x11);
+    /* Two steps: underflow latches pending. Third step: delayed pin asserts
+     * (CPU IRQ samples cia_interrupt_line, not immediate pending). */
     cia_step_cycle(&machine.cia1);
     cia_step_cycle(&machine.cia1);
+    expect_true("pending after underflow", cia_irq_pending(&machine.cia1));
+    expect_false("pin still low on underflow cycle", cia_interrupt_line(&machine.cia1));
+    cia_step_cycle(&machine.cia1);
+    expect_true("pin asserts one cycle later", cia_interrupt_line(&machine.cia1));
     machine.cpu.cpu.I = 0;
 
     step_machine_instructions(&machine, 1);
@@ -826,6 +838,9 @@ static void test_cia2_timer_nmi_reaches_cpu_nmi_vector(void) {
     cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x11);
     cia_step_cycle(&machine.cia2);
     cia_step_cycle(&machine.cia2);
+    expect_false("nmi pin low on underflow cycle", cia_interrupt_line(&machine.cia2));
+    cia_step_cycle(&machine.cia2);
+    expect_true("nmi pin asserts one cycle later", cia_interrupt_line(&machine.cia2));
 
     step_machine_instructions(&machine, 1);
     c64_copy_cpu_snapshot(&machine, &cpu);
@@ -1158,6 +1173,11 @@ static void test_cia2_serial_input_can_raise_nmi(void) {
         cia_pulse_cnt(&machine.cia2);
         cia_step_cycle(&machine.cia2);
     }
+    expect_true("serial complete pending", cia_irq_pending(&machine.cia2));
+    if (!cia_interrupt_line(&machine.cia2)) {
+        cia_step_cycle(&machine.cia2);
+    }
+    expect_true("serial pin asserted after delay", cia_interrupt_line(&machine.cia2));
 
     step_machine_instructions(&machine, 1);
     c64_copy_cpu_snapshot(&machine, &cpu);
@@ -1206,12 +1226,51 @@ static void test_cia2_flag_line_can_raise_nmi(void) {
     reset_machine(&machine);
     cia_write_register(&machine.cia2, CIA_REG_ICR, (uint8_t)(0x80u | CIA_INTERRUPT_FLAG));
     cia_set_flag_line(&machine.cia2, false);
+    expect_true("flag edge latches pending", cia_irq_pending(&machine.cia2));
+    expect_false("flag pin delayed until pipeline steps", cia_interrupt_line(&machine.cia2));
+    /* FLAG is set outside step_cycle, so the delay pipeline needs one step to
+     * sample latched pending and a second to drive the pin (same net delay as
+     * a timer underflow that sets the flag mid-step). */
+    cia_step_cycle(&machine.cia2);
+    expect_false("flag pin still low after first pipeline step", cia_interrupt_line(&machine.cia2));
+    cia_step_cycle(&machine.cia2);
+    expect_true("flag pin asserts after second pipeline step", cia_interrupt_line(&machine.cia2));
 
     step_machine_instructions(&machine, 1);
     c64_copy_cpu_snapshot(&machine, &cpu);
 
     expect_u16("cia2 flag nmi vector entered", TEST_NMI_VECTOR, cpu.pc);
     expect_u64("cia2 flag nmi entry counted", 1, machine.cpu.cpu.nmi_entries);
+}
+
+/* Option-2: CPU must not sample IRQ on the underflow cycle itself. */
+static void test_cia1_cpu_irq_waits_one_cycle_after_underflow(void) {
+    c64_t machine;
+    c64_cpu_snapshot cpu;
+
+    reset_machine(&machine);
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_LO, 0x01);
+    cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
+    cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
+    cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x11);
+    machine.cpu.cpu.I = 0;
+
+    /* Isolate CIA steps so the CPU is still between instructions. */
+    cia_step_cycle(&machine.cia1); /* 1 -> 0 */
+    cia_step_cycle(&machine.cia1); /* underflow: pending, pin low */
+    expect_true("pending on underflow", cia_irq_pending(&machine.cia1));
+    expect_false("pin still low on underflow", cia_interrupt_line(&machine.cia1));
+
+    /* Instruction boundary samples pin low → no IRQ entry; micro-steps will
+     * advance CIA and may assert the pin during this instruction. */
+    step_machine_instructions(&machine, 1);
+    expect_u64("no irq entry while pin was low at poll", 0, machine.cpu.cpu.irq_entries);
+
+    /* Next boundary: delayed pin is high → IRQ. */
+    step_machine_instructions(&machine, 1);
+    c64_copy_cpu_snapshot(&machine, &cpu);
+    expect_u16("irq vector after delay", TEST_IRQ_VECTOR, cpu.pc);
+    expect_u64("irq entry after delay", 1, machine.cpu.cpu.irq_entries);
 }
 
 int main(void) {
@@ -1239,6 +1298,7 @@ int main(void) {
     test_cia_port_b_ordinary_when_timer_output_disabled();
     test_machine_cia_step_and_irq_foundations();
     test_cia1_timer_irq_reaches_cpu_irq_vector();
+    test_cia1_cpu_irq_waits_one_cycle_after_underflow();
     test_cia2_timer_nmi_reaches_cpu_nmi_vector();
     test_restore_nmi_still_reaches_cpu_nmi_vector();
     test_cia1_keyboard_matrix_bidirectional_scan();

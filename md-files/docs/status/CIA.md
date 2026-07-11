@@ -35,19 +35,23 @@
   after eight bits.
 - The PC line pulses low for the one cycle following a CPU-visible PRB read or
   write, then returns high (`cia_pc_line`).
-- `cia_irq_pending` reports the immediate latched ICR (flags & mask) state and
-  continues to drive the validated CPU IRQ/NMI path. `cia_interrupt_line` is a
-  separate delayed output pin (asserts/deasserts one cycle behind the latched
-  state), modeling the 6526 interrupt delay for cycle-accurate consumers WITHOUT
-  changing CPU-observable timing.
+- `cia_irq_pending` reports the immediate latched ICR (flags & mask) state.
+  `cia_interrupt_line` is the delayed output pin (asserts/deasserts one cycle
+  behind the latched state). **Option-2 Phase 4:** the CPU IRQ (CIA #1) and NMI
+  edge (CIA #2) paths sample `cia_interrupt_line`, so CPU-visible interrupt
+  timing includes the 6526 one-cycle delay. RESTORE remains a separate NMI
+  source. VIC IRQ is still OR'd with CIA #1 on the IRQ line.
 
 ## Recent changes
 
-- C64MFULL Phases 1-4 added FLAG, serial SDR/CNT/SP, PC handshake, and a
-  conservative delayed interrupt-line abstraction. New public CIA API:
+- **Option-2 Phase 4:** `c64_cpu_irq_pending` / `c64_cpu_nmi_pending` now use
+  `cia_interrupt_line` (delayed pin) instead of immediate `cia_irq_pending`.
+  Unit tests cover the one-cycle CPU delay; existing IRQ/NMI vector tests step
+  the delay pipeline before expecting CPU entry. VICE priority corpus remains
+  the external oracle (`md-files/corpus/cia-timing/`).
+- C64MFULL Phases 1-4 added FLAG, serial SDR/CNT/SP, PC handshake, and the
+  delayed interrupt-line abstraction. Public CIA API includes
   `cia_set_flag_line`, `cia_set_sp_line`, `cia_pc_line`, `cia_interrupt_line`.
-  Serial output is deterministic and Timer-A driven; ICR bits 3 (serial) and 4
-  (FLAG) now have event generation, not just reserved mask/flag storage.
 - C64MENH Phase 1 reconciled CIA #2 NMI status.
 - Current code and tests confirm that CIA #1 interrupt output routes to CPU IRQ.
 - Current code and tests confirm that CIA #2 enabled-pending interrupt output routes to CPU NMI callback through an edge latch.
@@ -55,13 +59,14 @@
 
 ## Known limitations / deferred
 
-- Bit-exact 6526 cycle/race timing at the CPU-integration level is deferred.
-  The delayed `cia_interrupt_line` is a CIA-internal model; the CPU IRQ/NMI path
-  still consumes the immediate `cia_irq_pending` to preserve the validated
-  timing used by loaders and raster code. Full cycle-exact re-timing would
-  require a VICE-derived CIA interrupt-timing reference corpus as the acceptance
-  gate (see `C64MFULL_CIA.md` Phase 4).
-- 6526 vs 6526A vs 8521 chip-variant policy is not modeled.
+- CPU-visible one-cycle interrupt delay is wired (Option-2 Phase 4). Remaining
+  fidelity work: full PRG-level c64m runs against the VICE corpus, cycle-stamped
+  dual-emulator event logs for hard races, and explicit 6526 vs 6526A vs 8521
+  variant policy. See `md-files/corpus/cia-timing/`.
+- Corpus tools: `tools/cia-timing-corpus/`; VICE baselines green on priority /
+  lorenz-cia / cia-core. c64m does not yet autostart those PRGs in CI.
+- 6526 vs 6526A vs 8521 chip-variant policy is not modeled yet (corpus runs both
+  `-ciamodel 0` and `1` as separate cases).
 - Serial timing models one bit per two Timer A underflows; sub-cycle SP/CNT
   analog edge timing is not modeled.
 - The new FLAG/SP/PC lines expose machine-side seams (`cia_set_flag_line`,
@@ -84,6 +89,8 @@
 - Confirm the PC line pulses low for one cycle after a CPU-visible PRB access.
 - Confirm `cia_interrupt_line` asserts one cycle behind `cia_irq_pending` and
   deasserts one cycle after an ICR read clears the flag.
+- Confirm CPU IRQ/NMI entry waits for the delayed pin (not same-cycle as
+  underflow / FLAG edge latch).
 
 ## Files likely involved
 

@@ -1,0 +1,41 @@
+status	exit	cia_model	path	prg	timeout	notes	x64sc
+PASS	0	0	general/Lorenz-2.15/src	irq.prg	26000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	nmi.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1tb123.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia2tb123.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1pb6.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1pb7.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia2pb6.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia2pb7.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1tab.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	loadth.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cnto2.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	icr01.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	imr.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	flipos.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	oneshot.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cntdef.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1ta.prg	190000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia1tb.prg	80000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia2ta.prg	75000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	0	general/Lorenz-2.15/src	cia2tb.prg	75000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	irqnew.prg	26000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	nminew.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1tb123.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia2tb123.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1pb6.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1pb7.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia2pb6.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia2pb7.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1tabnew.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	loadth.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cnto2.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	icr01new.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	imrnew.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	flipos.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	oneshot.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cntdef.prg	20000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1tanew.prg	190000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia1tbnew.prg	80000000		/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia2tanew.prg	75000000	comment:TODO - incomplete 	/Applications/vice-arm64-gtk3-3.10/bin/x64sc
+PASS	0	1	general/Lorenz-2.15/src	cia2tbnew.prg	75000000	comment:TODO - incomplete 	/Applications/vice-arm64-gtk3-3.10/bin/x64sc

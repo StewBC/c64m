@@ -47,10 +47,16 @@
   #2 NMI; serial output (eight MSB-first bits on SP via Timer A, ICR bit 3),
   serial input (eight CNT-clocked SP bits into SDR) and CIA #2 serial NMI; the PC
   handshake pulse (one cycle low after a CPU-visible PRB access, not on debug
-  peeks); and the delayed `cia_interrupt_line` asserting one cycle behind
-  `cia_irq_pending` and deasserting one cycle after an ICR read. All in
+  peeks); the delayed `cia_interrupt_line` asserting one cycle behind
+  `cia_irq_pending` and deasserting one cycle after an ICR read; and CPU
+  IRQ/NMI entry waiting for that delayed pin (Option-2 Phase 4). All in
   `tests/machine/test_c64_cia.c`.
 - 1541/IEC: tests cover VIA IEC line modeling, ATN acknowledge DATA pull, queued READ/SEARCH jobs, queued WRITE jobs (persist to image + dirty, write-protect on read-only, out-of-range error; Phase 4), queued FORMT EXECUTE jobs (erase track + dirty, write-protect on read-only; Phase 5), direct real-ROM `LOAD"*",8` from `GALENCIA.D64`, and runtime autorun through the real 1541 ROM/IEC path. Phase 5 DOS command/error-channel behavior (scratch/rename/validate/format/status) was verified end-to-end via the control port against the real ROM.
+- CIA interrupt-timing corpus (external VICE baselines, not ctest): see
+  `md-files/corpus/cia-timing/`. Re-run with
+  `./tools/cia-timing-corpus/run_x64sc.sh priority|lorenz-cia|cia-core` after
+  `fetch.sh`. Latest baselines: priority 31/31, lorenz-cia 40/40, cia-core
+  66/66 PASS on local `x64sc` 3.10.
 - Control port: `tests/control/test_control_protocol.c` covers Phase 1 through 6 request parsing, `assemble`/`find-symbol` parsing, plus text/binary response formatting. `tests/test_app_options.c` covers `--control-port` and `--headless` parsing.
 - Keyboard joystick: `tests/frontend/test_frontend_joystick.c` covers layout defaults, numpad/WASD direction accumulation, diagonal-vs-cardinal non-clobbering, consume gating (only while assigned), disable/layout-switch release, and layout string round-trip. `tests/test_app_options.c` covers `--kbdjoy`/`--kbdjoy-layout` parsing and `[input]` INI save/reload round-trip.
 - Cartridge detach on program load and reset: `tests/runtime/test_runtime_crt.c` loads a CRT, confirms ROML/ROMH map at `$8000`/`$A000`, then loads a PRG and confirms `$8000` no longer reads cartridge ROM (the program boots instead). It then re-attaches the CRT and checks that `runtime_client_reset_ex(client, false)` keeps the cartridge mapped while `runtime_client_reset_ex(client, true)` detaches it.

@@ -480,11 +480,10 @@ void cia_step_cycle(cia *c) {
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
     cia_step_serial(c);
     cia_step_tod(c);
-    /* The latched ICR state drives the interrupt output pin one cycle later, per
-     * the 6526 interrupt delay. cia_irq_pending() continues to report the
-     * immediate latched state used by the validated CPU IRQ/NMI path;
-     * interrupt_line models the delayed pin for cycle-accurate consumers and
-     * debugger visibility without altering CPU-observable timing. */
+    /* Latched ICR (flags & mask) drives the interrupt output pin one cycle
+     * later (6526 interrupt delay). cia_irq_pending() reports the immediate
+     * latched state; cia_interrupt_line() is the delayed pin that drives the
+     * CPU IRQ/NMI path (c64_cpu_irq_pending / c64_cpu_nmi_pending). */
     pending_now = (c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0;
     c->interrupt_line = c->interrupt_pending_latched;
     c->interrupt_pending_latched = pending_now;

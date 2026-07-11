@@ -24,13 +24,13 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 
 ## CIA
 
-- FLAG (ICR bit 4), serial SDR/CNT/SP shift (ICR bit 3), and the PC handshake
-  pulse are now implemented (`C64MFULL_CIA.md` Phases 1-3). A conservative
-  delayed interrupt-line model (`cia_interrupt_line`) is also present (Phase 4),
-  separate from the immediate `cia_irq_pending` that still drives the CPU path.
-- Still deferred: bit-exact 6526 cycle/race timing at the CPU-integration level
-  (would require a VICE-derived CIA interrupt-timing reference corpus), 6526 vs
-  6526A vs 8521 chip-variant policy, and sub-cycle SP/CNT analog edge timing.
+- FLAG (ICR bit 4), serial SDR/CNT/SP shift (ICR bit 3), PC handshake, delayed
+  interrupt-line model, and **Option-2 CPU wiring** (`cia_interrupt_line` drives
+  CIA #1 IRQ and CIA #2 NMI edge) are implemented (`C64MFULL_CIA.md`).
+- **Corpus / remaining fidelity:** VICE + hardware reference under
+  `md-files/corpus/cia-timing/`. Still deferred: c64m PRG-level corpus runner,
+  cycle-stamped dual-emulator logs, explicit 6526 vs 6526A vs 8521 variant
+  policy, and sub-cycle SP/CNT analog edge timing.
 - The FLAG/SP/PC machine-side seams are not yet wired to concrete peripherals
   (cassette FLAG, RS-232, user-port handshake); tape (`.TAP`) and RS-232 work
   will consume them.
