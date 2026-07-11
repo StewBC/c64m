@@ -78,6 +78,16 @@ static void cia_reload_timer(cia_timer *timer) {
     timer->counter = timer->latch == 0 ? 0xffffu : timer->latch;
 }
 
+static void cia_reload_timer_from_run(cia_timer *timer) {
+    timer->counter = timer->latch == 0 ? 0xffffu : timer->latch;
+    /* Underflow/force-load while counting removes the next count clock. */
+    timer->skip_tick = true;
+}
+
+static uint16_t cia_timer_reload_value(const cia_timer *timer) {
+    return timer->latch == 0 ? 0xffffu : timer->latch;
+}
+
 static uint8_t cia_bcd_to_uint(uint8_t value) {
     return (uint8_t)(((value >> 4) & 0x0fu) * 10u + (value & 0x0fu));
 }
@@ -315,6 +325,13 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
 
     timer->underflow = false;
     if ((control & CIA_CONTROL_START) == 0) {
+        timer->start_delay = 0;
+        return;
+    }
+
+    /* Two clocks after start before any count (Lorenz); burns Phi2 while started. */
+    if (timer->start_delay > 0u) {
+        timer->start_delay--;
         return;
     }
 
@@ -326,11 +343,21 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
         return;
     }
 
-    if (timer->counter == 0) {
+    if (timer->skip_tick) {
+        timer->skip_tick = false;
+        return;
+    }
+
+    /*
+     * Phi2 continuous sequences read as 2-1-2-2-1-2 (no visible 0): underflow
+     * on the tick that would leave 0, reload from latch, and discard the next
+     * clock. Zero latch maps to 0xFFFF and still decrements normally until 1.
+     */
+    if (timer->counter <= 1u) {
         timer->underflow = true;
         cia_set_interrupt_source(c, interrupt_flag);
-    cia_timer_update_pb_output(timer, control);
-        cia_reload_timer(timer);
+        cia_timer_update_pb_output(timer, control);
+        cia_reload_timer_from_run(timer);
         if ((control & CIA_CONTROL_ONESHOT) != 0) {
             c->registers[control_reg] = (uint8_t)(control & (uint8_t)~CIA_CONTROL_START);
         }
@@ -636,18 +663,48 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             }
             c->registers[reg] = c->interrupt_mask;
             return;
-        case CIA_REG_CONTROL_A:
+        case CIA_REG_CONTROL_A: {
+            uint8_t old = c->registers[reg];
+            bool was_running = (old & CIA_CONTROL_START) != 0;
             c->registers[reg] = (uint8_t)(value & (uint8_t)~CIA_CONTROL_FORCE_LOAD);
             if ((value & CIA_CONTROL_FORCE_LOAD) != 0) {
-                cia_reload_timer(&c->timer_a);
+                /* Skip next tick only if the timer was already counting. */
+                if (was_running) {
+                    cia_reload_timer_from_run(&c->timer_a);
+                } else {
+                    cia_reload_timer(&c->timer_a);
+                }
+            }
+            /* Rising edge of START: two-cycle count delay (Lorenz). */
+            if (!was_running && ((value & CIA_CONTROL_START) != 0)) {
+                c->timer_a.start_delay = 2;
+                c->timer_a.skip_tick = false;
+            }
+            if ((value & CIA_CONTROL_START) == 0) {
+                c->timer_a.start_delay = 0;
             }
             return;
-        case CIA_REG_CONTROL_B:
+        }
+        case CIA_REG_CONTROL_B: {
+            uint8_t old = c->registers[reg];
+            bool was_running = (old & CIA_CONTROL_START) != 0;
             c->registers[reg] = (uint8_t)(value & (uint8_t)~CIA_CONTROL_FORCE_LOAD);
             if ((value & CIA_CONTROL_FORCE_LOAD) != 0) {
-                cia_reload_timer(&c->timer_b);
+                if (was_running) {
+                    cia_reload_timer_from_run(&c->timer_b);
+                } else {
+                    cia_reload_timer(&c->timer_b);
+                }
+            }
+            if (!was_running && ((value & CIA_CONTROL_START) != 0)) {
+                c->timer_b.start_delay = 2;
+                c->timer_b.skip_tick = false;
+            }
+            if ((value & CIA_CONTROL_START) == 0) {
+                c->timer_b.start_delay = 0;
             }
             return;
+        }
         default:
             c->registers[reg] = value;
             return;

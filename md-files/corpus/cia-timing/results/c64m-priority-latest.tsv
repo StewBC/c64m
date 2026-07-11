@@ -4,12 +4,12 @@ FAIL	255	0	general/Lorenz-2.15/src	cia2tb123.prg	20000000	timer B write race CIA
 FAIL	255	1	general/Lorenz-2.15/src	cia1tb123.prg	20000000	timer B write race CIA1 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	1	general/Lorenz-2.15/src	cia2tb123.prg	20000000	timer B write race CIA2 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	general/Lorenz-2.15/src	icr01.prg	20000000	ICR read/set race old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
-FAIL	255	1	general/Lorenz-2.15/src	icr01new.prg	20000000	ICR read/set race new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	general/Lorenz-2.15/src	icr01new.prg	20000000	ICR read/set race new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	general/Lorenz-2.15/src	imr.prg	20000000	IMR / interrupt mask old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	general/Lorenz-2.15/src	flipos.prg	20000000	flipos old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	1	general/Lorenz-2.15/src	flipos.prg	20000000	flipos new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
-FAIL	255	0	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
-FAIL	255	1	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	0	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	1	general/Lorenz-2.15/src	oneshot.prg	20000000	oneshot new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	CIA/irqdelay	irqdelay.prg	7000000	1-cycle IRQ delay detect old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 PASS	0	1	CIA/irqdelay	irqdelay-new.prg	7000000	1-cycle IRQ delay detect new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	CIA/irqdelay	irqdelay-oneshot.prg	7000000	oneshot IRQ delay old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus

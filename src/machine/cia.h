@@ -21,6 +21,10 @@ typedef struct cia_timer {
     bool underflow;
     bool output_level;
     bool pulse_active;
+    /* Lorenz CIA model: two Phi2 clocks after start before counting begins. */
+    uint8_t start_delay;
+    /* After force-load or underflow reload, the next count clock is discarded. */
+    bool skip_tick;
 } cia_timer;
 
 typedef struct cia_tod {
