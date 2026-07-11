@@ -220,6 +220,24 @@ Acceptance:
 - Any unresolved feature remains explicitly listed in `docs/status/DEFERRED.md`.
 - A decision is recorded on whether to pursue full cycle-perfect recreation.
 
+### Phase 5 completion record (2026-07-11)
+
+The bounded acceptance corpus is recorded in
+`md-files/timing-baselines/PHASE5_ACCEPTANCE.md` as
+`c64m-phase5-timing-v1`. It names executable PAL/NTSC CPU/VIC, AEC/RDY,
+opcode-family, raster, and ordinary-boot fixtures, plus the project-owned
+`samples/dkarcade2016.prg` raster program and its reproducible control-port
+check. `PAL_NTSC_CURRENT.md` remains the checked-in cycle-signature baseline.
+
+The specific compatibility gains are pending-bus reads, AEC-correct write
+arbitration, PAL/NTSC and cross-line sprite contention, shared instruction /
+cycle stepping, and timed VIC/raster writes. These are validated model
+properties, not a claim of universal cycle-perfect software compatibility.
+
+Phase 5 is complete for the current cycle-level scope. Hardware-authoritative
+capture and the separately scoped follow-ons remain deferred in
+`docs/status/DEFERRED.md`.
+
 ## Guardrails
 
 - Do not add SDL, frontend, or runtime dependencies to `machine/`.
@@ -272,7 +290,7 @@ then record the CPU event trace alongside raster position.
 Phase 0 follow-up completed on 2026-07-10:
 
 - A real PAL badline fixture starts a CPU instruction on VIC cycle 12, proves
-  the first CPU event completes before BA assertion, then proves 43 subsequent
+  the first CPU event completes before BA assertion, then proves 44 subsequent
   master cycles advance while the pending CPU read is held.
 - PAL and NTSC sprite-0 fixtures lock the different late BA assertion cycles
   (PAL 54, NTSC 56) and their six-cycle windows.
@@ -368,10 +386,10 @@ tested lead-window predicate. The schedule marker is the Phase 3 bridge toward
 individual fetch scheduling; idle g-accesses and per-byte sprite data accesses
 remain future work.
 
-The complete 46-test CTest suite passes after these changes. Phase 4 remains active:
-the remaining legal and practical-undocumented opcode families and complete VIC
-fetch scheduling have not migrated. Phase 5's full compatibility decision
-therefore cannot yet be closed honestly.
+The complete 47-test CTest suite passed after the migration work. Phase 4 is
+complete for the documented and practical-undocumented families listed below,
+and the bounded Phase 5 acceptance decision is recorded at the end of this
+document. Broader hardware-authoritative validation remains deferred.
 
 ## Current-model PAL/NTSC baseline (2026-07-10)
 

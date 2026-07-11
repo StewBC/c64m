@@ -28,7 +28,7 @@ for following CPU cycles; this ordering is part of the current baseline.
 
 | Fixture | Current signature | Executable coverage |
 |---|---|---|
-| Bad line | c-access marker cycles 15 through 54; the schedule derives BA three cycles earlier at cycle 12. The CPU cycle at 12 proceeds, followed by 43 held read attempts; the next eligible cycle resumes the pending read. | `test_timing_fixture_records_real_badline_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
+| Bad line | c-access marker cycles 15 through 54; the schedule derives BA three cycles earlier at cycle 12. The CPU cycle at 12 proceeds, followed by held read attempts; the first operand read resumes at cycle 57 after the three-cycle release margin. | `test_timing_fixture_records_real_badline_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
 | Sprite 0 | Sprite-data slots are cycles 57/58; the schedule derives BA at cycle 54. The resulting release margin produces five following held read attempts, then resume. | `test_timing_fixture_records_pal_sprite_ba_stall`, `test_vicii_bus_schedule_reports_c_and_sprite_accesses` |
 | Sprite 3 cross-line | The schedule sees the line-N sprite-data slot three cycles ahead at cycle 60 of line N-1. The held read spans the raster-line rollover and resumes after the derived window. | `test_timing_fixture_records_cross_line_sprite_ba_stall` |
 | CPU write timing | `STA $D020` emits opcode fetch, two operand reads, then the write at instruction start plus 3 Phi2 cycles. VIC observes the register write at that bus-event cycle. | `test_sta_d020_applies_at_event_cycle` |

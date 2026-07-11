@@ -39,7 +39,8 @@
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
-  format v2 carries the added sprite-pointer latch state.
+  format v3 carries the added sprite-pointer latch and cycle-level AEC/RDY
+  timing state.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE
   isolation, ICR read side effects, and debugger-safe peeks. The C64MFULL pin/
   serial work adds: FLAG negative-edge -> ICR bit 4 with mask/read-clear and CIA
@@ -185,3 +186,12 @@
 
 - Some accepted changes regressed scalar score slightly but replaced known placeholder behavior with more correct behavior.
 - Treat measured regressions honestly. Record whether the regression is accepted and why.
+
+## Phase 5 acceptance corpus
+
+The versioned timing acceptance manifest is
+`md-files/timing-baselines/PHASE5_ACCEPTANCE.md`. It records the exact focused
+and full-suite commands, expected PAL/NTSC CPU/VIC outcomes, the ordinary boot
+gate, and the manual `dkarcade2016.prg` raster check. Its traces are current
+model regression baselines; they are not presented as hardware-authoritative
+golden captures.
