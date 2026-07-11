@@ -154,9 +154,8 @@ void c6510_reset(C6510 *m);
 void c6510_set_overflow(C6510 *m);
 size_t c6510_step(C6510 *m);
 
-/* Resumable Phi2 path for a deliberately small, trace-gated set of common
-   6510 instructions. Unsupported opcodes continue through c6510_step() and
-   the compatibility trace/replay path until migrated. */
+/* Resumable Phi2 path for documented NMOS 6502/6510 opcodes plus practical
+   undocumented families. Unstable undocs and JAM fall back to c6510_step(). */
 bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode);
 void c6510_micro_begin(C6510 *m);
 void c6510_micro_begin_interrupt(C6510 *m, c6510_interrupt_kind kind);

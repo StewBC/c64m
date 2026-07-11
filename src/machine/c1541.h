@@ -25,6 +25,13 @@ typedef struct c1541 {
     int      device_number; /* 8 or 9 */
     size_t   cpu_cycles_remaining;
     int      via2_t1_pb7_last;
+    /* IEC bus-visible outputs: 2-stage pipeline of VIA ORB/DDRB (settle delay).
+       Every cycle shifts pipe[0]→out, pipe[1]→pipe[0], via→pipe[1] so rapid
+       $1800 bitbang writes are not collapsed by a retriggered countdown. */
+    uint8_t  iec_out_orb;
+    uint8_t  iec_out_ddrb;
+    uint8_t  iec_pipe_orb[2];
+    uint8_t  iec_pipe_ddrb[2];
     c1541_media media;      /* GCR track rotation / disk-controller VIA */
 } c1541;
 

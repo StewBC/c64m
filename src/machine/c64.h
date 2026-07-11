@@ -408,6 +408,9 @@ void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs);
 void c64_set_iec_external_pull(c64_t *machine, uint8_t lines);
 void c64_set_iec_drive_pull(c64_t *machine, int device_number, uint8_t lines);
 uint8_t c64_get_iec_external_pull(c64_t *machine);
+/* External IEC pulls excluding the given drive (8 or 9). Used so a drive can
+   sense the bus with immediate self-pull while publishing delayed pull to peers. */
+uint8_t c64_get_iec_pull_excluding_drive(c64_t *machine, int device_number);
 /* Returns a bitmask (C64_IEC_* flags) of IEC lines CIA #2 is actively asserting.
    Does not include iec_external_pull; no side effects. */
 uint8_t c64_get_iec_c64_pull(c64_t *machine);

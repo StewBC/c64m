@@ -72,11 +72,15 @@ Observed after `LOAD"*"` + RUN (autorun `-a`):
 7. **Stock media GCR is good:** c64m `LOAD"FAST",8,1` → `$7000` **byte-identical** to VICE extract of `fast`.
 8. **Secondary is corrupt:** VICE `load1` at `$8000` is `A0 00 A9 1A 59 0C 80 99 0C 80 C8 D0 …` (`LDA #$1A` / `INY`). c64m after full RUN path has `A0 00 A5 2A … E0 D0 …` then BRK. So the custom path after `JSR $7000` (M-W/M-E + bitbang / or the following `LOAD"LOAD1"` under patched protocol) is wrong — not the disk image.
 9. **`fast` patches ILOAD** (`$0330` → `$0A08`): subsequent `LOAD"LOAD1"` is custom bitbang, not stock DOS. Stock `LOAD"FAST"` is already byte-identical to VICE.
-10. **IEC bus latency fix:** serial VIA `$1800` ORB/DDRB writes refresh the IEC pull immediately (and `$1800` reads refresh inputs). Before: `$8000` garbage (`LDA $2A` / `CPX #$D0`). After: close to VICE — `LDA #$1A` / `INY` correct, still **7/32** wrong in first bytes (`99`→`A5`, `D0`→`C0`, …) then BRK.
-11. **Tried / rejected for now:**
-    - Drive Phi2 **micro-step** for supported opcodes: broke stock `LOAD"FAST"` (zeros) — needs more careful IRQ/integration before reuse.
-    - Bulk **write-at-end-of-instruction** IEC latch: overcorrected; `$8000` became noise.
-12. **Still left (main gap):** true drive-side write-on-last-cycle for `$1800` bitbang without breaking DOS (likely micro-step the drive once the C64 path’s IRQ/defer rules are mirrored carefully), then re-check `$8000` vs VICE `load1`.
+10. **Drive Phi2 micro-step:** `c1541_advance_one_cycle` prefers `c6510_micro_*` so multi-cycle `$1800` stores write on the last cycle. Stock media `LOAD"FAST"` remains **byte-identical** to VICE; unit G64/D64 LOADs pass.
+11. **IEC settle pipeline:** bus-visible drive IEC outputs are a **2-stage pipeline** of VIA ORB/DDRB (sampled post-CPU each cycle). Peers (C64) see a 2-cycle settle; the drive’s own `$1800` input sense uses **immediate** self-pull so bitbang “wait for host” loops do not false-trigger on delayed echo. Depth 0/1 ≈ **1.78%** residual; depth 2 ≈ **1.63%** (best of 0–3).
+12. **Custom ILOAD path (FAST → patch `$0330`→`$0A08` → `LOAD"LOAD1"`):** dual-bit receive at `$0A72` / drive send at `$0309`. Vs VICE `load1` extract:
+    - load address `$0E40` correct; transfer completes (pc returns)
+    - **`$8000` first 32 bytes: 0 mismatches** (decrypt stub `A0 00 A9 1A …` exact)
+    - full file **~1008 / 61880 ≈ 1.63%** wrong; **~1002 are isolated `0xFF` holes** (max streak 1; stream stays aligned); ~6 are `0xAA`
+    - errors often recur with **gap 29** (raster/BA interaction candidate); not a 16-byte framing shift
+13. **Tried / rejected:** bulk write-at-end IEC latch (overcorrected); partial micro coverage (broke stock LOAD); nopping ILOAD raster wait (worse, 5.16%); stock `LOAD"LOAD1"` without FAST (hung / impractically slow).
+14. **Still left:** cut residual ~1.63% dual-bit misses (likely C64 raster/BA vs drive handshake edge cases) so full `load1` is byte-identical; then headless RUN / post-decrypt.
 
 **How to smoke Robocop (human):**
 

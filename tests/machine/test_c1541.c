@@ -156,6 +156,9 @@ static void test_iec_drive_pulls_data(void) {
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     drive.via1.orb  = 0x02u; /* bit 1 = 1 → pulls DATA low */
 
+    /* IEC outputs pass a 2-stage pipeline; direct VIA pokes need settle cycles. */
+    c1541_advance_one_cycle(&drive);
+    c1541_advance_one_cycle(&drive);
     c1541_advance_one_cycle(&drive);
 
     if (!(c64.iec_external_pull & C64_IEC_DATA))
@@ -180,6 +183,8 @@ static void test_iec_drive_releases_data(void) {
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     drive.via1.orb  = 0x00u; /* bit 1 = 0 → not driving DATA low */
 
+    c1541_advance_one_cycle(&drive);
+    c1541_advance_one_cycle(&drive);
     c1541_advance_one_cycle(&drive);
 
     if (c64.iec_external_pull & C64_IEC_DATA)
@@ -281,7 +286,12 @@ static void test_iec_two_drive_pull_aggregation(void) {
     d9.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     d9.via1.orb  = 0x00u; /* drive 9 releases DATA */
 
+    /* Pipeline settle (3 cycles) on each drive before observing the bus. */
     c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d9);
+    c1541_advance_one_cycle(&d9);
     c1541_advance_one_cycle(&d9);
 
     if (!(c64.iec_external_pull & C64_IEC_DATA))
@@ -289,6 +299,10 @@ static void test_iec_two_drive_pull_aggregation(void) {
 
     d8.via1.orb = 0x00u; /* now both drives release DATA */
     c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d8);
+    c1541_advance_one_cycle(&d9);
+    c1541_advance_one_cycle(&d9);
     c1541_advance_one_cycle(&d9);
 
     if (c64.iec_external_pull & C64_IEC_DATA)
@@ -334,11 +348,15 @@ static void test_iec_atn_ack_pulls_data(void) {
     drive.via1.orb = 0x00u;
 
     c1541_advance_one_cycle(&drive);
+    c1541_advance_one_cycle(&drive);
+    c1541_advance_one_cycle(&drive);
 
     if (!(c64.iec_external_pull & C64_IEC_DATA))
         fail("iec_atn_ack_pulls_data: ATN acknowledge should pull DATA");
 
     drive.via1.orb = 0x10u;
+    c1541_advance_one_cycle(&drive);
+    c1541_advance_one_cycle(&drive);
     c1541_advance_one_cycle(&drive);
 
     if (c64.iec_external_pull & C64_IEC_DATA)
@@ -685,13 +703,14 @@ static void test_queued_write_job_success(void) {
     }
 
     /* Phase 3 read is the oracle: read the same sector into buffer 3.
-       Clear the pending-cycle counter so the next advance re-enters the
-       job-scan window instead of draining the prior instruction's cycles. */
+       Clear bulk-remaining and any in-flight micro-op so the next advance
+       re-enters the job-scan window instead of finishing the prior opcode. */
     drive.ram[0x03] = 0x80u; /* READ job */
     drive.ram[0x0C] = 1;
     drive.ram[0x0D] = 0;
     drive.cpu.cpu.pc = 0xF2BEu;
     drive.cpu_cycles_remaining = 0;
+    drive.cpu.micro_active = 0;
     c1541_advance_one_cycle(&drive);
     expect_eq_u8("write read-back job result", 0x01u, drive.ram[0x03]);
     for (i = 0; i < 256; i++) {

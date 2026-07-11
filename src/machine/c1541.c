@@ -121,12 +121,9 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
     if (addr >= 0x1800u && addr < 0x2000u) {
         uint8_t reg = (uint8_t)(addr & 0x0Fu);
         via6522_write(&drive->via1, reg, value);
-        /* ORB/DDRB change IEC pull immediately. Fast-loaders bitbang $1800 and
-           sample the host within a few cycles; waiting for the next advance is
-           too late. (Full write-on-last-cycle needs drive Phi2 micro-step.) */
-        if (reg == 0x00u || reg == 0x02u) {
-            c1541_update_iec_bus(drive);
-        }
+        /* IEC visibility is delayed by the 2-stage pipeline in advance_one_cycle
+           (not applied here) so multi-cycle STA $1800 still publishes on the
+           write cycle's pipeline sample, two host cycles later. */
         return;
     }
     /* ROM and unmapped: ignore */
@@ -149,13 +146,9 @@ static uint8_t c1541_irq_pending(void *user) {
    Reads VIA #1 Port B output lines, updates the C64's iec_external_pull,
    then reads the combined bus state and feeds it back into VIA #1
    input pins and CA1 (ATN IRQ source). */
-static void c1541_update_iec_bus(c1541 *drive) {
-    uint8_t ddrb1 = drive->via1.ddrb;
-    uint8_t orb1  = drive->via1.orb;
+/* Map serial VIA ORB/DDRB (+ ATN state) to open-collector IEC pull bits. */
+static uint8_t c1541_iec_pull_from_orb(uint8_t ddrb, uint8_t orb, int atn_low) {
     uint8_t drive_pull = 0;
-    uint8_t c64_pull, bus_low;
-    uint8_t data_low, clk_low, atn_low;
-    uint8_t port_b_in;
 
     /* Standard 1541 serial VIA ($1800) Port B:
        bit 0 = DATA in, bit 1 = DATA out, bit 2 = CLK in, bit 3 = CLK out,
@@ -164,19 +157,41 @@ static void c1541_update_iec_bus(c1541 *drive) {
        output bit high pulls the IEC line low, and input bit high means the
        IEC line is currently low.  PB4 is special: when ATN is asserted and
        PB4 is output-low, the drive acknowledges attention by pulling DATA low. */
+    if ((ddrb & 0x02u) && (orb & 0x02u)) {
+        drive_pull |= C64_IEC_DATA;
+    }
+    if ((ddrb & 0x10u) && !(orb & 0x10u) && atn_low) {
+        drive_pull |= C64_IEC_DATA;
+    }
+    if ((ddrb & 0x08u) && (orb & 0x08u)) {
+        drive_pull |= C64_IEC_CLK;
+    }
+    return drive_pull;
+}
+
+static void c1541_update_iec_bus(c1541 *drive) {
+    uint8_t drive_pull_ext;
+    uint8_t drive_pull_self;
+    uint8_t c64_pull, bus_low;
+    uint8_t data_low, clk_low, atn_low;
+    uint8_t port_b_in;
+    int atn_from_c64;
+
     c64_pull = c64_get_iec_c64_pull(drive->c64);
-    atn_low = (c64_pull & C64_IEC_ATN) != 0;
+    atn_from_c64 = (c64_pull & C64_IEC_ATN) != 0;
 
-    if ((ddrb1 & 0x02u) &&  (orb1 & 0x02u)) drive_pull |= C64_IEC_DATA;
-    if ((ddrb1 & 0x10u) && !(orb1 & 0x10u) && atn_low) drive_pull |= C64_IEC_DATA;
-    if ((ddrb1 & 0x08u) &&  (orb1 & 0x08u)) drive_pull |= C64_IEC_CLK;
+    /* Peers (C64 / other drives) see pipelined outputs — dual-bit sample windows. */
+    drive_pull_ext = c1541_iec_pull_from_orb(
+        drive->iec_out_ddrb, drive->iec_out_orb, atn_from_c64);
+    c64_set_iec_drive_pull(drive->c64, drive->device_number, drive_pull_ext);
 
-    /* Tell the C64 what this 1541 is pulling.  The C64 aggregates drive 8,
-       drive 9, and any other external pullers using open-collector OR logic. */
-    c64_set_iec_drive_pull(drive->c64, drive->device_number, drive_pull);
-
-    /* Open-collector: either side can pull a line low. */
-    bus_low  = c64_get_iec_external_pull(drive->c64) | c64_pull;
+    /* Local $1800 sense uses immediate VIA ORB/DDRB for this drive's contribution.
+       A settle delay on self-pull makes bitbang "wait for host" loops (LDX $1800 /
+       BEQ) see their own previous output as a false handshake. */
+    drive_pull_self = c1541_iec_pull_from_orb(
+        drive->via1.ddrb, drive->via1.orb, atn_from_c64);
+    bus_low = (uint8_t)(c64_get_iec_pull_excluding_drive(drive->c64, drive->device_number) |
+                        drive_pull_self | c64_pull);
 
     data_low = (bus_low & C64_IEC_DATA) != 0;
     clk_low  = (bus_low & C64_IEC_CLK)  != 0;
@@ -615,6 +630,12 @@ void c1541_reset(c1541 *drive) {
     c6510_reset(&drive->cpu);
     drive->cpu_cycles_remaining = 0;
     drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
+    drive->iec_out_orb = drive->via1.orb;
+    drive->iec_out_ddrb = drive->via1.ddrb;
+    drive->iec_pipe_orb[0] = drive->via1.orb;
+    drive->iec_pipe_orb[1] = drive->via1.orb;
+    drive->iec_pipe_ddrb[0] = drive->via1.ddrb;
+    drive->iec_pipe_ddrb[1] = drive->via1.ddrb;
 }
 
 /* ------------------------------------------------------------------ */
@@ -667,9 +688,78 @@ int c1541_load_rom_split(c1541 *drive, const char *path_lo, const char *path_hi)
 /* Cycle step                                                          */
 /* ------------------------------------------------------------------ */
 
-void c1541_advance_one_cycle(c1541 *drive) {
-    size_t cycles;
+/* Peek opcode at PC without VIA/media side effects (ROM/RAM only). */
+static uint8_t c1541_peek_opcode(const c1541 *drive) {
+    uint16_t pc = drive->cpu.cpu.pc;
 
+    if (pc < 0x0800u) {
+        return drive->ram[pc];
+    }
+    if (pc < 0x1000u) {
+        return drive->ram[pc & 0x07FFu];
+    }
+    if (pc >= 0xC000u && drive->rom_loaded) {
+        return drive->rom[pc - 0xC000u];
+    }
+    return 0xEAu; /* treat unmapped as NOP for can_begin */
+}
+
+static void c1541_run_cpu_one_cycle(c1541 *drive) {
+    size_t cycles;
+    c6510_interrupt_kind interrupt_kind;
+    uint8_t opcode;
+
+    /* Prefer Phi2 micro-step so multi-cycle STA/STX $1800 write on the last
+       cycle (needed for IEC bitbang). Every documented NMOS opcode is covered;
+       only JAM/unstable undocs fall back to bulk instruction step. */
+    if (drive->cpu.micro_active) {
+        (void)c6510_micro_step(&drive->cpu);
+        c1541_update_iec_bus(drive);
+        return;
+    }
+
+    if (drive->cpu_cycles_remaining > 0u) {
+        drive->cpu_cycles_remaining--;
+        return;
+    }
+
+    if (drive->cpu.cpu.pc >= 0xF2B0u && drive->cpu.cpu.pc <= 0xF2F6u) {
+        c1541_satisfy_queued_jobs(drive);
+    }
+
+    /* Intercept disk jobs before the ROM waits for unmodelled GCR hardware.
+       When media mode has valid tracks, physical READ/SEARCH/VERIFY are not
+       intercepted so the ROM GCR path runs against via2. */
+    if (drive->cpu.cpu.pc == C1541_ROM_PHYS_READ) {
+        (void)c1541_satisfy_physical_job(drive);
+    } else if (drive->cpu.cpu.pc == C1541_ROM_REED) {
+        c1541_satisfy_sector_read(drive);
+    }
+
+    interrupt_kind = c6510_micro_poll_interrupt(&drive->cpu);
+    if (interrupt_kind != C6510_INTERRUPT_NONE) {
+        c6510_micro_begin_interrupt(&drive->cpu, interrupt_kind);
+        (void)c6510_micro_step(&drive->cpu);
+        c1541_update_iec_bus(drive);
+        return;
+    }
+
+    opcode = c1541_peek_opcode(drive);
+    if (c6510_micro_can_begin(&drive->cpu, opcode)) {
+        c6510_micro_begin(&drive->cpu);
+        (void)c6510_micro_step(&drive->cpu);
+        c1541_update_iec_bus(drive);
+        return;
+    }
+
+    /* Bulk fallback (JAM / unstable undocs only for normal 1541 code). */
+    cycles = c6510_step(&drive->cpu);
+    drive->cpu_cycles_remaining = cycles != 0 ? cycles : 1u;
+    c1541_update_iec_bus(drive);
+    drive->cpu_cycles_remaining--;
+}
+
+void c1541_advance_one_cycle(c1541 *drive) {
     if (!drive->rom_loaded) return;
 
     /* Opt-in media path follows the machine config (requires emulate_1541). */
@@ -677,6 +767,10 @@ void c1541_advance_one_cycle(c1541 *drive) {
         drive->media.enabled =
             (drive->c64->config.emulate_1541 != 0 && drive->c64->config.media_1541 != 0) ? 1 : 0;
     }
+
+    /* 0. Publish pipeline head as bus-visible IEC outputs for this cycle. */
+    drive->iec_out_orb = drive->iec_pipe_orb[0];
+    drive->iec_out_ddrb = drive->iec_pipe_ddrb[0];
 
     /* 1. Step VIAs (may set IFR flags before CPU samples them). */
     via6522_step(&drive->via1);
@@ -693,30 +787,15 @@ void c1541_advance_one_cycle(c1541 *drive) {
     /* 4. Synchronise IEC bus: serial VIA outputs → C64 pull; C64 state → serial VIA inputs + CA1. */
     c1541_update_iec_bus(drive);
 
-    if (drive->cpu_cycles_remaining == 0) {
-        if (drive->cpu.cpu.pc >= 0xF2B0u && drive->cpu.cpu.pc <= 0xF2F6u) {
-            c1541_satisfy_queued_jobs(drive);
-        }
+    /* 5. Drive CPU: one Phi2 cycle (micro path preferred; may write $1800). */
+    c1541_run_cpu_one_cycle(drive);
 
-        /* 5. Intercept disk jobs before the ROM waits for unmodelled GCR hardware.
-           When media mode has valid tracks, physical READ/SEARCH/VERIFY are not
-           intercepted so the ROM GCR path runs against via2. */
-        if (drive->cpu.cpu.pc == C1541_ROM_PHYS_READ) {
-            (void)c1541_satisfy_physical_job(drive);
-        } else if (drive->cpu.cpu.pc == C1541_ROM_REED) {
-            c1541_satisfy_sector_read(drive);
-        }
-
-        /* 6. Execute one 6502 instruction, then spread its elapsed cycles over
-           subsequent c1541_advance_one_cycle() calls.  c6510_step() is an
-           instruction step, not a one-cycle step. $1800 writes refresh IEC
-           inside the bus write callback. */
-        cycles = c6510_step(&drive->cpu);
-        drive->cpu_cycles_remaining = cycles != 0 ? cycles : 1;
-        c1541_update_iec_bus(drive);
-    }
-
-    drive->cpu_cycles_remaining--;
+    /* 6. Sample post-CPU VIA ORB/DDRB into the 2-stage IEC pipeline.
+       Visible in two host cycles; intermediate bitbang edges are preserved. */
+    drive->iec_pipe_orb[0] = drive->iec_pipe_orb[1];
+    drive->iec_pipe_ddrb[0] = drive->iec_pipe_ddrb[1];
+    drive->iec_pipe_orb[1] = drive->via1.orb;
+    drive->iec_pipe_ddrb[1] = drive->via1.ddrb;
 }
 
 int c1541_debug_read_map(const c1541 *drive, uint16_t address, uint8_t *out_value) {

@@ -1665,6 +1665,20 @@ uint8_t c64_get_iec_external_pull(c64_t *machine) {
     return machine->iec_external_pull;
 }
 
+uint8_t c64_get_iec_pull_excluding_drive(c64_t *machine, int device_number) {
+    uint8_t pull;
+
+    assert(machine);
+    pull = machine->iec_external_pull_other;
+    if (device_number != 8) {
+        pull = (uint8_t)(pull | machine->iec_external_pull_drive8);
+    }
+    if (device_number != 9) {
+        pull = (uint8_t)(pull | machine->iec_external_pull_drive9);
+    }
+    return c64_iec_line_mask(pull);
+}
+
 uint8_t c64_get_iec_c64_pull(c64_t *machine) {
     assert(machine);
     /* CIA #2 Port A IEC assignments (from c64_cia2_port_inputs):
