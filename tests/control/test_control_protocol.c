@@ -169,6 +169,23 @@ static void test_parse_command_arguments(void)
     expect_true("parse get-memory rom", control_protocol_parse_request("26 get-memory 0xE000 8 rom", &request, &error));
     expect_u32("get-memory rom mode", 2u, request.args.memory_mode);
 
+    expect_true(
+        "parse get-memory drive8",
+        control_protocol_parse_request("27 get-memory $0160 32 drive8", &request, &error));
+    expect_u32("get-memory drive8 mode", 3u, request.args.memory_mode);
+    expect_u32("get-memory drive8 address", 0x0160u, request.args.address);
+
+    expect_true(
+        "parse get-memory drive9",
+        control_protocol_parse_request("28 get-memory $0300 16 drive9", &request, &error));
+    expect_u32("get-memory drive9 mode", 4u, request.args.memory_mode);
+
+    expect_true(
+        "parse get-drive-cpu",
+        control_protocol_parse_request("29 get-drive-cpu 8", &request, &error));
+    expect_int("get-drive-cpu type", CONTROL_COMMAND_GET_DRIVE_CPU, request.type);
+    expect_u32("get-drive-cpu device", 8u, request.args.device);
+
     expect_true("parse key-down", control_protocol_parse_request("30 key-down return", &request, &error));
     expect_int("key-down type", CONTROL_COMMAND_KEY_DOWN, request.type);
     expect_u32("key-down return", 37u, request.args.key);

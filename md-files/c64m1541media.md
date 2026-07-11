@@ -54,8 +54,29 @@ Rules for this matrix:
 | Intercept baseline | D64 GALENCIA | PASS | n/a | Job intercept, no media |
 | Media D64 stock | D64 GALENCIA | PASS | not claimed | Physical GCR READ; automated |
 | Media D64 SAVE | D64 blank | n/a | SAVE PASS | Hybrid WRITE; automated |
-| Media G64 first file | Robocop (Data East 1987) G64 | PASS | **FAIL (expected)** | Custom loader after bootstrap; human + automated LOAD* |
+| Media G64 first file | Robocop (Data East 1987) G64 | PASS | **FAIL (in progress)** | See post-bootstrap notes below |
 | Media G64 write | any G64 | n/a | WRITE/FORMT → protect | Read-only v1 |
+
+### Post-bootstrap diagnosis (Robocop G64, ongoing)
+
+Control-port tooling: `get-drive-cpu <8|9>`, `get-memory … drive8|drive9`.
+
+Observed after `LOAD"*"` + RUN (autorun `-a`):
+
+1. C64 bootstrap at `$0819` does stock `LOAD` of `FAS*`, `JSR $7000`, another `LOAD`, then `JMP $8000`.
+2. Drive M-E `$0162` **does run** (checksum over `$0300/$0400` matches `$CA`; `$0197=$0A`).
+3. **Bug fixed:** G64 `EXECUTE` jobs (`$E0`) were completed as write-protect, so buffer code never ran. On G64, EXECUTE now falls through to the ROM (buffer jump). Format still hybrid-intercepted on D64 only.
+4. After that fix, C64 reaches **`$8000` and hits `BRK` at `$800F`** (`stop=brk`). Drive often at ROM `$C1C1` (clear `$0200` loop) with motor on, track ~18.
+5. `$8000` starts `LDY #0 / LDA $2A / EOR $800C,Y / STA $800C,Y / CPX #$D0 / … / BRK` with `$2A=0`, `Y=0` — looks like a **broken/corrupt decrypt stub**.
+6. **VICE oracle (x64sc loads this G64):** `c1541 -attach …g64 -extract` gives reference PRGs. Directory: `robocop`, `fast`→`$7000`, `load1`→`$0E40` (large), plus `a`–`f`.
+7. **Stock media GCR is good:** c64m `LOAD"FAST",8,1` → `$7000` **byte-identical** to VICE extract of `fast`.
+8. **Secondary is corrupt:** VICE `load1` at `$8000` is `A0 00 A9 1A 59 0C 80 99 0C 80 C8 D0 …` (`LDA #$1A` / `INY`). c64m after full RUN path has `A0 00 A5 2A … E0 D0 …` then BRK. So the custom path after `JSR $7000` (M-W/M-E + bitbang / or the following `LOAD"LOAD1"` under patched protocol) is wrong — not the disk image.
+9. **`fast` patches ILOAD** (`$0330` → `$0A08`): subsequent `LOAD"LOAD1"` is custom bitbang, not stock DOS. Stock `LOAD"FAST"` is already byte-identical to VICE.
+10. **IEC bus latency fix:** serial VIA `$1800` ORB/DDRB writes refresh the IEC pull immediately (and `$1800` reads refresh inputs). Before: `$8000` garbage (`LDA $2A` / `CPX #$D0`). After: close to VICE — `LDA #$1A` / `INY` correct, still **7/32** wrong in first bytes (`99`→`A5`, `D0`→`C0`, …) then BRK.
+11. **Tried / rejected for now:**
+    - Drive Phi2 **micro-step** for supported opcodes: broke stock `LOAD"FAST"` (zeros) — needs more careful IRQ/integration before reuse.
+    - Bulk **write-at-end-of-instruction** IEC latch: overcorrected; `$8000` became noise.
+12. **Still left (main gap):** true drive-side write-on-last-cycle for `$1800` bitbang without breaking DOS (likely micro-step the drive once the C64 path’s IRQ/defer rules are mirrored carefully), then re-check `$8000` vs VICE `load1`.
 
 **How to smoke Robocop (human):**
 
@@ -72,9 +93,11 @@ and ROM paths set. Optional: `--control-port PORT` to observe with
 ```text
 hello
 get-disk-status 8
+get-drive-cpu 8
 wait-frame 100 60000
 get-cpu
 get-memory $0801 64 map
+get-memory $0160 64 drive8
 ```
 
 Do not use a scratch ini missing ROM/`emulate_1541` keys — that yields

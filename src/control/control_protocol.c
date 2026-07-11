@@ -90,11 +90,15 @@ static bool parse_memory_mode_token(const char *text, const char **out_end, uint
     }
     length = (size_t)(end - text);
     if (length == 3 && strncmp(text, "map", length) == 0) {
-        *out_mode = 0;
+        *out_mode = 0; /* RUNTIME_MEMORY_MODE_CPU_MAP */
     } else if (length == 3 && strncmp(text, "ram", length) == 0) {
-        *out_mode = 1;
+        *out_mode = 1; /* RUNTIME_MEMORY_MODE_RAM */
     } else if (length == 3 && strncmp(text, "rom", length) == 0) {
-        *out_mode = 2;
+        *out_mode = 2; /* RUNTIME_MEMORY_MODE_ROM */
+    } else if (length == 6 && strncmp(text, "drive8", length) == 0) {
+        *out_mode = 3; /* RUNTIME_MEMORY_MODE_DRIVE8_MAP */
+    } else if (length == 6 && strncmp(text, "drive9", length) == 0) {
+        *out_mode = 4; /* RUNTIME_MEMORY_MODE_DRIVE9_MAP */
     } else {
         return false;
     }
@@ -414,6 +418,9 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 15 && strncmp(name, "get-disk-status", length) == 0) {
         return CONTROL_COMMAND_GET_DISK_STATUS;
     }
+    if (length == 13 && strncmp(name, "get-drive-cpu", length) == 0) {
+        return CONTROL_COMMAND_GET_DRIVE_CPU;
+    }
     if (length == 10 && strncmp(name, "break-exec", length) == 0) {
         return CONTROL_COMMAND_BREAK_EXEC;
     }
@@ -632,7 +639,11 @@ bool control_protocol_parse_request(
             cursor++;
         }
         if (!parse_memory_mode_token(cursor, &cursor, &args.memory_mode)) {
-            set_parse_error(out_error, id, "bad-args", "expected memory mode map, ram, or rom");
+            set_parse_error(
+                out_error,
+                id,
+                "bad-args",
+                "expected memory mode map, ram, rom, drive8, or drive9");
             return false;
         }
         while (*cursor == ' ' || *cursor == '\t') {
@@ -790,7 +801,8 @@ bool control_protocol_parse_request(
         }
         skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_UNMOUNT_DISK ||
-               type == CONTROL_COMMAND_GET_DISK_STATUS) {
+               type == CONTROL_COMMAND_GET_DISK_STATUS ||
+               type == CONTROL_COMMAND_GET_DRIVE_CPU) {
         if (!parse_u8_token(cursor, &cursor, &args.device)) {
             set_parse_error(out_error, id, "bad-args", "expected disk device");
             return false;

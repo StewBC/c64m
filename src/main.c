@@ -1195,6 +1195,36 @@ static void control_format_disk_status_response(
     control_protocol_format_ok(response, request_id, text, false);
 }
 
+static void control_format_drive_cpu_response(
+    control_response *response,
+    uint32_t request_id,
+    const c64_1541_hardware_snapshot *drive)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || drive == NULL) {
+        return;
+    }
+    snprintf(
+        text,
+        sizeof(text),
+        "device=%d rom=%u media=%u tracks=%u g64=%u pc=%04X ht=%d dens=%d "
+        "mot=%u/%u wr=%u sync=%u",
+        drive->device_number,
+        drive->rom_loaded ? 1u : 0u,
+        drive->media_enabled ? 1u : 0u,
+        drive->tracks_valid ? 1u : 0u,
+        drive->from_g64 ? 1u : 0u,
+        (unsigned)drive->pc,
+        drive->half_track,
+        drive->density,
+        drive->motor_on ? 1u : 0u,
+        drive->motor_ready ? 1u : 0u,
+        drive->writing ? 1u : 0u,
+        drive->in_sync ? 1u : 0u);
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
 static void control_format_breakpoints_response(
     control_response *response,
     uint32_t request_id,
@@ -1477,6 +1507,18 @@ static void complete_deferred_control_response(
                event->type == RUNTIME_EVENT_DISK_STATUS_RESPONSE &&
                event->data.disk_status.device == deferred->memory_address) {
         control_format_disk_status_response(&response, deferred->request_id, &event->data.disk_status);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_DRIVE_CPU &&
+               event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
+        const c64_1541_hardware_snapshot *drive =
+            (deferred->memory_address == 9u) ? &event->data.machine_state.drive9_hardware
+                                             : &event->data.machine_state.drive8_hardware;
+        control_format_drive_cpu_response(&response, deferred->request_id, drive);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
         } else {
@@ -2926,7 +2968,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols",
+                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu",
                 false);
             break;
 
@@ -3285,6 +3327,46 @@ static void dispatch_control_request(
                     "deferred-response-active",
                     false);
             } else if (runtime_client_request_disk_status(client, request->args.device)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->memory_address = request->args.device;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_DRIVE_CPU:
+            if (request->args.device != 8u && request->args.device != 9u) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "expected device 8 or 9",
+                    false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_machine_state(client)) {
                 if (deferred != NULL) {
                     deferred->active = true;
                     deferred->request_id = request->id;

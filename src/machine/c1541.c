@@ -80,6 +80,8 @@ static int d64_sectors_per_track(uint8_t track) {
 /* Bus callbacks (static — not exposed)                                */
 /* ------------------------------------------------------------------ */
 
+static void c1541_update_iec_bus(c1541 *drive);
+
 static uint8_t c1541_bus_read(void *user, uint16_t addr) {
     c1541 *drive = (c1541 *)user;
     if (addr < 0x0800u) return drive->ram[addr];
@@ -94,7 +96,11 @@ static uint8_t c1541_bus_read(void *user, uint16_t addr) {
         }
         return value;
     }
-    if (addr >= 0x1800u && addr < 0x2000u) return via6522_read(&drive->via1, (uint8_t)(addr & 0x0Fu));
+    if (addr >= 0x1800u && addr < 0x2000u) {
+        /* Refresh IEC inputs before the drive samples Port B (bitbang waits). */
+        c1541_update_iec_bus(drive);
+        return via6522_read(&drive->via1, (uint8_t)(addr & 0x0Fu));
+    }
     if (addr >= 0xC000u) return drive->rom[addr - 0xC000u];
     return 0xFFu;
 }
@@ -113,7 +119,14 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
         return;
     }
     if (addr >= 0x1800u && addr < 0x2000u) {
-        via6522_write(&drive->via1, (uint8_t)(addr & 0x0Fu), value);
+        uint8_t reg = (uint8_t)(addr & 0x0Fu);
+        via6522_write(&drive->via1, reg, value);
+        /* ORB/DDRB change IEC pull immediately. Fast-loaders bitbang $1800 and
+           sample the host within a few cycles; waiting for the next advance is
+           too late. (Full write-on-last-cycle needs drive Phi2 micro-step.) */
+        if (reg == 0x00u || reg == 0x02u) {
+            c1541_update_iec_bus(drive);
+        }
         return;
     }
     /* ROM and unmapped: ignore */
@@ -373,17 +386,19 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             return 1;
 
         case C1541_JOB_CMD_EXECUTE: {
-            /* Hybrid format: erase D64 track sectors, rebuild that track's GCR
-               image, then let the ROM rewrite BAM/directory via WRITE jobs.
-               G64 mounts remain read-only. */
+            /* Hybrid D64 format: erase track sectors, rebuild GCR, then let the
+               ROM rewrite BAM/directory via WRITE jobs.
+               EXECUTE is also how custom drive code runs (job $E0 → buffer).
+               Never complete EXECUTE as write-protect on G64 — that aborts
+               multi-stage loaders. G64 has no format path; let the ROM jump
+               into the buffer. */
             uint8_t fr;
             uint8_t trk;
             const c64_drive_slot *slot;
 
             slot = c64_get_drive_slot(drive->c64, drive->device_number);
             if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
-                c1541_complete_queued_job(drive, n, C1541_JOB_WRITE_PROT);
-                return 1;
+                return 0;
             }
 
             fr = c1541_format_track(drive, n);
@@ -650,9 +665,11 @@ void c1541_advance_one_cycle(c1541 *drive) {
 
         /* 6. Execute one 6502 instruction, then spread its elapsed cycles over
            subsequent c1541_advance_one_cycle() calls.  c6510_step() is an
-           instruction step, not a one-cycle step. */
+           instruction step, not a one-cycle step. $1800 writes refresh IEC
+           inside the bus write callback. */
         cycles = c6510_step(&drive->cpu);
         drive->cpu_cycles_remaining = cycles != 0 ? cycles : 1;
+        c1541_update_iec_bus(drive);
     }
 
     drive->cpu_cycles_remaining--;

@@ -342,7 +342,11 @@ bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     case LDX_imm:
     case LDY_imm:
     case LDA_abs:
+    case LDX_abs:
+    case LDY_abs:
     case STA_abs:
+    case STX_abs:
+    case STY_abs:
     case JMP_abs:
     case BPL_rel:
     case BMI_rel:
@@ -512,9 +516,13 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
     case LDY_imm:
         return C6510_BUS_ACCESS_OPERAND_READ;
     case LDA_abs:
+    case LDX_abs:
+    case LDY_abs:
         return m->micro_phase < 3 ?
             C6510_BUS_ACCESS_OPERAND_READ : C6510_BUS_ACCESS_DATA_READ;
     case STA_abs:
+    case STX_abs:
+    case STY_abs:
         return m->micro_phase < 3 ?
             C6510_BUS_ACCESS_OPERAND_READ : C6510_BUS_ACCESS_DATA_WRITE;
     case JMP_abs:
@@ -768,6 +776,8 @@ bool c6510_micro_step(C6510 *m) {
         set_register_to_value(m, &m->cpu.Y, value);
         break;
     case LDA_abs:
+    case LDX_abs:
+    case LDY_abs:
         if (m->micro_phase == 1) {
             m->cpu.address_lo = read_operand(m, m->cpu.pc);
             CYCLE(m);
@@ -784,9 +794,17 @@ bool c6510_micro_step(C6510 *m) {
         }
         value = read_from_memory(m, m->cpu.address_16);
         CYCLE(m);
-        set_register_to_value(m, &m->cpu.A, value);
+        if (m->micro_opcode == LDX_abs) {
+            set_register_to_value(m, &m->cpu.X, value);
+        } else if (m->micro_opcode == LDY_abs) {
+            set_register_to_value(m, &m->cpu.Y, value);
+        } else {
+            set_register_to_value(m, &m->cpu.A, value);
+        }
         break;
     case STA_abs:
+    case STX_abs:
+    case STY_abs:
         if (m->micro_phase == 1) {
             m->cpu.address_lo = read_operand(m, m->cpu.pc);
             CYCLE(m);
@@ -801,7 +819,13 @@ bool c6510_micro_step(C6510 *m) {
             m->micro_phase++;
             return false;
         }
-        write_to_memory(m, m->cpu.address_16, m->cpu.A);
+        if (m->micro_opcode == STX_abs) {
+            write_to_memory(m, m->cpu.address_16, m->cpu.X);
+        } else if (m->micro_opcode == STY_abs) {
+            write_to_memory(m, m->cpu.address_16, m->cpu.Y);
+        } else {
+            write_to_memory(m, m->cpu.address_16, m->cpu.A);
+        }
         CYCLE(m);
         break;
     case JMP_abs:
@@ -1404,7 +1428,11 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
     case LDY_imm:
         return 1;
     case LDA_abs:
+    case LDX_abs:
+    case LDY_abs:
     case STA_abs:
+    case STX_abs:
+    case STY_abs:
         return (size_t)(4u - m->micro_phase);
     case JMP_abs:
         return (size_t)(3u - m->micro_phase);
