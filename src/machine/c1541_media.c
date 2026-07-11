@@ -548,6 +548,52 @@ static int slot_is_writable(c1541 *drive) {
     return (slot != NULL && slot->mounted && slot->writable) ? 1 : 0;
 }
 
+/* Place the head on the first data bit after a SYNC mark so inter-sync gap
+   measurements start on a full gap (not mid-sector). */
+static void media_align_after_sync(c1541_media *m) {
+    c1541_track *tr = current_track(m);
+    uint32_t nbits;
+    uint32_t i;
+    uint16_t sh = 0;
+
+    m->bits_in_byte = 0;
+    m->byte_ready = 0;
+    m->shifting_byte = 0;
+    m->head_bit_pos = 0;
+    m->shift10 = 0;
+    m->in_sync = 0;
+    if (tr == NULL || tr->data == NULL || tr->length <= 0) {
+        return;
+    }
+    nbits = (uint32_t)tr->length * 8u;
+    for (i = 0; i < nbits; i++) {
+        int bit = track_bit(tr, i);
+        sh = (uint16_t)(((sh << 1) | (bit & 1)) & 0x3FFu);
+        if (sh != 0x3FFu) {
+            continue;
+        }
+        while (i + 1u < nbits) {
+            int b2 = track_bit(tr, i + 1u);
+            sh = (uint16_t)(((sh << 1) | (b2 & 1)) & 0x3FFu);
+            i++;
+            if (sh != 0x3FFu) {
+                m->head_bit_pos = i;
+                m->shift10 = sh;
+                m->in_sync = 0;
+                return;
+            }
+        }
+        return;
+    }
+}
+
+void c1541_media_align_after_sync(struct c1541 *drive) {
+    if (drive == NULL || !drive->media.enabled || !drive->media.tracks_valid) {
+        return;
+    }
+    media_align_after_sync(&drive->media);
+}
+
 static void sample_disk_via_outputs(c1541 *drive) {
     c1541_media *m = &drive->media;
     uint8_t orb = drive->via2.orb;
@@ -589,12 +635,8 @@ static void sample_disk_via_outputs(c1541 *drive) {
                 }
             }
             m->stepper_phase = phase;
-            m->bits_in_byte = 0;
-            m->byte_ready = 0;
-            m->head_bit_pos = 0;
-            m->shift10 = 0;
-            m->in_sync = 0;
             m->write_bits_left = 0;
+            media_align_after_sync(m);
         }
     }
 

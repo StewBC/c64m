@@ -86,6 +86,9 @@ int c1541_media_build_from_g64(
 /* One drive-cycle media step: sample disk VIA, rotate, update SYNC/Port A/SO. */
 void c1541_media_step(struct c1541 *drive);
 
+/* Align head to the first data bit after a SYNC mark (full-gap sampling). */
+void c1541_media_align_after_sync(struct c1541 *drive);
+
 /* Called when the drive CPU reads disk-controller VIA Port A ($1C01). */
 void c1541_media_on_port_a_read(struct c1541 *drive);
 
