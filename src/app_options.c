@@ -1161,6 +1161,7 @@ static void apply_config(app_options *options, config *cfg)
 
     options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
     options->media_1541 = config_get_bool(cfg, "disk", "media_1541", options->media_1541);
+    options->show_disk_leds = config_get_bool(cfg, "disk", "show_disk_leds", options->show_disk_leds);
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1475,6 +1476,7 @@ void app_options_init(app_options *options)
     options->assembler_rearm_oneshots = false;
     options->control_port = 0;
     options->headless = false;
+    options->show_disk_leds = true;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1512,6 +1514,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->autorun = src->autorun;
     dest->emulate_1541 = src->emulate_1541;
     dest->media_1541 = src->media_1541;
+    dest->show_disk_leds = src->show_disk_leds;
     dest->rom_single_system = src->rom_single_system;
     dest->audio_smoke = src->audio_smoke;
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
@@ -1689,6 +1692,8 @@ bool app_options_save_shutdown(const app_options *options)
     } else {
         config_remove_prefix(cfg, "disk", "media_1541");
     }
+    /* Always persist so a false value survives (default is true). */
+    config_set_bool(cfg, "disk", "show_disk_leds", options->show_disk_leds);
 
     if (options->assembler_file != NULL && options->assembler_file[0] != '\0') {
         char rel_path[PATH_MAX];

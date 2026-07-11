@@ -120,6 +120,7 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_INI_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_SYMBOL_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY,
+    FRONTEND_DEBUGGER_INTENT_SAVE_INI_NOW,
     FRONTEND_DEBUGGER_INTENT_ASSEMBLE_BROWSE,
     FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN,
     FRONTEND_DEBUGGER_INTENT_LOAD_BIN_BROWSE,
@@ -153,7 +154,6 @@ typedef enum frontend_browse_slot {
 typedef struct frontend_config_apply_result {
     bool accepted;
     bool needs_reboot;
-    bool save_ini_on_quit;
     bool symbols_changed;
     bool roms_changed;
 } frontend_config_apply_result;

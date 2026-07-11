@@ -30,12 +30,13 @@
   greys out the separate Basic/Kernal fields, or vice versa; Character and 1541
   are always editable. ROM edits apply on OK by rebooting and reloading the ROM
   set, and are persisted by both OK (full save) and "Save Paths Only". The
-  Configure dialog's Emulator tab adds an "Emulate 1541" checkbox (INI
-  `[disk] emulate_1541`) that applies live without a reboot.
+  Configure dialog's Machine tab adds "Emulate 1541" / "1541 media (GCR)" /
+  "Show disk LEDs" checkboxes (INI `[disk] emulate_1541`, `media_1541`,
+  `show_disk_leds`); 1541 flags apply live without a reboot.
 - Help UI Phases 1 through 5 are implemented.
 - Dialog modal input exclusivity is implemented.
 - The OS window title reflects live runtime state without the debugger UI being open: `c64m - Running`, `c64m - Paused (<reason>)` (reason text reuses `frontend_stop_reason_name()`, e.g. `BRK`, `breakpoint`, `step`, `reset`), or `c64m - Error`. Updated only on state/reason change in `run_main_loop()` (`src/main.c`) via the new `platform_window_set_title()`. See `docs/status/CPU_MACHINE.md` for the BRK auto-stop behavior that feeds the `BRK` reason.
-- Shared disk activity LEDs are drawn in the bottom-right corner of the application window (over display-only and debugger layouts). Green (read) is flush to the right and bottom edges; red (write) sits immediately to its left. Devices 8 and 9 share the same pair of LEDs. Machine side only counts discrete R/W events (`activity_read_seq` / `activity_write_seq`); the frontend arms a ~300 ms host-time hold on each sequence change so LEDs remain visible across frames and expire even when the machine is paused. LEDs are forced off on `RUNTIME_EVENT_RESET_COMPLETE` (machine counters cleared in `c64_reset`, frontend hold cleared via `frontend_clear_disk_activity_leds`). Event sources: KERNAL LOAD/SAVE traps, 1541 READ/WRITE/SEARCH/VERIFY/FORMT job intercepts, and media GCR byte-ready pulses (not continuous motor-on). Write hold suppresses green while red is lit. Embedded PNG assets live in `src/frontend/disk_led_data.{c,h}`.
+- Shared disk activity LEDs are drawn in the bottom-right corner of the application window (over display-only and debugger layouts) when **Show disk LEDs** is enabled (Configure → Machine; INI `[disk] show_disk_leds`, default true). Green (read) is flush to the right and bottom edges; red (write) sits immediately to its left. Devices 8 and 9 share the same pair of LEDs. Machine side only counts discrete R/W events (`activity_read_seq` / `activity_write_seq`); the frontend arms a ~300 ms host-time hold on each sequence change so LEDs remain visible across frames and expire even when the machine is paused. LEDs are forced off on `RUNTIME_EVENT_RESET_COMPLETE` (machine counters cleared in `c64_reset`, frontend hold cleared via `frontend_clear_disk_activity_leds`). Event sources: KERNAL LOAD/SAVE traps, 1541 READ/WRITE/SEARCH/VERIFY/FORMT job intercepts, and media GCR byte-ready pulses (not continuous motor-on). Write hold suppresses green while red is lit. Embedded PNG assets live in `src/frontend/disk_led_data.{c,h}`.
 - Breakpoint action parameters: Tron accepts an optional custom trace file path (empty = `trace.log`), Swap accepts a disk queue parameter (`+N` relative forward, `-N` relative backward, `N` absolute 1-based with wrap), Type accepts raw text in the input-encoding format parsed by `util/paste_parser`. Tron and Troff are mutually exclusive in the editor. INI and UI both persist and restore these parameters.
 - Breakpoint counter repeat value: `reset=0` / Repeat `0` auto-disables the breakpoint after it fires once. `reset=1` (the default for new breakpoints) repeats on every subsequent hit. `reset=N` repeats every N hits. The editor label is "Repeat" (previously "Reset").
 - Breakpoint Type action translator (`util/paste_parser`) is implemented. The parser converts stored text into `paste_event_t[]` events (up to 128) consumed by the runtime via `RUNTIME_COMMAND_PASTE_EVENTS` through `runtime_advance_paste_events()`. Supported syntax: literal printable chars (0x20–0x7E); named keys `\[KEYNAME]`, `\[KEYNAME+]` (assert), `\[KEYNAME-]` (deassert); wait tokens `\[W:N]` and `\[WAIT:N]` where `N` is a normal-keypress-duration multiplier and `0` is a no-op; PETSCII escapes `\xHH` (hex), `\dDDD` (decimal), `\oOOO` (octal); direct matrix address `\mR,C`; joystick events `\jPD[,B]`. Bare `SHIFT`, `CTRL`, `CBM`, and `RUNSTOP` tokens are one-shot modifiers released after the next non-modifier key/RESTORE event completes; explicit `+`/`-` holds override one-shot cleanup. Keys without a physical matrix position (F2/F4/F6/F8, cursor-up, cursor-left, PI) are encoded as `needs_shift` variants of their base key, and synthetic SHIFT cleanup preserves already-held one-shot or explicit SHIFT. OPT+SHIFT+INS clipboard paste routes through the same parser. Key aliases: `RT`=RETURN, `RE`=RESTORE (NMI), `RS`=RUNSTOP, `SH`=SHIFT, `CB`=CBM, `CT`=CTRL, `CH`=CLRHOME, `ID`=INSDEL, `SP`=SPACE, `PO`=POUND, `LA`=LEFTARROW, `UA`=UPARROW, `AS`=ASTERISK. RESTORE ignores `+`/`-` modifiers — `\[RE]`, `\[RE+]`, and `\[RE-]` all fire the NMI identically. RUN/STOP+RESTORE soft reset shorthand: `\[RS]\[RE]`.
@@ -78,7 +79,7 @@
 - The joystick only consumes keys under the same focus condition as the C64
   keyboard (`!ui_visible || frontend_routes_keyboard_to_c64(ui)`).
 - Both settings are also editable in the config dialog (Misc → Machine →
-  Emulator → Configure... → Emulator tab): a tri-state port selector
+  Emulator → Configure... → Machine tab): a tri-state port selector
   (Off / Port 1 / Port 2) and a Numpad/WASD layout selector. Applying the dialog
   updates the live keyboard-joystick source immediately (`dispatch_debugger_intents`
   re-runs `frontend_joystick_set_layout`/`set_port`). The layout can only be
@@ -212,8 +213,13 @@ UI behavior:
 
 ## Configuration UI
 
-- Configure dialog has three tabs — Machine, Emulator, Paths — supporting
-  PAL/NTSC, display, turbo, symbol, and INI options.
+- Configure dialog has three tabs — **Machine** (video, joystick, turbo, 1541,
+  disk LEDs), **Emulator** (scroll wheel, symbols), and **Paths** (browse
+  folders + ROMs). Bottom of the dialog: INI path, **Auto-save INI on Quit**
+  (`[config] Save` / `options->remember`), and buttons **Save INI now** / **OK** /
+  **Cancel**. Save INI now applies the dialog state and writes the INI immediately
+  without closing; OK applies without writing unless auto-save is on (quit still
+  saves when auto-save is enabled).
 - The Paths tab (`frontend_draw_config_paths_tab`) exposes the six `[browse]`
   default folders as editable, INI-relative fields, each with a `[...]` folder
   picker, plus a "Save Paths Only" button that rewrites just the `[browse]`

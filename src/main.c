@@ -2609,8 +2609,11 @@ static void dispatch_debugger_intents(
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
+            case FRONTEND_DEBUGGER_INTENT_SAVE_INI_NOW:
                 {
                     int d;
+                    int slot;
+                    bool save_now = (intent.type == FRONTEND_DEBUGGER_INTENT_SAVE_INI_NOW);
                     c64_config machine_config = machine_config_from_options(&intent.config);
                     runtime_config runtime_options = runtime_config_from_options(&intent.config);
                     char absolute_symbol_files[1024];
@@ -2621,7 +2624,8 @@ static void dispatch_debugger_intents(
                     app_options_destroy(options);
                     *options = intent.config;
                     memset(&intent.config, 0, sizeof(intent.config));
-                    options->save_ini = intent.config_result.save_ini_on_quit || options->remember;
+                    /* Auto-save preference is options->remember; session save follows it. */
+                    options->save_ini = options->remember;
                     runtime_client_rom_paths rom_paths;
                     if (!app_options_symbol_files_absolute(options, absolute_symbol_files, sizeof(absolute_symbol_files))) {
                         snprintf(absolute_symbol_files, sizeof(absolute_symbol_files), "%s", options->symbol_files ? options->symbol_files : "");
@@ -2645,6 +2649,25 @@ static void dispatch_debugger_intents(
                             debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING,
                         &rom_paths,
                         intent.config_result.roms_changed);
+                    /* Pull live browse/ROM path edits into options before any save. */
+                    for (slot = 0; slot < FRONTEND_BROWSE_SLOT_COUNT &&
+                             slot < APP_BROWSE_DIR_COUNT; ++slot) {
+                        const char *dir = frontend_get_browse_dir(ui, (frontend_browse_slot)slot);
+                        app_options_set_string(&options->browse_dirs[slot], dir[0] ? dir : NULL);
+                    }
+                    frontend_config_export_rom_paths(ui, options);
+                    if (save_now) {
+                        if (options->no_save_ini) {
+                            SDL_Log("Save INI now: saving disabled (--nosaveini)");
+                        } else if (!app_options_save_shutdown(options)) {
+                            SDL_Log("Save INI now failed: %s",
+                                    options->ini_path ? options->ini_path : "(null)");
+                        } else {
+                            SDL_Log("Save INI now: wrote %s",
+                                    options->ini_path ? options->ini_path : "(null)");
+                        }
+                    }
+                    /* Save INI now leaves Configure open; OK already closed it. */
                     frontend_set_config_state(ui, options);
                     frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
                     frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);

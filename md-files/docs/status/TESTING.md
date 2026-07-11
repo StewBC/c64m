@@ -88,13 +88,13 @@
   - `--kbdjoy 2` (or `Alt+Shift+2` at runtime) then verify numpad 8/2/4/6/diagonals + KP_0 fire drive a joystick game on port 2.
   - Switch to `--kbdjoy-layout wasd` and confirm W/A/S/D + Space drive the joystick while the C64 has keyboard focus, and that those letters do NOT reach the C64 keyboard while assigned; confirm they type normally when the joystick is disabled (`Alt+Shift+2` again) or when the debugger UI has focus.
   - Confirm `Alt+1`/`Alt+2` still map real game controllers independently.
-  - Config dialog (Misc → Machine → Emulator → Configure... → Emulator tab): set the port tri-state (Off/Port 1/Port 2) and Numpad/WASD layout, Apply, and confirm the change takes effect live; confirm assigning a port via `Alt+Shift+2` first and then opening the dialog shows Port 2 (not Off).
+  - Config dialog (Misc → Machine → Emulator → Configure... → Machine tab): set the port tri-state (Off/Port 1/Port 2) and Numpad/WASD layout, Apply, and confirm the change takes effect live; confirm assigning a port via `Alt+Shift+2` first and then opening the dialog shows Port 2 (not Off).
 - Assembler tab:
   - Assemble with Reset on.
 - Save-state UI:
-  - Configure Misc -> Machine -> Emulator -> Configure... -> Emulator tab ->
-    Quicksave Folder, Apply, quit, and confirm `[state] quicksave_folder` is
-    persisted.
+  - Configure Misc -> Machine -> Emulator -> Configure... -> Paths tab ->
+    Snapshot folder, Apply/Save Paths Only, quit, and confirm `[browse] snapshot`
+    is persisted.
   - Press `Opt+Shift+>` twice and confirm timestamped `.c64state` files are
     created in the quicksave folder without overwriting.
   - Press `Opt+Shift+<` and confirm the newest `.c64state` in that folder loads.

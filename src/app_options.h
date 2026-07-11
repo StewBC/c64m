@@ -63,6 +63,8 @@ typedef struct app_options {
     /* When true (and emulate_1541), use GCR track rotation / disk-controller VIA
        media path for physical reads instead of job-level sector intercept. */
     bool media_1541;
+    /* When true, draw shared disk activity LEDs in the UI window corner. */
+    bool show_disk_leds;
     /* Assembler tab persistent state */
     char *assembler_file;
     char *assembler_address;

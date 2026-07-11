@@ -548,6 +548,12 @@ mounts it immediately and makes it current.
 The queue order and current index are not saved when the emulator quits. On the next
 launch the first image in the saved list is mounted.
 
+When **Show disk LEDs** is enabled in Configure (see **Configure**), shared activity
+indicators appear in the bottom-right corner of the application window while either
+device 8 or 9 is reading or writing. The green LED is disk read activity; the red LED
+is write activity. Both drives share the same pair of LEDs. They appear only during
+activity and go out shortly after the transfer finishes.
+
 ### Programs
 
 **[Load]** opens the Load dialog:
@@ -1197,37 +1203,33 @@ c64masm -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
 
 ## Configure
 
-The Configure dialog (opened from **[Configure...]** in **Misc -> Machine**) has two tabs:
-**Emulator** and **Paths**.
+The Configure dialog (opened from **[Configure...]** in **Misc -> Machine**) has three
+tabs: **Machine**, **Emulator**, and **Paths**. Shared controls for the INI file sit
+below the tab body on every tab.
 
-### Emulator
-
-The tab is organized into three sections:
-
-**Machine**
+### Machine
 
 | Control           | Effect |
 |-------------------|--------|
 | Video             | Select `NTSC` or `PAL`; changes take effect on reboot |
-| Keyboard Joystick| Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
+| Keyboard Joystick | Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
 | Turbo Speeds      | Comma-separated multiplier list, e.g. `2,4,8,16` |
 | Emulate 1541      | Route disk I/O through the real 1541 DOS ROM (needs a 1541 ROM); applies live |
 | 1541 media (GCR)  | When Emulate 1541 is on: GCR tracks, rotation, SYNC, motor/head; enables G64 |
+| Show disk LEDs    | Draw green (read) and red (write) activity LEDs in the window corner |
 
-**UI**
+The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
+**Shift+Opt+2** assignment; either place can change the active port. Change the layout
+here or with **Shift+Opt+M**. Changing Video reboots the emulated machine while
+preserving its running state. Emulate 1541, 1541 media (GCR), Show disk LEDs, and the
+other Machine settings apply immediately when you press **[OK]** or **[Save INI now]**.
+
+### Emulator
 
 | Control           | Effect |
 |-------------------|--------|
 | Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
 | Symbol Files      | Add symbol files and display the comma-separated list of selected files |
-
-**Auto-save INI on Quit** enables persistent automatic saving of the configuration.
-
-The Keyboard Joystick port selector matches the runtime **Shift+Opt+1** /
-**Shift+Opt+2** assignment; either place can change the active port. Change the layout
-here or with **Shift+Opt+M**. Changing Video reboots the emulated machine while
-preserving its running state; Emulate 1541, 1541 media (GCR), and the other settings
-apply immediately.
 
 ### Paths
 
@@ -1274,12 +1276,18 @@ no-op if no INI file is set.
 
 ### INI File
 
-The Configure dialog shows the INI file path with a **Browse...** button. Changing the
-path prompts c64m to parse the selected file immediately. **Save INI file on Quit** is a
-one-time save request. **Auto-save INI on Quit** enables persistent save-on-quit behavior
-by writing `Save=yes` under `[config]`.
+Below the tab body, the Configure dialog shows the INI file path and a **[...]**
+button. Changing the path prompts c64m to parse the selected file immediately.
 
-**[OK]** applies all changes immediately. **[Cancel]** discards them.
+**Auto-save INI on Quit** enables persistent save-on-quit behavior by writing `Save=yes`
+under `[config]`. When that box is ticked, quitting the emulator writes the current
+settings to the named INI file.
+
+| Button            | Effect |
+|-------------------|--------|
+| **[Save INI now]**| Apply the dialog settings and write the INI file immediately; Configure stays open |
+| **[OK]**          | Apply all changes without writing the INI (quit still saves when Auto-save is on) |
+| **[Cancel]**      | Discard dialog changes |
 
 ## INI Files
 
@@ -1381,6 +1389,7 @@ Paths may be absolute or relative to the directory containing the INI file.
 | `9_writable` | Parallel `0`/`1` list for device 9 images; omitted means read-only |
 | `emulate_1541` | `true`/`false`; when true and a 1541 ROM is loaded, route disk LOADs through real IEC/1541 emulation |
 | `media_1541` | `true`/`false`; when true with `emulate_1541`, use GCR media path (rotation/SYNC/head); needed for G64 |
+| `show_disk_leds` | `true`/`false`; when true (default), show green read / red write activity LEDs in the window corner |
 
 Example - single disk:
 
