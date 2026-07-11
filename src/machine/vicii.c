@@ -1087,6 +1087,12 @@ static bool vicii_phi2_access_scheduled_now(const vicii *v) {
 
 static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs_cycle) {
     uint32_t last_offset;
+    uint32_t release;
+    uint32_t end_cycle;
+    uint32_t end_line;
+    int sprite;
+    bool second_cycle;
+    bool badline_window;
 
     if (!vicii_phi2_access_scheduled_after(v, cycle, VICII_BA_LEAD_CYCLES)) {
         return;
@@ -1095,9 +1101,25 @@ static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs
     while (vicii_phi2_access_scheduled_after(v, cycle, last_offset + 1u)) {
         last_offset++;
     }
-    if (abs_cycle + last_offset + VICII_BA_RELEASE_CYCLES > v->timing.ba_low_until_abs) {
-        v->timing.ba_low_until_abs =
-            abs_cycle + last_offset + VICII_BA_RELEASE_CYCLES;
+
+    /* Badline character fetches need a slightly longer post-steal BA hold so
+       dual-bit IEC samples that resume after RDY do not land on a released bus.
+       Sprite BA windows keep the classic RELEASE=2 length (unit matrix). */
+    end_cycle = cycle + last_offset;
+    end_line = v->timing.raster_line;
+    if (end_cycle >= v->timing.cycles_per_line) {
+        end_cycle -= v->timing.cycles_per_line;
+        end_line = (end_line + 1u) % v->timing.lines_per_frame;
+    }
+    badline_window =
+        vicii_is_bad_line_at(v, end_line) &&
+        end_cycle >= VICII_CACCESS_FIRST_CYCLE &&
+        end_cycle <= VICII_CACCESS_LAST_CYCLE &&
+        !vicii_sprite_slot(v, end_cycle, &sprite, &second_cycle);
+    release = badline_window ? 3u : (uint32_t)VICII_BA_RELEASE_CYCLES;
+
+    if (abs_cycle + last_offset + release > v->timing.ba_low_until_abs) {
+        v->timing.ba_low_until_abs = abs_cycle + last_offset + release;
     }
 }
 

@@ -312,16 +312,16 @@ static void test_bad_line_ba_asserts_at_cycle_12(void) {
     abs_cycle++;
     expect_true("ba asserts at cycle 12", vicii_ba_active(&v, abs_cycle));
 
-    while (v.timing.cycle_in_line <= 54) {
+    while (v.timing.cycle_in_line <= 55) {
         expect_true("ba remains low through c-access window", vicii_ba_active(&v, abs_cycle));
         vicii_step_cycle(&v, NULL, abs_cycle);
         abs_cycle++;
     }
 
-    /* One more step past cycle 54; BA should have expired. */
+    /* Badline windows use RELEASE=3 (one cycle longer than sprite BA). */
     vicii_step_cycle(&v, NULL, abs_cycle);
     abs_cycle++;
-    expect_true("ba released after cycle 54", !vicii_ba_active(&v, abs_cycle));
+    expect_true("ba released after badline post-steal extension", !vicii_ba_active(&v, abs_cycle));
 }
 
 static void test_frame_snapshot_geometry_and_regions(void) {
@@ -1672,8 +1672,13 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
 
     v.timing.cycle_in_line = 56u;
     vicii_step_cycle(&v, NULL, 56u);
-    expect_true("badline RDY releases", vicii_rdy_active(&v, 56u));
+    expect_true("badline RDY still low for RELEASE=3", !vicii_rdy_active(&v, 56u));
     expect_true("badline AEC remains high", vicii_aec_active(&v));
+
+    v.timing.cycle_in_line = 57u;
+    vicii_step_cycle(&v, NULL, 57u);
+    expect_true("badline RDY releases", vicii_rdy_active(&v, 57u));
+    expect_true("badline AEC remains high after release", vicii_aec_active(&v));
 
     vicii_reset(&v);
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);

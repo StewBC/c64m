@@ -75,13 +75,13 @@ Observed after `LOAD"*"` + RUN (autorun `-a`):
 10. **Drive Phi2 micro-step:** `c1541_advance_one_cycle` prefers `c6510_micro_*` so multi-cycle `$1800` stores write on the last cycle. Stock media `LOAD"FAST"` remains **byte-identical** to VICE; unit G64/D64 LOADs pass.
 11. **IEC settle pipeline:** bus-visible drive IEC outputs are a **2-stage pipeline** of VIA ORB/DDRB (sampled post-CPU each cycle). Peers (C64) see a 2-cycle settle; the drive’s own `$1800` input sense uses **immediate** self-pull so bitbang “wait for host” loops do not false-trigger on delayed echo. Depth 0/1 ≈ **1.78%** residual; depth 2 ≈ **1.63%** (best of 0–3).
 12. **Custom ILOAD path (FAST → patch `$0330`→`$0A08` → `LOAD"LOAD1"`):** dual-bit receive at `$0A72` / drive send at `$0309`. Vs VICE `load1` extract:
-    - load address `$0E40` correct; transfer completes (pc returns)
+    - load address `$0E40` correct; transfer completes
     - **`$8000` first 32 bytes: 0 mismatches** (decrypt stub exact)
-    - full file **~6 / 61880 ≈ 0.01%** residual (was 1.63% → 8 with `$D012` phase, then 6 with BA freeze)
-13. **`$D012` CPU-visible phase:** ILOAD guards with `LDA $D012` / `SBC #(yscroll+$2F)` / wait on pre-badline. CPU-visible raster is internal+1 (`vicii_read_register`); badline/BA use internal `raster_line`.
-14. **1541 freeze during C64 BA/AEC:** while RDY/AEC freezes the host mid dual-bit `$DD00` sample, host chips still step but the 1541 does not — otherwise lockstep drive bitbang races ahead and the resume sample is idle/`0xFF`. Stock media LOAD and `LOAD"FAST"` stay VICE-identical.
-15. **Tried / rejected:** bulk write-at-end IEC latch; partial micro; nop ILOAD raster wait; freeze drive but keep media/VIA only (broke transfer); BA_RELEASE=3 (1 residual but breaks VIC BA unit matrix); BA prepare-before-CPU.
-16. **Still left:** wipe last **6** dual-bit bytes; headless RUN / post-decrypt / playability not claimed.
+    - full file **1 / 61880** residual (`$9F1A`: `07`→`F7` in `STA $079E` high byte)
+13. **`$D012` CPU-visible phase:** ILOAD pre-badline wait; CPU-visible raster is internal+1; badline/BA use internal `raster_line`.
+14. **1541 freeze during C64 BA/AEC:** host chips step; 1541 does not — dual-bit patterns hold across RDY freeze. Stock media LOAD / FAST stay VICE-identical.
+15. **Badline BA release = 3** (sprites stay at RELEASE=2): one extra post-steal cycle on character-fetch BA only, so dual-bit resume samples do not land on a released bus.
+16. **Still left:** wipe the last 1 dual-bit byte; headless RUN / post-decrypt / playability not claimed.
 
 **How to smoke Robocop (human):**
 
