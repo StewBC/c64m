@@ -44,11 +44,10 @@
 
 ## Recent changes
 
-- **Option-2 Phase 4:** `c64_cpu_irq_pending` / `c64_cpu_nmi_pending` now use
-  `cia_interrupt_line` (delayed pin) instead of immediate `cia_irq_pending`.
-  Unit tests cover the one-cycle CPU delay; existing IRQ/NMI vector tests step
-  the delay pipeline before expecting CPU entry. VICE priority corpus remains
-  the external oracle (`md-files/corpus/cia-timing/`).
+- **Option-2 Phase 4 + corpus + timer pipeline:** see  
+  `md-files/corpus/cia-timing/HANDOFF.md` for full status. CPU IRQ/NMI sample
+  `cia_interrupt_line`; VICE/c64m runners and Lorenz-oriented timer/IR model
+  are in tree. c64m priority matrix **11/31 PASS** at last run.
 - C64MFULL Phases 1-4 added FLAG, serial SDR/CNT/SP, PC handshake, and the
   delayed interrupt-line abstraction. Public CIA API includes
   `cia_set_flag_line`, `cia_set_sp_line`, `cia_pc_line`, `cia_interrupt_line`.

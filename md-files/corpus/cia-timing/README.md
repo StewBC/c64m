@@ -35,10 +35,11 @@ observing it.
 | `tools/cia-timing-corpus/run_c64m.c` / `run_c64m.sh` | Same convention on c64m (`build/run_c64m_cia_corpus`) |
 | `external/cia-timing-corpus/VICE-testprogs/` | Upstream PRGs (gitignored clone) |
 | `external/cia-timing-corpus/c64ciaTests/` | Same tests + real-hardware notes (gitignored clone) |
-| `md-files/corpus/cia-timing/results/` | Logged VICE baselines (checked in) |
+| `md-files/corpus/cia-timing/results/` | Logged VICE + c64m baselines (checked in) |
 | `md-files/corpus/cia-timing/HARDWARE.md` | Hardware tiebreaker summary |
 | `md-files/corpus/cia-timing/PRIORITY.md` | Phase-4 priority cases and why |
 | `md-files/corpus/cia-timing/AGENT_PHASE4.md` | What a Phase-4 coding agent should do with this corpus |
+| `md-files/corpus/cia-timing/HANDOFF.md` | **Current session handoff** — status, matrix, next steps |
 
 Default VICE binary: `/Applications/vice-arm64-gtk3-3.10/bin/x64sc`  
 Override: `X64SC=/path/to/x64sc`.
