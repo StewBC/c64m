@@ -1026,26 +1026,21 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
     machine->pending_cpu_trace_active = true;
 }
 
-static bool c64_micro_interrupt_pending(const c64_t *machine) {
-    bool cia1_irq;
-    bool vic_irq;
-    bool cia2_edge;
-
-    assert(machine);
-
-    cia1_irq = cia_irq_pending(&machine->cia1);
-    vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
-    cia2_edge = cia_irq_pending(&machine->cia2) && !machine->cia2_nmi_line;
-    return machine->restore_pending || cia1_irq || vic_irq || cia2_edge;
-}
-
 static bool c64_prepare_micro_instruction(c64_t *machine) {
+    c6510_interrupt_kind interrupt_kind;
     uint8_t opcode;
 
     assert(machine);
 
-    if (c64_micro_interrupt_pending(machine)) {
-        return false;
+    interrupt_kind = c6510_micro_poll_interrupt(&machine->cpu);
+    if (interrupt_kind != C6510_INTERRUPT_NONE) {
+        if (machine->cpu_trace_enabled) {
+            c64_trace_reset(&machine->last_cpu_trace);
+        }
+        machine->cpu_trace_start_cycle = machine->clock.cycle;
+        machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+        c6510_micro_begin_interrupt(&machine->cpu, interrupt_kind);
+        return true;
     }
 
     opcode = c64_debug_read_cpu_map(machine, machine->cpu.cpu.pc);

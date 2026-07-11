@@ -73,6 +73,12 @@ typedef enum c6510_bus_access_kind {
     C6510_BUS_ACCESS_VECTOR_READ
 } c6510_bus_access_kind;
 
+typedef enum c6510_interrupt_kind {
+    C6510_INTERRUPT_NONE = 0,
+    C6510_INTERRUPT_NMI,
+    C6510_INTERRUPT_IRQ
+} c6510_interrupt_kind;
+
 typedef struct C6510 {
     CPU cpu;
     void *user;
@@ -86,6 +92,8 @@ typedef struct C6510 {
     uint8_t micro_phase;
     uint8_t micro_branch_taken;
     uint16_t micro_target;
+    uint16_t micro_interrupt_vector;
+    uint8_t micro_is_interrupt;
 } C6510;
 
 typedef enum {
@@ -151,6 +159,8 @@ size_t c6510_step(C6510 *m);
    the compatibility trace/replay path until migrated. */
 bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode);
 void c6510_micro_begin(C6510 *m);
+void c6510_micro_begin_interrupt(C6510 *m, c6510_interrupt_kind kind);
+c6510_interrupt_kind c6510_micro_poll_interrupt(C6510 *m);
 c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m);
 bool c6510_micro_step(C6510 *m);
 size_t c6510_micro_cycles_remaining(const C6510 *m);

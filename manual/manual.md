@@ -1984,9 +1984,18 @@ raster-timed effects) land at the correct cycle. IRQ is level-sensitive; NMI use
 edge-triggered latch so a single NMI edge triggers exactly once even if the NMI line
 stays asserted. RESTORE routes through the NMI path.
 
-BA stall: when VIC-II asserts BA, the CPU is held on read cycles only. Write cycles
-continue normally. The emulator classifies each bus event as read or write so the stall
-predicate is applied correctly. AEC is not modeled as separate emulator state.
+The machine has a resumable Phi2 execution path for a trace-gated subset of common
+instructions, including immediate and selected zero-page/absolute loads, stores, ALU,
+compare, branch, stack, interrupt, register-transfer, and read-modify-write operations.
+Those instructions issue one typed CPU bus access per completed Phi2 cycle. Other
+implemented opcode families continue to use the compatibility execute-and-replay path.
+
+BA stall: when VIC-II asserts BA, the CPU is held on read-like cycles while eligible
+write cycles continue according to the current arbiter policy. The emulator classifies
+opcode fetches, operand reads, data reads, dummy reads, RMW dummy writes, stack accesses,
+vector reads, and data writes separately. AEC is not modeled as separate emulator state.
+This is a progressively more accurate bus model, not yet a claim of complete cycle-
+perfect 6510 behavior.
 
 ### Memory and Bus
 
@@ -2040,6 +2049,11 @@ write-ignore, and IRQs (IMMC/IMBC) wired through the VIC IRQ path. Sprite pointe
 
 BA cycle stealing for sprite fetch windows is implemented with correct cross-line
 handling for sprites 3 and 4.
+
+The VIC-II also exposes scheduled c-access and sprite-fetch markers for machine-level
+timing traces. Complete per-byte character, graphics, idle-g-access, and sprite-data
+fetch arbitration remains future work; BA windows are still maintained by the tested
+PAL/NTSC timing tables.
 
 **Registers:** full mirroring at $D000-$D3FF; unused high-bit masking per hardware spec;
 open-bus high nibble on color register reads returns 1; unused block $D02F-$D03F reads

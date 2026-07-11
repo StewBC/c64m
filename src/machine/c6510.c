@@ -49,6 +49,8 @@ void c6510_reset(C6510 *m) {
     m->micro_phase = 0;
     m->micro_branch_taken = 0;
     m->micro_target = 0;
+    m->micro_interrupt_vector = 0;
+    m->micro_is_interrupt = 0;
 }
 
 void c6510_set_overflow(C6510 *m) {
@@ -367,6 +369,20 @@ bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     case CLD:
     case SED:
     case CLV:
+    case INX:
+    case INY:
+    case DEX:
+    case DEY:
+    case TAX:
+    case TAY:
+    case TXA:
+    case TYA:
+    case TSX:
+    case TXS:
+    case ASL_A:
+    case ROL_A:
+    case LSR_A:
+    case ROR_A:
     case PHA:
     case PHP:
     case PLA:
@@ -379,6 +395,38 @@ bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     case STA_zpg:
     case STX_zpg:
     case STY_zpg:
+    case ORA_zpg:
+    case AND_zpg:
+    case EOR_zpg:
+    case ADC_zpg:
+    case SBC_zpg:
+    case CMP_zpg:
+    case CPX_zpg:
+    case CPY_zpg:
+    case LDA_zpg_X:
+    case LDX_zpg_Y:
+    case LDY_zpg_X:
+    case STA_zpg_X:
+    case STX_zpg_Y:
+    case STY_zpg_X:
+    case LDA_abs_X:
+    case LDA_abs_Y:
+    case LDX_abs_Y:
+    case LDY_abs_X:
+    case STA_abs_X:
+    case STA_abs_Y:
+    case ASL_zpg:
+    case ROL_zpg:
+    case LSR_zpg:
+    case ROR_zpg:
+    case DEC_zpg:
+    case INC_zpg:
+    case ASL_abs:
+    case ROL_abs:
+    case LSR_abs:
+    case ROR_abs:
+    case DEC_abs:
+    case INC_abs:
         return true;
     default:
         return false;
@@ -396,6 +444,47 @@ void c6510_micro_begin(C6510 *m) {
     m->micro_phase = 0;
     m->micro_branch_taken = 0;
     m->micro_target = 0;
+    m->micro_interrupt_vector = 0;
+    m->micro_is_interrupt = 0;
+}
+
+void c6510_micro_begin_interrupt(C6510 *m, c6510_interrupt_kind kind) {
+    assert(m);
+    assert(!m->micro_active);
+    assert(kind == C6510_INTERRUPT_NMI || kind == C6510_INTERRUPT_IRQ);
+
+    m->cpu.opcode_pc = m->cpu.pc;
+    m->cpu.opcode_active = 0;
+    m->micro_active = 1;
+    m->micro_opcode = 0;
+    m->micro_phase = 0;
+    m->micro_branch_taken = 0;
+    m->micro_target = 0;
+    m->micro_interrupt_vector = kind == C6510_INTERRUPT_NMI ? 0xfffau : 0xfffeu;
+    m->micro_is_interrupt = 1;
+}
+
+c6510_interrupt_kind c6510_micro_poll_interrupt(C6510 *m) {
+    uint8_t pending;
+    uint8_t irq_disable;
+
+    assert(m);
+
+    if (c6510_nmi_pending(m)) {
+        return C6510_INTERRUPT_NMI;
+    }
+    pending = c6510_irq_pending(m);
+    irq_disable = m->cpu.irq_defer ? m->cpu.irq_defer_i : m->cpu.I;
+    if (!pending || irq_disable) {
+        if (m->cpu.irq_defer) {
+            m->cpu.irq_defer = 0;
+        }
+        return C6510_INTERRUPT_NONE;
+    }
+    if (m->cpu.irq_defer) {
+        m->cpu.irq_defer = 0;
+    }
+    return C6510_INTERRUPT_IRQ;
 }
 
 c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
@@ -403,7 +492,16 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
     assert(m->micro_active);
 
     if (m->micro_phase == 0) {
+        if (m->micro_is_interrupt) {
+            return C6510_BUS_ACCESS_DUMMY_READ;
+        }
         return C6510_BUS_ACCESS_OPCODE_FETCH;
+    }
+
+    if (m->micro_is_interrupt) {
+        if (m->micro_phase == 1) return C6510_BUS_ACCESS_DUMMY_READ;
+        if (m->micro_phase < 5) return C6510_BUS_ACCESS_STACK_WRITE;
+        return C6510_BUS_ACCESS_VECTOR_READ;
     }
 
     switch (m->micro_opcode) {
@@ -457,6 +555,20 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
     case CLD:
     case SED:
     case CLV:
+    case INX:
+    case INY:
+    case DEX:
+    case DEY:
+    case TAX:
+    case TAY:
+    case TXA:
+    case TYA:
+    case TSX:
+    case TXS:
+    case ASL_A:
+    case ROL_A:
+    case LSR_A:
+    case ROR_A:
         return C6510_BUS_ACCESS_DUMMY_READ;
     case PHA:
     case PHP:
@@ -483,9 +595,105 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
     case STY_zpg:
         return m->micro_phase == 1 ?
             C6510_BUS_ACCESS_OPERAND_READ : C6510_BUS_ACCESS_DATA_WRITE;
+    case ORA_zpg:
+    case AND_zpg:
+    case EOR_zpg:
+    case ADC_zpg:
+    case SBC_zpg:
+    case CMP_zpg:
+    case CPX_zpg:
+    case CPY_zpg:
+        return m->micro_phase == 1 ?
+            C6510_BUS_ACCESS_OPERAND_READ : C6510_BUS_ACCESS_DATA_READ;
+    case LDA_zpg_X:
+    case LDX_zpg_Y:
+    case LDY_zpg_X:
+        if (m->micro_phase == 1) return C6510_BUS_ACCESS_OPERAND_READ;
+        return m->micro_phase == 2 ? C6510_BUS_ACCESS_DUMMY_READ :
+            C6510_BUS_ACCESS_DATA_READ;
+    case STA_zpg_X:
+    case STX_zpg_Y:
+    case STY_zpg_X:
+        if (m->micro_phase == 1) return C6510_BUS_ACCESS_OPERAND_READ;
+        return m->micro_phase == 2 ? C6510_BUS_ACCESS_DUMMY_READ :
+            C6510_BUS_ACCESS_DATA_WRITE;
+    case LDA_abs_X:
+    case LDA_abs_Y:
+    case LDX_abs_Y:
+    case LDY_abs_X:
+        if (m->micro_phase < 3) return C6510_BUS_ACCESS_OPERAND_READ;
+        if (m->micro_phase == 3 && m->micro_branch_taken) {
+            return C6510_BUS_ACCESS_DUMMY_READ;
+        }
+        return C6510_BUS_ACCESS_DATA_READ;
+    case STA_abs_X:
+    case STA_abs_Y:
+        if (m->micro_phase < 3) return C6510_BUS_ACCESS_OPERAND_READ;
+        return m->micro_phase == 3 ? C6510_BUS_ACCESS_DUMMY_READ :
+            C6510_BUS_ACCESS_DATA_WRITE;
+    case ASL_zpg:
+    case ROL_zpg:
+    case LSR_zpg:
+    case ROR_zpg:
+    case DEC_zpg:
+    case INC_zpg:
+        if (m->micro_phase == 1) return C6510_BUS_ACCESS_OPERAND_READ;
+        if (m->micro_phase == 2) return C6510_BUS_ACCESS_DATA_READ;
+        return m->micro_phase == 3 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE :
+            C6510_BUS_ACCESS_DATA_WRITE;
+    case ASL_abs:
+    case ROL_abs:
+    case LSR_abs:
+    case ROR_abs:
+    case DEC_abs:
+    case INC_abs:
+        if (m->micro_phase < 3) return C6510_BUS_ACCESS_OPERAND_READ;
+        if (m->micro_phase == 3) return C6510_BUS_ACCESS_DATA_READ;
+        return m->micro_phase == 4 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE :
+            C6510_BUS_ACCESS_DATA_WRITE;
     default:
         return C6510_BUS_ACCESS_DATA_READ;
     }
+}
+
+static uint8_t c6510_micro_rmw_value(C6510 *m) {
+    uint8_t value = m->cpu.scratch_lo;
+
+    switch (m->micro_opcode) {
+    case ASL_zpg:
+    case ASL_abs:
+        m->cpu.C = (value & 0x80u) != 0;
+        value <<= 1;
+        break;
+    case ROL_zpg:
+    case ROL_abs: {
+        uint8_t carry = (value & 0x80u) != 0;
+        value = (uint8_t)((value << 1) | m->cpu.C);
+        m->cpu.C = carry;
+        break;
+    }
+    case LSR_zpg:
+    case LSR_abs:
+        m->cpu.C = value & 0x01u;
+        value >>= 1;
+        break;
+    case ROR_zpg:
+    case ROR_abs: {
+        uint8_t carry = value & 0x01u;
+        value = (uint8_t)((value >> 1) | (m->cpu.C << 7));
+        m->cpu.C = carry;
+        break;
+    }
+    case DEC_zpg:
+    case DEC_abs:
+        value--;
+        break;
+    default:
+        value++;
+        break;
+    }
+    set_register_to_value(m, &m->cpu.scratch_hi, value);
+    return value;
 }
 
 bool c6510_micro_step(C6510 *m) {
@@ -493,6 +701,40 @@ bool c6510_micro_step(C6510 *m) {
 
     assert(m);
     assert(m->micro_active);
+
+    if (m->micro_is_interrupt) {
+        if (m->micro_phase == 0) {
+            (void)read_dummy(m, m->cpu.pc);
+        } else if (m->micro_phase == 1) {
+            (void)read_dummy(m, m->cpu.sp);
+        } else if (m->micro_phase == 2) {
+            write_stack(m, m->cpu.sp, (uint8_t)(m->cpu.pc >> 8));
+            if (--m->cpu.sp < 0x100u) m->cpu.sp += 0x100u;
+        } else if (m->micro_phase == 3) {
+            write_stack(m, m->cpu.sp, (uint8_t)m->cpu.pc);
+            if (--m->cpu.sp < 0x100u) m->cpu.sp += 0x100u;
+        } else if (m->micro_phase == 4) {
+            write_stack(m, m->cpu.sp, (uint8_t)(m->cpu.flags & (uint8_t)~0x10u) | 0x20u);
+            if (--m->cpu.sp < 0x100u) m->cpu.sp += 0x100u;
+        } else if (m->micro_phase == 5) {
+            m->cpu.address_lo = read_vector(m, m->micro_interrupt_vector);
+        } else {
+            m->cpu.address_hi = read_vector(m, (uint16_t)(m->micro_interrupt_vector + 1u));
+        }
+        CYCLE(m);
+        if (m->micro_phase < 6) {
+            m->micro_phase++;
+            return false;
+        }
+        m->cpu.pc = m->cpu.address_16;
+        m->cpu.I = 1;
+        m->cpu.irq_entries += m->micro_interrupt_vector == 0xfffeu ? 1u : 0u;
+        m->cpu.nmi_entries += m->micro_interrupt_vector == 0xfffau ? 1u : 0u;
+        m->micro_active = 0;
+        m->micro_is_interrupt = 0;
+        m->micro_phase = 0;
+        return true;
+    }
 
     if (m->micro_phase == 0) {
         m->micro_opcode = read_opcode(m, m->cpu.pc);
@@ -752,6 +994,51 @@ bool c6510_micro_step(C6510 *m) {
         if (m->micro_opcode == SED) m->cpu.D = 1;
         if (m->micro_opcode == CLV) m->cpu.V = 0;
         break;
+    case INX:
+    case INY:
+    case DEX:
+    case DEY:
+    case TAX:
+    case TAY:
+    case TXA:
+    case TYA:
+    case TSX:
+    case TXS:
+    case ASL_A:
+    case ROL_A:
+    case LSR_A:
+    case ROR_A:
+        (void)read_dummy(m, m->cpu.pc);
+        CYCLE(m);
+        if (m->micro_opcode == INX) set_register_to_value(m, &m->cpu.X, (uint8_t)(m->cpu.X + 1u));
+        if (m->micro_opcode == INY) set_register_to_value(m, &m->cpu.Y, (uint8_t)(m->cpu.Y + 1u));
+        if (m->micro_opcode == DEX) set_register_to_value(m, &m->cpu.X, (uint8_t)(m->cpu.X - 1u));
+        if (m->micro_opcode == DEY) set_register_to_value(m, &m->cpu.Y, (uint8_t)(m->cpu.Y - 1u));
+        if (m->micro_opcode == TAX) set_register_to_value(m, &m->cpu.X, m->cpu.A);
+        if (m->micro_opcode == TAY) set_register_to_value(m, &m->cpu.Y, m->cpu.A);
+        if (m->micro_opcode == TXA) set_register_to_value(m, &m->cpu.A, m->cpu.X);
+        if (m->micro_opcode == TYA) set_register_to_value(m, &m->cpu.A, m->cpu.Y);
+        if (m->micro_opcode == TSX) set_register_to_value(m, &m->cpu.X, (uint8_t)m->cpu.sp);
+        if (m->micro_opcode == TXS) m->cpu.sp = (uint16_t)(0x100u | m->cpu.X);
+        if (m->micro_opcode == ASL_A) {
+            m->cpu.C = (m->cpu.A & 0x80u) != 0;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A << 1));
+        }
+        if (m->micro_opcode == ROL_A) {
+            uint8_t carry = (m->cpu.A & 0x80u) != 0;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)((m->cpu.A << 1) | m->cpu.C));
+            m->cpu.C = carry;
+        }
+        if (m->micro_opcode == LSR_A) {
+            m->cpu.C = m->cpu.A & 0x01u;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A >> 1));
+        }
+        if (m->micro_opcode == ROR_A) {
+            uint8_t carry = m->cpu.A & 0x01u;
+            set_register_to_value(m, &m->cpu.A, (uint8_t)((m->cpu.A >> 1) | (m->cpu.C << 7)));
+            m->cpu.C = carry;
+        }
+        break;
     case PHA:
     case PHP:
         if (m->micro_phase == 1) {
@@ -890,6 +1177,202 @@ bool c6510_micro_step(C6510 *m) {
             CYCLE(m);
         }
         break;
+    case LDA_zpg_X:
+    case LDX_zpg_Y:
+    case LDY_zpg_X:
+    case STA_zpg_X:
+    case STX_zpg_Y:
+    case STY_zpg_X:
+        if (m->micro_phase == 1) {
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            m->cpu.address_hi = 0;
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 2) {
+            (void)read_dummy(m, m->cpu.address_16);
+            m->cpu.address_lo = (uint8_t)(m->cpu.address_lo +
+                ((m->micro_opcode == LDX_zpg_Y || m->micro_opcode == STX_zpg_Y) ?
+                    m->cpu.Y : m->cpu.X));
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_opcode == LDA_zpg_X) {
+            value = read_from_memory(m, m->cpu.address_16);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.A, value);
+        } else if (m->micro_opcode == LDX_zpg_Y) {
+            value = read_from_memory(m, m->cpu.address_16);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.X, value);
+        } else if (m->micro_opcode == LDY_zpg_X) {
+            value = read_from_memory(m, m->cpu.address_16);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.Y, value);
+        } else if (m->micro_opcode == STA_zpg_X) {
+            write_to_memory(m, m->cpu.address_16, m->cpu.A);
+            CYCLE(m);
+        } else if (m->micro_opcode == STX_zpg_Y) {
+            write_to_memory(m, m->cpu.address_16, m->cpu.X);
+            CYCLE(m);
+        } else {
+            write_to_memory(m, m->cpu.address_16, m->cpu.Y);
+            CYCLE(m);
+        }
+        break;
+    case ORA_zpg:
+    case AND_zpg:
+    case EOR_zpg:
+    case ADC_zpg:
+    case SBC_zpg:
+    case CMP_zpg:
+    case CPX_zpg:
+    case CPY_zpg:
+        if (m->micro_phase == 1) {
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            m->cpu.address_hi = 0;
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_phase++;
+            return false;
+        }
+        value = read_from_memory(m, m->cpu.address_16);
+        CYCLE(m);
+        if (m->micro_opcode == ORA_zpg) set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A | value));
+        if (m->micro_opcode == AND_zpg) set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A & value));
+        if (m->micro_opcode == EOR_zpg) set_register_to_value(m, &m->cpu.A, (uint8_t)(m->cpu.A ^ value));
+        if (m->micro_opcode == ADC_zpg) add_value_to_accumulator(m, value);
+        if (m->micro_opcode == SBC_zpg) subtract_value_from_accumulator(m, value);
+        if (m->micro_opcode == CMP_zpg) compare_bytes(m, m->cpu.A, value);
+        if (m->micro_opcode == CPX_zpg) compare_bytes(m, m->cpu.X, value);
+        if (m->micro_opcode == CPY_zpg) compare_bytes(m, m->cpu.Y, value);
+        break;
+    case LDA_abs_X:
+    case LDA_abs_Y:
+    case LDX_abs_Y:
+    case LDY_abs_X:
+    case STA_abs_X:
+    case STA_abs_Y:
+        if (m->micro_phase == 1) {
+            uint8_t index;
+
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            index = (m->micro_opcode == LDA_abs_Y || m->micro_opcode == LDX_abs_Y ||
+                     m->micro_opcode == STA_abs_Y) ? m->cpu.Y : m->cpu.X;
+            m->micro_branch_taken = (uint16_t)m->cpu.address_lo + index > 0xffu;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 2) {
+            uint16_t base;
+            uint8_t index;
+
+            m->cpu.address_hi = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            base = m->cpu.address_16;
+            index = (m->micro_opcode == LDA_abs_Y || m->micro_opcode == LDX_abs_Y ||
+                     m->micro_opcode == STA_abs_Y) ? m->cpu.Y : m->cpu.X;
+            m->micro_target = (uint16_t)(base + index);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 3 &&
+            (m->micro_branch_taken || m->micro_opcode == STA_abs_X || m->micro_opcode == STA_abs_Y)) {
+            (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
+                                            (m->micro_target & 0x00ffu)));
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_opcode == LDA_abs_X || m->micro_opcode == LDA_abs_Y) {
+            value = read_from_memory(m, m->micro_target);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.A, value);
+        } else if (m->micro_opcode == LDX_abs_Y) {
+            value = read_from_memory(m, m->micro_target);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.X, value);
+        } else if (m->micro_opcode == LDY_abs_X) {
+            value = read_from_memory(m, m->micro_target);
+            CYCLE(m);
+            set_register_to_value(m, &m->cpu.Y, value);
+        } else {
+            write_to_memory(m, m->micro_target, m->cpu.A);
+            CYCLE(m);
+        }
+        break;
+    case ASL_zpg:
+    case ROL_zpg:
+    case LSR_zpg:
+    case ROR_zpg:
+    case DEC_zpg:
+    case INC_zpg:
+        if (m->micro_phase == 1) {
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            m->cpu.address_hi = 0;
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 2) {
+            m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 3) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m);
+        break;
+    case ASL_abs:
+    case ROL_abs:
+    case LSR_abs:
+    case ROR_abs:
+    case DEC_abs:
+    case INC_abs:
+        if (m->micro_phase == 1) {
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 2) {
+            m->cpu.address_hi = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 3) {
+            m->cpu.scratch_lo = read_from_memory(m, m->cpu.address_16);
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 4) {
+            m->bus_access_kind = C6510_BUS_ACCESS_RMW_DUMMY_WRITE;
+            m->write(m->user, m->cpu.address_16, m->cpu.scratch_lo);
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        write_to_memory(m, m->cpu.address_16, c6510_micro_rmw_value(m));
+        CYCLE(m);
+        break;
     default:
         assert(!"unsupported resumable 6510 opcode");
         break;
@@ -906,6 +1389,9 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
 
     if (!m->micro_active) {
         return 0;
+    }
+    if (m->micro_is_interrupt) {
+        return (size_t)(7u - m->micro_phase);
     }
     if (m->micro_phase == 0) {
         return 1;
@@ -950,6 +1436,20 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
     case CLD:
     case SED:
     case CLV:
+    case INX:
+    case INY:
+    case DEX:
+    case DEY:
+    case TAX:
+    case TAY:
+    case TXA:
+    case TYA:
+    case TSX:
+    case TXS:
+    case ASL_A:
+    case ROL_A:
+    case LSR_A:
+    case ROR_A:
         return 1;
     case PHA:
     case PHP:
@@ -968,6 +1468,45 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
     case STX_zpg:
     case STY_zpg:
         return (size_t)(3u - m->micro_phase);
+    case ORA_zpg:
+    case AND_zpg:
+    case EOR_zpg:
+    case ADC_zpg:
+    case SBC_zpg:
+    case CMP_zpg:
+    case CPX_zpg:
+    case CPY_zpg:
+        return (size_t)(3u - m->micro_phase);
+    case LDA_zpg_X:
+    case LDX_zpg_Y:
+    case LDY_zpg_X:
+    case STA_zpg_X:
+    case STX_zpg_Y:
+    case STY_zpg_X:
+        return (size_t)(4u - m->micro_phase);
+    case LDA_abs_X:
+    case LDA_abs_Y:
+    case LDX_abs_Y:
+    case LDY_abs_X:
+        return m->micro_branch_taken ? (size_t)(5u - m->micro_phase) :
+            (size_t)(4u - m->micro_phase);
+    case STA_abs_X:
+    case STA_abs_Y:
+        return (size_t)(5u - m->micro_phase);
+    case ASL_zpg:
+    case ROL_zpg:
+    case LSR_zpg:
+    case ROR_zpg:
+    case DEC_zpg:
+    case INC_zpg:
+        return (size_t)(5u - m->micro_phase);
+    case ASL_abs:
+    case ROL_abs:
+    case LSR_abs:
+    case ROR_abs:
+    case DEC_abs:
+    case INC_abs:
+        return (size_t)(6u - m->micro_phase);
     default:
         return 0;
     }

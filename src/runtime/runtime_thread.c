@@ -1625,7 +1625,14 @@ static bool runtime_breakpoint_matches_access(
     return false;
 }
 
+static bool runtime_at_instruction_boundary(const runtime *rt) {
+    return !rt->machine.cpu.micro_active && !rt->machine.pending_cpu_trace_active;
+}
+
 static bool runtime_breakpoint_matches_pc(runtime *rt) {
+    if (!runtime_at_instruction_boundary(rt)) {
+        return false;
+    }
     return runtime_breakpoint_matches_access(
         rt,
         RUNTIME_BREAKPOINT_ACCESS_EXECUTE,
@@ -1678,6 +1685,14 @@ static bool runtime_pause_if_breakpoint_pending(runtime *rt) {
 
 static bool runtime_brk_pending(runtime *rt) {
     if (rt->suppress_execute_bp) {
+        return false;
+    }
+    /* A resumable instruction advances PC as it consumes its operands. During
+       (for example) STA $DC00, PC briefly addresses the $00 operand byte;
+       that is data, not a BRK opcode. Only inspect for BRK at an instruction
+       boundary, after any live micro-instruction or compatibility replay has
+       completed. */
+    if (!runtime_at_instruction_boundary(rt)) {
         return false;
     }
     return (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc) == 0x00u;
@@ -1939,6 +1954,16 @@ static void runtime_set_cpu_register(runtime *rt, const runtime_command *command
 
     switch (command->data.set_cpu_register.reg) {
         case RUNTIME_CPU_REGISTER_PC:
+            /* A debugger PC edit establishes a new execution boundary. A
+               paused Phi2 micro-instruction may otherwise resume its old
+               opcode after the new PC has been installed. */
+            rt->machine.pending_cpu_trace_active = false;
+            rt->machine.pending_cpu_event_index = 0;
+            rt->machine.pending_cpu_elapsed = 0;
+            rt->machine.cpu.micro_active = 0;
+            rt->machine.cpu.micro_is_interrupt = 0;
+            rt->machine.cpu.micro_phase = 0;
+            rt->machine.cpu.cpu.opcode_active = 0;
             rt->machine.cpu.cpu.pc = command->data.set_cpu_register.value;
             break;
 
@@ -3131,7 +3156,7 @@ static void runtime_clear_host_transients_after_state_load(runtime *rt) {
 static bool runtime_finish_pending_state_snapshot_instruction(runtime *rt) {
     size_t guard = 0;
 
-    while (rt->machine.pending_cpu_trace_active) {
+    while (rt->machine.pending_cpu_trace_active || rt->machine.cpu.micro_active) {
         if (guard++ >= 4096u) {
             runtime_publish_error(rt, "failed to reach snapshot instruction boundary");
             return false;
@@ -4076,7 +4101,7 @@ int runtime_thread_main(void *userdata) {
                     runtime_pause_for_brk(rt);
                     break;
                 }
-                if (rt->temp_bp_active) {
+                if (rt->temp_bp_active && runtime_at_instruction_boundary(rt)) {
                     if (rt->temp_bp_skip_current &&
                         rt->machine.cpu.cpu.pc != rt->temp_bp_address) {
                         rt->temp_bp_skip_current = false;

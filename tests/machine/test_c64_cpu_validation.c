@@ -824,6 +824,36 @@ static void test_microcycle_jsr_rts_trace(void) {
     expect_u16("rts destination", 0xe003u, snapshot(&machine).pc);
 }
 
+static void test_microcycle_indexed_zero_page_trace(void) {
+    static const uint8_t program[] = {
+        0xa2, 0x01,       /* LDX #$01 */
+        0xb5, 0x10        /* LDA $10,X */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+    c64_cpu_instruction_trace trace;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x0011] = 0x5au;
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 1);
+    step_machine(&machine, 1);
+    expect_u64("indexed zero-page trace events", 4,
+        c64_debug_copy_last_cpu_trace(&machine, &trace));
+    expect_u8("indexed zero-page operand", C6510_BUS_ACCESS_OPERAND_READ,
+        (uint8_t)trace.events[1].access_kind);
+    expect_u8("indexed zero-page dummy", C6510_BUS_ACCESS_DUMMY_READ,
+        (uint8_t)trace.events[2].access_kind);
+    expect_u16("indexed zero-page dummy address", 0x0010u, trace.events[2].address);
+    expect_u8("indexed zero-page data", C6510_BUS_ACCESS_DATA_READ,
+        (uint8_t)trace.events[3].access_kind);
+    expect_u16("indexed zero-page data address", 0x0011u, trace.events[3].address);
+    expect_u8("indexed zero-page value", 0x5au, snapshot(&machine).a);
+}
+
 static void test_sta_d020_applies_at_event_cycle(void) {
     static const uint8_t program[] = {
         0xa9, 0x0b,       /* LDA #$0b */
@@ -1318,6 +1348,7 @@ int main(void) {
     test_microcycle_jmp_trace();
     test_microcycle_branch_page_cross_trace();
     test_microcycle_jsr_rts_trace();
+    test_microcycle_indexed_zero_page_trace();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
     test_cycle_step_trace_enabled_records_bus_events();

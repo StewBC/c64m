@@ -344,10 +344,19 @@ a frozen device world. The migrated, trace-gated families are:
 
 - NOP; immediate loads, ALU, compare, and common flag operations.
 - Zero-page and absolute loads/stores.
+- Zero-page ALU and compare operations.
+- X/Y-indexed zero-page loads/stores, including their pre-index dummy read.
+- X/Y-indexed absolute loads/stores, including page-cross and store dummy
+  reads before the final effective-memory access.
+- Zero-page and absolute ASL/ROL/LSR/ROR/DEC/INC, including the NMOS old-value
+  dummy write.
 - Absolute JMP; conditional branches including page-cross dummy cycles.
+- Register transfer, register increment/decrement, and accumulator-shift
+  instructions, each with its Phi2 dummy read.
 - JSR/RTS, PHA/PHP/PLA/PLP, RTI, and BRK.
+- IRQ/NMI entry, including its dummy reads, stack writes, and vector reads.
 
-IRQ/NMI entry and all other opcode families deliberately remain on compatibility replay. This is
+All other opcode families deliberately remain on compatibility replay. This is
 not yet a complete replacement for `c6510_step()` and must not be described as
 full cycle-perfect CPU execution.
 
@@ -358,6 +367,6 @@ individual fetch scheduling; idle g-accesses and per-byte sprite data accesses
 remain future work.
 
 The complete 43-test suite passes after these changes. Phase 4 remains active:
-the remaining legal and practical-undocumented opcode families, interrupt
-sequences, and complete VIC fetch scheduling have not migrated. Phase 5's full
-compatibility decision therefore cannot yet be closed honestly.
+the remaining legal and practical-undocumented opcode families and complete VIC
+fetch scheduling have not migrated. Phase 5's full compatibility decision
+therefore cannot yet be closed honestly.

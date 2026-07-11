@@ -10,10 +10,12 @@
 - Public instruction stepping and cycle stepping now use the same Phi2 arbiter,
   so both honor BA stalls and produce the same CPU/VIC timing result.
 - A resumable CPU path is active for a trace-gated subset of common instructions:
-  NOP, immediate loads/ALU/compare/flag operations, zero-page and absolute
-  loads/stores, absolute JMP, conditional branches, JSR/RTS, PHA/PHP/PLA/PLP,
-  RTI, and BRK. IRQ/NMI entry plus remaining opcode families still use the
-  compatibility instruction-trace/replay path.
+  NOP, immediate and zero-page ALU/compare operations, zero-page and absolute
+  loads/stores (including X/Y-indexed zero page and absolute), zero-page and absolute
+  ASL/ROL/LSR/ROR/DEC/INC, absolute JMP,
+  conditional branches, register-transfer/increment/decrement/accumulator-shift
+  operations, JSR/RTS, PHA/PHP/PLA/PLP, RTI, BRK, and IRQ/NMI entry. Remaining
+  opcode families still use the compatibility instruction-trace/replay path.
 
 ## 6510 / undocumented opcodes
 
@@ -159,11 +161,12 @@ This is expected when the CPU interrupt-disable flag remains set.
   `RUNTIME_EVENT_SAVE_STATE_COMPLETE` / `RUNTIME_EVENT_LOAD_STATE_COMPLETE` on
   success, and uses normal `RUNTIME_EVENT_ERROR` messages on failure. Successful
   load publishes refreshed CPU, machine, and debug-frame state. Runtime save
-  finishes any active deferred CPU trace first, so UI/runtime save requests land
-  on an instruction boundary even if the command arrived mid-instruction.
+  finishes any active deferred CPU trace or resumable CPU micro-instruction first, so
+  UI/runtime save requests land on an instruction boundary even if the command arrived
+  mid-instruction.
 - The raw machine serializer still rejects mid-instruction cycle-stepping state
-  (`pending_cpu_trace_active`). CPU bus trace buffers and write-history are
-  debugger scratch and are cleared/rebuilt rather than serialized.
+  (`pending_cpu_trace_active` or `cpu.micro_active`). CPU bus trace buffers and
+  write-history are debugger scratch and are cleared/rebuilt rather than serialized.
 
 ### Save-state inventory
 
