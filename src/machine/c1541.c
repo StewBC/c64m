@@ -135,6 +135,29 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
 
 static uint8_t c1541_irq_pending(void *user) {
     c1541 *drive = (c1541 *)user;
+    uint16_t pc;
+
+    /* Custom drive code in RAM often runs with I=0. VIA2 T1 free-runs for GCR
+       byte-ready; its IRQ enters ROM $F2B0 which, when the job queue is idle,
+       JMP $F99C instead of RTS — abandoning the custom routine (Robocop stage-3
+       $0371 checksum; C64 ACPTR then reads garbage). Ack T1 while PC is in RAM
+       and no job is active; keep T1 when a job is pending so GCR can complete.
+       VIA1 (ATN) is never filtered. */
+    pc = drive->cpu.cpu.pc;
+    if (pc < 0xC000u && (drive->via2.ifr & drive->via2.ier & 0x40u) != 0) {
+        int job_active = 0;
+        uint8_t n;
+        for (n = 0; n < 6u; n++) {
+            if ((drive->ram[C1541_ZP_JOBS + n] & 0x80u) != 0) {
+                job_active = 1;
+                break;
+            }
+        }
+        if (!job_active) {
+            drive->via2.ifr &= (uint8_t)~0x40u;
+        }
+    }
+
     return (uint8_t)(via6522_irq_pending(&drive->via1) || via6522_irq_pending(&drive->via2));
 }
 
