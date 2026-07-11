@@ -132,8 +132,9 @@ Each device (8, 9) has an `app_disk_slot` holding an ordered list of image paths
   format (`N0:name,id`), and `OPEN 15,8,15` status readback. Format is handled by
   a FORMT EXECUTE-job intercept that erases the track and lets the DOS write the
   new BAM/directory. Opt-in media path (`media_1541=1`) synthesises GCR tracks and
-  can satisfy physical READ without job intercept; WRITE/FORMT still intercept.
-  Still deferred: media-level write stream, G64, cross-drive copy, and
+  can satisfy physical READ without job intercept; WRITE/FORMT use hybrid D64+GCR
+  poke. G64 images mount read-only (auto-detected `GCR-1541` signature) and need
+  media_1541 + 1541 ROM. Still deferred: G64 write-back, cross-drive copy, and
   block/memory commands. In the KERNAL-trap world (`emulate_1541=0`) there is no
   command/error channel (SAVE trap only).
 - Mounted tape/T64 state, T64 entry selection UI, and BASIC/KERNAL `LOAD` traps

@@ -33,9 +33,10 @@ static void test_build_from_d64(void) {
     c1541_media_init(&m);
     if (!c1541_media_build_from_d64(&m, img, 174848)) fail("build");
     if (!m.tracks_valid) fail("valid");
-    if (m.tracks[18].data == NULL || m.tracks[18].length < 1000) fail("track18");
-    if (m.tracks[1].density != 3) fail("dens1");
-    if (m.tracks[35].density != 0) fail("dens35");
+    /* halves[]: track N.0 at index (N-1)*2 */
+    if (m.halves[34].data == NULL || m.halves[34].length < 1000) fail("track18");
+    if (m.halves[0].density != 3) fail("dens1");
+    if (m.halves[68].density != 0) fail("dens35");
     c1541_media_free_tracks(&m);
     free(img);
     printf("PASS: test_build_from_d64\n");
@@ -230,13 +231,13 @@ static void test_sync_dirty_track_to_d64(void) {
     if (!c1541_media_build_from_d64(&m2, img2, 174848)) fail("build secondary");
     free(img2);
 
-    /* Swap track 1 GCR for the 0xA5-filled variant and mark dirty. */
-    free(drive.media.tracks[1].data);
-    drive.media.tracks[1].data = m2.tracks[1].data;
-    drive.media.tracks[1].length = m2.tracks[1].length;
-    drive.media.tracks[1].density = m2.tracks[1].density;
-    drive.media.tracks[1].dirty = 1;
-    m2.tracks[1].data = NULL; /* ownership transferred */
+    /* Swap track 1.0 GCR for the 0xA5-filled variant and mark dirty. */
+    free(drive.media.halves[0].data);
+    drive.media.halves[0].data = m2.halves[0].data;
+    drive.media.halves[0].length = m2.halves[0].length;
+    drive.media.halves[0].density = m2.halves[0].density;
+    drive.media.halves[0].dirty = 1;
+    m2.halves[0].data = NULL; /* ownership transferred */
     c1541_media_free_tracks(&m2);
 
     if (!c1541_media_sync_dirty_to_d64(&drive)) fail("sync returned 0");
@@ -293,7 +294,7 @@ static void test_write_mode_mutates_track(void) {
     drive.via2.ddra = 0xFFu;
     drive.via2.pcr = 0xC0u; /* CB2 manual low = write gate on */
     drive.media.head_bit_pos = 0;
-    before = drive.media.tracks[1].data[0];
+    before = drive.media.halves[0].data[0];
 
     /* Enter write, latch a non-gap byte, clock enough bits to commit it. */
     c1541_media_step(&drive);
@@ -302,15 +303,15 @@ static void test_write_mode_mutates_track(void) {
 
     for (i = 0; i < 1000u; ++i) {
         c1541_media_step(&drive);
-        if (drive.media.tracks[1].dirty) {
+        if (drive.media.halves[0].dirty) {
             break;
         }
     }
-    if (!drive.media.tracks[1].dirty) fail("track not dirty after write");
+    if (!drive.media.halves[0].dirty) fail("track not dirty after write");
 
     pos = 0;
     /* At least one bit under the head should have changed for 0x00 vs typical 0xFF sync. */
-    if (drive.media.tracks[1].data[0] == before && before == 0xFFu) {
+    if (drive.media.halves[0].data[0] == before && before == 0xFFu) {
         /* First byte was sync 0xFF; writing 0x00 must clear bits. */
         fail("track byte unchanged after writing 0x00 over sync");
     }
@@ -326,6 +327,68 @@ static void test_write_mode_mutates_track(void) {
     (void)pos;
 }
 
+/* Build a tiny G64 containing one whole track of 0xFF sync noise. */
+static uint8_t *make_min_g64(size_t *out_size) {
+    const size_t header = 0x2ACu;
+    const size_t track_off = header;
+    const uint16_t track_len = 64;
+    const size_t total = track_off + 2u + track_len;
+    uint8_t *b = (uint8_t *)calloc(1, total);
+    int i;
+    if (b == NULL) fail("oom g64");
+    memcpy(b, "GCR-1541", 8);
+    b[8] = 0;
+    b[9] = 84;
+    b[10] = (uint8_t)(7928 & 0xff);
+    b[11] = (uint8_t)(7928 >> 8);
+    b[12] = (uint8_t)(track_off & 0xff);
+    b[13] = (uint8_t)((track_off >> 8) & 0xff);
+    for (i = 0; i < 84; ++i) {
+        b[0x15Cu + (size_t)i * 4u] = 3;
+    }
+    b[track_off] = (uint8_t)(track_len & 0xff);
+    b[track_off + 1] = (uint8_t)(track_len >> 8);
+    memset(b + track_off + 2, 0xFF, track_len);
+    *out_size = total;
+    return b;
+}
+
+static void test_build_from_g64(void) {
+    size_t sz;
+    uint8_t *g = make_min_g64(&sz);
+    c1541_media m;
+
+    c1541_media_init(&m);
+    if (!c1541_media_build_from_g64(&m, g, sz)) fail("g64 build");
+    if (!m.tracks_valid || !m.from_g64) fail("g64 flags");
+    if (m.halves[0].data == NULL || m.halves[0].length != 64) fail("g64 track1");
+    if (m.halves[0].data[0] != 0xFF) fail("g64 payload");
+    c1541_media_free_tracks(&m);
+    free(g);
+    printf("PASS: test_build_from_g64\n");
+}
+
+static void test_mount_g64_readonly(void) {
+    static c64_t c64;
+    size_t sz;
+    uint8_t *g = make_min_g64(&sz);
+
+    c64_init(&c64);
+    if (c64_mount_g64(&c64, 8, g, sz, "test.g64") != C64_DRIVE_STATUS_OK) {
+        fail("mount g64");
+    }
+    free(g);
+    {
+        const c64_drive_slot *slot = c64_get_drive_slot(&c64, 8);
+        if (!slot->mounted || slot->image_kind != C64_DRIVE_IMAGE_G64) fail("kind");
+        if (slot->writable) fail("g64 should be read-only");
+        if (c64_set_drive_writable(&c64, 8, true)) fail("cannot force writable");
+        if (slot->writable) fail("still writable");
+    }
+    c64_unmount_drive(&c64, 8);
+    printf("PASS: test_mount_g64_readonly\n");
+}
+
 int main(void) {
     test_build_from_d64();
     test_stepper_and_head_stop();
@@ -334,6 +397,8 @@ int main(void) {
     test_physical_read_gate();
     test_sync_dirty_track_to_d64();
     test_write_mode_mutates_track();
+    test_build_from_g64();
+    test_mount_g64_readonly();
     printf("All c1541_media tests passed.\n");
     return 0;
 }

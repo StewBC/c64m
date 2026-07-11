@@ -814,6 +814,37 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         return;
     }
 
+    /* G64 path: raw track dumps for media-level 1541 (read-only v1). */
+    if (size >= 12u && bytes[0] == 'G' && bytes[1] == 'C' && bytes[2] == 'R' &&
+        bytes[3] == '-' && bytes[4] == '1' && bytes[5] == '5' && bytes[6] == '4' &&
+        bytes[7] == '1') {
+        status_result = c64_mount_g64(
+            &rt->machine,
+            command->data.mount_d64.device,
+            bytes,
+            size,
+            runtime_basename(command->data.mount_d64.path));
+        if (status_result == C64_DRIVE_STATUS_OK) {
+            int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+            snprintf(
+                rt->mounted_disk_paths[slot_index],
+                sizeof(rt->mounted_disk_paths[slot_index]),
+                "%s",
+                command->data.mount_d64.path);
+        } else {
+            int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+            if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
+                rt->machine.drives[slot_index].last_result = status_result;
+            }
+        }
+        free(bytes);
+        runtime_publish_drive_status(rt, command->data.mount_d64.device);
+        if (rt->autorun && command->data.mount_d64.device == C64_DRIVE_MIN_DEVICE) {
+            rt->autorun_d64_phase = 1;
+        }
+        return;
+    }
+
     image = d64_image_create(bytes, size, &result);
     if (image == NULL) {
         int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);

@@ -2458,15 +2458,16 @@ static void dispatch_debugger_intents(
 
             case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    /* Empty filter: show .d64 and .g64 (and other files). */
                     frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
-                        "Mount Disk Image", false, "d64", NULL, intent.disk_device);
+                        "Mount Disk Image", false, "", NULL, intent.disk_device);
                 }
                 break;
 
             case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
                     frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG,
-                        "Add Disk Image", false, "d64", NULL, intent.disk_device);
+                        "Add Disk Image", false, "", NULL, intent.disk_device);
                 }
                 break;
 
@@ -2851,7 +2852,7 @@ static void handle_keyboard_input(
 }
 
 static void handle_drop_file(runtime_client *client, app_options *options, char *path) {
-    if (path_has_extension(path, "d64")) {
+    if (path_has_extension(path, "d64") || path_has_extension(path, "g64")) {
         if (runtime_client_mount_d64_ex(client, 8, path, false) && options != NULL) {
             app_disk_slot_set(&options->disk_slots[8], path);
         }

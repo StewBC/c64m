@@ -49,11 +49,11 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   updates persist to writable images while the drive ROM is active. D64 PRG SAVE
   is additionally supported through the compatibility KERNAL SAVE trap when the
   1541 ROM is absent.
-- Opt-in media path (`[disk] media_1541=1`, see `c64m1541media.md` M0–M5): GCR
-  track synthesis from D64, rotation, SYNC, disk-controller VIA motor/stepper/WPS,
-  Port A GCR read, BYTE READY→SO, hybrid WRITE/FORMT (D64 + GCR track poke/rebuild).
-  Still deferred: pure job-level Port A write fidelity, G64 (M6), broad
-  fast-loader matrix (M7).
+- Opt-in media path (`[disk] media_1541=1`, see `c64m1541media.md` M0–M6): GCR
+  track synthesis from D64, G64 read-only mount, rotation, SYNC, disk-controller
+  VIA motor/stepper/WPS, Port A GCR read, BYTE READY→SO, hybrid WRITE/FORMT
+  (D64 + GCR track poke/rebuild). Still deferred: pure job-level Port A write
+  fidelity, G64 write-back, broad fast-loader matrix (M7).
 - DOS command channel (scratch/rename/format/validate/initialize) and the
   error/status channel work via the real 1541 ROM when `emulate_1541=1`
   (C64IEC1541PHASE_5). Format is handled by a FORMT EXECUTE-job intercept.

@@ -3,9 +3,25 @@
 #include "c1541.h"
 #include "c1541_gcr.h"
 #include "c64.h"
+#include "g64.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+/* Whole track t (1-based) → half-slot index for track t.0. */
+static int whole_track_slot(int track) {
+    if (track < 1 || track > 42) {
+        return -1;
+    }
+    return (track - 1) * 2;
+}
+
+static c1541_track *slot_track(c1541_media *m, int half_slot) {
+    if (half_slot < 0 || half_slot >= C1541_MEDIA_HALF_SLOTS) {
+        return NULL;
+    }
+    return &m->halves[half_slot];
+}
 
 void c1541_media_init(c1541_media *m) {
     memset(m, 0, sizeof(*m));
@@ -19,14 +35,15 @@ void c1541_media_init(c1541_media *m) {
 
 void c1541_media_free_tracks(c1541_media *m) {
     int t;
-    for (t = 0; t < C1541_MEDIA_TRACK_COUNT; ++t) {
-        free(m->tracks[t].data);
-        m->tracks[t].data = NULL;
-        m->tracks[t].length = 0;
-        m->tracks[t].density = 0;
-        m->tracks[t].dirty = 0;
+    for (t = 0; t < C1541_MEDIA_HALF_SLOTS; ++t) {
+        free(m->halves[t].data);
+        m->halves[t].data = NULL;
+        m->halves[t].length = 0;
+        m->halves[t].density = 0;
+        m->halves[t].dirty = 0;
     }
     m->tracks_valid = 0;
+    m->from_g64 = 0;
     m->built_from = NULL;
     m->built_size = 0;
 }
@@ -163,13 +180,17 @@ int c1541_media_build_from_d64(
     c1541_media_free_tracks(m);
 
     for (t = 1; t <= 35; ++t) {
-        if (!build_one_track(&m->tracks[t], (uint8_t)t, image_bytes, image_size, id_lo, id_hi)) {
+        int slot = whole_track_slot(t);
+        if (slot < 0 ||
+            !build_one_track(
+                &m->halves[slot], (uint8_t)t, image_bytes, image_size, id_lo, id_hi)) {
             c1541_media_free_tracks(m);
             return 0;
         }
     }
 
     m->tracks_valid = 1;
+    m->from_g64 = 0;
     m->built_from = image_bytes;
     m->built_size = image_size;
     m->head_bit_pos = 0;
@@ -184,19 +205,67 @@ int c1541_media_build_from_d64(
 }
 
 static c1541_track *current_track(c1541_media *m) {
-    int track;
+    int slot = g64_half_index_for_media_half_track(m->half_track);
+    c1541_track *tr = slot_track(m, slot);
+    if (tr == NULL || tr->data == NULL || tr->length == 0) {
+        return NULL;
+    }
+    return tr;
+}
 
-    if ((m->half_track & 1) != 0) {
-        return NULL;
+int c1541_media_build_from_g64(
+    c1541_media *m,
+    const uint8_t *image_bytes,
+    size_t image_size) {
+    g64_image *g64;
+    g64_result result;
+    int i;
+
+    if (m == NULL || image_bytes == NULL) {
+        return 0;
     }
-    track = m->half_track / 2;
-    if (track < 1 || track >= C1541_MEDIA_TRACK_COUNT) {
-        return NULL;
+
+    g64 = g64_image_create(image_bytes, image_size, &result);
+    if (g64 == NULL) {
+        return 0;
     }
-    if (m->tracks[track].data == NULL || m->tracks[track].length == 0) {
-        return NULL;
+
+    c1541_media_free_tracks(m);
+
+    for (i = 0; i < g64->half_track_count && i < C1541_MEDIA_HALF_SLOTS; ++i) {
+        g64_half_track *src = &g64->half_tracks[i];
+        c1541_track *dst = &m->halves[i];
+        if (src->data == NULL || src->length == 0) {
+            continue;
+        }
+        dst->data = (uint8_t *)malloc(src->length);
+        if (dst->data == NULL) {
+            g64_image_destroy(g64);
+            c1541_media_free_tracks(m);
+            return 0;
+        }
+        memcpy(dst->data, src->data, src->length);
+        dst->length = src->length;
+        dst->density = (src->density >= 0 && src->density <= 3)
+            ? src->density
+            : c1541_gcr_density_for_track((uint8_t)(i / 2 + 1));
+        dst->dirty = 0;
     }
-    return &m->tracks[track];
+
+    g64_image_destroy(g64);
+    m->tracks_valid = 1;
+    m->from_g64 = 1;
+    m->built_from = image_bytes;
+    m->built_size = image_size;
+    m->head_bit_pos = 0;
+    m->bit_acc = 0;
+    m->shift10 = 0;
+    m->in_sync = 0;
+    m->bits_in_byte = 0;
+    m->byte_ready = 0;
+    m->writing = 0;
+    m->write_bits_left = 0;
+    return 1;
 }
 
 static int track_bit(const c1541_track *tr, uint32_t bit_pos) {
@@ -444,14 +513,20 @@ int c1541_media_sync_dirty_to_d64(c1541 *drive) {
         return 0;
     }
 
+    if (m->from_g64) {
+        return 0; /* G64 mounts are read-only in v1; no D64 sector mirror. */
+    }
+
     for (t = 1; t <= 35; ++t) {
-        if (!m->tracks[t].dirty || m->tracks[t].data == NULL) {
+        int hs = whole_track_slot(t);
+        c1541_track *tr = slot_track(m, hs);
+        if (tr == NULL || !tr->dirty || tr->data == NULL) {
             continue;
         }
-        if (decode_track_to_d64(&m->tracks[t], (uint8_t)t, slot->image_bytes, slot->image_size)) {
+        if (decode_track_to_d64(tr, (uint8_t)t, slot->image_bytes, slot->image_size)) {
             any = 1;
         }
-        m->tracks[t].dirty = 0;
+        tr->dirty = 0;
     }
 
     if (any) {
@@ -565,8 +640,7 @@ static void ensure_tracks(c1541 *drive) {
     }
 
     slot = c64_get_drive_slot(drive->c64, drive->device_number);
-    if (slot == NULL || !slot->mounted || slot->image_bytes == NULL ||
-        slot->image_kind != C64_DRIVE_IMAGE_D64) {
+    if (slot == NULL || !slot->mounted || slot->image_bytes == NULL) {
         return;
     }
 
@@ -575,7 +649,11 @@ static void ensure_tracks(c1541 *drive) {
         return;
     }
 
-    (void)c1541_media_build_from_d64(m, slot->image_bytes, slot->image_size);
+    if (slot->image_kind == C64_DRIVE_IMAGE_G64) {
+        (void)c1541_media_build_from_g64(m, slot->image_bytes, slot->image_size);
+    } else if (slot->image_kind == C64_DRIVE_IMAGE_D64) {
+        (void)c1541_media_build_from_d64(m, slot->image_bytes, slot->image_size);
+    }
 }
 
 void c1541_media_step(c1541 *drive) {
@@ -719,15 +797,15 @@ int c1541_media_poke_sector(
         return 0;
     }
     m = &drive->media;
-    if (!m->enabled || !m->tracks_valid || track < 1 || track >= C1541_MEDIA_TRACK_COUNT) {
+    if (!m->enabled || !m->tracks_valid || m->from_g64 || track < 1 || track > 35) {
         return 0;
     }
     spt = c1541_gcr_sectors_per_track(track);
     if (spt <= 0 || sector >= (uint8_t)spt) {
         return 0;
     }
-    tr = &m->tracks[track];
-    if (tr->data == NULL) {
+    tr = slot_track(m, whole_track_slot(track));
+    if (tr == NULL || tr->data == NULL) {
         return 0;
     }
 
@@ -769,11 +847,17 @@ int c1541_media_rebuild_track(c1541 *drive, uint8_t track) {
         id_lo = slot->image_bytes[bam_off + 162];
         id_hi = slot->image_bytes[bam_off + 163];
     }
-    return build_one_track(
-        &m->tracks[track],
-        track,
-        slot->image_bytes,
-        slot->image_size,
-        id_lo,
-        id_hi);
+    {
+        int hs = whole_track_slot(track);
+        if (hs < 0) {
+            return 0;
+        }
+        return build_one_track(
+            &m->halves[hs],
+            track,
+            slot->image_bytes,
+            slot->image_size,
+            id_lo,
+            id_hi);
+    }
 }

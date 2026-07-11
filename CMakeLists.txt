@@ -165,6 +165,18 @@ target_link_libraries(test_c1541_gcr PRIVATE
 
 add_test(NAME c1541_gcr COMMAND test_c1541_gcr)
 
+add_executable(test_g64
+    tests/tools/test_g64.c
+)
+
+target_compile_features(test_g64 PRIVATE c_std_99)
+
+target_link_libraries(test_g64 PRIVATE
+    g64
+)
+
+add_test(NAME g64 COMMAND test_g64)
+
 add_executable(test_c1541_media
     tests/machine/test_c1541_media.c
 )

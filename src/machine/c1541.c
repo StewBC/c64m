@@ -322,10 +322,17 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
         case C1541_JOB_CMD_WRITE: {
             /* Hybrid media write: persist the job buffer to the D64 (reliable),
                then poke the matching GCR data block so media reads stay coherent.
-               Pure Port A flux capture remains for non-job code paths. */
+               G64 mounts are read-only. */
             uint8_t wr;
             uint8_t trk, sec;
             uint16_t buf_addr;
+            const c64_drive_slot *slot;
+
+            slot = c64_get_drive_slot(drive->c64, drive->device_number);
+            if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+                c1541_complete_queued_job(drive, n, C1541_JOB_WRITE_PROT);
+                return 1;
+            }
 
             wr = c1541_copy_job_buffer_to_sector(drive, n);
             if (wr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
@@ -424,6 +431,13 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
             uint8_t wr;
             uint8_t trk, sec;
             uint16_t buf_addr;
+            const c64_drive_slot *slot;
+
+            slot = c64_get_drive_slot(drive->c64, drive->device_number);
+            if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+                c1541_complete_job(drive, C1541_JOB_WRITE_PROT);
+                return 1;
+            }
 
             wr = c1541_copy_job_buffer_to_sector(drive, n);
             if (wr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {

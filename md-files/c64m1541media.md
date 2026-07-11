@@ -2,7 +2,7 @@
 
 ## Status of this document
 
-**M0–M5 IMPLEMENTED (opt-in).** M6–M8 remain planned.
+**M0–M6 IMPLEMENTED (opt-in).** M7–M8 remain planned.
 
 | Field | Value |
 |---|---|
@@ -22,7 +22,7 @@
 | M3 Rotation / SYNC / read | **Done** | Port A GCR stream, BYTE READY→SO; stock LOAD without READ intercept |
 | M4 Port A write | **Done (hybrid)** | Port A + PCR write-gate flux path live; DOS WRITE jobs still intercept to D64 then `poke_sector` GCR |
 | M5 Format | **Done (hybrid)** | FORMT EXECUTE still erases D64 track then `rebuild_track` GCR |
-| M6 G64 | Pending | |
+| M6 G64 | **Done (read-only v1)** | `tools/g64`, mount via runtime, media attach; WRITE → protect |
 | M7 Fast-loader matrix | Pending | |
 | M8 Harden / default | Pending | |
 

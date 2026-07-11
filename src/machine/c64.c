@@ -1807,6 +1807,70 @@ c64_drive_status_result c64_mount_d64_ex(
     c64_copy_text(slot->disk_id, sizeof(slot->disk_id), disk_id);
     c64_copy_text(slot->dos_type, sizeof(slot->dos_type), dos_type);
     slot->free_blocks = free_blocks;
+    /* Force media rebuild for this device on next cycle. */
+    if (device == 8) {
+        c1541_media_invalidate(&machine->drive8.media);
+    } else if (device == 9) {
+        c1541_media_invalidate(&machine->drive9.media);
+    }
+    return C64_DRIVE_STATUS_OK;
+}
+
+c64_drive_status_result c64_mount_g64(
+    c64_t *machine,
+    uint8_t device,
+    const uint8_t *image_bytes,
+    size_t image_size,
+    const char *display_name) {
+    int slot_index;
+    c64_drive_slot *slot;
+    uint8_t *copy;
+
+    assert(machine);
+
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return C64_DRIVE_STATUS_INVALID_DEVICE;
+    }
+    if (image_bytes == NULL || image_size < 12u ||
+        image_bytes[0] != 'G' || image_bytes[1] != 'C' || image_bytes[2] != 'R' ||
+        image_bytes[3] != '-' || image_bytes[4] != '1' || image_bytes[5] != '5' ||
+        image_bytes[6] != '4' || image_bytes[7] != '1') {
+        machine->drives[slot_index].last_result = C64_DRIVE_STATUS_UNSUPPORTED_IMAGE;
+        return C64_DRIVE_STATUS_UNSUPPORTED_IMAGE;
+    }
+
+    copy = (uint8_t *)malloc(image_size);
+    if (copy == NULL) {
+        machine->drives[slot_index].last_result = C64_DRIVE_STATUS_OUT_OF_MEMORY;
+        return C64_DRIVE_STATUS_OUT_OF_MEMORY;
+    }
+    memcpy(copy, image_bytes, image_size);
+
+    slot = &machine->drives[slot_index];
+    free(slot->image_bytes);
+    free(slot->entries);
+    memset(slot, 0, sizeof(*slot));
+    slot->mounted = true;
+    slot->writable = false; /* G64 v1 read-only */
+    slot->dirty = false;
+    slot->image_kind = C64_DRIVE_IMAGE_G64;
+    slot->last_result = C64_DRIVE_STATUS_OK;
+    slot->image_bytes = copy;
+    slot->image_size = image_size;
+    slot->entries = NULL;
+    slot->entry_count = 0;
+    c64_copy_text(slot->display_name, sizeof(slot->display_name), display_name);
+    c64_copy_text(slot->disk_title, sizeof(slot->disk_title), "");
+    c64_copy_text(slot->disk_id, sizeof(slot->disk_id), "");
+    c64_copy_text(slot->dos_type, sizeof(slot->dos_type), "");
+    slot->free_blocks = 0;
+
+    if (device == 8) {
+        c1541_media_invalidate(&machine->drive8.media);
+    } else if (device == 9) {
+        c1541_media_invalidate(&machine->drive9.media);
+    }
     return C64_DRIVE_STATUS_OK;
 }
 
@@ -1818,6 +1882,11 @@ bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable) {
     slot_index = c64_drive_slot_index(device);
     if (slot_index < 0 || !machine->drives[slot_index].mounted) {
         return false;
+    }
+    /* G64 mounts stay read-only in v1. */
+    if (machine->drives[slot_index].image_kind == C64_DRIVE_IMAGE_G64) {
+        machine->drives[slot_index].writable = false;
+        return writable == false;
     }
     machine->drives[slot_index].writable = writable;
     return true;

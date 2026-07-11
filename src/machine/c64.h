@@ -96,7 +96,8 @@ uint32_t c64_config_cycles_per_frame(const c64_config *config);
 
 typedef enum c64_drive_image_kind {
     C64_DRIVE_IMAGE_NONE = 0,
-    C64_DRIVE_IMAGE_D64
+    C64_DRIVE_IMAGE_D64,
+    C64_DRIVE_IMAGE_G64
 } c64_drive_image_kind;
 
 typedef enum c64_drive_status_result {
@@ -434,6 +435,14 @@ c64_drive_status_result c64_mount_d64_ex(
     const char *dos_type,
     uint16_t free_blocks,
     bool writable);
+/* Mount a G64 image. v1 is read-only (writable flag ignored / forced false).
+   Requires media_1541 + 1541 ROM for useful loads (no sector intercept). */
+c64_drive_status_result c64_mount_g64(
+    c64_t *machine,
+    uint8_t device,
+    const uint8_t *image_bytes,
+    size_t image_size,
+    const char *display_name);
 bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable);
 void c64_unmount_drive(c64_t *machine, uint8_t device);
 void c64_unmount_all_drives(c64_t *machine);

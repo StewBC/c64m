@@ -11,7 +11,10 @@ struct c64_drive_slot;
 enum {
     C1541_MEDIA_MIN_HALF_TRACK = 2,   /* track 1 head-stop */
     C1541_MEDIA_MAX_HALF_TRACK = 84,  /* track 42 */
-    C1541_MEDIA_TRACK_COUNT = 36,     /* 1..35 usable + spare */
+    /* 84 G64 half-track slots: index 0 = track 1.0, 1 = 1.5, ... */
+    C1541_MEDIA_HALF_SLOTS = 84,
+    /* Legacy whole-track count (D64 uses tracks 1..35). */
+    C1541_MEDIA_TRACK_COUNT = 36,
     /* Motor spin-up in drive cycles (~50 ms at 1 MHz). Short enough for tests. */
     C1541_MEDIA_SPINUP_CYCLES = 50000u,
     /* Nominal revolution at 300 rpm: 200 ms → 200000 cycles @ 1 MHz. */
@@ -53,8 +56,10 @@ typedef struct c1541_media {
     uint8_t write_shift;  /* bits still to write, MSB first */
     int last_write_bit;   /* held while waiting for next Port A write */
 
-    c1541_track tracks[C1541_MEDIA_TRACK_COUNT];
+    /* Flux store indexed by (half_track - MIN): [0]=1.0, [1]=1.5, ... */
+    c1541_track halves[C1541_MEDIA_HALF_SLOTS];
     int tracks_valid;
+    int from_g64; /* 1 when built from a G64 image (no D64 sector mirror) */
     const uint8_t *built_from; /* image_bytes pointer used for last build */
     size_t built_size;
 } c1541_media;
@@ -65,6 +70,12 @@ void c1541_media_free_tracks(c1541_media *m);
 
 /* Build standard GCR tracks from a mounted 35-track D64 image. */
 int c1541_media_build_from_d64(
+    c1541_media *m,
+    const uint8_t *image_bytes,
+    size_t image_size);
+
+/* Attach raw GCR half-tracks from a parsed G64 image (read-only host mount). */
+int c1541_media_build_from_g64(
     c1541_media *m,
     const uint8_t *image_bytes,
     size_t image_size);
