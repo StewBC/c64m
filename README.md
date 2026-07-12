@@ -53,10 +53,12 @@ correctly, but accuracy gaps remain.
   (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS write path also handles
   SAVE, sequential/relative file writes, and the scratch/rename/validate/format command
   and error channels. Optional media path (`[disk] media_1541=1`) adds GCR track
-  rotation/SYNC/head/motor and read-only G64 mounts for stock loads; multi-stage
-  commercial/fast-loader titles are not broadly claimed. Still missing: pure media-level
-  write fidelity, G64 write-back, cross-drive copy, block/memory-execute commands,
-  devices beyond 8 and 9, and broad fast-loader playthroughs.
+  rotation/SYNC/head/motor, hybrid WRITE/FORMT on D64, and read-only G64 mounts. Stock
+  media LOAD/SAVE and some multi-stage/fast-loader paths (e.g. Robocop G64 load-to-game
+  via dual-bit ILOAD and protection self-checks) work; this is not a claim that every
+  commercial title or full playthrough is covered. Still missing: pure media-level write
+  fidelity, G64 write-back, cross-drive copy, block/memory-execute commands, devices
+  beyond 8 and 9, and exhaustive fast-loader coverage.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
   last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 
