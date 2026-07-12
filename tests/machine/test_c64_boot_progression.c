@@ -158,8 +158,15 @@ static void test_irq_entry_uses_machine_vectors_and_stack(void) {
     cia_write_register(&machine.cia1, 0x05, 0x00);
     cia_write_register(&machine.cia1, 0x0d, 0x81);
     cia_write_register(&machine.cia1, 0x0e, 0x11);
-    cia_step_cycle(&machine.cia1);
-    cia_step_cycle(&machine.cia1);
+    /* Advance CIA1 until the (delayed) interrupt pin actually asserts; the CPU
+       samples cia_interrupt_line, which lags the latched flag by one cycle, so a
+       fixed cycle count here rots whenever timer/pin timing is tuned. */
+    {
+        int guard = 0;
+        while (!cia_interrupt_line(&machine.cia1) && guard++ < 32) {
+            cia_step_cycle(&machine.cia1);
+        }
+    }
     machine.cpu.cpu.I = 0;
 
     step_instructions(&machine, 1);
