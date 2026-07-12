@@ -1,8 +1,0 @@
-suite=lorenz-cia
-x64sc=/Applications/vice-arm64-gtk3-3.10/bin/x64sc
-x64sc_version=/Users/swessels/Develop/github/personal/c64m Error - failed to retrieve executable path, falling back to getcwd() + argv[0] Error - argv[0] is NULL, giving up. 
-started_utc=20260711T230710Z
-host=Darwin stefans-mini.lan 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:27:52 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8112 arm64
-common_opts=-default -console -warp -debugcart -jamaction 1 -VICIIfilter 0
-finished_utc=20260711T230757Z
-total=25 pass=17 fail=0 timeout=8 missing=0 other=0

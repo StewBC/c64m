@@ -1,0 +1,6 @@
+# Corpus run outputs are timestamped (run_c64m.sh / run_x64sc.sh write
+# <runner>-<suite>-<UTCSTAMP>.tsv). Those per-run snapshots are throwaway;
+# only the curated *-latest.tsv baselines are tracked. Ignore the stamped ones
+# so runs don't keep re-adding clutter.
+*T??????Z.tsv
+*T??????Z.tsv.meta.txt
