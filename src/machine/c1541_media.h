@@ -39,7 +39,20 @@ typedef struct c1541_media {
     uint8_t stepper_phase; /* last STP0/STP1 (PB0/PB1) */
     int density; /* latched DS0/DS1 */
 
-    uint32_t bit_acc; /* fractional bit clock */
+    uint32_t bit_acc; /* fractional bit clock, in 16 MHz reference ticks */
+    uint32_t ref_cycle;
+    uint32_t bit_event_ref;
+    uint32_t ref_tick_accum;
+    unsigned ref_advance; /* reference ticks already run ahead for Port-A bus latency */
+    unsigned req_ref_cycles; /* bus latency requested by a Port-A read */
+    uint32_t flux_acc;
+    int filter_counter;
+    int filter_state;
+    int filter_last_state;
+    int no_flux_cycles;
+    uint32_t flux_rand; /* VICE-compatible deterministic pseudo-flux source */
+    int ue7_counter;
+    int uf4_counter;
     uint32_t head_bit_pos; /* bit index into current track */
 
     uint16_t shift10; /* last 10 bits under head (for SYNC) */
@@ -49,6 +62,7 @@ typedef struct c1541_media {
     uint8_t port_a_byte;
     int byte_ready;
     int so_pulse; /* edge request for CPU SO */
+    int so_delay; /* reference ticks until BYTE READY/SO */
 
     /* Write path (DDRA all outputs). */
     int writing;          /* 1 while Port A is write mode */

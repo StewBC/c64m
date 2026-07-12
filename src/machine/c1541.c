@@ -754,15 +754,6 @@ static void c1541_run_cpu_one_cycle(c1541 *drive) {
         c1541_satisfy_queued_jobs(drive);
     }
 
-    /* First inter-sync gap sample after JSR $F50A: $030D with $85 still 0.
-       Align onto a long (data-block) post-sync and skip the two GCR bytes the
-       dual BVC at $0304/$0307 already consumed — stage-3 self-checks 16 equal
-       gap lengths; without the skip, entry 0 is two bytes long. */
-    if (drive->media.enabled && drive->cpu.cpu.pc == 0x030Du &&
-        drive->ram[0x85] == 0) {
-        c1541_media_align_after_sync_skip(drive, 2u);
-    }
-
     /* Intercept disk jobs before the ROM waits for unmodelled GCR hardware.
        When media mode has valid tracks, physical READ/SEARCH/VERIFY are not
        intercepted so the ROM GCR path runs against via2. */
@@ -825,6 +816,13 @@ void c1541_advance_one_cycle(c1541 *drive) {
 
     /* 5. Drive CPU: one Phi2 cycle (micro path preferred; may write $1800). */
     c1541_run_cpu_one_cycle(drive);
+
+    /* BYTE READY is presented to the 6502 SO input after the drive CPU's
+       Phi2 work, so a BVC cannot sample it one Phi2 early. */
+    if (drive->media.enabled && drive->media.so_pulse) {
+        drive->media.so_pulse = 0;
+        c6510_set_overflow(&drive->cpu);
+    }
 
     /* 6. Sample post-CPU VIA ORB/DDRB into the 2-stage IEC pipeline.
        Visible in two host cycles; intermediate bitbang edges are preserved. */

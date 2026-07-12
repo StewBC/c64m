@@ -314,8 +314,6 @@ target_link_libraries(test_c64_robocop_g64 PRIVATE
 
 add_test(NAME c64_robocop_g64 COMMAND test_c64_robocop_g64)
 
-# Phase-1 differential probe; intentionally non-gating until VICE checkpoints
-# are captured and promoted to assertions.
 add_executable(probe_c64_arkanoid_g64
     tests/machine/probe_c64_arkanoid_g64.c
 )
@@ -329,6 +327,9 @@ target_compile_definitions(probe_c64_arkanoid_g64 PRIVATE
 target_link_libraries(probe_c64_arkanoid_g64 PRIVATE
     machine
 )
+
+add_test(NAME c64_arkanoid_g64 COMMAND probe_c64_arkanoid_g64)
+add_test(NAME c64_arkanoid_alt_g64 COMMAND probe_c64_arkanoid_g64 alt)
 
 add_executable(test_frontend_input
     tests/frontend/test_frontend_input.c

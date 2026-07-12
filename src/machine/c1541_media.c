@@ -31,6 +31,7 @@ void c1541_media_init(c1541_media *m) {
     m->shift10 = 0;
     m->port_a_byte = 0;
     m->last_write_bit = 0;
+    m->flux_rand = 0x1234abcdu;
 }
 
 void c1541_media_free_tracks(c1541_media *m) {
@@ -330,8 +331,87 @@ static void media_shift_bit_read(c1541 *drive, int bit) {
         m->bits_in_byte = 0;
         m->port_a_byte = m->shifting_byte;
         m->byte_ready = 1;
-        m->so_pulse = 1;
+        if ((drive->via2.pcr & 0x02u) != 0u) {
+            m->so_delay = 16 - (int)((m->bit_event_ref - 1u) & 15u);
+            if (m->so_delay < 10) {
+                m->so_delay += 16;
+            }
+        }
     }
+}
+
+static uint32_t media_next_flux_random(c1541_media *m) {
+    m->flux_rand ^= m->flux_rand << 13;
+    m->flux_rand ^= m->flux_rand >> 17;
+    m->flux_rand ^= m->flux_rand << 5;
+    return m->flux_rand;
+}
+
+/* G64 stores the flux-transition stream, not bytes already recovered by the
+   1541.  Reproduce the relevant UE7/UF4 divider and 10-bit decoder path used
+   by the real drive: a transition resets the flux filter, the divider clocks
+   the shifter, and BYTE READY is scheduled from the recovered byte boundary. */
+static void media_advance_g64_decoder(c1541 *drive, c1541_track *tr, unsigned refs) {
+    c1541_media *m = &drive->media;
+    const uint32_t ref_per_rev = 3200000u; /* 16 MHz / 5 rev/s */
+    uint32_t nbits;
+    unsigned i;
+
+    if (tr == NULL || tr->length == 0) {
+        return;
+    }
+    nbits = (uint32_t)tr->length * 8u;
+    for (i = 0; i < refs; ++i) {
+        if (m->so_delay > 0) {
+            m->so_delay--;
+            if (m->so_delay == 0) {
+                m->so_pulse = 1;
+            }
+        }
+
+        if (m->filter_counter < 40) {
+            m->filter_counter++;
+        }
+        if (m->filter_counter >= 40 && m->filter_state != m->filter_last_state) {
+            m->filter_last_state = m->filter_state;
+            m->ue7_counter = m->density & 3;
+            m->uf4_counter = 0;
+            m->no_flux_cycles = (int)((media_next_flux_random(m) >> 16) % 31u) + 289;
+        } else if (m->no_flux_cycles > 0 && --m->no_flux_cycles == 0) {
+            /* After a real transition, the analogue read circuit eventually
+               sees deterministic pseudo-flux in a long no-transition run.
+               This is the same xorshift sequence and 33..399 interval VICE
+               uses, rather than a fixed 300-tick reset. */
+            m->ue7_counter = m->density & 3;
+            m->uf4_counter = 0;
+            m->no_flux_cycles = (int)((media_next_flux_random(m) >> 16) % 367u) + 33;
+        }
+
+        if (++m->ue7_counter == 16) {
+            int recovered;
+            m->ue7_counter = m->density & 3;
+            m->uf4_counter = (m->uf4_counter + 1) & 15;
+            if ((m->uf4_counter & 3) == 2) {
+                recovered = ((m->uf4_counter + 0x1c) >> 4) & 1;
+                m->bit_event_ref = m->ref_cycle + i + 1u;
+                media_shift_bit_read(drive, recovered);
+            }
+        }
+
+        m->flux_acc += nbits;
+        if (m->flux_acc >= ref_per_rev) {
+            int transition;
+            m->flux_acc -= ref_per_rev;
+            transition = track_bit(tr, m->head_bit_pos);
+            m->head_bit_pos = (m->head_bit_pos + 1u) % nbits;
+            if (transition) {
+                m->filter_counter = 39;
+                m->filter_state ^= 1;
+                m->no_flux_cycles = 0;
+            }
+        }
+    }
+    m->ref_cycle += refs;
 }
 
 static void media_shift_bit_write(c1541 *drive, c1541_track *tr) {
@@ -684,9 +764,11 @@ static void sample_disk_via_outputs(c1541 *drive) {
         m->density = (int)((out_b >> 5) & 0x03u);
     }
 
-    if ((ddrb & 0x03u) == 0x03u) {
+    if (motor && (ddrb & 0x03u) == 0x03u) {
         phase = (uint8_t)(out_b & 0x03u);
         if (phase != m->stepper_phase) {
+            c1541_track *old_track = current_track(m);
+            uint32_t old_bits = old_track != NULL ? (uint32_t)old_track->length * 8u : 0u;
             int diff = (int)((phase - m->stepper_phase) & 3);
             if (diff == 1) {
                 if (m->half_track < C1541_MEDIA_MAX_HALF_TRACK) {
@@ -699,7 +781,17 @@ static void sample_disk_via_outputs(c1541 *drive) {
             }
             m->stepper_phase = phase;
             m->write_bits_left = 0;
-            media_align_after_sync(m);
+            if (m->from_g64) {
+                c1541_track *new_track = current_track(m);
+                uint32_t new_bits = new_track != NULL ? (uint32_t)new_track->length * 8u : 0u;
+                if (old_bits != 0u && new_bits != 0u) {
+                    m->head_bit_pos = (uint32_t)(((uint64_t)m->head_bit_pos * new_bits) / old_bits);
+                } else {
+                    m->head_bit_pos = 0u;
+                }
+            } else {
+                media_align_after_sync(m);
+            }
         }
     }
 
@@ -804,6 +896,39 @@ void c1541_media_step(c1541 *drive) {
      * (common dual-drive idle case).
      */
     if (m->motor_ready && m->tracks_valid) {
+        if (!m->writing && m->from_g64) {
+            unsigned advance = m->req_ref_cycles & 15u;
+            unsigned refs = 16u + advance;
+            /* The 1541's reference clock is divided from the emulated drive
+               Phi2 clock: one drive CPU cycle is exactly 16 reference ticks.
+               It is deliberately not an independent 16 MHz wall clock; using
+               PAL host frequency here made the disk run 1.5% too fast relative
+               to the drive code, which is fatal to V-MAX's cycle-counted read
+               loop.  This matches VICE's `cpu_cycles << 4` conversion. */
+            /* Port-A is a shared disk-controller bus.  A read advances the
+               analogue rotation circuit by 14 reference ticks, then the
+               following Phi2 cycles consume that lead before normal rotation
+               resumes.  Do this here, at the next rotation update, exactly as
+               VICE's rotation_1541_gcr_cycle does; advancing it directly in
+               the bus callback races the CPU and is observably wrong. */
+            m->req_ref_cycles = 0u;
+            if (refs > m->ref_advance) {
+                refs -= m->ref_advance;
+                m->ref_advance = advance;
+                media_advance_g64_decoder(drive, current_track(m), refs);
+            } else {
+                m->ref_advance -= refs;
+            }
+            update_disk_via_inputs(drive);
+            goto media_step_done;
+        }
+        if (m->so_delay > 0) {
+            m->so_delay -= 16;
+            if (m->so_delay <= 0) {
+                m->so_delay = 0;
+                m->so_pulse = 1;
+            }
+        }
         tr = current_track(m);
         /*
          * Bit rate: prefer VIA DS0/DS1 when both are outputs (software-selected
@@ -821,9 +946,12 @@ void c1541_media_step(c1541 *drive) {
             cpb = 26;
         }
 
-        m->bit_acc += 8u;
-        while (m->bit_acc >= (uint32_t)cpb) {
-            m->bit_acc -= (uint32_t)cpb;
+        m->bit_acc += 16u;
+        while (m->bit_acc >= (uint32_t)cpb * 2u) {
+            uint32_t boundary = (uint32_t)cpb * 2u;
+            uint32_t before = m->bit_acc - 16u;
+            m->bit_event_ref = m->ref_cycle + (boundary - before);
+            m->bit_acc -= boundary;
 
             if (m->writing) {
                 if (slot_is_writable(drive)) {
@@ -854,9 +982,12 @@ void c1541_media_step(c1541 *drive) {
                 }
             }
         }
+        m->ref_cycle += 16u;
     }
 
     update_disk_via_inputs(drive);
+
+media_step_done:
 
     if (m->so_pulse) {
         /* One GCR byte completed under the head — discrete transfer event for UI LEDs. */
@@ -867,8 +998,6 @@ void c1541_media_step(c1541 *drive) {
                 c64_disk_activity_read(drive->c64, drive->device_number);
             }
         }
-        m->so_pulse = 0;
-        c6510_set_overflow(&drive->cpu);
     }
 }
 
@@ -877,6 +1006,8 @@ void c1541_media_on_port_a_read(c1541 *drive) {
         return;
     }
     if (!drive->media.writing) {
+        /* 1541 disk bus read delay, measured in its 16 MHz reference clock. */
+        drive->media.req_ref_cycles = 14u;
         drive->media.byte_ready = 0;
     }
 }

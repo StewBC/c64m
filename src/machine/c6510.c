@@ -354,6 +354,14 @@ static bool c6510_micro_is_practical_undocumented(uint8_t opcode) {
     }
 }
 
+/* Stable undocumented NOPs are common in compact C64 loaders.  They still
+   perform their addressing reads, so executing them as one bulk instruction
+   loses VIC/IEC-visible cycles even though they do not change registers. */
+static bool c6510_micro_is_undocumented_nop(uint8_t opcode) {
+    return opcode == UND_44 || opcode == UND_80 ||
+           opcode == UND_1C || opcode == UND_FC;
+}
+
 static bool c6510_micro_is_undocumented_rmw(uint8_t opcode) {
     switch (opcode) {
     case UND_03: case UND_07: case UND_0F: case UND_13: case UND_17: case UND_1B: case UND_1F:
@@ -412,6 +420,9 @@ bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     assert(m);
 
     if (c6510_micro_is_practical_undocumented(opcode)) {
+        return true;
+    }
+    if (c6510_micro_is_undocumented_nop(opcode)) {
         return true;
     }
 
@@ -692,6 +703,23 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
             if (m->micro_phase == 4) return C6510_BUS_ACCESS_DATA_READ;
             return m->micro_phase == 5 ? C6510_BUS_ACCESS_RMW_DUMMY_WRITE : C6510_BUS_ACCESS_DATA_WRITE;
         }
+    }
+
+    if (c6510_micro_is_undocumented_nop(m->micro_opcode)) {
+        if (m->micro_opcode == UND_80) {
+            return C6510_BUS_ACCESS_OPERAND_READ;
+        }
+        if (m->micro_opcode == UND_44) {
+            return m->micro_phase == 1 ? C6510_BUS_ACCESS_OPERAND_READ :
+                C6510_BUS_ACCESS_DATA_READ;
+        }
+        if (m->micro_phase < 3) {
+            return C6510_BUS_ACCESS_OPERAND_READ;
+        }
+        if (m->micro_phase == 3 && m->micro_branch_taken) {
+            return C6510_BUS_ACCESS_DUMMY_READ;
+        }
+        return C6510_BUS_ACCESS_DATA_READ;
     }
 
     switch (m->micro_opcode) {
@@ -1384,6 +1412,55 @@ bool c6510_micro_step(C6510 *m) {
         if (!c6510_micro_step_practical_undocumented(m)) {
             return false;
         }
+        goto micro_complete;
+    }
+
+    if (c6510_micro_is_undocumented_nop(m->micro_opcode)) {
+        if (m->micro_opcode == UND_80) {
+            (void)read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            goto micro_complete;
+        }
+        if (m->micro_opcode == UND_44) {
+            if (m->micro_phase == 1) {
+                m->cpu.address_lo = read_operand(m, m->cpu.pc);
+                CYCLE(m);
+                m->cpu.pc++;
+                m->micro_phase++;
+                return false;
+            }
+            (void)read_from_memory(m, m->cpu.address_lo);
+            CYCLE(m);
+            goto micro_complete;
+        }
+        if (m->micro_phase == 1) {
+            m->cpu.address_lo = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            m->micro_branch_taken = (uint16_t)m->cpu.address_lo + m->cpu.X > 0xffu;
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 2) {
+            uint16_t base;
+            m->cpu.address_hi = read_operand(m, m->cpu.pc);
+            CYCLE(m);
+            m->cpu.pc++;
+            base = m->cpu.address_16;
+            m->micro_target = (uint16_t)(base + m->cpu.X);
+            m->micro_phase++;
+            return false;
+        }
+        if (m->micro_phase == 3 && m->micro_branch_taken) {
+            (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
+                                            (m->micro_target & 0x00ffu)));
+            CYCLE(m);
+            m->micro_phase++;
+            return false;
+        }
+        (void)read_from_memory(m, m->micro_target);
+        CYCLE(m);
         goto micro_complete;
     }
 
@@ -2351,6 +2428,11 @@ size_t c6510_micro_cycles_remaining(const C6510 *m) {
         default: total_cycles = 7u; break;
         }
         return total_cycles > m->micro_phase ? total_cycles - m->micro_phase : 0;
+    }
+    if (c6510_micro_is_undocumented_nop(m->micro_opcode)) {
+        if (m->micro_opcode == UND_80) return 1;
+        if (m->micro_opcode == UND_44) return (size_t)(3u - m->micro_phase);
+        return (size_t)((m->micro_branch_taken ? 5u : 4u) - m->micro_phase);
     }
 
     switch (m->micro_opcode) {
