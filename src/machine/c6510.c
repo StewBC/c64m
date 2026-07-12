@@ -373,6 +373,13 @@ static bool c6510_micro_is_lax(uint8_t opcode) {
            opcode == UND_B3 || opcode == UND_B7 || opcode == UND_BF;
 }
 
+/* SAX zp,Y (0x97) and LAX zp,Y (0xB7) are Y-indexed even though their low
+   nibble (0x17) matches the X-indexed zero-page column of the RMW families.
+   LAX abs,Y (0xBF) is handled separately via the ABS_Y mode mapping. */
+static bool c6510_micro_undoc_uses_y_index(uint8_t opcode) {
+    return opcode == UND_97 || opcode == UND_B7;
+}
+
 typedef enum c6510_undocumented_mode {
     C6510_UND_MODE_X_IND,
     C6510_UND_MODE_ZP,
@@ -384,6 +391,12 @@ typedef enum c6510_undocumented_mode {
 } c6510_undocumented_mode;
 
 static c6510_undocumented_mode c6510_micro_undocumented_mode(uint8_t opcode) {
+    /* LAX abs,Y (0xBF) reuses the 0x1f column but is Y-indexed, unlike the
+       RMW abs,X families that share that column.  Route it to ABS_Y so it
+       uses the Y register and the correct 4/5-cycle timing. */
+    if (opcode == UND_BF) {
+        return C6510_UND_MODE_ABS_Y;
+    }
     switch (opcode & 0x1fu) {
     case 0x03u: return C6510_UND_MODE_X_IND;
     case 0x07u: return C6510_UND_MODE_ZP;
@@ -1163,7 +1176,8 @@ static bool c6510_micro_step_practical_undocumented(C6510 *m) {
     case C6510_UND_MODE_ZP_INDEXED:
         if (m->micro_phase == 2) {
             (void)read_dummy(m, m->cpu.scratch_lo);
-            m->cpu.address_lo = (uint8_t)(m->cpu.scratch_lo + (lax ? m->cpu.Y : m->cpu.X));
+            m->cpu.address_lo = (uint8_t)(m->cpu.scratch_lo +
+                (c6510_micro_undoc_uses_y_index(m->micro_opcode) ? m->cpu.Y : m->cpu.X));
             m->cpu.address_hi = 0;
             CYCLE(m); m->micro_phase++; return false;
         }

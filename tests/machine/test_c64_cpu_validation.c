@@ -1265,6 +1265,39 @@ static void test_practical_undocumented_microcycle_semantics(void) {
     expect_u8("SAX stores A and X", 0x0au, machine.bus.ram[0x0021]);
 }
 
+static void test_practical_undocumented_y_indexed_forms(void) {
+    /* LAX abs,Y (0xBF) and SAX zp,Y (0x97) are Y-indexed.  Their opcode
+       columns collide with the X-indexed RMW templates, so a classifier that
+       keys only on the low nibble wrongly indexes them with X.  Use X != Y and
+       distinct targets so an X-indexed regression is observable. */
+    static const uint8_t program[] = {
+        0xa0, 0x03,       /* LDY #$03 */
+        0xa2, 0x07,       /* LDX #$07 */
+        0xbf, 0x34, 0x12, /* LAX $1234,Y -> reads $1237 (X-bug would read $123b) */
+        0xa9, 0x5a,       /* LDA #$5a */
+        0xa2, 0x0f,       /* LDX #$0f */
+        0x97, 0x40        /* SAX $40,Y  -> writes $43   (X-bug would write $4f) */
+    };
+    c64_rom_set roms;
+    c64_t machine;
+
+    build_roms(&roms, TEST_RESET_VECTOR);
+    copy_to_kernal(&roms, TEST_RESET_VECTOR, program, sizeof(program));
+    reset_machine(&machine, &roms);
+    machine.bus.ram[0x1237] = 0x3cu; /* correct LAX abs,Y target */
+    machine.bus.ram[0x123bu] = 0xffu; /* X-indexed decoy target */
+    machine.bus.ram[0x0043] = 0x00u; /* correct SAX zp,Y target */
+    machine.bus.ram[0x004f] = 0x11u; /* X-indexed decoy target */
+    c64_set_cpu_trace_enabled(&machine, true);
+
+    step_machine(&machine, 3);
+    expect_u8("LAX abs,Y loads accumulator via Y", 0x3cu, snapshot(&machine).a);
+    expect_u8("LAX abs,Y loads index via Y", 0x3cu, snapshot(&machine).x);
+    step_machine(&machine, 3);
+    expect_u8("SAX zp,Y stores A&X via Y", 0x0au, machine.bus.ram[0x0043]);
+    expect_u8("SAX zp,Y leaves X-indexed cell untouched", 0x11u, machine.bus.ram[0x004f]);
+}
+
 static void test_practical_undocumented_families_match_badline_trace(void) {
     static const uint8_t slo_absolute[] = {
         0xa9, 0x01,       /* LDA #$01 */
@@ -1943,6 +1976,7 @@ int main(void) {
     test_microcycle_indexed_rmw_and_indirect_jump_trace();
     test_migrated_families_match_normal_trace_under_pal_badline();
     test_practical_undocumented_microcycle_semantics();
+    test_practical_undocumented_y_indexed_forms();
     test_practical_undocumented_families_match_badline_trace();
     test_sta_d020_applies_at_event_cycle();
     test_cpu_trace_disabled_leaves_debug_trace_empty();
