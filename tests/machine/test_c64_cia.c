@@ -164,11 +164,16 @@ static void test_cia_timer_and_interrupts(void) {
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
 
     expect_u8("timer loaded low", 0x02, cia_read_register(&c, CIA_REG_TIMER_A_LO));
-    /* Lorenz: two clocks after START before counting (start_delay). */
+    /* Lorenz: two clocks after START before counting (start_delay). The CR write
+     * also set the force-load bit ($11), and the force-load reload discards one
+     * further count clock (matches VICE and Lorenz cia1tb123 block 9), so the
+     * first visible decrement lands one cycle later than for a plain START. */
     cia_step_cycle(&c);
     expect_u8("still 2 during start delay 1", 0x02, cia_read_register(&c, CIA_REG_TIMER_A_LO));
     cia_step_cycle(&c);
     expect_u8("still 2 during start delay 2", 0x02, cia_read_register(&c, CIA_REG_TIMER_A_LO));
+    cia_step_cycle(&c);
+    expect_u8("still 2 during force-load discard", 0x02, cia_read_register(&c, CIA_REG_TIMER_A_LO));
     cia_step_cycle(&c);
     expect_u8("timer decremented to 1", 0x01, cia_read_register(&c, CIA_REG_TIMER_A_LO));
     expect_false("irq not pending before underflow", cia_irq_pending(&c));
@@ -231,11 +236,16 @@ static void test_cia_timer_continuous_underflow_reloads_both_timers(void) {
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x11);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x11);
 
-    /* start_delay 2 + count tick at 1 → underflow on third cycle. */
+    /* start_delay 2 + force-load discard ($11 sets the load bit) + count tick at
+     * 1 → underflow on the fourth cycle. */
     cia_step_cycle(&c);
     cia_step_cycle(&c);
     expect_u8("no source flags during start delay", 0x00, c.interrupt_flags);
     expect_u16("still latch during delay", 0x0001, c.timer_a.counter);
+
+    cia_step_cycle(&c);
+    expect_u8("no source flags after force-load discard", 0x00, c.interrupt_flags);
+    expect_u16("still latch after force-load discard", 0x0001, c.timer_a.counter);
 
     cia_step_cycle(&c);
     expect_u16("continuous timer a reloads on uf", 0x0001, c.timer_a.counter);
@@ -257,8 +267,9 @@ static void test_cia_timer_oneshot_reloads_and_stops_both_timers(void) {
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x19);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x19);
 
-    /* start_delay 2 + uf tick at counter 1. */
-    step_cia_cycles(&c, 3);
+    /* start_delay 2 + force-load discard ($19 sets the load bit) + uf tick at
+     * counter 1 → underflow on the fourth cycle. */
+    step_cia_cycles(&c, 4);
 
     expect_u16("oneshot timer a reloads", 0x0001, c.timer_a.counter);
     expect_u16("oneshot timer b reloads", 0x0001, c.timer_b.counter);
@@ -281,6 +292,9 @@ static void test_cia_zero_latch_does_not_underflow_every_cycle(void) {
     cia_step_cycle(&c);
     expect_false("zero latch does not underflow during start delay", cia_irq_pending(&c));
     expect_u16("zero latch still full during delay", 0xffff, c.timer_a.counter);
+    cia_step_cycle(&c);
+    /* $11 set the force-load bit, whose reload discards one further count clock. */
+    expect_u16("zero latch still full after force-load discard", 0xffff, c.timer_a.counter);
     cia_step_cycle(&c);
     expect_false("zero latch does not underflow on first tick", cia_irq_pending(&c));
     expect_u16("zero latch decrements", 0xfffe, c.timer_a.counter);
@@ -310,7 +324,8 @@ static void test_cia_oneshot_stops_after_underflow(void) {
     cia_write_register(&c, CIA_REG_ICR, 0x81);
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x19);
 
-    step_cia_cycles(&c, 3);
+    /* start_delay 2 + force-load discard ($19) + uf tick at 1 → 4 cycles. */
+    step_cia_cycles(&c, 4);
     expect_true("oneshot irq", cia_irq_pending(&c));
     expect_u8("oneshot clears start", 0x08, cia_read_register(&c, CIA_REG_CONTROL_A));
 }
@@ -448,25 +463,29 @@ static void test_cia_timer_b_cascade_mode(void) {
     cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x51);
 
-    /* Both timers share start_delay (2). A: delay, delay, 3→2, 2→1, 1→uf. */
+    /* Both timers share start_delay (2). $11/$51 also set the force-load bit,
+     * whose reload discards one further count clock, so A counts:
+     * delay, delay, load-discard, 3->2, 2->1, 1->uf. */
     cia_step_cycle(&c);
     expect_u16("tb cascade step1 unchanged", 5, c.timer_b.counter);
     cia_step_cycle(&c);
     expect_u16("tb cascade step2 unchanged", 5, c.timer_b.counter);
     cia_step_cycle(&c);
-    expect_u16("tb cascade step3 ta dec", 2, c.timer_a.counter);
+    expect_u16("tb cascade step3 ta load-discard", 3, c.timer_a.counter);
     expect_u16("tb cascade step3 b still 5", 5, c.timer_b.counter);
     cia_step_cycle(&c);
-    expect_u16("tb cascade step4 ta at 1", 1, c.timer_a.counter);
+    expect_u16("tb cascade step4 ta dec", 2, c.timer_a.counter);
     expect_u16("tb cascade step4 b still 5", 5, c.timer_b.counter);
+    cia_step_cycle(&c);
+    expect_u16("tb cascade step5 ta at 1", 1, c.timer_a.counter);
+    expect_u16("tb cascade step5 b still 5", 5, c.timer_b.counter);
 
     /* A underflows (tick at 1); B cascade decrements same cycle. */
     cia_step_cycle(&c);
     expect_u16("tb cascade after a uf", 4, c.timer_b.counter);
     expect_u16("ta reloaded after underflow", 3, c.timer_a.counter);
 
-    /* A skip_tick then 3→2→1 then uf again. B starts after its own delay already
-     * burned; cascade only on A uf. */
+    /* A skip_tick then 3→2→1 then uf again. B cascade only on A uf. */
     cia_step_cycle(&c); /* A skip after reload */
     cia_step_cycle(&c); /* 3→2 */
     cia_step_cycle(&c); /* 2→1 */
@@ -525,8 +544,9 @@ static void test_cia_timer_b_combined_cascade_and_cnt_mode(void) {
     cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x71);
 
-    /* A latch=1: delay 2 then uf. B needs A.underflow + CNT same cycle. */
-    step_cia_cycles(&c, 2);
+    /* A latch=1: delay 2 + force-load discard ($11) then uf. B needs
+     * A.underflow + CNT same cycle. */
+    step_cia_cycles(&c, 3);
     expect_u16("combined mode ignores during start delay", 5, c.timer_b.counter);
 
     cia_pulse_cnt(&c);
@@ -542,7 +562,7 @@ static void test_cia_pb6_pb7_pulse_outputs(void) {
     cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
     cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x13);
-    step_cia_cycles(&c, 3); /* delay 2 + uf */
+    step_cia_cycles(&c, 4); /* delay 2 + force-load discard + uf */
     expect_u8("pb6 pulse low", 0xbf, cia_read_register(&c, CIA_REG_PORT_B));
     cia_step_cycle(&c);
     expect_u8("pb6 pulse restored high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
@@ -551,7 +571,7 @@ static void test_cia_pb6_pb7_pulse_outputs(void) {
     cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
     cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x13);
-    step_cia_cycles(&c, 3);
+    step_cia_cycles(&c, 4); /* delay 2 + force-load discard + uf */
     expect_u8("pb7 pulse low", 0x7f, cia_read_register(&c, CIA_REG_PORT_B));
     cia_step_cycle(&c);
     expect_u8("pb7 pulse restored high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
@@ -565,7 +585,7 @@ static void test_cia_pb6_pb7_toggle_outputs(void) {
     cia_write_register(&c, CIA_REG_TIMER_A_LO, 0x01);
     cia_write_register(&c, CIA_REG_TIMER_A_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x17);
-    step_cia_cycles(&c, 3); /* delay 2 + uf */
+    step_cia_cycles(&c, 4); /* delay 2 + force-load discard + uf */
     expect_u8("pb6 toggle low", 0xbf, cia_read_register(&c, CIA_REG_PORT_B));
     step_cia_cycles(&c, 2); /* skip after reload + uf */
     expect_u8("pb6 toggle high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
@@ -574,7 +594,7 @@ static void test_cia_pb6_pb7_toggle_outputs(void) {
     cia_write_register(&c, CIA_REG_TIMER_B_LO, 0x01);
     cia_write_register(&c, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&c, CIA_REG_CONTROL_B, 0x17);
-    step_cia_cycles(&c, 3);
+    step_cia_cycles(&c, 4); /* delay 2 + force-load discard + uf */
     expect_u8("pb7 toggle low", 0x7f, cia_read_register(&c, CIA_REG_PORT_B));
     step_cia_cycles(&c, 2);
     expect_u8("pb7 toggle high", 0xff, cia_read_register(&c, CIA_REG_PORT_B));
@@ -631,7 +651,7 @@ static void test_cia_debug_read_icr_no_side_effects(void) {
     cia_write_register(&c, CIA_REG_ICR, 0x81);
     cia_write_register(&c, CIA_REG_CONTROL_A, 0x19);
 
-    step_cia_cycles(&c, 3);
+    step_cia_cycles(&c, 4); /* start delay 2 + force-load discard + uf */
     expect_true("irq pending before debug read", cia_irq_pending(&c));
 
     icr_val = cia_debug_read_register(&c, CIA_REG_ICR);
@@ -831,9 +851,10 @@ static void test_machine_cia_step_and_irq_foundations(void) {
     cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
     cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
     cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x11);
-    /* start_delay 2 + uf at counter 1 */
+    /* start_delay 2 + force-load discard ($11) + uf at counter 1 */
     expect_true("machine cycle steps cia", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("machine cycle steps cia again", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("machine cycle steps cia discard", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("machine cycle steps cia uf", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("cia1 irq foundation", cia_irq_pending(&machine.cia1));
 
@@ -843,6 +864,7 @@ static void test_machine_cia_step_and_irq_foundations(void) {
     cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x11);
     expect_true("machine cycle steps cia2", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("machine cycle steps cia2 again", c64_step_cycle(&machine, error, sizeof(error)));
+    expect_true("machine cycle steps cia2 discard", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("machine cycle steps cia2 uf", c64_step_cycle(&machine, error, sizeof(error)));
     expect_true("cia2 nmi foundation", cia_irq_pending(&machine.cia2));
 }
@@ -856,7 +878,8 @@ static void test_cia1_timer_irq_reaches_cpu_irq_vector(void) {
     cia_write_register(&machine.cia1, CIA_REG_TIMER_A_HI, 0x00);
     cia_write_register(&machine.cia1, CIA_REG_ICR, 0x81);
     cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x11);
-    /* start_delay 2 + uf → pending; one more cycle → delayed pin. */
+    /* start_delay 2 + force-load discard ($11) + uf → pending; one more cycle → delayed pin. */
+    cia_step_cycle(&machine.cia1);
     cia_step_cycle(&machine.cia1);
     cia_step_cycle(&machine.cia1);
     cia_step_cycle(&machine.cia1);
@@ -882,6 +905,7 @@ static void test_cia2_timer_nmi_reaches_cpu_nmi_vector(void) {
     cia_write_register(&machine.cia2, CIA_REG_TIMER_B_HI, 0x00);
     cia_write_register(&machine.cia2, CIA_REG_ICR, 0x82);
     cia_write_register(&machine.cia2, CIA_REG_CONTROL_B, 0x11);
+    cia_step_cycle(&machine.cia2);
     cia_step_cycle(&machine.cia2);
     cia_step_cycle(&machine.cia2);
     cia_step_cycle(&machine.cia2);
@@ -1016,6 +1040,7 @@ static void test_cycle_step_replays_cia_icr_read_at_bus_cycle(void) {
     cia_write_register(&machine.cia1, CIA_REG_CONTROL_A, 0x19);
     cia_step_cycle(&machine.cia1);
     cia_step_cycle(&machine.cia1);
+    cia_step_cycle(&machine.cia1); /* force-load discard ($19) */
     cia_step_cycle(&machine.cia1);
 
     expect_true("irq pending before lda icr", cia_irq_pending(&machine.cia1));
@@ -1075,6 +1100,7 @@ static void test_cia_interrupt_line_delays_one_cycle_behind_pending(void) {
 
     cia_step_cycle(&c); /* start delay */
     cia_step_cycle(&c); /* start delay */
+    cia_step_cycle(&c); /* force-load discard ($19) */
     expect_false("no pending before underflow", cia_irq_pending(&c));
     expect_false("pin low before underflow", cia_interrupt_line(&c));
 
@@ -1099,6 +1125,7 @@ static void test_cia_interrupt_line_deasserts_one_cycle_after_icr_read(void) {
 
     cia_step_cycle(&c); /* start delay */
     cia_step_cycle(&c); /* start delay */
+    cia_step_cycle(&c); /* force-load discard ($19) */
     cia_step_cycle(&c); /* underflow */
     cia_step_cycle(&c); /* pin asserts */
     expect_true("pin asserted", cia_interrupt_line(&c));
@@ -1310,6 +1337,7 @@ static void test_cia1_cpu_irq_waits_one_cycle_after_underflow(void) {
     /* Isolate CIA steps so the CPU is still between instructions. */
     cia_step_cycle(&machine.cia1); /* start delay */
     cia_step_cycle(&machine.cia1); /* start delay */
+    cia_step_cycle(&machine.cia1); /* force-load discard ($11) */
     cia_step_cycle(&machine.cia1); /* underflow: pending, pin low */
     expect_true("pending on underflow", cia_irq_pending(&machine.cia1));
     expect_false("pin still low on underflow", cia_interrupt_line(&machine.cia1));

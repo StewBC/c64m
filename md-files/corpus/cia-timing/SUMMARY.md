@@ -12,7 +12,7 @@ Method: autostart PRG + `-debugcart` + `-limitcycles` (no mid-race ICR polling).
 | **priority** (Tier 1) | `results/x64sc-priority-latest.tsv` | **31/31 PASS** |
 | **lorenz-cia** | `results/x64sc-lorenz-cia-latest.tsv` | **40/40 PASS** |
 | **cia-core** | `results/x64sc-cia-core-latest.tsv` | **66/66 PASS** |
-| **c64m priority** | `results/c64m-priority-latest.tsv` | **11 PASS / 18 FAIL / 2 OTHER** |
+| **c64m priority** | `results/c64m-priority-latest.tsv` | **13 PASS / 16 FAIL / 2 OTHER** |
 
 Priority includes: Lorenz `cia1tb123`/`cia2tb123`, `icr01`/`icr01new`, `imr`,
 `flipos`, `oneshot` (old+new where applicable), full `CIA/irqdelay/*` list,
@@ -28,8 +28,11 @@ Lorenz-cia uses **official** cycle limits from VICE `c64-testlist.in` (e.g.
 - c64m does not yet select old vs new CIA models; the `cia_model` column is documentary.
 - After Lorenz timer pipeline (2-cycle start delay, underflow-on-1 with skip-after-reload):
   **oneshot** (old+new) and **icr01new** PASS; several new-CIA irqdelay + CIA2 cases PASS.
-- Still FAIL: `cia1tb123`/`cia2tb123` CRB write races, `icr01` (old), `imr`, `flipos`,
-  old irqdelay matrix, `reload0`, `dd0dtest`.
+- After 6526 register-write + deferred force-load timing (LOW write = latch only;
+  force-load reload lands on the second Phi2 and suppresses two count clocks):
+  cia1tb123 blocks 1-12 correct, `irqdelay-cia1`(+oneshot) PASS → **13/31**.
+- Still FAIL: `cia1tb123`/`cia2tb123` tail blocks 13-18 (delayed START-clear effect),
+  `icr01` (old), `imr`, `flipos`, old irqdelay matrix, `reload0`, `dd0dtest`.
 
 ## How to reproduce
 

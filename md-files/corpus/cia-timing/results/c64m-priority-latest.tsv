@@ -16,9 +16,9 @@ FAIL	255	0	CIA/irqdelay	irqdelay-oneshot.prg	7000000	oneshot IRQ delay old	/User
 PASS	0	1	CIA/irqdelay	irqdelay-oneshot-new.prg	7000000	oneshot IRQ delay new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 OTHER	10	0	CIA/irqdelay	irqdelay2.prg	9000000	irqdelay2 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 OTHER	10	1	CIA/irqdelay	irqdelay2-new.prg	9000000	irqdelay2 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
-FAIL	255	default	CIA/irqdelay	irqdelay-cia1.prg	10000000	CIA1 delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia1.prg	10000000	CIA1 delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 PASS	0	default	CIA/irqdelay	irqdelay-cia2.prg	10000000	CIA2 delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
-FAIL	255	default	CIA/irqdelay	irqdelay-cia1-oneshot.prg	10000000	CIA1 oneshot delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
+PASS	0	default	CIA/irqdelay	irqdelay-cia1-oneshot.prg	10000000	CIA1 oneshot delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 PASS	0	default	CIA/irqdelay	irqdelay-cia2-oneshot.prg	10000000	CIA2 oneshot delay	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 FAIL	255	0	CIA/irqdelay	irqdelay-cia1-4-old.prg	10000000	CIA1-4 old	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus
 PASS	0	1	CIA/irqdelay	irqdelay-cia1-4-new.prg	10000000	CIA1-4 new	/Users/swessels/Develop/github/personal/c64m/build/run_c64m_cia_corpus

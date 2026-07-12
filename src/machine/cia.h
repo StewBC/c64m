@@ -25,6 +25,11 @@ typedef struct cia_timer {
     uint8_t start_delay;
     /* After force-load or underflow reload, the next count clock is discarded. */
     bool skip_tick;
+    /* Force-load strobe reloads the counter from the latch on the 6526, but the
+     * new value is not visible until the second Phi2 after the CR write, and the
+     * reload suppresses counting on its Phi2 and the following one. */
+    uint8_t load_delay;
+    uint8_t load_hold;
     /* Effective oneshot for underflow (delayed vs CRA bit 3 / FLIPOS). */
     bool oneshot_effective;
     bool oneshot_pending;

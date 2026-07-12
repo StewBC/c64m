@@ -44,10 +44,21 @@
 
 ## Recent changes
 
+- **Timer register-write timing (cia1tb123 arc):** a timer LOW-byte write now
+  updates the latch only; a stopped counter is loaded solely by a HIGH-byte
+  write (or force-load/underflow), matching the 6526. The force-load strobe is
+  now deferred: the reload becomes visible on the second Phi2 after the CR write
+  and suppresses counting on that Phi2 and the following one (VICE `CIAT_LOAD`
+  behaviour). This greened Lorenz `cia1tb123` blocks 1-12 (write phases through
+  the force-load-while-running races) and lifted the priority matrix to
+  **13/31 PASS**. Remaining `cia1tb123` blocks (13-18) need the delayed
+  control-write effect on counting (a CR write that clears START keeps counting
+  for the write cycle); this is the flagged regression-prone area and is
+  deferred. See `md-files/corpus/cia-timing/HANDOFF.md`.
 - **Option-2 Phase 4 + corpus + timer pipeline:** see  
   `md-files/corpus/cia-timing/HANDOFF.md` for full status. CPU IRQ/NMI sample
   `cia_interrupt_line`; VICE/c64m runners and Lorenz-oriented timer/IR model
-  are in tree. c64m priority matrix **11/31 PASS** at last run.
+  are in tree.
 - C64MFULL Phases 1-4 added FLAG, serial SDR/CNT/SP, PC handshake, and the
   delayed interrupt-line abstraction. Public CIA API includes
   `cia_set_flag_line`, `cia_set_sp_line`, `cia_pc_line`, `cia_interrupt_line`.
@@ -64,8 +75,12 @@
   See `md-files/corpus/cia-timing/`.
 - Corpus tools: `tools/cia-timing-corpus/` (`run_x64sc.sh`, `run_c64m.sh`).
   VICE baselines green on priority/lorenz-cia/cia-core. c64m priority matrix:
-  **11 PASS / 18 FAIL / 2 OTHER** (`results/c64m-priority-latest.tsv`).
-  Timer model: two Phi2 clocks after START before counting; underflow reloads
+  **13 PASS / 16 FAIL / 2 OTHER** (`results/c64m-priority-latest.tsv`).
+  Timer model: two Phi2 clocks after START before counting; a LOW-byte write
+  latches only (HIGH-byte write loads a stopped counter); force-load reload is
+  deferred to the second Phi2 after the write and suppresses two count clocks
+  (own `load_delay`/`load_hold`, kept separate from the underflow `skip_tick`
+  so cascade/CNT-gated timers still clear it on schedule); underflow reloads
   from latch and discards the next count clock; oneshot stop uses a delayed
   effective bit (set delay 1, clear delay 2). IR flip-flop sets when flags&mask
   and clears only on ICR read (clearing IMR does not clear IR).

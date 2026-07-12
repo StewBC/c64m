@@ -347,9 +347,37 @@ static void cia_timer_update_pb_output(cia_timer *timer, uint8_t control) {
     }
 }
 
+/* Advances the force-load pipeline. Returns true while counting must be
+ * suppressed: on the Phi2 the reload lands (the load occupies the clock, like
+ * VICE's CIAT_LOAD clearing the count phase) and on the following Phi2 (the
+ * reload discards the next count clock). Kept separate from skip_tick so a
+ * cascade/CNT-gated timer, which may not count for many cycles, still clears the
+ * suppression on schedule instead of eating its next real count event. */
+static bool cia_timer_update_load_pipe(cia_timer *timer) {
+    if (timer->load_delay > 0u) {
+        timer->load_delay--;
+        if (timer->load_delay == 0u) {
+            timer->counter = cia_timer_reload_value(timer);
+            timer->load_hold = 1u;
+            return true;
+        }
+        return false;
+    }
+    if (timer->load_hold > 0u) {
+        timer->load_hold--;
+        return true;
+    }
+    return false;
+}
+
 static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_t interrupt_flag) {
     uint8_t control = c->registers[control_reg];
     bool oneshot_for_uf;
+    bool loaded_now;
+
+    /* Apply a pending force-load before this cycle's count so the reloaded value
+     * becomes visible one Phi2 after the CR write, not on the write cycle. */
+    loaded_now = cia_timer_update_load_pipe(timer);
 
     timer->underflow = false;
     /*
@@ -374,6 +402,12 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
             goto apply_oneshot_write;
         }
     } else if (!cia_timer_b_should_count(c, control)) {
+        goto apply_oneshot_write;
+    }
+
+    /* The cycle a force-load reload lands does not count; skip_tick (set by the
+     * reload) still suppresses the following cycle. */
+    if (loaded_now) {
         goto apply_oneshot_write;
     }
 
@@ -646,10 +680,9 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             return;
         case CIA_REG_TIMER_A_LO:
             c->registers[reg] = value;
+            /* Low-byte write updates the latch only. On the 6526 only a high-byte
+             * write (or force-load/underflow) loads a stopped counter. */
             c->timer_a.latch = (uint16_t)((c->timer_a.latch & 0xff00u) | value);
-            if ((c->registers[CIA_REG_CONTROL_A] & CIA_CONTROL_START) == 0) {
-                cia_reload_timer(&c->timer_a);
-            }
             return;
         case CIA_REG_TIMER_A_HI:
             c->registers[reg] = value;
@@ -660,10 +693,8 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             return;
         case CIA_REG_TIMER_B_LO:
             c->registers[reg] = value;
+            /* Low-byte write updates the latch only (see Timer A low above). */
             c->timer_b.latch = (uint16_t)((c->timer_b.latch & 0xff00u) | value);
-            if ((c->registers[CIA_REG_CONTROL_B] & CIA_CONTROL_START) == 0) {
-                cia_reload_timer(&c->timer_b);
-            }
             return;
         case CIA_REG_TIMER_B_HI:
             c->registers[reg] = value;
@@ -707,11 +738,9 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             bool was_running = (old & CIA_CONTROL_START) != 0;
             c->registers[reg] = (uint8_t)(value & (uint8_t)~CIA_CONTROL_FORCE_LOAD);
             if ((value & CIA_CONTROL_FORCE_LOAD) != 0) {
-                if (was_running) {
-                    cia_reload_timer_from_run(&c->timer_a);
-                } else {
-                    cia_reload_timer(&c->timer_a);
-                }
+                /* Deferred: reload becomes visible on the second Phi2 after the
+                 * write (see cia_timer_update_load_pipe). */
+                c->timer_a.load_delay = 2;
             }
             if (!was_running && ((value & CIA_CONTROL_START) != 0)) {
                 c->timer_a.start_delay = 2;
@@ -730,11 +759,8 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             bool was_running = (old & CIA_CONTROL_START) != 0;
             c->registers[reg] = (uint8_t)(value & (uint8_t)~CIA_CONTROL_FORCE_LOAD);
             if ((value & CIA_CONTROL_FORCE_LOAD) != 0) {
-                if (was_running) {
-                    cia_reload_timer_from_run(&c->timer_b);
-                } else {
-                    cia_reload_timer(&c->timer_b);
-                }
+                /* Deferred: see Timer A force-load above. */
+                c->timer_b.load_delay = 2;
             }
             if (!was_running && ((value & CIA_CONTROL_START) != 0)) {
                 c->timer_b.start_delay = 2;
