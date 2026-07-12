@@ -1,6 +1,11 @@
 # lft-nine investigation
 
-Date: 2026-07-11
+Date: 2026-07-11 (original diagnosis); progress update 2026-07-12.
+
+> **See "## Implementation progress (2026-07-12)" below** for what has since been
+> built (side-border flip-flop, dot-anchored render mapping, idle graphics in the
+> opened border) and the remaining known shortcomings measured against VICE. The
+> executable plan those steps followed is `md-files/C64MVICII_SIDEBORDER.md`.
 
 ## Result
 
@@ -12,6 +17,129 @@ and positioned in the side border is always hidden by the border colour.
 This is independent of the already implemented PAL/NTSC sprite BA tables. The
 demo is therefore a useful next target for horizontal-border work, but it is
 not yet evidence that the current sprite BA table is wrong.
+
+## Implementation progress (2026-07-12)
+
+The horizontal side-border opening was implemented per
+`md-files/C64MVICII_SIDEBORDER.md`. The mechanism now works; the *content* shown
+in the opened regions and the bottom-border behaviour are still wrong. A side-by-
+side capture of VICE (x64sc PAL) vs c64m was taken at a settled frame.
+
+### What has been achieved (works)
+
+- **Dot-anchored render mapping (Step A, committed `116cde6`).** The live
+  renderer maps a VIC cycle to output dots with `X = 24 + (cycle-15)*8` so
+  `buffer_x == VIC X-coordinate`, replacing the old scaled
+  `cycle*width/cycles_per_line`. A timed `$D016` write now lands on the correct
+  border-compare column. Two pre-existing pixel tests were re-baselined to the
+  new dot-exact timing (`test_expose_harness_midline_injection_hits_exact_column`,
+  the D020 border test), plus one runtime frame test
+  (`test_frame_while_running`).
+- **Main (horizontal) border flip-flop (Steps B/C, committed `813ec51`).** New
+  `vicii.main_border_ff`, evaluated per dot with the CSEL live for that cycle
+  (Bauer 3.9 rules 1 & 6: set at the right compare, reset at the left compare
+  when the vertical border is clear). Persists across cycles/lines/frames. A
+  timed `$D016` CSEL 1->0 in the open window (c64m cycle 54) opens the right side
+  border; the flip-flop staying clear also opens the next line's left region.
+  Tests: `test_live_right_side_border_opens`,
+  `test_live_side_border_wrong_cycle_stays_closed`,
+  `test_live_side_border_flip_flop_persists_left`,
+  `test_live_side_border_reveals_sprite`.
+- **Sprites reveal in the opened side border.** Sprites now compose over the
+  opened region instead of being masked. Confirmed in the VICE-vs-c64m capture:
+  the numbered sprites do appear at the left/right edges (previously they were
+  solid border).
+- **Idle/ghost-byte graphics in the opened border (Step D).** The over-border
+  region renders the idle `$3FFF`/`$39FF` byte instead of a flat colour. Test:
+  `test_live_side_border_shows_ghost_byte`.
+- **Write-path audit (Step E).** `$D016` needs no special handling: it is an
+  ordinary register store, `vicii_get_border_geometry` reads it live each cycle,
+  and `c64.c` applies the CPU write before the VIC renders that cycle
+  (`c64_apply_pending_cpu_events_at_elapsed` then `c64_advance_one_cycle`). No
+  code change.
+
+All 47 ctest cases pass after a full rebuild.
+
+### Known shortcomings (still wrong vs VICE)
+
+1. **Opened side border shows blue, should be black -- because the black is made
+   of SPRITES, not the border/background.** Per the author's own explanation
+   (see reference below), "the black borders ... are assigned to Sprites 5 and 7."
+   So the black frame is not an opened border rendered black, nor the idle colour:
+   it is black sprites drawn in the opened region. c64m showing **blue** there
+   means the black border sprites are missing / mis-timed at those positions, so
+   the idle "ghostbyte shine-through" background (`b0c` = the blue playfield)
+   shows instead. In the real demo that shine-through is *mostly covered* by the
+   black sprites and only peeks through the gaps between digit sprites as thin
+   stripes. **This is a sprite-multiplex/timing problem (items 4-6), not an
+   idle-colour bug** -- an earlier version of this note wrongly chased the idle
+   colour resolution. The Step D idle graphics are correct as the *substrate*; the
+   fix is getting the border sprites to render over it.
+2. **Bottom border clips sprites; should open to black with sprites.** VICE shows
+   the lower numbered sprites (4/5/6) over a **black** bottom border. c64m cuts
+   them off under the bottom border -- the vertical border opening this demo uses
+   is not happening (or the sprites are clipped by the crop / vertical FF). Note
+   the existing `test_live_*_bottom_border_can_be_opened_for_sprites` pass, so the
+   generic bottom-open path works; this demo's specific top/bottom technique (the
+   `$D011` chain in "## Demo timing observations" and item 5) is not yet
+   reproduced. Investigate alongside item 5 (late top-border sprite multiplex).
+3. **XSCROLL ghost-byte phase not applied.** `vicii_idle_pixel` ignores XSCROLL,
+   matching the existing vertical-border idle approximation. lft-nine uses XSCROLL
+   to align the ghost pattern with the sprites, so the ghost pattern phase will be
+   off even once its colour (item 1) is fixed.
+4. **Sprite vertical positions/multiplex differ.** The numbered sprites sit at
+   different heights in the two captures, consistent with the unresolved late
+   multiplex/timing failure (item 5) and the AEC/RDY sub-cycle write phase
+   (item 6). Neither was touched by this work.
+
+### Authoritative reference: the author's explanation
+
+Linus Akesson explains the demo at
+<https://www.linusakesson.net/scene/nine/explanation.php>. Key facts that reframe
+the remaining c64m work (all are the demo's design, confirmed by the author):
+
+- **The black frame is sprites.** Wizard = Sprites 1 & 3; **black borders =
+  Sprites 5 & 7**; the three freely-moving digits = Sprites 2, 4, 6. All nine
+  digits are **multiplexed** across the eight hardware sprites, with the
+  front-to-back priority mapping constantly re-assigned (lower sprite number =
+  in front).
+- **Stable timing via flanking sprites.** Freely-moving sprites are flanked by
+  **four always-on sprites (0, 2, 4, 6)** so the BA/sprite-fetch pattern stays
+  fixed. PAL line = 63 cycles, **16 at risk** of sprite fetches, BA asserted **3
+  cycles ahead** (CPU may still write, halts on read) -- exactly c64m's existing
+  BA model.
+- **Invalid mode `$70`, not plain ECM `$50`.** "Mode $70 behaves like ECM as far
+  as the ghost byte is concerned." c64m's idle path keys the ghost address off the
+  ECM bit ($39FF), which `$70` sets, so the address is right; the invalid-mode
+  colour resolution in the idle/over-border path should be checked against this.
+- **Cycle-exact `$D011` + `$D021` kernel.** `sta $d011` at **cycle 15**, then
+  `sta $d021-$70,x` at **cycle 21**; there are **three variants one cycle apart**
+  to cover VIC-chip version and XSCROLL position (a one-cycle pixel-pipeline
+  delay). The `$D021` **background splits** paint parts of the black frame too.
+- **`$D018` bank switching** updates all four sprite pointers with a single
+  register write (pointers live in the char-graphics region of the VIC bank).
+- **XSCROLL alignment.** The colour change is "delayed by one pixel to line up
+  with horizontal scroll position 1"; at position 0 the delayed change and a grey
+  stripe land just right of the covered gap. This is the ghost-byte phase detail
+  (item 3).
+
+### Suggested next steps for a future agent
+
+Reprioritised after reading the author's explanation:
+
+1. **Sprite multiplex + cycle-exact raster kernel is now the main event** (items
+   4-6), not an idle-colour tweak. The visible blue-vs-black and the clipped
+   bottom sprites both come from border sprites (5/7 and the multiplexed digits)
+   not being rendered at the right raster positions. Get the multiplex kernel and
+   BA/`$D018`/`$D011`/`$D021` cycle timing right; the black frame follows.
+2. Verify the invalid-mode `$70` idle/over-border colour resolution against VICE
+   for the gaps where the ghost-byte shine-through actually shows (thin stripes
+   between digit sprites), once the covering sprites render.
+3. XSCROLL ghost-byte phase (item 3) last -- a one-pixel alignment detail.
+
+The Steps A-D border-opening substrate (main-border flip-flop, dot-anchored
+mapping, idle over-border graphics) is a prerequisite and appears correct; it is
+not the remaining blocker.
 
 ## Reproduction
 
