@@ -230,9 +230,20 @@ static void test_frame_while_running(void) {
     if (frame.machine_cycle == 0) {
         fail("running frame did not carry an advanced machine cycle");
     }
-    expect_u32("running frame starts blank before den", TEST_COLOR_LIGHT_BLUE, frame.pixels[8]);
-    expect_u32("running frame shows border after den", TEST_COLOR_BLUE, frame.pixels[40]);
-    expect_u32("running frame shows timed d020 write", TEST_COLOR_GREEN, frame.pixels[80]);
+    /* Row 0 is the top border (raster 0 < top compare 51) with DEN=1, so the
+       whole line shows the program's border colour. The boot code writes
+       $D020 = green within the first cycles of frame 0, before the dot-anchored
+       paint mapping (C64MVICII_SIDEBORDER.md §2.2) emits any visible column of
+       raster 0 (the earliest is cycle 12), so the running frame's top border is
+       uniformly green. The previous per-column split (light-blue/blue/green) was
+       an artifact of the old scaled paint mapping that drew x=8 at cycle ~1,
+       before the boot write. */
+    expect_u32("running frame top border reflects timed d020 write (left)",
+        TEST_COLOR_GREEN, frame.pixels[8]);
+    expect_u32("running frame top border reflects timed d020 write (mid)",
+        TEST_COLOR_GREEN, frame.pixels[40]);
+    expect_u32("running frame top border reflects timed d020 write (right)",
+        TEST_COLOR_GREEN, frame.pixels[80]);
 
     expect_true("pause command", runtime_client_pause(client));
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {

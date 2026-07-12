@@ -636,11 +636,27 @@ static vicii_bg_pixel vicii_background_pixel(
     uint16_t char_base;
     uint16_t bitmap_base;
 
-    if (x < g->left || x >= g->right) {
-        /* Side border. Overridden by the border colour in vicii_compose_pixel,
-           so the exact value here only matters when the caller does not treat it
-           as border; b0c keeps prior behaviour. */
-        return vicii_bg_pixel_make(b0c, false);
+    /* Border geometry is no longer needed here: the display span is the fixed
+       40-column window and the CSEL-narrowed border is applied by the main
+       flip-flop in the renderer, not by clamping the background value. */
+    (void)g;
+
+    if (x < (uint32_t)VICII_HBORDER_LEFT_40 || x >= (uint32_t)VICII_HBORDER_RIGHT_40) {
+        /* Horizontal over-border region: outside the fixed 40-column display span
+           [24,344), independent of CSEL. The VIC emits idle-state graphics here
+           -- the ghost byte at $3FFF (or $39FF in ECM) -- which is overlaid by the
+           border colour while the main border flip-flop is closed, but shows
+           through when a timed $D016 CSEL write opens the side border (the "ghost
+           byte shine-through" lft-nine relies on). Rendering the idle pixel here
+           instead of b0c is what makes an opened side border reveal that content.
+           When the border is closed this value is overridden in
+           vicii_compose_pixel, so ordinary screens are unaffected. (Note: the
+           idle sequencer here does not apply XSCROLL, matching the existing
+           vertical-border idle approximation; exact ghost-byte phase alignment is
+           a VICE-oracle follow-on, see C64MVICII_SIDEBORDER.md §6.)
+           vicii_idle_pixel only uses the low 3 bits of x-24, so x < 24 (unsigned
+           underflow) still selects the correct pixel within the 8-dot group. */
+        return vicii_idle_pixel(v, bus, x);
     }
 
     if (lc->idle_when_inactive) {

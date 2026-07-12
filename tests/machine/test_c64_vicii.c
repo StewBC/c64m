@@ -1229,6 +1229,41 @@ static void test_live_side_border_reveals_sprite(void) {
                frame.pixels[101 * C64_FRAME_WIDTH + 352]);
 }
 
+/* Step D: an opened side border shows idle-state ghost-byte graphics (read from
+   $3FFF in non-ECM), not the background colour. With a patterned ghost byte the
+   revealed border reproduces that pattern -- the "ghost byte shine-through". */
+static void test_live_side_border_shows_ghost_byte(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3, ECM=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    /* Ghost byte 0xF0 = 1111_0000: idle bit = 0x80 >> ((x-24) & 7), so the first
+       four dots of the 8-dot group at x=344 are foreground (black), the next four
+       are background (b0c/blue). */
+    machine.bus.ram[0x3fffu] = 0xf0u;
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x00); /* open right border */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("ghost-byte side border frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("opened border shows ghost-byte foreground", TEST_PALETTE_0,
+               frame.pixels[100 * C64_FRAME_WIDTH + 344]);
+    expect_u32("opened border shows ghost-byte background", TEST_PALETTE_6,
+               frame.pixels[100 * C64_FRAME_WIDTH + 348]);
+}
+
 static void test_den_clear_blanks_text_display(void) {
     c64_t machine;
     c64_frame frame;
@@ -2369,6 +2404,7 @@ int main(void) {
     test_live_side_border_wrong_cycle_stays_closed();
     test_live_side_border_flip_flop_persists_left();
     test_live_side_border_reveals_sprite();
+    test_live_side_border_shows_ghost_byte();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();
