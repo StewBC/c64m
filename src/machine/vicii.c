@@ -204,6 +204,7 @@ void vicii_reset(vicii *v) {
     v->sprite_sprite_collision = 0;
     v->sprite_background_collision = 0;
     v->vertical_border_active = true;
+    v->main_border_ff         = true;
     /* Default on; runtime turbo policy re-applies after reset when needed. */
     v->pixel_output_enabled = true;
     vicii_begin_live_frame(v);
@@ -871,8 +872,7 @@ static uint32_t vicii_compose_pixel(
     return bg.color;
 }
 
-static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, const vicii_line_ctx *lc, uint32_t x, uint32_t y) {
-    bool hborder = x < g->left || x >= g->right;
+static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, const vicii_line_ctx *lc, uint32_t x, uint32_t y, bool border_active) {
     uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
     vicii_sprite_pixel sprites[8];
@@ -884,7 +884,7 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
     }
 
     if (!any_sprite_enabled) {
-        if (v->vertical_border_active || hborder) {
+        if (border_active) {
             if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
                 return bg.color;
             }
@@ -903,7 +903,7 @@ static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_bor
         }
     }
 
-    return vicii_compose_pixel(v, v->vertical_border_active || hborder, border_color, bg, sprites);
+    return vicii_compose_pixel(v, border_active, border_color, bg, sprites);
 }
 
 static void vicii_update_live_vertical_border(vicii *v) {
@@ -960,7 +960,22 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     for (x = x0; x < x1; x++) {
-        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] = vicii_live_pixel(v, bus, &g, &lc, x, y);
+        /* Main border flip-flop (Bauer 3.9 rules 1 & 6), advanced per dot in
+           increasing X with the CSEL live for this cycle (g is per-cycle). Rule 1:
+           set at the right compare. Rule 6: reset at the left compare when the
+           vertical border is not active. Both are applied before the dot is drawn,
+           so the compare column itself takes the new state. A timed $D016 CSEL
+           change moves g.left/g.right and can leave the FF set (side border open)
+           for the rest of the line. */
+        if (x == g.right) {
+            v->main_border_ff = true;
+        }
+        if (x == g.left && !v->vertical_border_active) {
+            v->main_border_ff = false;
+        }
+        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] =
+            vicii_live_pixel(v, bus, &g, &lc, x, y,
+                             v->main_border_ff || v->vertical_border_active);
     }
 }
 

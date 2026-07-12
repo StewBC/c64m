@@ -115,6 +115,13 @@ struct vicii {
        geometry; completed live frames preserve mid-frame RSEL timing effects. */
     bool     vertical_border_active;
 
+    /* Live main (horizontal) border flip-flop. Set at the right compare column
+       and reset at the left compare column (Bauer 3.9 rules 1 & 6), evaluated per
+       dot in the live renderer with the CSEL live for that cycle. Persists across
+       cycles/lines/frames so a timed $D016 CSEL write can leave the side border
+       open. Snapshot rendering keeps geometric side borders. */
+    bool     main_border_ff;
+
     /* When false, raster/BA/IRQ/sprite-DMA timing still advances, but ARGB pixel
        fill, working-frame clears, and completed-frame copies are skipped. Used by
        the runtime under high turbo so free-run is not bound by display work.

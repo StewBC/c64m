@@ -1086,6 +1086,149 @@ static void test_live_deep_bottom_border_sprite_is_painted(void) {
                frame.pixels[275 * C64_FRAME_WIDTH + 46]);
 }
 
+/* Step B/C main-border flip-flop: a timed $D016 CSEL 1->0 write in the open
+   window (c64m cycle 54, between the RIGHT_38 compare at X=335/cycle 53 and the
+   RIGHT_40 compare at X=344/cycle 55, see C64MVICII_SIDEBORDER.md §2.4) leaves
+   the flip-flop clear, opening the right side border for the rest of the line. */
+static void test_live_right_side_border_opens(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    /* Closed baseline: 40-column display, red border, blue background. The right
+       side border (x >= 344) shows the border colour on a display line. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
+    make_live_frame(&machine, &frame, "closed right side border frame");
+    expect_u32("closed right side border is border colour", TEST_PALETTE_2,
+               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+
+    /* Opened: flip CSEL 1->0 at cycle 54 of raster 100. RIGHT_40 (344) is never
+       matched (CSEL is 0 => right compare is 335, already passed), so the flip-flop
+       stays clear and x >= 344 shows background instead of border. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x00); /* CSEL=0 in the open window */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("opened right side border frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("opened right side border shows background", TEST_PALETTE_6,
+               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+    /* A line the write did not touch keeps its closed right border. */
+    expect_u32("untouched line keeps closed right border", TEST_PALETTE_2,
+               frame.pixels[99 * C64_FRAME_WIDTH + 350]);
+}
+
+/* Writing CSEL too early (before the RIGHT_38 compare at cycle 53) makes the VIC
+   match the 38-column right compare (X=335) with CSEL=0, setting the flip-flop
+   and closing the border at 335 -- the side border does NOT open. */
+static void test_live_side_border_wrong_cycle_stays_closed(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 52u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x00); /* CSEL=0 too early (before cycle 53) */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("wrong-cycle side border frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("wrong-cycle write keeps right border closed", TEST_PALETTE_2,
+               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+}
+
+/* The flip-flop persists across the line boundary: opening the right border on
+   raster 100 leaves it clear entering raster 101, so raster 101's left region is
+   also open (nothing sets it before the left compare). */
+static void test_live_side_border_flip_flop_persists_left(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x00); /* open right border on raster 100 */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("persist-left side border frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("left region open on next line (flip-flop stayed clear)",
+               TEST_PALETTE_6, frame.pixels[101 * C64_FRAME_WIDTH + 10]);
+}
+
+/* A sprite positioned in the right side border is hidden while the border is
+   closed and revealed once the border is opened by the CSEL trick. */
+static void test_live_side_border_reveals_sprite(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    /* Closed baseline: sprite at X=350, Y=100 -> first visible row raster 101,
+       hidden by the closed right border. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 350, 100, 7);
+    make_live_frame(&machine, &frame, "closed side border sprite frame");
+    expect_u32("closed side border hides sprite", TEST_PALETTE_2,
+               frame.pixels[101 * C64_FRAME_WIDTH + 352]);
+
+    /* Opened on raster 101: the sprite becomes visible in the side border. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    setup_solid_sprite(&machine, 0, 0x0340, 350, 100, 7);
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 101u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x00);
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("opened side border sprite frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("opened side border reveals sprite", TEST_PALETTE_7,
+               frame.pixels[101 * C64_FRAME_WIDTH + 352]);
+}
+
 static void test_den_clear_blanks_text_display(void) {
     c64_t machine;
     c64_frame frame;
@@ -2222,6 +2365,10 @@ int main(void) {
     test_live_bottom_border_can_be_opened_for_sprites();
     test_ntsc_live_bottom_border_can_be_opened_for_sprites();
     test_live_deep_bottom_border_sprite_is_painted();
+    test_live_right_side_border_opens();
+    test_live_side_border_wrong_cycle_stays_closed();
+    test_live_side_border_flip_flop_persists_left();
+    test_live_side_border_reveals_sprite();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();
