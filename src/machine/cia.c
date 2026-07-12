@@ -388,8 +388,14 @@ static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_
     cia_timer_update_oneshot_pipe(timer);
 
     if ((control & CIA_CONTROL_START) == 0) {
-        timer->start_delay = 0;
-        goto apply_oneshot_write;
+        /* A CPU write cleared START. The 6526 still counts on the write cycle;
+         * the stop takes effect the following Phi2. */
+        if (timer->stop_pending) {
+            timer->stop_pending = false;
+        } else {
+            timer->start_delay = 0;
+            goto apply_oneshot_write;
+        }
     }
 
     if (timer->start_delay > 0u) {
@@ -749,6 +755,8 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_a.start_delay = 0;
             }
+            /* Clearing START on a running timer takes effect one Phi2 late. */
+            c->timer_a.stop_pending = was_running && ((value & CIA_CONTROL_START) == 0);
             /* Defer oneshot pipeline update until after this cycle's timer tick. */
             c->timer_a.oneshot_write_value = (value & CIA_CONTROL_ONESHOT) != 0;
             c->timer_a.oneshot_write_pending = true;
@@ -769,6 +777,8 @@ void cia_write_register(cia *c, uint16_t addr, uint8_t value) {
             if ((value & CIA_CONTROL_START) == 0) {
                 c->timer_b.start_delay = 0;
             }
+            /* Clearing START on a running timer takes effect one Phi2 late. */
+            c->timer_b.stop_pending = was_running && ((value & CIA_CONTROL_START) == 0);
             c->timer_b.oneshot_write_value = (value & CIA_CONTROL_ONESHOT) != 0;
             c->timer_b.oneshot_write_pending = true;
             return;

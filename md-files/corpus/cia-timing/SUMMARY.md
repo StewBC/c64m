@@ -29,10 +29,12 @@ Lorenz-cia uses **official** cycle limits from VICE `c64-testlist.in` (e.g.
 - After Lorenz timer pipeline (2-cycle start delay, underflow-on-1 with skip-after-reload):
   **oneshot** (old+new) and **icr01new** PASS; several new-CIA irqdelay + CIA2 cases PASS.
 - After 6526 register-write + deferred force-load timing (LOW write = latch only;
-  force-load reload lands on the second Phi2 and suppresses two count clocks):
-  cia1tb123 blocks 1-12 correct, `irqdelay-cia1`(+oneshot) PASS → **13/31**.
-- Still FAIL: `cia1tb123`/`cia2tb123` tail blocks 13-18 (delayed START-clear effect),
-  `icr01` (old), `imr`, `flipos`, old irqdelay matrix, `reload0`, `dd0dtest`.
+  force-load reload lands on the second Phi2 and suppresses two count clocks) plus
+  the one-Phi2-late START-clear (`stop_pending`): cia1tb123 blocks 1-16 correct,
+  `irqdelay-cia1`(+oneshot) PASS → **13/31**.
+- Still FAIL: `cia1tb123`/`cia2tb123` blocks 17-18 (STOP write lands one Phi2 early
+  for `stx`-first-opcode — CPU deferred-write phase, not CIA), `icr01` (old),
+  `imr`, `flipos`, old irqdelay matrix, `reload0`, `dd0dtest`.
 
 ## How to reproduce
 

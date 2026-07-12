@@ -42,7 +42,7 @@ Implemented in `src/machine/cia.c` / `cia.h` (Lorenz software model–oriented):
 4. **Oneshot effective bit:** delayed (set delay 1, clear delay 2); CRA oneshot **write applied after** this cycle’s timer tick so same-cycle set does not affect that underflow (FLIPOS intent).  
 5. **Timer register writes:** a LOW-byte write updates the **latch only**; a stopped counter is loaded only by a HIGH-byte write (or force-load / underflow). This is the 6526 rule (previously both bytes reloaded → cia1tb123 block 4 read the latch instead of the running counter).  
 6. **Force-load:** deferred via `load_delay` — reload lands on the **second Phi2** after the CR write, and suppresses counting on that Phi2 **and** the following one (`load_hold`). Kept separate from the underflow `skip_tick` so a cascade / CNT-gated timer clears the suppression on schedule instead of eating its next real count. This greened cia1tb123 blocks 4-12 (`00 10`, `00 11`, `01 11` write phases).  
-7. **START clear still applies immediately.** Full “all CRA bits after tick” was tried and **regressed** oneshot/icr01new — do not reintroduce without a plan. The remaining cia1tb123 blocks (13-18, `01 10` / `01 00`) need a **targeted** delayed effect: a CR write that clears START must let the timer count for the write cycle, with the stop taking effect the next Phi2 (do **not** generalise to all CR bits).
+7. **START clear takes effect one Phi2 late (`stop_pending`).** A CPU CR write that clears START on a running timer still counts on the write cycle; the stop lands the next Phi2. This is a **targeted** delay on the START bit only — the full “all CR bits after tick” was tried before and **regressed** oneshot/icr01new; do **not** generalise. Greened cia1tb123 blocks 13-16 (`01 10`, `01 00 cycle 1`).
 
 ### VICE baselines (green oracle)
 | Suite | Result |
@@ -64,7 +64,7 @@ Implemented in `src/machine/cia.c` / `cia.h` (Lorenz software model–oriented):
 **Typically FAIL:**
 | Cluster | Cases | Likely need |
 |---------|--------|-------------|
-| CRB write races (tail) | `cia1tb123`, `cia2tb123` | Blocks 1-12 pass; blocks 13-18 (`01 10` / `01 00`) need the delayed START-clear effect on counting (targeted, not all-CR-bits) |
+| CRB write races (tail) | `cia1tb123`, `cia2tb123` | Blocks 1-16 pass; blocks 17-18 (`01 00 cycle 2/3`) freeze the counter one count high — the STOP write **lands one Phi2 early** for that instruction pattern (stx as the first opcode). Block 16 (same CIA model) is correct, so this is CPU deferred-write **phase** alignment, not the CIA stop count (a stop-delay of 2 breaks block 16). |
 | FLIPOS / IMR PRGs | `flipos`, `imr` | Tighter write-vs-uf / IMR enable timing (partial model only) |
 | Old CIA irqdelay | most `*old*` | Explicit 6526 vs 8521 delay policy |
 | Other | `reload0*`, `dd0dtest`, `icr01` (old) | Reload-0 races; ICR read-during-set old variant |
@@ -107,15 +107,18 @@ Default VICE binary path in scripts:
 
 ## What to do next (recommended order)
 
-1. **Finish cia1tb123 (blocks 13-18).** These are `01 10` (force-load while running,
-   which also clears START) and `01 00` (plain STOP while running). Block 13 was
-   traced: c64m's counter is one count **behind** the sampled value because the CR
-   write clears START on the write cycle, stopping the count too early. Real HW
-   counts for the write cycle and stops the next Phi2. Model this as a **targeted**
-   one-cycle delay on the START-bit's effect on counting only — **not** a global
-   “apply all CR bits after tick” (that regressed oneshot/icr01new before). Verify
-   `oneshot`/`icr01new`/`flipos` after each attempt.  
-2. **Do not** blindly re-add full CRA/CRB “clock then apply” global delay.  
+1. **cia1tb123 blocks 17-18 (CPU write-phase, not CIA).** Blocks 1-16 pass. In
+   17/18 (`stx $dc0f` as the *first* opcode, plain STOP) the counter freezes one
+   count high: the STOP write lands one Phi2 earlier than for block 16 (where a
+   `nop` precedes the `stx`). The CIA-side `stop_pending` delay is already correct
+   (block 16 freezes exactly right, and a 2-cycle stop delay breaks block 16), so
+   the residual is the c6510 deferred-write micro-model landing the CR write one
+   Phi2 early for the no-preceding-instruction pattern. Investigate
+   `c64_apply_pending_cpu_events_at_elapsed` / the write event `cycle_offset` for
+   `stx abs` vs `nop; stx abs`. Confirm against instrumented VICE before changing
+   CPU write timing (it is shared with every I/O write).  
+2. **Do not** re-add a global “clock then apply all CR bits” delay (regressed
+   oneshot/icr01new).  
 3. Then `flipos` (fails old+new) and `imr`: FLIPOS set/clear at t-2/t-1/t vs the
    oneshot-effective pipeline; drive from Lorenz tables as unit tests first.  
 4. Only then consider **chip model** (old vs new interrupt delay) for the old

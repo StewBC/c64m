@@ -30,6 +30,9 @@ typedef struct cia_timer {
      * reload suppresses counting on its Phi2 and the following one. */
     uint8_t load_delay;
     uint8_t load_hold;
+    /* A CPU write that clears START while running takes effect on counting one
+     * Phi2 late: the timer counts once more on the write cycle, then stops. */
+    bool stop_pending;
     /* Effective oneshot for underflow (delayed vs CRA bit 3 / FLIPOS). */
     bool oneshot_effective;
     bool oneshot_pending;

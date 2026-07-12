@@ -49,12 +49,14 @@
   write (or force-load/underflow), matching the 6526. The force-load strobe is
   now deferred: the reload becomes visible on the second Phi2 after the CR write
   and suppresses counting on that Phi2 and the following one (VICE `CIAT_LOAD`
-  behaviour). This greened Lorenz `cia1tb123` blocks 1-12 (write phases through
-  the force-load-while-running races) and lifted the priority matrix to
-  **13/31 PASS**. Remaining `cia1tb123` blocks (13-18) need the delayed
-  control-write effect on counting (a CR write that clears START keeps counting
-  for the write cycle); this is the flagged regression-prone area and is
-  deferred. See `md-files/corpus/cia-timing/HANDOFF.md`.
+  behaviour). A CPU CR write that clears START on a running timer also takes
+  effect one Phi2 late (`stop_pending`): the timer counts on the write cycle and
+  stops next Phi2 — a targeted delay on the START bit only, **not** all CR bits.
+  Together these greened Lorenz `cia1tb123` blocks 1-16 and lifted the priority
+  matrix to **13/31 PASS**. Remaining `cia1tb123` blocks (17-18) freeze the
+  counter one count high because the STOP write lands one Phi2 early for the
+  `stx`-as-first-opcode pattern — a c6510 deferred-write **phase** issue, not the
+  CIA stop model. See `md-files/corpus/cia-timing/HANDOFF.md`.
 - **Option-2 Phase 4 + corpus + timer pipeline:** see  
   `md-files/corpus/cia-timing/HANDOFF.md` for full status. CPU IRQ/NMI sample
   `cia_interrupt_line`; VICE/c64m runners and Lorenz-oriented timer/IR model
@@ -80,7 +82,8 @@
   latches only (HIGH-byte write loads a stopped counter); force-load reload is
   deferred to the second Phi2 after the write and suppresses two count clocks
   (own `load_delay`/`load_hold`, kept separate from the underflow `skip_tick`
-  so cascade/CNT-gated timers still clear it on schedule); underflow reloads
+  so cascade/CNT-gated timers still clear it on schedule); a CR write clearing
+  START on a running timer stops one Phi2 late (`stop_pending`); underflow reloads
   from latch and discards the next count clock; oneshot stop uses a delayed
   effective bit (set delay 1, clear delay 2). IR flip-flop sets when flags&mask
   and clears only on ICR read (clearing IMR does not clear IR).
