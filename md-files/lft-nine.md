@@ -215,3 +215,12 @@ c64_robocop_g64: stage-3 gap table self-check would FAIL
 ```
 
 No source change was made by this investigation.
+
+## Additional details
+
+This demo uses the "Idle Graphics" or "Ghost Byte" and "Ghost Byte Shine Through"
+technique, ie using the last byte the Vic chip can fetch graphics from (normally
+$3FFF).  But this demo uses ECM mode that moves the ghost bytes to address
+$39FF.  Also uses the horz scroll position to delay the fetch of the ghost byte
+to align the pattern of the ghost byte with the sprites.  So perfect timing is
+needed here.
