@@ -65,7 +65,7 @@ Implemented in `src/machine/cia.c` / `cia.h` (Lorenz software model–oriented):
 | Cluster | Cases | Likely need |
 |---------|--------|-------------|
 | CRB write races (tail) | `cia1tb123`, `cia2tb123` | Blocks 1-16 pass; blocks 17-18 (`01 00 cycle 2/3`) freeze the counter one count high — the STOP write **lands one Phi2 early** for that instruction pattern (stx as the first opcode). Block 16 (same CIA model) is correct, so this is CPU deferred-write **phase** alignment, not the CIA stop count (a stop-delay of 2 breaks block 16). |
-| FLIPOS / IMR PRGs | `flipos`, `imr` | Tighter write-vs-uf / IMR enable timing (partial model only) |
+| FLIPOS / IMR PRGs | `flipos`, `imr` | `flipos` **fails at block 1** ("set oneshot at underflow-1", expects 255): c64m returns 252, which is block 2's ("set at t") answer. Traced cause: the counter underflow lands ~1 Phi2 **before** the `stx $dc0e` oneshot write (the double-write `sta`/`stx` and the underflow are misaligned by one cycle), so "t-1" behaves like "t+1". This is underflow-cycle alignment vs the fixed instruction sequence — entangled with the `underflow-on-1` model and start-from-stopped timing that the passing tb123/oneshot cases depend on. Not an isolated oneshot-pipeline tweak (swapping the `oneshot_for_uf` sample vs `update_oneshot_pipe` order does **not** move it, and is unjustified without a test). Needs a cycle-stamped VICE diff of this exact block before touching the count model. |
 | Old CIA irqdelay | most `*old*` | Explicit 6526 vs 8521 delay policy |
 | Other | `reload0*`, `dd0dtest`, `icr01` (old) | Reload-0 races; ICR read-during-set old variant |
 
@@ -76,7 +76,7 @@ plus an optional per-Phi2 trace of the timer counter / CR / delay fields for a
 `TRACE_BLOCK`. This is how blocks 4 / 9 / 12 / 13 were localised. Recreate under
 `tools/` if the tail work needs it again.
 
-**OTHER (exit 10):** `irqdelay2` / `irqdelay2-new` — non-`$00`/`$FF` debugcart value; investigate before treating as pass/fail.
+**"OTHER" (exit 10) = genuine FAIL:** `irqdelay2` / `irqdelay2-new` write their *own* failure code (`ldy #10; sty $d7ff`) on a detection mismatch — 10 is not an ambiguous value, it means fail. The test measures the exact IRQ delay for five consecutive timer values (20..24 cycles) and compares against reference tables (`old 0b 0b 0c 0c 0d` / `new 0a 0b 0b 0c 0c`). c64m matches neither fully, so both variants fail. Greening needs a per-timer-value IRQ-delay match — a finer-grained version of the `irqdelay` cluster, tied to the underflow→IRQ pipeline.
 
 c64m does **not** implement `-ciamodel`; matrix `cia_model` column is documentary only.
 
