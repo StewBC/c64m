@@ -937,13 +937,26 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     g = vicii_get_border_geometry(v);
     lc = vicii_live_line_ctx(v);
-    x0 = (v->timing.cycle_in_line * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
-    x1 = ((v->timing.cycle_in_line + 1u) * (uint32_t)C64_FRAME_WIDTH) / v->timing.cycles_per_line;
-    if (x1 <= x0) {
-        x1 = x0 + 1u;
-    }
-    if (x1 > C64_FRAME_WIDTH) {
-        x1 = C64_FRAME_WIDTH;
+
+    /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle paints its
+       true 8 VIC dots, so buffer_x == VIC X-coordinate and the paint cycle for
+       every column matches hardware. Display column 0 (X=24) is drawn at the
+       first c-access cycle (15); each cycle advances X by 8. This replaces the
+       scaled cycle*width/cycles_per_line mapping, which was not dot-anchored and
+       smeared a mid-line $D016 CSEL write across the border-compare columns.
+       Cycles whose dots fall outside the 384-px crop (line start/end H-blank)
+       produce an empty span and paint nothing; every column 0..383 is still
+       painted exactly once per line (PAL cycles 12..59, NTSC 12..59). */
+    {
+        int32_t xs = (int32_t)VICII_HBORDER_LEFT_40 +
+            ((int32_t)v->timing.cycle_in_line - (int32_t)VICII_CACCESS_FIRST_CYCLE) *
+            (int32_t)VICII_CHARACTER_WIDTH;
+        int32_t xe = xs + (int32_t)VICII_CHARACTER_WIDTH;
+        if (xs < 0) xs = 0;
+        if (xe > (int32_t)C64_FRAME_WIDTH) xe = (int32_t)C64_FRAME_WIDTH;
+        if (xe < xs) xe = xs;
+        x0 = (uint32_t)xs;
+        x1 = (uint32_t)xe;
     }
 
     for (x = x0; x < x1; x++) {

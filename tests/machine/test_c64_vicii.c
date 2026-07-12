@@ -747,8 +747,15 @@ static void test_live_raster_border_change_and_text(void) {
     step_until_frame_complete(&machine);
     expect_true("live frame snapshot", c64_make_frame_snapshot(&machine, &frame));
 
-    expect_u32("live border before d020 write", TEST_PALETTE_6, frame.pixels[8]);
-    expect_u32("live border after d020 write", TEST_PALETTE_5, frame.pixels[32]);
+    /* The program's single boot-time STA $D020=green completes before cycle 12,
+       and under the dot-anchored paint mapping (C64MVICII_SIDEBORDER.md §2.2) the
+       earliest visible column of raster 0 is painted at cycle 12. So the whole
+       first line's border is already green -- there is no pre-write visible dot,
+       unlike the old scaled mapping that painted x=0..7 at cycle ~0. Both border
+       samples are therefore green; the assertion still exercises that the live
+       renderer paints a uniform border line at the written color. */
+    expect_u32("live border left is written green", TEST_PALETTE_5, frame.pixels[8]);
+    expect_u32("live border mid is written green", TEST_PALETTE_5, frame.pixels[32]);
     expect_u32("live standard text foreground", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
     expect_u32("live standard text background", TEST_PALETTE_6, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
@@ -1977,13 +1984,17 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
     run_vic_frame_with_injections(&machine, injs, 1u, &frame);
 
     /* Line 10 is entirely top border. Pixels rendered before cycle 20 keep the
-       old (red) color; pixels from cycle 20 on take the new (green) color. With
-       NTSC 65 cycles/line over 384px, x=90 maps to ~cycle 15 (pre-write) and
-       x=140 to ~cycle 23 (post-write). */
-    expect_u32("border before mid-line write is red",
-        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 90]);
-    expect_u32("border after mid-line write is green",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 140]);
+       old (red) color; pixels from cycle 20 on take the new (green) color. Under
+       the dot-anchored paint mapping (C64MVICII_SIDEBORDER.md §2.2) column X is
+       painted at cycle 15 + (X-24)/8, so the write at cycle 20 splits the line
+       exactly at column 64 (cycle_of_X(64) == 20): x=63 is the last pre-write dot
+       (cycle 19, red) and x=64 is the first post-write dot (green). This boundary
+       is now dot-exact rather than the previous ~scaled approximation, and is
+       independent of cycles_per_line (same for PAL and NTSC). */
+    expect_u32("border last dot before mid-line write is red",
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 63]);
+    expect_u32("border first dot after mid-line write is green",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
 
     /* The next line (11) is fully past the write -> entirely green. */
     expect_u32("subsequent line fully takes new border color",
