@@ -638,20 +638,43 @@ shortfall** -- almost certainly the sprite-DMA/BA stall accounting or raster-IRQ
 acceptance cycle (items 4-6): c64m spends more stolen/stalled cycles per device
 frame than real hardware, pushing the sequencer's work into the next frame.
 
+**BALOG budget measured (device vs off frame), 2026-07-13:**
+- Device frame F5850: **total exec=14887, stall=4769** (sum 19656 = 312x63 ok).
+- Off frame F5851: total exec=18556, stall=1100.
+- Per-raster in the device kernel: R23-R25 `exec=48 stall=15`, then **R26-R44
+  `exec=44-45 stall=18-19`**. Session 4 documented `stall=15` through R24-R42 as
+  the *intended* VICE-matching sprite contention -- so c64m now shows **~3-4 extra
+  stall cycles/line through R26-R44** (~600+ extra stolen cycles over the device
+  kernel). That is exactly the kind of over-theft that would push the demo's
+  per-frame work (device kernel + colour splits + `$8600` sequencer) past the
+  frame budget, so it completes only every other frame.
+
+**LEADING HYPOTHESIS:** c64m **over-stalls the CPU in the six-write-kernel region
+(R26-R44)** vs hardware/VICE -- a sprite-DMA/BA cycle-accounting error (items 4-6).
+The demo keeps its four flanking sprites (0,2,4,6) DMA-active across the device
+via the **sprite crunch** (Session 2's original MCBASE thesis). `eba06c4` removed
+the forced-crunch model and the c64m stall in this region appears to have drifted
+from `15` to `18-19`; the crunch / MCBASE per-cycle DMA-active accounting is the
+prime suspect for the extra theft. (Verify the stall=15 baseline wasn't just a
+narrower window in Session 4 before concluding.)
+
 **Next work (final mile):**
-1. Confirm the `$CD` clear is the `$8017` memset via `$8000` (break `exec $8000`
-   / `$8017`; if they time out under banking, bracket with `$904E`/`$9B75` breaks
-   reading `$CD`).
-2. **Decisive:** `C64M_BALOG` per-raster CPU budget on a device frame -- does the
-   device kernel + sprite DMA consume so much of the frame that the R34 sequencer
-   IRQ can't run? Compare the c64m device-frame budget/IRQ timing against VICE
-   (add the same exec/stall trace to VICE's core, or compare the `$D012`/IRQ
-   acceptance rasters). VICE recipe: `VICE_VICLOG=/tmp/v.txt VICE_VICLOG_F0=5980
-   VICE_VICLOG_F1=6000 VICE_VICLOG_EXIT=1 timeout 120 src/x64sc -directory data
-   -console -sounddev dummy -warp -autostart <prg>` from
-   `/Users/swessels/Develop/svm/vice-emu-code/vice` (x64sc built, patch in place).
-3. When the cycle discrepancy is found, fix it under the existing sprite-BA/DMA
-   PAL/NTSC tests + boot/robocop suites (no regressions).
+1. **Decisive:** get VICE's per-line stall in R26-R44 (add an exec/stall trace to
+   VICE's `viciisc` core like `C64M_BALOG`, or infer from VICE's `$D012`/IRQ
+   acceptance rasters) and compare to c64m's `18-19`. If VICE is `15`, the bug is
+   confirmed as c64m over-stalling ~3-4 cyc/line in the multiplex/crunch region.
+2. Then fix the sprite-DMA/BA cycle accounting for that region (revisit the crunch
+   / per-cycle MCBASE DMA-active window) under the existing sprite-BA/DMA PAL/NTSC
+   tests + boot/robocop suites (no regressions). Success = c64m 202 writes every
+   frame and the multiplex renders stably.
+3. (Lower priority) confirm the `$CD` clear is the `$8017` memset via `$8000`.
+
+VICE recipe: `VICE_VICLOG=/tmp/v.txt VICE_VICLOG_F0=5980 VICE_VICLOG_F1=6000
+VICE_VICLOG_EXIT=1 timeout 120 src/x64sc -directory data -console -sounddev dummy
+-warp -autostart <prg>` from `/Users/swessels/Develop/svm/vice-emu-code/vice`
+(x64sc built, VICE_VICLOG patch in `src/viciisc/vicii-mem.c`). c64m BALOG:
+`C64M_BALOG=/tmp/ba.txt C64M_VICLOG_F0=5850 C64M_VICLOG_F1=5853 C64M_VICLOG_EXIT=1
+./build-trace/c64m --headless --control-port PORT --pal -a --turbo=200 -p <prg>`.
 
 NOTE: control-port `break-create exec` sometimes times out on addresses in
 banked/low-RAM code that runs under IRQ banking (`$8619`, `$8606`, `$9322`, `$1C61`
