@@ -447,34 +447,50 @@ not resume the `$9B75` wait-path chase as a suspected defect. (Aligning both
 emulators on the same `$61` is still a *valid semantic anchor* for a matched
 comparison -- just not evidence of a fault by itself.)
 
-**2. Visual ground truth re-localizes the defect to the multiplexed digits.**
-Captured `get-frame` output during the device/multiplex phase (frame ~5723):
-- The **wizard** (sprites 1&3) renders correctly as a black figure.
-- The **black frame border** (sprites 5&7) renders correctly (it is black, not
-  blue). This **contradicts the Session-2 theory** that "blue-where-black" is
-  caused by missing border sprites 5/7.
-- The **nine multiplexed digits** (sprites 2,4,6) are **entirely absent**,
-  exposing the blue ghost-byte field (`b0c`) underneath -- that exposed field is
-  the "blue where it should be black".
-- Many frames render **fully black** (border + centre), i.e. a whole-frame
-  dropout on some cadence.
+**2. CRITICAL METHODOLOGY FINDING: `get-frame` under turbo returns the geometric
+debug render, NOT the live output.** Under `--turbo>=8` (`RUNTIME_TURBO_DISPLAY_
+THRESHOLD`, `runtime_thread.c`) the live per-cycle ARGB renderer is *disabled*
+(`c64_set_video_output_enabled(false)`) and frames are published via
+`c64_make_current_frame_snapshot` -- the **snapshot/debug renderer that draws
+borders geometrically (closed CSEL border)**, which **masks every sprite in the
+border region**. Because lft-nine puts the digits and the black frame in the
+opened border, the turbo/debug frame shows only the central wizard on a closed
+black border and *no digits* -- a rendering artifact, not the emulator's real
+output. **Always capture lft-nine with `--turbo<=7`** (or no turbo) so the live
+completed-frame path (`c64_copy_completed_frame`) is used.
 
-So the real open bug is: **the heavily-multiplexed digit sprites fail to display
-in the device phase, and some frames drop out entirely.** The less-multiplexed
-always-on sprites (wizard, border frame) work. This points at the sprite
-fetch/multiplex + raster-kernel timing for the digit sprites, consistent with
-the original item-5 ("late top-border sprite multiplex"), and *away* from the
-side-border-colour and border-sprite theories.
+An earlier revision of this note claimed the "nine multiplexed digits are
+entirely absent" and the border renders black; **that was the turbo/debug-render
+artifact and is retracted.** Confirmed against the user's real SDL screenshots
+and reproduced headless at `--turbo=7`.
 
-Suggested next work (supersedes the Session-4 list):
-1. In the device phase, trace why the digit sprites (2,4,6) produce no visible
-   pixels: check `$D015` enable, per-sprite DMA-active, `$D000`-`$D010` X/Y and
-   `$D017`/`$D01D` expansion across the multiplex rasters. The control port can
-   break at the sprite-register rewrite block (~raster 216 per item 5) and dump
-   `$D000-$D02E`.
-2. Characterise the whole-frame black dropout: is it a real per-frame demo
-   cadence, or a c64m frame-publication/timing artifact? Step exact single
-   frames and correlate with the `$D011`/`$D021` kernel writes.
+**Real live-render symptoms (turbo<=7, device phase ~frame 5850-6200):**
+- The digit sprites (2,4,6 multiplexed to nine) **do render** but the **multiplex
+  is unstable frame-to-frame**: in some frames the nine digits spread roughly
+  correctly around the four borders; in others they **clump into the top border**
+  (all jammed in one row), **tear**, or **duplicate** (e.g. two 8s). Up to ~12
+  distinct sprite colours appear on good frames, ~1 on bad ones.
+- The **wizard** (sprites 1&3) is sometimes rendered, sometimes **garbled or
+  gone** on the very next frame.
+- The **black frame border** (sprites 5&7) is frequently **missing** (blue field
+  extends to the display edge) -- so the Session-2 "blue-where-black = missing
+  border sprites 5/7" theory is back in play; the *debug*-render black border
+  that seemed to refute it was the geometric CSEL border, not the sprites.
+
+So the real open bug is an **unstable sprite multiplex / raster kernel**: the
+per-scanline sprite repositioning is not landing consistently, so digits pile up
+/ tear / duplicate and the border+wizard sprites drop in and out frame to frame.
+This is consistent with the original cycle-timing thesis (items 4-6), not a
+simple "sprites off" fault.
+
+Suggested next work:
+1. Capture at `--turbo<=7`. Compare two consecutive live frames' sprite register
+   writes: break at the sprite-register rewrite block (~raster 216, item 5) on
+   successive frames and dump `$D000-$D02E` + `$D015`/`$D017`/`$D01D` to see which
+   sprites get repositioned late/not at all.
+2. Correlate the good-vs-bad multiplex frames with the `$D011`/`$D021`/`$D018`
+   raster-kernel write timing (is the kernel running a different number of lines
+   on bad frames?).
 3. Only then return to the VICE write-stream diff, aligned on a semantic anchor
    (e.g. matched `$61` and intra-frame raster), not on raw frame numbers.
 
