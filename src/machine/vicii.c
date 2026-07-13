@@ -406,8 +406,9 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
 
     /* Renderer pre-latch of the three s-access data bytes, plus the per-line
        MC advance. This mirrors VICE's per-cycle sprite s-accesses collapsed to
-       line start: MC was loaded from MCBASE at cycle 58 of the previous line
-       (see vicii_step_sprite_sequencer), so an expanded sprite -- whose MCBASE
+       line start: MC was loaded from MCBASE at the display-check cycle of the
+       previous line (see vicii_step_sprite_sequencer), so an expanded sprite --
+       whose MCBASE
        is only latched every other line -- reads the same row twice. DMA
        lifetime, MCBASE and the Y-expand flip-flop are owned by the sequencer,
        not here. */
@@ -434,10 +435,10 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
 }
 
 #ifdef C64M_VIC_TRACE
-/* Oracle companion to VICE_SPRDMA.  At the hardware's cycle-58 display check,
-   record the sequencer state that decides later sprite DMA/BA slots.  This is
-   deliberately compile- and runtime-gated like C64M_VICLOG: normal builds do
-   not contain the file I/O path. */
+/* Oracle companion to VICE_SPRDMA.  At the hardware's display check
+   (Bauer cycle 58 / VICE raster_cycle 57), record the sequencer state that
+   decides later sprite DMA/BA slots.  Deliberately compile- and runtime-gated
+   like C64M_VICLOG: normal builds do not contain the file I/O path. */
 static void vicii_trace_sprite_dma(const vicii *v) {
     static FILE *trace = NULL;
     static int init = 0;
@@ -482,20 +483,23 @@ static void vicii_trace_sprite_dma(const vicii *v) {
 #endif
 
 /* Per-cycle sprite DMA/MCBASE sequencer, ported from VICE's viciisc model
-   (vicii-cycle.c) so the cycle-exact sprite crunch is reproduced. PAL cycle
-   numbers; NTSC shares the logic. The Y-expand flip-flop semantics match VICE:
-   it is set to 1 when DMA turns on, toggled at cycle 56 for expanded sprites,
-   and forced to 1 by a $D017 clear (see the crunch handler in
-   vicii_write_register). MC advances +3/line in vicii_prepare_sprite_line. */
+   (vicii-cycle.c) so the cycle-exact sprite crunch is reproduced.
+   Cycle numbers are 0-based like VICE's raster_cycle / VICII_PAL_CYCLE(n)
+   (= Bauer/doc cycle n, minus one). NTSC shares the logic. The Y-expand
+   flip-flop matches VICE: set to 1 when DMA turns on, toggled on the
+   expansion-check cycle for expanded sprites, and forced to 1 by a $D017
+   clear (see the crunch handler in vicii_write_register). MC advances +3/line
+   in vicii_prepare_sprite_line. */
 static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t  y_expand = v->registers[VICII_REG_SPR_Y_EXPAND];
     uint8_t  raster8  = (uint8_t)(v->timing.raster_line & 0xffu);
     int n;
 
-    /* Cycle 16: MCBASE update. If the expansion flip-flop is set, latch
-       MCBASE from MC and turn DMA off when MCBASE reaches 63. */
-    if (cycle == 16u) {
+    /* Bauer cycle 16 / VICE index 15: MCBASE update. If the expansion
+       flip-flop is set, latch MCBASE from MC and turn DMA off when MCBASE
+       reaches 63. */
+    if (cycle == 15u) {
         for (n = 0; n < 8; ++n) {
             if (v->sprite_y_exp_ff[n]) {
                 v->sprite_mcbase[n] = v->sprite_mc[n];
@@ -506,10 +510,10 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
         }
     }
 
-    /* Cycles 55 & 56: DMA-on check. Turn DMA on for an enabled sprite whose Y
-       matches the current raster and whose DMA is still off; reset MCBASE and
-       set the expansion flip-flop. */
-    if (cycle == 55u || cycle == 56u) {
+    /* Bauer cycles 55 & 56 / VICE indices 54 & 55: DMA-on check. Turn DMA on
+       for an enabled sprite whose Y matches the current raster and whose DMA
+       is still off; reset MCBASE and set the expansion flip-flop. */
+    if (cycle == 54u || cycle == 55u) {
         for (n = 0; n < 8; ++n) {
             uint8_t spr_y = v->registers[1 + n * 2];
             if ((enable & (uint8_t)(1u << n)) != 0u &&
@@ -522,8 +526,9 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
         }
     }
 
-    /* Cycle 56: toggle the expansion flip-flop for DMA-active expanded sprites. */
-    if (cycle == 56u) {
+    /* Bauer cycle 56 / VICE index 55: toggle the expansion flip-flop for
+       DMA-active expanded sprites (same index as the second DMA-on check). */
+    if (cycle == 55u) {
         for (n = 0; n < 8; ++n) {
             if (v->sprite_active[n] && (y_expand & (uint8_t)(1u << n)) != 0u) {
                 v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
@@ -531,8 +536,9 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
         }
     }
 
-    /* Cycle 58: load MC from MCBASE for the upcoming display row. */
-    if (cycle == 58u) {
+    /* Bauer cycle 58 / VICE index 57: load MC from MCBASE for the upcoming
+       display row. */
+    if (cycle == 57u) {
         for (n = 0; n < 8; ++n) {
             v->sprite_mc[n] = v->sprite_mcbase[n];
         }
@@ -1115,10 +1121,10 @@ static bool vicii_sprite_dma_current_line(const vicii *v, int n) {
 
     /* sprite_visible is a renderer latch made at cycle 0.  It intentionally
        survives until the next line so presentation can use the bytes already
-       fetched, but it must not keep stealing Phi2 slots after the cycle-16
-       MCBASE==63 DMA-off check.  Bus arbitration follows the live DMA flag,
-       matching VICE's sprite_dma mask; the Y-match clause covers the line on
-       which DMA turns on at cycles 55/56. */
+       fetched, but it must not keep stealing Phi2 slots after the MCBASE==63
+       DMA-off check (Bauer cycle 16 / VICE index 15).  Bus arbitration follows
+       the live DMA flag, matching VICE's sprite_dma mask; the Y-match clause
+       covers the line on which DMA turns on at the DMA-check cycles. */
     if (v->sprite_active[n]) {
         return true;
     }
@@ -1710,11 +1716,13 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
                 uint8_t b = (uint8_t)(1u << n);
                 /* A sprite whose expand bit is being cleared while its
                    expansion flip-flop is clear: force the flip-flop set, and
-                   if this store lands on the crunch cycle (PAL 15) mangle MC
-                   from MC/MCBASE exactly as the hardware does. Ported from
-                   VICE viciisc d017_store(). */
+                   if this store lands on the crunch cycle mangle MC from
+                   MC/MCBASE exactly as the hardware does. Ported from VICE
+                   viciisc d017_store(). VICE fires ChkSprCrunch on
+                   VICII_PAL_CYCLE(15) == raster_cycle 14 (0-based); the
+                   lft-nine $D017<-$00 write lands on that cycle. */
                 if (!(value & b) && !v->sprite_y_exp_ff[n]) {
-                    if (cyc == 15u) {
+                    if (cyc == 14u) {
                         uint8_t mc     = v->sprite_mc[n];
                         uint8_t mcbase = v->sprite_mcbase[n];
                         v->sprite_mc[n] = (uint8_t)((0x2au & (mcbase & mc)) |

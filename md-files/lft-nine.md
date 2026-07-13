@@ -1,16 +1,21 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 10, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 11, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest finding: jump to "### Session 10" below.** The every-other-frame
-> device-kernel failure is fixed on `main`; the current visual gap is the
-> non-black side frame. Session 10 fixes a smaller, independent sprite-arbitration
-> error: a renderer row latch incorrectly kept stealing Phi2 slots after the
-> cycle-16 sprite DMA-off event. The remaining investigation needs a
-> semantically aligned VICE/c64m `$D015/$D017` and sprite-Y trace; raw temporary
-> trace frame numbers do not share an origin.
+> **Latest finding: jump to "### Session 11" below.** Sprite crunch now works:
+> the flanking-sprite DMA lifetime matches VICE (active R9-R73, off at R74) and
+> the six-write `$D021/$D011` kernel runs stably every frame. Root cause was an
+> off-by-one against VICE's 0-based `raster_cycle` (`VICII_PAL_CYCLE(n) = n-1`):
+> the `$D017` crunch bit-magic checked Bauer cycle 15 instead of index 14, so
+> lft-nine's `$D017<-$00` at C14 never mangled MC. Session 9's "VICE has no DMA
+> at R8-R48" claim is **retracted** (wrong SPRDMA frame alignment).
+>
+> **Still open for visual 1:1:** the six-write kernel still starts ~11 lines
+> later than VICE (c64m R36 vs VICE R25) and free-sprite Y values differ
+> (animation/multiplex phase). Per-frame VIC writes ~159 vs VICE ~202. Align on
+> register sequence / sprite Y, not raw frame numbers.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -18,9 +23,9 @@ Date: 2026-07-11 (original diagnosis); updated through Session 10, 2026-07-13.
 > **Capture lft-nine at `--turbo<=7`** or the live renderer is off and `get-frame`
 > returns a misleading geometric debug frame (see Session 6).
 >
-> Earlier sessions below are kept for the full trail. Two superseded leads: the
-> "sprite crunch (MCBASE)" root-cause (Session 2, scaffolding since removed) and
-> the "$61/$9B75 wait-path" lead (Session 6, a frame-misalignment artifact).
+> Earlier sessions below are kept for the full trail. Superseded leads: the
+> "$61/$9B75 wait-path" as a defect (Session 6, frame-misalignment artifact)
+> and Session 9's "VICE has no top-region DMA" (frame-misaligned SPRDMA).
 
 > **See "## Implementation progress (2026-07-12)" below** for what has since been
 > built (side-border flip-flop, dot-anchored render mapping, idle graphics in the
@@ -1046,3 +1051,49 @@ timing. Do not compare the two trace helpers' raw frame counters: VICE's
 register logger begins counting at its first VIC store while the temporary DMA
 logger counts raster wraps from process start, so their numbers have different
 origins. Align on the `$D015/$D017` handshake and register sequence instead.
+
+### Session 11 (2026-07-13): sprite crunch bit-magic cycle + VICE 0-based sequencer
+
+**Aligned oracle (same `$D015=FF` / `$D017 $35@$R11C38` / `$D017 $00@$R12C14`
+handshake):**
+
+| | VICE (device phase) | c64m before Session 11 | c64m after |
+| --- | --- | --- | --- |
+| flanking DMA (spr 0,2,4,5) | R9-R73 (`dma` includes `35`) | R9-R29 only (21 rows) | R9-R73 |
+| DMA segs shape | 35 → 37 → 3f → ff → fd → f5 → 35 | truncated at R30 | same shape as VICE |
+| six-write kernel | every line ~R25-R45, C20 stable | mostly `$D018` only | every frame, C22 stable, starts ~R36 |
+| VIC writes/frame | ~202 | ~139 | ~159 |
+
+**Root cause:** VICE indexes sprite-sequencer events with 0-based `raster_cycle`
+where `VICII_PAL_CYCLE(n) = (n) - 1` (Bauer/doc cycle n). In particular
+`ChkSprCrunch` is on Bauer cycle 15 → **index 14**. Both emulators log the
+demo's `$D017<-$00` at **C14**; c64m previously required `cycle_in_line == 15`
+for the MC bit-magic, so crunch never fired. Session 8 had already observed that
+applying bit-magic at C14 produced theft through ~R75, then reverted it because
+Session 9's misaligned SPRDMA suggested VICE had no top-region DMA.
+
+**Fix (hardware model, not a demo special case):**
+
+1. `$D017` crunch bit-magic fires at cycle **14** (VICE `VICII_PAL_CYCLE(15)`).
+2. Align the rest of `vicii_step_sprite_sequencer` to the same 0-based indices:
+   MCBASE update 15, DMA-on 54/55, expand toggle 55, MC reload/display 57.
+3. Regression tests: crunch keeps DMA past 21 rows; off-crunch-cycle clear does not.
+
+**Session 9 correction:** when SPRDMA is taken from the same process exit as
+VICLOG (SPRDMA frames near the end of the capture, not early boot frames), VICE
+**does** keep `dma=35` through the top device region via crunch. The earlier
+"no DMA R8-R48" sample was a different demo phase / misaligned frame counter.
+
+**Still open:**
+
+- Six-write kernel entry ~11 lines late (R36 vs R25). Free-sprite Y values also
+  differ (e.g. c64m `1D/1F/23` vs VICE `12/14/17` for the non-flanking sprites)
+  so the staircase of extra DMA joins is shifted by the same ~11 lines. Flanking
+  Y=9 matches. Treat as residual multiplex/CPU-phase timing, not MCBASE lifetime.
+- Per-frame write count ~159 vs ~202 (missing ~9 six-write lines × 6 writes).
+- Settled visual black frame (sprites 5/7 + `$D021` kernel coverage) still needs
+  re-check at `--turbo<=7` once the kernel line range matches.
+
+**Next:** keep VICE as gold standard; compare multiplex Y-rewrite block timing
+(R215-R264 region) and any remaining BA over/under-count once Y sequences are
+phase-matched. Do not reintroduce forced-crunch hacks.

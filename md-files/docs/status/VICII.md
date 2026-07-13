@@ -17,15 +17,18 @@
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 - The live renderer models the horizontal border flip-flop for timed `$D016`/CSEL
-  side-border opening. The per-cycle sprite sequencer tracks MCBASE and samples
-  the live `$D017` Y-expand bit at the cycle-16/55 boundaries; sprite DMA becomes
-  active on the raster line that matches the sprite Y. The full cycle-accurate
-  sprite crunch that `samples/lft-nine.prg` relies on is not yet reproduced (the
-  timed raster kernel's entry still diverges from VICE; see `md-files/lft-nine.md`).
+  side-border opening. The per-cycle sprite sequencer tracks MCBASE and the live
+  `$D017` Y-expand bit at VICE's 0-based cycle indices (MCBASE update 15, DMA-on
+  54/55, expand toggle 55, display reload 57). Sprite DMA becomes active on the
+  raster line that matches the sprite Y. The `$D017` Y-expand clear crunch
+  bit-magic fires on cycle 14 (`VICII_PAL_CYCLE(15)`), so mid-line expand toggles
+  used by `samples/lft-nine.prg` keep flanking sprites DMA-active past 21 rows
+  (matches VICE R9-R73). The timed six-write kernel still starts a few lines
+  later than VICE; see `md-files/lft-nine.md` Session 11.
 - Sprite bus arbitration follows the live DMA state, not the renderer's
-  per-line `sprite_visible` data latch. In particular, after the cycle-16
-  MCBASE==63 DMA-off check, later sprite slots on that line no longer steal
-  Phi2 cycles. The renderer retains its data latch independently.
+  per-line `sprite_visible` data latch. After the MCBASE==63 DMA-off check,
+  later sprite slots on that line no longer steal Phi2 cycles. The renderer
+  retains its data latch independently.
 
 ## Turbo scales back rendering (capture trap)
 

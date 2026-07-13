@@ -1596,8 +1596,9 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
 }
 
 /* The renderer latches a complete sprite row at cycle 0, but that latch must
-   not extend bus DMA past the cycle-16 MCBASE==63 shutdown. Sprite 0's slots
-   are late in the line, so this exercises the exact stale-latch seam. */
+   not extend bus DMA past the MCBASE==63 shutdown (Bauer cycle 16 / index 15).
+   Sprite 0's slots are late in the line, so this exercises the exact
+   stale-latch seam. */
 static void test_sprite_dma_off_stops_late_phi2_slots(void) {
     vicii v;
     char error[256];
@@ -1613,12 +1614,94 @@ static void test_sprite_dma_off_stops_late_phi2_slots(void) {
     v.sprite_mc[0] = 60u;
     v.sprite_mcbase[0] = 60u;
 
-    /* Cycle 0 advances MC to 63; cycle 16 drops DMA. Processing through
-       cycle 57 reaches sprite 0's late pointer/data slot. */
+    /* Cycle 0 advances MC to 63; MCBASE update at index 15 drops DMA.
+       Processing through cycle 57 reaches sprite 0's late pointer/data slot. */
     (void)advance_vicii(&v, 0u, 58u);
     expect_true("sprite dma off at MCBASE 63", !v.sprite_active[0]);
     expect_u8("dma-off sprite0 has no Phi2 slot", VICII_BUS_ACCESS_NONE,
         (uint8_t)vicii_bus_access(&v));
+}
+
+/* lft-nine-style sprite crunch: a mid-line $D017 clear on VICE's crunch
+   cycle (raster_cycle 14 == VICII_PAL_CYCLE(15)) while the expansion
+   flip-flop is clear corrupts MC so DMA never reaches MCBASE==63.
+   At cycle 14, prepare_sprite_line has already advanced MC by +3 for the
+   line while MCBASE still holds the previous latch — the bit-magic mixes
+   those two values into a residue class that +3 never takes to 63. */
+static void test_sprite_crunch_keeps_dma_past_21_rows(void) {
+    vicii v;
+    char error[256];
+    uint32_t line;
+    uint64_t abs = 0u;
+    uint8_t mc_after;
+    const uint8_t mcbase = 9u;
+    const uint8_t mc = 12u; /* mcbase + 3 after this line's fetch advance */
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_write_register(&v, 0xd011, 0x03u); /* DEN=0: no bad lines */
+    v.timing.raster_line = 12u;
+    vicii_write_register(&v, 0xd015, 0x01u); /* sprite 0 */
+    vicii_write_register(&v, 0xd001, 9u);    /* Y no longer matches */
+    vicii_write_register(&v, 0xd017, 0x01u); /* expand currently on */
+
+    /* Mid-display state after a few normal rows, with exp_flop clear as after
+       the expand-toggle cycle — the condition the hardware crunch requires. */
+    v.sprite_active[0] = true;
+    v.sprite_y_exp_ff[0] = false;
+    v.sprite_mcbase[0] = mcbase;
+    v.sprite_mc[0] = mc;
+    v.timing.cycle_in_line = 14u;
+
+    vicii_write_register(&v, 0xd017, 0x00u); /* clear expand on crunch cycle */
+    mc_after = v.sprite_mc[0];
+
+    expect_true("exp flop forced set by crunch clear", v.sprite_y_exp_ff[0]);
+    expect_u8("crunch MC formula",
+        (uint8_t)((0x2au & (mcbase & mc)) | (0x15u & (mcbase | mc))),
+        mc_after);
+    expect_true("crunched MC not congruent 0 mod 3", (mc_after % 3u) != 0u);
+
+    /* Ordinary +3 counting from MCBASE=9 hits 63 in ~18 rows. After crunch
+       the counter walks a longer path (and only hits 63 after a 6-bit wrap);
+       require DMA still active past the normal lifetime. */
+    abs = 14u;
+    for (line = 0u; line < 25u; ++line) {
+        abs = advance_vicii(&v, abs, 63u);
+    }
+    expect_true("crunch keeps dma past 21 rows", v.sprite_active[0]);
+    expect_true("mcbase never settled at 63", v.sprite_mcbase[0] != 63u);
+}
+
+/* Control: without the cycle-14 bit-magic, the same mid-display clear only
+   forces the expand flip-flop and MCBASE still reaches 63. */
+static void test_sprite_d017_clear_off_crunch_cycle_ends_normally(void) {
+    vicii v;
+    char error[256];
+    uint32_t line;
+    uint64_t abs;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_write_register(&v, 0xd011, 0x03u);
+    v.timing.raster_line = 12u;
+    vicii_write_register(&v, 0xd015, 0x01u);
+    vicii_write_register(&v, 0xd001, 9u);
+    vicii_write_register(&v, 0xd017, 0x01u);
+
+    v.sprite_active[0] = true;
+    v.sprite_y_exp_ff[0] = false;
+    v.sprite_mcbase[0] = 9u;
+    v.sprite_mc[0] = 12u;
+    v.timing.cycle_in_line = 20u; /* not the crunch cycle */
+
+    vicii_write_register(&v, 0xd017, 0x00u);
+    expect_true("exp flop forced even off crunch cycle", v.sprite_y_exp_ff[0]);
+    expect_u8("MC unchanged off crunch cycle", 12u, v.sprite_mc[0]);
+
+    abs = 20u;
+    for (line = 0u; line < 25u; ++line) {
+        abs = advance_vicii(&v, abs, 63u);
+    }
+    expect_true("dma ends without bit-magic", !v.sprite_active[0]);
 }
 
 /* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */
@@ -2443,6 +2526,8 @@ int main(void) {
     test_sprite5_ba_window_within_line();
     test_vicii_bus_schedule_reports_c_and_sprite_accesses();
     test_sprite_dma_off_stops_late_phi2_slots();
+    test_sprite_crunch_keeps_dma_past_21_rows();
+    test_sprite_d017_clear_off_crunch_cycle_ends_normally();
     test_sprites567_adjacent_ba_union();
     test_6sprite_ba_early_and_late_windows();
     test_ntsc_sprites012_late_ba_window();
