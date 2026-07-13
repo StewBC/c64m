@@ -23,6 +23,21 @@
   sprite crunch that `samples/lft-nine.prg` relies on is not yet reproduced (the
   timed raster kernel's entry still diverges from VICE; see `md-files/lft-nine.md`).
 
+## Turbo scales back rendering (capture trap)
+
+At `--turbo>=8` (`RUNTIME_TURBO_DISPLAY_THRESHOLD` in `runtime_thread.c`) the
+runtime **disables the live per-cycle ARGB renderer**
+(`c64_set_video_output_enabled(false)`) and publishes frames via
+`c64_make_current_frame_snapshot` -- the geometric/debug renderer, which draws a
+**closed CSEL border and masks every sprite in the border region**. So a
+control-port `get-frame` (or the on-screen display) under turbo>=8 is NOT the
+real live output: anything drawn in an opened border (side-border demos, sprites
+in the border) disappears and the border looks solid. **To inspect real VIC
+output via `get-frame`, run at `--turbo<=7` or no turbo** (the live
+`c64_copy_completed_frame` path). A settled paused `get-frame` also uses the
+geometric snapshot. This trap cost a full lft-nine debugging pass; see
+`md-files/lft-nine.md` Session 6.
+
 ## Important invariants
 
 - The machine owns the monotonic master cycle.
