@@ -121,9 +121,6 @@ static void c1541_bus_write(void *user, uint16_t addr, uint8_t value) {
     if (addr >= 0x1800u && addr < 0x2000u) {
         uint8_t reg = (uint8_t)(addr & 0x0Fu);
         via6522_write(&drive->via1, reg, value);
-        /* IEC visibility is delayed by the 2-stage pipeline in advance_one_cycle
-           (not applied here) so multi-cycle STA $1800 still publishes on the
-           write cycle's pipeline sample, two host cycles later. */
         return;
     }
     /* ROM and unmapped: ignore */
@@ -203,9 +200,11 @@ static void c1541_update_iec_bus(c1541 *drive) {
     c64_pull = c64_get_iec_c64_pull(drive->c64);
     atn_from_c64 = (c64_pull & C64_IEC_ATN) != 0;
 
-    /* Peers (C64 / other drives) see pipelined outputs — dual-bit sample windows. */
+    /* Peers (C64 / other drives) see the drive's current VIA output. VICE catches
+       the drive up to the exact C64 clock on each CIA2 IEC access and resolves the
+       bus with no fixed pipeline delay; mirror that by exposing immediate output. */
     drive_pull_ext = c1541_iec_pull_from_orb(
-        drive->iec_out_ddrb, drive->iec_out_orb, atn_from_c64);
+        drive->via1.ddrb, drive->via1.orb, atn_from_c64);
     c64_set_iec_drive_pull(drive->c64, drive->device_number, drive_pull_ext);
 
     /* Local $1800 sense uses immediate VIA ORB/DDRB for this drive's contribution.
@@ -653,12 +652,6 @@ void c1541_reset(c1541 *drive) {
     c6510_reset(&drive->cpu);
     drive->cpu_cycles_remaining = 0;
     drive->via2_t1_pb7_last = drive->via2.t1_pb7_state;
-    drive->iec_out_orb = drive->via1.orb;
-    drive->iec_out_ddrb = drive->via1.ddrb;
-    drive->iec_pipe_orb[0] = drive->via1.orb;
-    drive->iec_pipe_orb[1] = drive->via1.orb;
-    drive->iec_pipe_ddrb[0] = drive->via1.ddrb;
-    drive->iec_pipe_ddrb[1] = drive->via1.ddrb;
 }
 
 /* ------------------------------------------------------------------ */
@@ -795,10 +788,6 @@ void c1541_advance_one_cycle(c1541 *drive) {
             (drive->c64->config.emulate_1541 != 0 && drive->c64->config.media_1541 != 0) ? 1 : 0;
     }
 
-    /* 0. Publish pipeline head as bus-visible IEC outputs for this cycle. */
-    drive->iec_out_orb = drive->iec_pipe_orb[0];
-    drive->iec_out_ddrb = drive->iec_pipe_ddrb[0];
-
     /* 1. Step VIAs (may set IFR flags before CPU samples them). */
     via6522_step(&drive->via1);
     via6522_step(&drive->via2);
@@ -823,13 +812,6 @@ void c1541_advance_one_cycle(c1541 *drive) {
         drive->media.so_pulse = 0;
         c6510_set_overflow(&drive->cpu);
     }
-
-    /* 6. Sample post-CPU VIA ORB/DDRB into the 2-stage IEC pipeline.
-       Visible in two host cycles; intermediate bitbang edges are preserved. */
-    drive->iec_pipe_orb[0] = drive->iec_pipe_orb[1];
-    drive->iec_pipe_ddrb[0] = drive->iec_pipe_ddrb[1];
-    drive->iec_pipe_orb[1] = drive->via1.orb;
-    drive->iec_pipe_ddrb[1] = drive->via1.ddrb;
 }
 
 int c1541_debug_read_map(const c1541 *drive, uint16_t address, uint8_t *out_value) {

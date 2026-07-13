@@ -165,14 +165,53 @@ static void c64_configure_cia_tod(c64_t *machine) {
     cia_set_tod_cycles(&machine->cia2, pal_tenth, ntsc_tenth);
 }
 
+/* Advance both 1541s until their own clock has run `target_cycle` C64 cycles'
+   worth of time. The 1541 CPU is a fixed 1.000 MHz (16 MHz / 16), independent of
+   the C64's 985248 Hz PAL / 1022727 Hz NTSC Phi2, so the fixed-point accumulator
+   steps it slightly faster than PAL and slower than NTSC — the same true rate
+   VICE derives from its drivesync sync_factor. The drive is caught up to the
+   exact C64 access clock at each CIA2 IEC read/write (VICE's drive_catch_up_hook)
+   plus a per-cycle backstop, so IEC line transitions are sampled in the C64
+   clock domain. */
+static void c64_drive_sync_to(c64_t *machine, uint64_t target_cycle) {
+    uint64_t c64_hz = c64_config_clock_hz(&machine->config);
+
+    while (machine->clock.drive_synced_cycle < target_cycle) {
+        machine->clock.drive_synced_cycle++;
+        machine->clock.drive_accum += 1000000u;
+        while (machine->clock.drive_accum >= c64_hz) {
+            machine->clock.drive_accum -= c64_hz;
+            c1541_advance_one_cycle(&machine->drive8);
+            c1541_advance_one_cycle(&machine->drive9);
+        }
+    }
+}
+
+/* A CIA2 IEC read ($DD00) samples the drive's bus output at the current C64
+   clock. clock.cycle is not yet incremented for the in-progress cycle, matching
+   VICE read_ciapa's drive_catch_up_hook(maincpu_clk) ordering. */
+static void c64_drive_catch_up_at_iec_read(c64_t *machine) {
+    c64_drive_sync_to(machine, machine->clock.cycle);
+}
+
+/* A CIA2 IEC write ($DD00/$DD02) advances the drive one further cycle against the
+   OLD bus state before the new output is applied, so the drive sees the C64's new
+   IEC lines a cycle later — the one-cycle propagation delay VICE models via the
+   CIA write_offset. Without it the drive reacts to per-byte fast-loader
+   handshakes a cycle early and drifts ahead of the C64's timed samples. */
+static void c64_drive_catch_up_at_iec_write(c64_t *machine) {
+    c64_drive_sync_to(machine, machine->clock.cycle + 1u);
+}
+
 static void c64_advance_one_cycle(c64_t *machine) {
     c64_step_vic(machine);
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
-    c1541_advance_one_cycle(&machine->drive8);
-    c1541_advance_one_cycle(&machine->drive9);
     machine->clock.cycle++;
+    /* Per-cycle backstop: keep the drive current when no IEC access catches it
+       up. IEC accesses advance it precisely ahead of this point. */
+    c64_drive_sync_to(machine, machine->clock.cycle);
 }
 
 static void c64_advance_devices_to(c64_t *machine, uint64_t target_cycle) {
@@ -1130,29 +1169,12 @@ static void c64_step_micro_cycle(c64_t *machine) {
 /*
  * Host BA/AEC stall handling for the 1541.
  *
- * Real hardware: the drive never freezes for C64 BA. Dual-bit ILOAD receivers
- * (e.g. Robocop FAST → $0A08) avoid sampling across BA via $D012 waits; when a
- * residual BA still hits mid-window we must hold the drive bitbang or IEC races.
- *
- * Only freeze the 1541 while the host PC is in the custom ILOAD dual-bit band
- * ($0A00–$0BFF). Everywhere else (raster effects, stage-3 GCR measure, stock
- * code) the drive keeps running. Do not fudge CPU-visible $D012 — that breaks
- * raster-exact titles (DK arcade venetian reveal).
+ * The 6510 is held by BA/AEC, but the drive is a fully independent machine and
+ * keeps running (its media, CPU and VIAs advance via the normal per-cycle
+ * backstop / IEC catch-up). Real hardware never freezes the drive for C64 BA;
+ * dual-bit ILOAD receivers avoid sampling across BA with their own $D012 waits.
  */
-static int c64_in_dual_bit_iload(const c64_t *machine) {
-    uint16_t pc = machine->cpu.cpu.pc;
-    return pc >= 0x0A00u && pc < 0x0C00u;
-}
-
 static void c64_step_host_ba_stall(c64_t *machine) {
-    if (machine->config.emulate_1541 && c64_in_dual_bit_iload(machine)) {
-        c64_step_vic(machine);
-        c64_step_cia1(machine);
-        c64_step_cia2(machine);
-        c64_step_sid(machine);
-        machine->clock.cycle++;
-        return;
-    }
     /* 6510 held; 1541 continues (media + drive CPU + VIAs). */
     c64_advance_one_cycle(machine);
 }
@@ -1163,6 +1185,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         machine->instruction_complete = true;
         machine->clock.cpu_cycles++;
         machine->clock.cycle++;
+        c64_drive_sync_to(machine, machine->clock.cycle);
         return true;
     }
 
@@ -1286,6 +1309,12 @@ static uint8_t c64_cpu_read(void *user, uint16_t address) {
         c64_advance_devices_to(machine, machine->cpu_trace_start_cycle + offset);
     }
 
+    /* CIA2 Port A carries the IEC input lines: catch the drive up to this cycle
+       so the read samples its bus output at the current C64 clock. */
+    if (address == 0xDD00u) {
+        c64_drive_catch_up_at_iec_read(machine);
+    }
+
     value = c64_bus_read(&machine->bus, address);
 
     if (machine->cpu_bus_mode != C64_CPU_BUS_MODE_IMMEDIATE) {
@@ -1314,6 +1343,10 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_DEFER_WRITES) {
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
         return;
+    }
+
+    if (address == 0xDD00u || address == 0xDD02u) {
+        c64_drive_catch_up_at_iec_write(machine);
     }
 
     c64_bus_write(&machine->bus, address, value);

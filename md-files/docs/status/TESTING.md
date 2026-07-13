@@ -5,9 +5,13 @@
 - SID: 63 tests in `tests/machine/test_sid.c` covering registers, voice behavior, sync/ring/combined waveform behavior, ADSR, exponential ADSR shape, mixer/filter/routing, filter cutoff LUT range, filter regression, output conditioning, output HF rolloff, audio-flow smoke, and per-standard rate tables (PAL bit-identical lock, NTSC clock-scaling, envelope absolute-time preservation).
 - 1541 media (M0–M8): `test_c1541_gcr`, `test_g64`, `test_c1541_media`,
   `test_c64_real_1541_load` (intercept LOAD; media D64 LOAD/SAVE; G64 first-file
-  LOAD), and `test_c64_robocop_g64` (Robocop multi-stage: LOAD1 prefix, stage-3
-  equal gap table, no BRK in loader RAM). Matrix: `c64m1541media.md` § M7.
+  LOAD), and the timed dual-bit fast-loader regressions
+  `probe_c64_arkanoid_g64` (V-MAX, both PAL dumps: `$9400` + `$5F50` byte-identical
+  to VICE) and `test_c64_robocop_g64` (NTSC: LOAD1 `$8000` byte-identical to VICE).
+  See `md-files/C64mG64-fix.md`; matrix: `c64m1541media.md` § M7.
   Hardware tab includes a **1541** section (motor/track/sync/media flags).
+  Known unrelated failure: `test_c1541_media` `test_stepper_and_head_stop`
+  (pre-existing; steps head without valid tracks).
 - Runtime audio scheduler: tests verify sample-count accounting and absence of batch-sized identical-sample SID runs.
 - CPU: local tests cover documented CPU execution, typed bus traces (opcode,
   operand, data, dummy, RMW, stack, and vector cycles), instruction/cycle-step

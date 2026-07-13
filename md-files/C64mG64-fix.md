@@ -334,3 +334,142 @@ Capture it from VICE at the `$0190` receiver loop and c64m with the same
 event numbering.  The first differing line value or receiver bit owns the
 fix.  Do not resume with byte patches, title/PC timing branches, or another
 global delay sweep.
+
+## Investigation record — 2026-07-12 (session 2)
+
+### Status
+
+**Root-caused with high confidence; not yet fully fixed.** Baseline is unchanged
+(Robocop `test_c64_robocop_g64` still PASSES; Arkanoid probe still fails). All
+session-2 code changes are reverted and saved as a patch (see below), because the
+correct model regresses Robocop until the final drive-side defect is fixed.
+
+### New tooling (reusable)
+
+- **Headless VICE oracle.** `x64sc` runs without a display via
+  `x64sc -console -sounddev dummy -warp [-ntsc] -autostart <g64> -moncommands <f>`.
+  A `break exec <addr>` + `command 1 "save \"file\" 0 0801 fff0; quit"` captures
+  full RAM at a semantic checkpoint. Captured: Arkanoid RAM at `$9400` (PAL) and
+  Robocop RAM at `$8000` (NTSC). These are trustworthy (post-load, settled — the
+  earlier sync caveat only applied to mid-transfer captures).
+- **Fitness metric.** Diff c64m's dumped RAM against the VICE oracle. VICE inits
+  RAM to the `FF FF FF FF 00 00 00 00` power-on pattern, so unwritten regions and
+  RAM-under-I/O (`$D000-$DFFF`) diff harmlessly; restrict scoring to `$0801-$CFFF`
+  and/or the DATA/CLK bit-loss signature.
+
+### Precise characterisation of the Arkanoid fault
+
+- The receiver is a **timed 2-bit V-MAX loader** at `$0190`/`$01A0`: per byte it
+  waits for the drive (`LDA $DD00 / BPL`), acks (`LDA #$03 / STA $DD00`), then does
+  **four back-to-back `LDA $DD00` reads ~25 cycles apart**, each extracting
+  bit7(DATA)+bit6(CLK) via `ASL/PHP/ASL/ROL/PLP/ROL` into `$A4`. There is **no
+  per-bit handshake**, so exact drive<->C64 *timing* alignment is essential.
+- The dominant original corruption was DATA(PA7)/CLK(PA6) loss (XOR `0x40/0x80/0xC0`,
+  ~4800 bytes). **Root cause: the drive's 2-stage IEC output pipe** (`iec_pipe_*`
+  in `c1541.c`) delayed the drive's bus contribution ~2-3 cycles, so the C64
+  sampled stale lines. VICE has no such pipe — it catches the drive up to the exact
+  C64 clock at each CIA2 access (`iecbus.c` `drive_catch_up_hook`, `c64cia2.c`).
+- **Removing the pipe makes Arkanoid load perfectly at 1:1 drive clock**: dumped
+  RAM matches the VICE `$9400` oracle exactly over `$0801-$CFFF` (code-diff = 0),
+  and the `$5F5C` impossible branch (`AND #$01 / BMI`) is gone.
+
+### The remaining defect (blocker)
+
+- Pipe removal **regresses Robocop**, which is NTSC and needs the drive at its true
+  rate. The 1541 runs at a fixed 1.000 MHz; the C64 is 985248 Hz (PAL) / 1022727 Hz
+  (NTSC). c64m steps the drive 1:1 with the C64, which is ~1.5% slow for PAL and
+  ~2.2% fast for NTSC. VICE runs the drive at the true rate
+  (`drivesync.c`: `sync_factor = floor(65536 * 1e6 / c64_hz)`).
+- Implementing the true fractional rate (matches VICE exactly) plus VICE-style
+  per-access catch-up **fixes the drive rate but exposes a deeper defect**: the
+  correct rate **corrupts Arkanoid's payload** — every 3rd byte, the last 2-bit
+  pair (result bits 0,1, XOR `1/2/3`) reads the lines *asserted one sample too
+  long*. This is the "IEC cross-clock scheduling defect" the prior record predicted.
+- **It is a drive-output-*waveform* timing discrepancy vs VICE, not a C64-side
+  sampling bug.** Proof: everything drive-side (CPU, VIA, media) is drive-cycle
+  indexed and therefore *identical* between the 1:1 and fractional runs; only the
+  C64's sample instants move (25.0 vs ~25.4 drive-cycles per read). Since 1:1 loads
+  correctly, c64m's drive output is right *at the 1:1 sample points* but wrong at
+  the shifted fractional points, whereas VICE-fractional (same rate, same 25-cycle
+  receiver) loads correctly. So c64m's drive holds/transitions each transmitted bit
+  at slightly wrong *drive-cycles* vs VICE; 1:1 masks it by exact alignment.
+- Sweeping read/write sub-cycle catch-up offsets (half-cycle resolution added) and
+  full VICE-style catch-up were tried: they move which bytes fail but never fix
+  Arkanoid under the correct rate, and no fixed integer/half latency satisfies both
+  titles at once (Robocop's handshake wants one latency, Arkanoid's timed reads
+  want another). This confirms the fault is the drive waveform, not the C64 latency.
+
+### Required next step to resume
+
+A **same-rate, drive-cycle-synchronised VICE drive trace** — for each 1541 VIA1 PB
+(IEC output) transition during the Arkanoid transfer, the drive PC and drive-cycle
+index — compared against the identical c64m trace. The first drive-cycle where the
+IEC output transition differs owns the fix (a drive-side timing constant: 6502
+sub-cycle write phase, VIA PB output latch timing, or a `c1541_media` reference-tick
+constant vs VICE `rotation.c`). The blocker is obtaining this: VICE's GTK3 monitor
+could not reliably log per-cycle drive state here, and the local VICE source
+(`/private/tmp/vice-src/vice`) is not configured/built. Building or source-patching
+`x64sc` to log VIA1 output per drive cycle is the concrete unblock.
+
+Do **not** resume with: a 1:1-for-PAL / fractional-for-NTSC split (a disguised
+per-title hack — PAL 1:1 is a known ~1.5% wrong rate), byte patches, PC/title
+branches, or another blind global delay sweep.
+
+### Session-2 change set (saved, reverted from tree)
+
+Patch: `/private/tmp/g64fix/wip_g64_investigation.patch`. Contents: remove the
+2-stage IEC output pipe (`c1541.c`); fractional 1541 clock + per-access catch-up
+with half-cycle resolution (`c64.c`/`c64.h`, `DRIVE_FRACTIONAL`,
+`READ_HALF_OFFSET`/`WRITE_HALF_OFFSET`); remove the `$0A00-$0BFF` BA-freeze hack;
+probe/test RAM dumps for the fitness metric. Oracle captures and metric scripts are
+under `/private/tmp/g64fix/`.
+
+## Resolution — 2026-07-12 (session 3)
+
+**SOLVED.** Both reference images load to game with no title-specific behaviour.
+Arkanoid (both PAL dumps) loads byte-identical to VICE at the `$9400` handoff;
+Robocop LOAD1 decrypts a byte-identical VICE `$8000` image. Both are passing
+regression tests, and a real `./build/c64m --video NTSC -a -d 8=...` run loads
+each all the way into the game.
+
+### Root cause (three coupled defects, all now fixed)
+
+1. **Stale drive→C64 IEC sampling.** The 1541's bus-visible output went through a
+   2-stage settle pipeline (`iec_pipe_*` in `c1541.c`), so the C64 sampled the
+   drive's DATA/CLK lines ~2-3 cycles late. This was the dominant Arkanoid
+   corruption (top-two-bit loss on the timed dual-bit samples). VICE has no such
+   pipe — it resolves the bus at the exact access clock. **Fix:** the drive's
+   contribution is now its current VIA1 output; the pipe is removed.
+2. **Wrong drive clock rate.** The 1541 was stepped 1:1 with the C64. The real
+   drive CPU is a fixed 1.000 MHz, independent of the 985248 Hz PAL / 1022727 Hz
+   NTSC C64, so 1:1 is ~1.5% slow on PAL and ~2.2% fast on NTSC. **Fix:** a
+   fixed-point accumulator runs the drive at its true rate (matching VICE
+   `drivesync.c` `sync_factor`), selected per video standard.
+3. **Wrong drive↔C64 IEC latency.** With the correct rate, the drive drifted
+   *ahead* of the C64's timed reads because it saw each per-byte fast-loader
+   handshake a cycle early (c64m's C64→drive latency was 0; VICE's is ~1 cycle
+   via the CIA `write_offset`). **Fix:** VICE-style per-access catch-up — at a
+   CIA2 IEC read the drive is advanced to the current C64 cycle; at a write it is
+   advanced one further cycle against the *old* bus state before the new value is
+   applied. The `$0A00-$0BFF` BA-freeze hack and the drive-PC media-alignment
+   shortcuts are gone; the drive never freezes for C64 BA.
+
+### How it was pinned down (reusable method)
+
+Patched a local VICE 3.10 build to log every CIA2 `$DD00` read (value + C64 PC +
+1541 PC) under env `VICE_DD00LOG`, and added the identical log to c64m. Filtering
+to the fast-loader's four timed sampler reads per byte and comparing the value
+sequences gave an exact divergence: Arkanoid diverged at byte 63, sub-read 3,
+where the 1541 (drive PC `$06D3` vs VICE `$06CC`) had already released the lines
+one sample early. Calibrating the read/write catch-up (read = current cycle,
+write = +1 cycle) made **all 259804** Arkanoid sampler reads and the first ~106
+Robocop sampler bytes match VICE. Both traces + oracle captures live under
+`/private/tmp/g64fix/`; the VICE log patch was reverted after use.
+
+### Regression tests
+
+- `probe_c64_arkanoid_g64` (and `... alt`): real KERNAL/1541/G64 load to `$9400`,
+  asserts the VICE-captured `$9400` handoff and `$5F50` receiver code per image
+  (the smoking-gun byte `$5F64 = $F0 BEQ`, previously `$30 BMI`).
+- `test_c64_robocop_g64`: real KERNAL FAST + LOAD1, asserts the VICE-captured
+  `$8000..$803F` decrypt image.

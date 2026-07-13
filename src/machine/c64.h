@@ -29,6 +29,16 @@ typedef struct c64_clock {
     uint64_t cpu_cycles;
     uint64_t vic_cycles;
     uint64_t cia_cycles;
+    /* Fractional 1541 clock accumulator. The 1541 runs at a fixed 1.000 MHz
+       (16 MHz / 16), independent of the C64's 985248 Hz PAL / 1022727 Hz NTSC
+       Phi2. Each C64 cycle adds 1e6 and every full c64_hz worth steps the drive
+       once, so the drive runs faster than PAL and slower than NTSC, matching VICE. */
+    uint64_t drive_accum;
+    /* Number of C64 cycles' worth of drive credit already consumed. The drive is
+       lazily advanced to the current cycle at each CIA2 IEC access (VICE's
+       drive_catch_up_hook) and by a per-cycle backstop, so an IEC read/write
+       samples the drive exactly at the access clock. */
+    uint64_t drive_synced_cycle;
 } c64_clock;
 
 typedef enum c64_cpu_bus_event_kind {

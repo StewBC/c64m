@@ -1,8 +1,16 @@
 /*
- * Arkanoid G64 Phase-1 checkpoint probe.
+ * Arkanoid (Imagine 1988) G64 load regression.
  *
- * Exercises the real 1541/G64 path through Arkanoid's V-MAX loader without
- * title-specific drive behavior.
+ * Drives the real KERNAL / 1541 ROM / G64 media / IEC path with no
+ * title-specific behaviour: PAL C64, true 1541 + GCR media, the exact PETSCII
+ * LOAD "*",8,1 in the keyboard buffer. Arkanoid's V-MAX bootstrap then loads
+ * "F" and runs its timed dual-bit fast loader, handing off at $9400.
+ *
+ * The loaded payload is asserted byte-for-byte against a VICE 3.10 true-drive
+ * capture at the $9400 handoff (the same image on real-drive VICE). In
+ * particular $5F5C..$5F6F is the receiver-installed IRQ code whose control-flow
+ * bytes were corrupted before the IEC timing model matched VICE (e.g. $5F64 read
+ * $30 BMI — impossible after AND #$01 — instead of $F0 BEQ).
  */
 #include "c64.h"
 #include "c64_rom.h"
@@ -14,10 +22,6 @@
 #ifndef C64M_SOURCE_DIR
 #define C64M_SOURCE_DIR "."
 #endif
-
-enum {
-    BOOTSTRAP_ENTRY = 0x0363
-};
 
 static void die(const char *message) {
     fprintf(stderr, "FAIL: %s\n", message);
@@ -95,44 +99,43 @@ static void queue_load_star(c64_t *machine) {
     machine->bus.ram[0x00c6u] = (uint8_t)sizeof(command);
 }
 
-static void print_checkpoint(const char *id, const c64_t *m) {
-    const CPU *cpu = &m->cpu.cpu;
-    const c1541 *d = &m->drive8;
-    printf(
-        "%s cyc=%llu c64=%04X A=%02X X=%02X Y=%02X SP=%02X P=%02X M01=%02X "
-        "st=%02X d8=%04X A=%02X X=%02X Y=%02X SP=%02X VIA2=%02X/%02X DDR=%02X/%02X "
-        "ht=%d dens=%d bit=%u sync=%d byte=%02X\n",
-        id, (unsigned long long)m->clock.cycle, cpu->pc, cpu->A, cpu->X, cpu->Y,
-        cpu->sp, cpu->flags, m->bus.ram[1], m->bus.ram[0x90], d->cpu.cpu.pc, d->cpu.cpu.A,
-        d->cpu.cpu.X, d->cpu.cpu.Y, d->cpu.cpu.sp, d->via2.ora, d->via2.orb,
-        d->via2.ddra, d->via2.ddrb, d->media.half_track, d->media.density,
-        d->media.head_bit_pos, d->media.in_sync, d->media.port_a_byte);
-}
+/* VICE 3.10 true-drive captures of each image at the $9400 handoff. The two
+   dumps differ in a few payload bytes ($9407, $5F60/$5F67) but agree on the
+   fix's smoking gun at $5F64 = $F0 (BEQ), which read $30 (BMI) when the IEC
+   timing was wrong. */
+static const uint8_t vice_9400[8] = { 0xA9, 0x35, 0x85, 0x01, 0x80, 0xAD, 0x4C, 0x5A };
+static const uint8_t vice_5f50[32] = {
+    0x08, 0x20, 0x49, 0xA9, 0x8D, 0x0C, 0xDC, 0xA9, 0xD9, 0x8D, 0x0E, 0xDC, 0xAD, 0x0D, 0xDC, 0x8D,
+    0x65, 0xBA, 0x29, 0x01, 0xF0, 0xF6, 0xAD, 0x65, 0xBA, 0x29, 0x08, 0xC9, 0x08, 0xD0, 0xE8, 0x8D
+};
+static const uint8_t vice_9400_alt[8] = { 0xA9, 0x35, 0x85, 0x01, 0x80, 0xAD, 0x4C, 0x00 };
+static const uint8_t vice_5f50_alt[32] = {
+    0x08, 0x20, 0x49, 0xA9, 0x8D, 0x0C, 0xDC, 0xA9, 0xD9, 0x8D, 0x0E, 0xDC, 0xAD, 0x0D, 0xDC, 0x8D,
+    0x6C, 0xBA, 0x29, 0x01, 0xF0, 0xF6, 0xAD, 0x6C, 0xBA, 0x29, 0x08, 0xC9, 0x08, 0xD0, 0xE8, 0x8D
+};
 
-static uint8_t drive_opcode(const c1541 *d) {
-    uint16_t pc = d->cpu.cpu.pc;
-    if (pc < 0x1000u) return d->ram[pc & 0x07ffu];
-    if (pc >= 0xc000u) return d->rom[pc - 0xc000u];
-    return 0xeau;
+static void assert_region(const c64_t *m, uint16_t base, const uint8_t *want, size_t n,
+                          const char *label) {
+    size_t i;
+    for (i = 0; i < n; ++i) {
+        if (m->bus.ram[base + i] != want[i]) {
+            fprintf(stderr, "%s mismatch at $%04X: got", label, (unsigned)(base + i));
+            for (i = 0; i < n; ++i) fprintf(stderr, " %02X", m->bus.ram[base + i]);
+            fprintf(stderr, "\nexpected (VICE):");
+            for (i = 0; i < n; ++i) fprintf(stderr, " %02X", want[i]);
+            fprintf(stderr, "\n");
+            die(label);
+        }
+    }
 }
 
 int main(int argc, char **argv) {
     c64_t machine;
     char error[256];
     uint64_t cycle;
-    int saw_a1 = 0;
-    int saw_a2 = 0;
-    int saw_a3 = 0;
-    uint64_t a3_cycle = 0;
-    int reported_5f_loop = 0;
-    uint32_t deferred_undoc[256] = { 0 };
-    uint32_t post_a3_deferred_undoc[256] = { 0 };
-    uint32_t drive_deferred_undoc[256] = { 0 };
-
     int alt = argc > 1 && strcmp(argv[1], "alt") == 0;
+    int saw_9400 = 0;
 
-    printf("ARKANOID_G64_CHECKPOINT_PROBE %s start\n", alt ? "alt" : "original");
-    fflush(stdout);
     install_media_pal(&machine);
     mount_arkanoid(&machine, alt);
 
@@ -141,135 +144,19 @@ int main(int argc, char **argv) {
     }
     queue_load_star(&machine);
 
-    for (cycle = 0; cycle < 500000000ull; ++cycle) {
-        uint16_t pc = machine.cpu.cpu.pc;
-
-        if ((cycle % 10000000ull) == 0ull) {
-            print_checkpoint("progress", &machine);
-            fflush(stdout);
-        }
-
-        if (!machine.cpu.micro_active && !machine.pending_cpu_trace_active) {
-            if (saw_a2 && !saw_a3 && !machine.drive8.cpu.micro_active) {
-                uint8_t opcode = drive_opcode(&machine.drive8);
-                if (!c6510_micro_can_begin(&machine.drive8.cpu, opcode)) {
-                    drive_deferred_undoc[opcode]++;
-                }
-            }
-            if (saw_a2 && !saw_a3) {
-                uint8_t opcode = c64_debug_read_cpu_map(&machine, pc);
-                if (!c6510_micro_can_begin(&machine.cpu, opcode)) {
-                    deferred_undoc[opcode]++;
-                }
-            }
-            if (saw_a3) {
-                uint8_t opcode = c64_debug_read_cpu_map(&machine, pc);
-                if (!c6510_micro_can_begin(&machine.cpu, opcode)) {
-                    post_a3_deferred_undoc[opcode]++;
-                }
-            }
-            if (!saw_a1 && pc == 0xffd5u && machine.bus.ram[0xb7u] == 1u &&
-                machine.bus.ram[0x0395u] == 'F') {
-                print_checkpoint("A1", &machine);
-                saw_a1 = 1;
-            }
-            if (!saw_a2 && pc == 0x4000u) {
-                print_checkpoint("A2", &machine);
-                printf("A2_mem=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                    machine.bus.ram[0x4000], machine.bus.ram[0x4001],
-                    machine.bus.ram[0x4002], machine.bus.ram[0x4003],
-                    machine.bus.ram[0x4004], machine.bus.ram[0x4005],
-                    machine.bus.ram[0x4006], machine.bus.ram[0x4007]);
-                {
-                    FILE *dump = fopen(alt ? "/private/tmp/c64m-arkanoid-alt-a2.bin"
-                                             : "/private/tmp/c64m-arkanoid-a2.bin", "wb");
-                    if (dump != NULL) {
-                        (void)fwrite(machine.bus.ram, 1, sizeof(machine.bus.ram), dump);
-                        fclose(dump);
-                    }
-                }
-                saw_a2 = 1;
-            }
-            if (!saw_a3 && pc == 0x9400u) {
-                print_checkpoint("A3", &machine);
-                printf("A3_mem=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                    machine.bus.ram[0x9400], machine.bus.ram[0x9401],
-                    machine.bus.ram[0x9402], machine.bus.ram[0x9403],
-                    machine.bus.ram[0x9404], machine.bus.ram[0x9405],
-                    machine.bus.ram[0x9406], machine.bus.ram[0x9407]);
-                saw_a3 = 1;
-                a3_cycle = cycle;
-                {
-                    FILE *dump = fopen(alt ? "/private/tmp/c64m-arkanoid-alt-a3.bin"
-                                             : "/private/tmp/c64m-arkanoid-a3.bin", "wb");
-                    if (dump != NULL) {
-                        (void)fwrite(machine.bus.ram, 1, sizeof(machine.bus.ram), dump);
-                        fclose(dump);
-                    }
-                }
-                {
-                    unsigned op;
-                    printf("A2_deferred:");
-                    for (op = 0; op < 256; ++op) {
-                        if (deferred_undoc[op] != 0u) {
-                            printf(" %02X=%u", op, deferred_undoc[op]);
-                        }
-                    }
-                    printf("\n");
-                    printf("drive_A2_deferred:");
-                    for (op = 0; op < 256; ++op) {
-                        if (drive_deferred_undoc[op] != 0u) {
-                            printf(" %02X=%u", op, drive_deferred_undoc[op]);
-                        }
-                    }
-                    printf("\n");
-                }
-            }
-            if (saw_a3 && c64_debug_read_cpu_map(&machine, pc) == 0x00u &&
-                pc >= 0x0200u && pc < 0xA000u) {
-                fprintf(stderr, "BRK after A3 at %04X\n", pc);
-                return 1;
-            }
-            /* The corrupt-load failure renders random character data while
-               spinning at this address; surviving the handoff alone is not
-               a valid Arkanoid acceptance condition. */
-            if (saw_a3 && !reported_5f_loop && pc >= 0x5f50u && pc <= 0x5f8fu) {
-                int j;
-                fprintf(stderr, "corrupt Arkanoid execution loop at %04X\n", pc);
-                for (j = 0; j < 32; ++j) {
-                    if ((j % 16) == 0) fprintf(stderr, "%04X:", 0x5f50 + j);
-                    fprintf(stderr, " %02X", machine.bus.ram[0x5f50 + j]);
-                    if ((j % 16) == 15) fprintf(stderr, "\n");
-                }
-                fprintf(stderr, "screen writes: 0400=%08llX 1C00=%08llX 2000=%08llX 4000=%08llX\n",
-                    (unsigned long long)c64_debug_read_write_history(&machine, 0x0400),
-                    (unsigned long long)c64_debug_read_write_history(&machine, 0x1c00),
-                    (unsigned long long)c64_debug_read_write_history(&machine, 0x2000),
-                    (unsigned long long)c64_debug_read_write_history(&machine, 0x4000));
-                fprintf(stderr, "post_A3_deferred:");
-                for (j = 0; j < 256; ++j) {
-                    if (post_a3_deferred_undoc[j] != 0u) {
-                        fprintf(stderr, " %02X=%u", j, post_a3_deferred_undoc[j]);
-                    }
-                }
-                fprintf(stderr, "\n");
-                fprintf(stderr,
-                    "VIC: D011=%02X D016=%02X D018=%02X D020=%02X D021=%02X bank=%04X raster=%u\n",
-                    machine.vic.registers[0x11], machine.vic.registers[0x16],
-                    machine.vic.registers[0x18], machine.vic.registers[0x20],
-                    machine.vic.registers[0x21], machine.bus.vic_bank_base,
-                    machine.vic.timing.raster_line);
-                reported_5f_loop = 1;
-            }
-            if (saw_a3 && cycle - a3_cycle >= 100000000ull) {
-                printf("POST_A3_100M c64=%04X d8=%04X\n", machine.cpu.cpu.pc,
-                    machine.drive8.cpu.cpu.pc);
-                return reported_5f_loop ? 1 : 0;
-            }
-        }
+    /* Run the real load until the V-MAX bootstrap hands off at $9400. */
+    for (cycle = 0; cycle < 200000000ull && !saw_9400; ++cycle) {
         require("step", c64_step_cycle(&machine, error, sizeof(error)));
+        if (!machine.cpu.micro_active && !machine.pending_cpu_trace_active &&
+            machine.cpu.cpu.pc == 0x9400u) {
+            saw_9400 = 1;
+        }
     }
+    require("reached $9400 handoff", saw_9400);
 
-    die("did not reach Arkanoid A3 checkpoint");
-    return 1;
+    assert_region(&machine, 0x9400u, alt ? vice_9400_alt : vice_9400, 8, "$9400 handoff");
+    assert_region(&machine, 0x5f50u, alt ? vice_5f50_alt : vice_5f50, 32, "$5F50 receiver code");
+
+    printf("PASS: arkanoid%s g64 load matches VICE at $9400\n", alt ? " (alt)" : "");
+    return 0;
 }
