@@ -514,17 +514,53 @@ The decision therefore lives in the `$F9` handler: it branches on some
 frame-parity/state variable (or an extra/late `$F9` IRQ corrupts that state) and
 takes the "arm `$09`" branch only every other execution.
 
-**Next work (pinpointed):**
-1. Find and disassemble the `$F9` (raster 249) IRQ handler. Read the IRQ vector
-   (`$FFFE/$FFFF` with ROM banked, or `$0314/$0315`) from a running instance,
-   and the code that does `STA $D012` (`8D 12 D0`) with value `$09`. Identify the
-   state byte it branches on and where that byte is updated.
-2. Determine whether c64m is taking the wrong branch (state-byte value wrong) or
-   whether an extra/mis-timed `$F9` raster IRQ is firing (double-fire at line
-   249). Compare the raster-IRQ acceptance cycle for the `$F9` compare against
-   VICE -- this is the first place the two-frame vs one-frame cycle could diverge.
-3. Only then re-run the VICE write-stream diff, aligned on this `$F9`-handler
-   state, to confirm VICE arms `$09` every frame where c64m arms it every other.
+**Handler decoded (control-port disasm; IRQ vector `$FFFE`=`$4000` stub, real
+chained handlers via `$FFFE/$FFFF` rewrites; `$01`=$35 so I/O in, ROMs out):**
+
+The chained raster-IRQ handlers each rewrite `$FFFE/$FFFF` for the next link. The
+`$C8`(R200) handler vectors the `$F9`(R249) IRQ to the shared dispatcher
+**`$99BF`**. That dispatcher is the decision point:
+
+```
+$99BF: PHA/TXA/PHA/TYA/PHA
+$99C4: LDA $CD  / BNE $99CE          ; $CD!=0 -> raster stabiliser path
+$99C8: LDA $1D  / CMP #$14 / BCC $99FD
+$99CE: ... stabiliser: LDA $D012 / CMP #$FA / BCC (spin) + NOP sled ...
+$99FD: LDA #$00 / STA $D015          ; sprites off
+$9A02: JSR $1003
+$9A05: LDA $CD  / BEQ $9A46          ; *** DECISION ***  $CD==0 -> colour/data path
+$9A09: (arm path) set sprite Y=$09, D011=$73, D021/D025=0,
+       vector := $9B00 (device kernel), STA $D012=$09, D018=$80, JMP $9AF1
+```
+
+So **`$CD` gates whether the device kernel is armed.** Measured live at `$9A05`
+across the multiplex window, `$CD` toggles a clean **`0,1,0,1,...` every frame**:
+`$CD=1` -> arm `$09` (device runs next frame); `$CD=0` -> colour/data path (no
+device). That is exactly the 192/16 alternation.
+
+`$CD` writers: `INC $CD` at **`$904E`** (tail of a sub that also sets sprite Y
+from `$48/$49`) and `STA $CD` at `$1C61`. Main-loop sync at **`$931A`**:
+`LDA $CD / ORA $CE / ORA $CF / BNE $931A` -- the main thread spins until
+`$CD|$CE|$CF == 0` before doing its sprite setup (`STA $D001` ...). So `$CD/$CE/
+$CF` are a main-loop <-> raster-IRQ handshake: the IRQ side sets/consumes them,
+the main loop waits on them.
+
+**Two candidate root causes (need to disambiguate):**
+1. **CPU-budget starvation.** On a device frame the raster IRQs run R9-R294 (lots
+   of stolen CPU + sprite-DMA BA stalls), leaving the main loop too little time to
+   finish its work and re-request the next device frame in time -- so `$CD` is 0
+   the following frame. If c64m's sprite-DMA/BA budget differs from VICE (the
+   original items 4-6 thesis), the main loop would starve every other frame here
+   where VICE does not. **This ties the bug back to sprite-DMA/BA cycle timing.**
+2. **IRQ-count divergence.** `$CD` is `INC`/cleared by IRQ vs main-loop races; an
+   extra or missing raster IRQ per frame in c64m would flip the parity.
+
+**Next work:** (a) capture the per-raster CPU budget (`C64M_BALOG`) on a device
+frame vs an off frame and check whether the main loop gets starved; (b) re-run the
+VICE write-stream diff aligned on `$CD` -- confirm VICE keeps `$CD=1` (device)
+every frame where c64m alternates; (c) trace the exact producer/consumer of `$CD`
+(`$904E` INC vs `$1C61` STA vs the device-kernel clear) to see which side loses
+the race in c64m.
 
 **Control-port tooling.** A minimal Python client for the C64M/1 control
 protocol was written during this session (connect, `get-state`/`get-cpu`,
