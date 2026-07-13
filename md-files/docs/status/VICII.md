@@ -25,10 +25,11 @@
   used by `samples/lft-nine.prg` keep flanking sprites DMA-active past 21 rows
   (matches VICE R9-R73). The timed six-write kernel still starts a few lines
   later than VICE; see `md-files/lft-nine.md` Session 11.
-- Sprite bus arbitration follows the live DMA state, not the renderer's
-  per-line `sprite_visible` data latch. After the MCBASE==63 DMA-off check,
-  later sprite slots on that line no longer steal Phi2 cycles. The renderer
-  retains its data latch independently.
+- Sprite bus arbitration follows the live DMA flag (`sprite_active`) only —
+  matching VICE's `sprite_dma` mask — not the renderer `sprite_visible` latch
+  and not a pure Y-match before DMA-on. After MCBASE==63 clears DMA, later
+  slots on that line no longer steal Phi2. DMA-on at cycles 54/55 still feeds
+  the 3-cycle BA lead into the first p/s slots.
 
 ## Turbo scales back rendering (capture trap)
 

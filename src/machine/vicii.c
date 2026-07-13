@@ -1094,42 +1094,18 @@ static void vicii_assert_raster_irq(vicii *v) {
     vicii_set_irq_flag(v, VICII_IRQ_RASTER);
 }
 
-/* Returns true if sprite n will perform a DMA fetch on the NEXT raster line.
-   Called during the previous line (at the sprite's BA-assert cycle) to determine
-   whether to open a sprite BA window that spans the line boundary.
-   DMA starts on the line whose number equals spr_y, matching the VIC-II
-   cycle-55/56 DMA check. Border masking may defer visible pixels to the next
-   line, but the sprite sequencer is already active on the Y-match line. */
+/* Bus arbitration follows the live DMA flag only (VICE sprite_dma), not the
+   renderer latch and not a pure Y-match. DMA turns on at the cycle-54/55
+   sequencer checks; from that moment sprite_active is true so the usual
+   3-cycle BA lead still covers the first p/s slots. A Y-match-before-DMA
+   predicate was stealing Phi2 on the activation line earlier than VICE (which
+   only sets sprite_dma at the DMA-on checks). */
 static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
-    uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
-    uint8_t  spr_y    = v->registers[1 + n * 2];
-
-    if (v->sprite_active[n]) {
-        return true;
-    }
-    if ((enable >> n) & 1u) {
-        if (v->timing.raster_line == (uint32_t)spr_y) {
-            return true;
-        }
-    }
-    return false;
+    return v->sprite_active[n];
 }
 
 static bool vicii_sprite_dma_current_line(const vicii *v, int n) {
-    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
-    uint8_t spr_y = v->registers[1 + n * 2];
-
-    /* sprite_visible is a renderer latch made at cycle 0.  It intentionally
-       survives until the next line so presentation can use the bytes already
-       fetched, but it must not keep stealing Phi2 slots after the MCBASE==63
-       DMA-off check (Bauer cycle 16 / VICE index 15).  Bus arbitration follows
-       the live DMA flag, matching VICE's sprite_dma mask; the Y-match clause
-       covers the line on which DMA turns on at the DMA-check cycles. */
-    if (v->sprite_active[n]) {
-        return true;
-    }
-    return ((enable >> n) & 1u) != 0u &&
-        v->timing.raster_line == (uint32_t)spr_y;
+    return v->sprite_active[n];
 }
 
 static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {

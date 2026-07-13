@@ -1,21 +1,21 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 11, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 12, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest finding: jump to "### Session 11" below.** Sprite crunch now works:
-> the flanking-sprite DMA lifetime matches VICE (active R9-R73, off at R74) and
-> the six-write `$D021/$D011` kernel runs stably every frame. Root cause was an
-> off-by-one against VICE's 0-based `raster_cycle` (`VICII_PAL_CYCLE(n) = n-1`):
-> the `$D017` crunch bit-magic checked Bauer cycle 15 instead of index 14, so
-> lft-nine's `$D017<-$00` at C14 never mangled MC. Session 9's "VICE has no DMA
-> at R8-R48" claim is **retracted** (wrong SPRDMA frame alignment).
+> **Latest finding: jump to "### Session 12" below.** Session 11 fixed sprite
+> crunch (VICE 0-based cycle-14 bit-magic). Session 12 found why it is only
+> intermittent: the device kernel opens with a **CIA1 Timer B stabiliser**
+> (`SBC $DC06` at `$9B05`) that only partially cancels a residual 2-cycle
+> IRQ-acceptance phase error, so `$D017<-$00` lands on C14 (~70-75%) or C12
+> (~25-30%). Crunch only fires on C14. Some frames already reach ~202 VIC
+> writes and six-write entry near R25 — the gap is **stability**, not a missing
+> feature. Session 9's "VICE has no DMA at R8-R48" remains **retracted**.
 >
-> **Still open for visual 1:1:** the six-write kernel still starts ~11 lines
-> later than VICE (c64m R36 vs VICE R25) and free-sprite Y values differ
-> (animation/multiplex phase). Per-frame VIC writes ~159 vs VICE ~202. Align on
-> register sequence / sprite Y, not raw frame numbers.
+> **Still open for visual 1:1:** lock the `$9B05` stabiliser so `$D015/$D017`
+> always land on VICE's C48/C38/C14. Then re-check six-write R25-R45 and the
+> black frame at `--turbo<=7`.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -1097,3 +1097,59 @@ VICLOG (SPRDMA frames near the end of the capture, not early boot frames), VICE
 **Next:** keep VICE as gold standard; compare multiplex Y-rewrite block timing
 (R215-R264 region) and any remaining BA over/under-count once Y sequences are
 phase-matched. Do not reintroduce forced-crunch hacks.
+
+### Session 12 (2026-07-13): CIA Timer B stabiliser + residual 2-cycle phase
+
+**Device kernel head (depacked at `$9B00`, control-port disasm):**
+
+```text
+$9B05  LDA #$1D
+$9B07  SEC
+$9B08  SBC $DC06        ; CIA1 Timer B lo — stable-raster probe
+$9B0B  STA $9B0F        ; self-mod BPL offset
+$9B0E  BPL <sled>       ; absorb 0/1 cycle via LDA #$A9 mid-op trick
+...
+$9B1B  STA $D015
+...
+$9B5C  STA $D017        ; #$35
+$9B6F  STA $D017        ; #$00  (crunch clear — must be cycle 14)
+$9B75  LDY $61          ; then $D018 multiplex until $D012>=$2D
+```
+
+Internal gaps from `$D015` → `$D017` set → `$D017` clear are **rigid**
+(116 / 155 cycles). Only the absolute phase on R9 varies: **C46 vs C48** for
+`$D015`, and therefore **C12 vs C14** for the crunch clear.
+
+**100-frame oracle (F5800-5899, post-Session 11):**
+
+| | share | notes |
+| --- | --- | --- |
+| `$D017` clear @ C14 | ~70-75% | crunch works; DMA through R73 |
+| `$D017` clear @ C12 | ~25-30% | no bit-magic; flanking DMA ends ~R30 |
+| VIC writes/frame | 119-205 | some frames already **202-205** (VICE) |
+| first `$D021` line | R25-R44 | R25 occurs; often later (animation + missed crunch) |
+
+**Stabiliser samples at `$9B0B` (device phase):** CRA=CRB=`$01` (both timers
+Phi2 continuous). After `SBC $DC06`, A ∈ {`$00`, `$01`, `$FF`} while Timer B lo
+clusters at 28-30. BPL+$00 and BPL-not-taken (A=`$FF`) take the **same** sled
+entry, so a 1-cycle-early arrival is not distinguished from on-time; only
+1-cycle-late (A=`$01`) shortens the sled. A residual **2-cycle** IRQ phase
+error therefore survives as C46 vs C48 for `$D015`.
+
+**Tried and reverted:** raising the raster IRQ at line-wrap instead of cycle 0
+worsened the phase spread (C11/C12/C14). Do not ship that.
+
+**BA predicate cleanup (kept):** bus steal follows **live `sprite_active` only**
+(VICE `sprite_dma`), not Y-match-before-DMA. DMA-on at cycles 54/55 still
+supplies the 3-cycle BA lead into the first p/s slots. Matches VICE more
+closely; focused VIC-II tests green.
+
+**Next (do not hack crunch width to C12):**
+
+1. Find why R9 IRQ acceptance vs Timer B still wanders by ~2 cycles (main-loop
+   instruction boundary under BA, or a 1-cycle CIA/VIC order skew). Goal:
+   `$DC06` residual always maps through the stabiliser to a single `$D015` cycle
+   (VICE's C48).
+2. Confirm 100-frame `$D017` clear is 100% @ C14 and flanking DMA R9-R73 every
+   frame.
+3. Then re-measure six-write R25-R45 and settled `--turbo<=7` black frame.
