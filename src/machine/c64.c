@@ -1350,6 +1350,18 @@ static uint8_t c64_deferred_io_read(const c64_t *machine, uint16_t address, uint
                 return value;
             }
         }
+
+        /* $D01E/$D01F: mid-line sprite collisions change as the beam paints.
+           A frozen DEFER_WRITES snapshot at instruction start misses collisions
+           that latch later in the same instruction (lft-nine VIC-type detect
+           double-reads $D01F after sprites have covered the ghost byte). Return
+           the live latch; clear still runs when the read is played back. */
+        if (reg == 0x1eu) {
+            return machine->vic.sprite_sprite_collision;
+        }
+        if (reg == 0x1fu) {
+            return machine->vic.sprite_background_collision;
+        }
     }
 
     return c64_debug_read_cpu_map(machine, address);

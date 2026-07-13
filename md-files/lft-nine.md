@@ -1,21 +1,15 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 14, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 17, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest finding: jump to "### Session 14" below.** Crunch stays **100%
-> locked** (C48/C38/C14). The write-count / first-`$D021`-raster sweep
-> (119–205 writes, first kernel line R24–R44) is **the same pattern in VICE**
-> — it is `$61` animation, not a c64m defect. At matched phase (202 writes,
-> first `$D021` @ R24) structural VIC-write match is **~96%** and `$D021/$D011`
-> values match exactly; six-write phase is C17 vs VICE C16 (within VICE's own
-> C13–C21 spread for R24 frames).
+> **Latest: Session 17 — main border always `$D020`.** DEN=0 no longer repaints
+> side strips as `$D021` blue. Early-orbit black frame is now continuous on all
+> four sides (matches VICE left/right border draw). Rebuild and check ~1m11.
 >
-> **Still open for full visual 1:1:** fine multiplex X/cycle residuals mid-frame;
-> settled black-frame look at `--turbo<=7` (border sprites 5/7 + opened
-> border). Y-match-line sprite presentation is primed after DMA-on so border
-> digits are not blank on their first raster.
+> Sessions 15–16: Bauer main-vs-vertical compose; PAL sprite wrap 504; matched-
+> phase VIC writes 404/404 vs VICE.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -1217,3 +1211,366 @@ frame.
 cycle-0 `prepare_sprite_line` ran before DMA-on on the Y-match line, so border
 sprites were blank for their first raster (bad for digits jammed in the top
 border).
+
+### Session 15 (2026-07-13): Bauer main-vs-vertical compose + early border chase
+
+User report (`samples/bad-border.png`): after wizard blinks/hat/white flash,
+(1) side black frame incomplete/unstable, (2) digit sprites pass **under** the
+bottom bar instead of over it. Top border digits look good.
+
+#### Compose / flip-flop (landed)
+
+| Before | After |
+| --- | --- |
+| Pixel treated as border when `main \|\| vertical` | Only **main** returns `$D020` (covers sprites) |
+| Vertical not separated in compose | Vertical forces graphics → B0C; sprites still mux |
+| DEN=0 special-cased as “return bg, no sprites” under border | DEN=0 blanks main-border to B0C; sprites still mux (Phase J) |
+| Vertical top clear without DEN (cycle 0) | Bauer: top clear needs DEN; update at line-end **and** left compare |
+
+Regression: `test_sprite_hires_appears_at_position` (no `$D011` after reset → DEN=0)
+failed with pure border blue until the DEN=0 path was restored correctly.
+
+#### Early-phase open (F~3655–4600) — measured
+
+D011 sequence (c64m and VICE agree structurally):
+
+1. F3655: hold `$5B` (DEN=1) through top → **vertical clears**; R249 RSEL→0;
+   miss both bottom compares → open sticks across frames.
+2. Later frames: R24 `$4B` (DEN=0), R249 `$43`, R250/251 `$13`, end `$5B`.
+3. Live log at F4200 R251 left: **`main=0 vert=0 den=1`** — main is *not*
+   covering the bottom; open bottom works.
+
+So “sprites under bottom border” is **not** a stuck vertical FF after Session 15.
+
+#### Why bottom still looks clipped / sides incomplete
+
+| Observation | Implication |
+| --- | --- |
+| `$D015←$00` at R251 C12–13 | Same in VICE. Sprites off for R252+; only idle black (ghost) remains |
+| y=251 still has digit pixels; y=252+ pure black | Last sprite row can touch 251; deeper rows need enable (cleared) |
+| Free-digit Y writes differ c64m vs VICE mid-frame | Animation/multiplex phase residual (same family as `$61` packing) |
+| Left strip often **16/24** black, 8 blue | X-expanded spr5 at X=480 wraps with `dx=x+32` → only dx 32–47 (16 px) land in x=0..15 |
+| Side open + DEN=0 | x&lt;left is main=1 → blanks to B0C (blue), so only black *sprites* paint the frame |
+
+#### Smoking gun for incomplete sides (not flip-flops)
+
+On F4200, almost all structural VIC writes land on the **same raster** as VICE
+(R24/R28/R90/R91/R249/R251). Exception:
+
+| write | c64m | VICE | delta |
+| --- | --- | --- | --- |
+| `$D017←$00` + `$D01D←$00` (clear Y/X expand) | R209 | R223 | **−14 lines** |
+| `$D011←$5B` restore | R260 | R263 | −3 lines |
+
+Both clears are a single straight-line store at **`$A219`** (`LDA #0 / STA $D017 /
+STA $D01D`) after Y-counted open-side loops at `$A17A`/`$A1C8` (CPY #$D2/#$DC,
+per-line `$D016` CSEL toggles, **no `$D012` wait**). Finishing 14 lines early
+means those loops burn fewer Phi2 cycles per pass than VICE — classic
+**under-BA / over-CPU budget** on the early open-border path. Side black from
+Y-expanded spr 5/7 therefore dies early (coverage ~58–216 instead of through
+~230), leaving a blue gap before the bottom idle bar.
+
+Left column width 16/24 is consistent with X-expanded spr5 at X=480 wrapping
+onto dx 32–47 (hardware-like); full-height connection is the expand lifetime.
+
+Entry to the open-side path: `$9FB5 → $A000` waits `LDY $D012 / CPY #$46`,
+then **CIA Timer B stabiliser** `LDA #$22 / SEC / SBC $DC06` (self-mod delay
+into `$A016`), then `LDY #$5A` and the CSEL/INY stages. Same family as the
+device-phase `$9B05` stabiliser (Session 12–13).
+
+**CPY limits are self-modded** from `$9F0C`/`$9F57`/… into `$A03F`/`$A142`/…
+so open-side **length is animation state**, not a fixed constant. A raw F4200
+vs F4200 compare (14 fewer D016 lines on c64m) is therefore the same class of
+hazard as Session 14’s `$61` frame misalignment until phase is matched.
+
+**Tests:** `test_c64_vicii` green after compose + DEN path.
+**Capture:** `--turbo<=7`, ROMs from repo root `roms/`, early phase ~F4200.
+
+### Session 16 (2026-07-13): matched-phase oracle + PAL sprite wrap 504
+
+#### Matched-phase early orbit is write-identical to VICE
+
+Anchor: open-side length `nd016==153` and `$D017←$00` @ R223 (max open of the
+animation sweep). c64m **F4244** vs VICE **F3920**:
+
+| metric | result |
+| --- | --- |
+| `(reg,val)` sequence | **404/404** identical |
+| `(R,reg,val)` set | **99.5%** (cycle ±1–2 on a few stores) |
+| spr5/7 Y multiplex | identical (`$39→$63→$8D→$B7`) |
+| `$D015←$00` @ R251 | both |
+| `$D017/$D01D` clear @ R223 | both |
+| SPRDMA spr5/7 | DMA **R57–R223** continuous, no gaps |
+
+Earlier “14 fewer D016 lines” was **animation phase**, not a BA defect (CPY
+limits self-modded from `$9Fxx`; same histogram 133–153 on both emulators).
+
+#### Fix: sprite X wrap period = `cycles_per_line × 8`
+
+`vicii_sprite_dx_wrapped` used **512** (9-bit). Hardware/VICE PAL wrap is
+**504** (`63×8`); NTSC **520** (`65×8`).
+
+X-expanded sprite at **X=480** (lft-nine spr5):
+
+| wrap | left coverage (buffer x) |
+| --- | --- |
+| 512 (old) | x=0..15 only (16 px) — blue strip inside left border |
+| **504 (new)** | **x=0..23 full 24 px** left border |
+
+Regression: `test_pal_sprite_x_wrap_covers_left_border`.
+
+#### Residual (VICE-matched writes → expect same on VICE)
+
+- **Bottom digits:** `$D015←0` at R251; bottom-orbit Y≈238→240 ⇒ first row
+  ~239, last would be ~259; only rows through 251 paint. Hard idle-black bar
+  below looks like “under the border.” Same register stream on VICE.
+- **Side corners:** black columns run while spr5/7 DMA is on (~R58–R223);
+  expand clear + idle bottom leave a blue gap before R251. Not a flip-flop bug.
+
+**Human check:** turbo 1, ~1m11 after RUN — left black column should now be a
+**full-width** side bar (no thin blue gap inside the left border). Bottom
+glyph clip may still match VICE at the same phase.
+
+### Session 17 (2026-07-13): main border is always `$D020` (even DEN=0)
+
+User rebuild still looked “broken” after Session 16: wrap fixed width (14→24)
+but **blue notches** remained where spr 5/7 were absent (R51–57, R222–250).
+
+**VICE reference** (limitcycles ~F4500, 384×272 crop): left black is **continuous
+for the entire blue field height** (and full frame height in the buffer). VICE
+draws left/right border strips with `border_color` (`$D020`) on every line;
+DEN blanking does not recolour those strips to B0C.
+
+**c64m bug:** Session 15 composed `main_border && !DEN` as B0C + sprites. With
+lft-nine’s open phase (`$D011` DEN=0 for most of the display), every closed side
+column without a black sprite went **blue** — incomplete/animated side frame.
+
+**Fix:** `main_border` always returns `$D020` (covers sprites). DEN=0 blanks
+**graphics only** when main is clear (vertical open / interior). Vertical FF
+still blanks graphics to B0C without masking sprites.
+
+| Region | DEN=0 before | DEN=0 after |
+| --- | --- | --- |
+| Main set (side strips) | B0C blue | **`$D020` black** |
+| Main clear (open / interior) | sprites + B0C graphics | unchanged |
+
+Headless check after fix: `left_spans=[(51,250)]` full display height; solid
+rectangular black frame with digits over sides. `$D015←0` @ R251 still limits
+how far into the bottom bar digits paint (VICE-matched writes).
+
+Tests updated: DEN border expectations use `$D020`; sprite position tests set
+DEN=1 so the vertical FF can open.
+
+### Session 18 (2026-07-13): `$D015` clear does not blank active sprite display
+
+User confirmed side frame fixed; remaining issues: (1) digits clip under bottom
+bar, (2) occasional top-border number corruption.
+
+**VICE ground truth** (`viciisc/vicii-cycle.c` `check_sprite_display`):
+
+```c
+if (sprite_dma & b) {
+    if ((enable & b) && (y == raster))
+        sprite_display_bits |= b;   /* set only on Y-match while enabled */
+    /* else: sticky — do not clear */
+} else {
+    sprite_display_bits &= ~b;      /* clear only when DMA ends */
+}
+```
+
+`$D015` is checked at **DMA-on** (cycles 55/56) and at the **display-set** on
+the Y-match line. Once `sprite_display_bits` is set, clearing `$D015` does
+**not** blank the remaining DMA rows.
+
+**c64m bug:** `vicii_live_pixel` gated paint on `sprite_line_enabled[]`, which
+is re-latched from `$D015` every line. After lft-nine’s `$D015←0` @ R251 C12–14,
+rows R252+ of still-active bottom digits were dropped while DMA continued.
+
+**Fix:** paint from `sprite_visible[]` (line-latched row data for DMA-active
+sprites). `$D015` / `sprite_line_enabled` remain for DMA start and diagnostics
+only.
+
+| After R251 `$D015←0` | before | after |
+| --- | --- | --- |
+| R251 (latched enable=1) | paints | paints |
+| R252+ while DMA on | **blank** | **paints** |
+| new Y-match with enable=0 | no DMA | no DMA |
+
+**Test:** `test_d015_clear_keeps_active_sprite_display` (open bottom, clear
+`$D015` mid-sprite @ R251 C12, assert rows 260/271 still yellow).
+
+**Headless** (turbo=7, F~4300–4570): digit colours on interior x through
+**y=261–267** (was hard-stopped ~251). Side `$D020` still covers x&lt;left.
+
+**Residual for next:** issue 2 — occasional top-border number corruption.
+
+### Session 19 (2026-07-13): top-border digit corruption — first cuts
+
+User sample `samples/bad-top1.png`: brown-where-yellow 3, busted 2, 9 with
+wrong colour, digits not aligned with the ghostbyte pattern. Linus’s
+[explanation](https://www.linusakesson.net/scene/nine/explanation.php) restated
+the mechanisms: sprite crunch + `$D018` bank switches, XSCROLL ghost alignment,
+cycle-exact `$D011`/`$D021` kernel (three variants), flanking-sprite BA lock.
+
+#### Measured device phase (F5900, `C64M_VICLOG`)
+
+| write | where |
+| --- | --- |
+| `$D017` `$35`→`$00` | R11 C38 / **R12 C14** (crunch cycle — bit-magic fires) |
+| `$D016` XSCROLL | R11 C47 **v$0D** (XSCROLL=**5**), later R80 back to 0 |
+| `$D018` banks | R12–22 `$40`, R26 `$50`, R41 `$60`, R53 `$70` |
+| `$D011` kernel | R24+ C26 `$1E` / C44 `$70` (invalid ECM-like) |
+| `$D021` splits | cycles **19/32/36/40** (21× each on F5900) |
+
+#### Fixes landed
+
+1. **Ghostbyte XSCROLL phase** — `vicii_idle_pixel` ignored XSCROLL; lft-nine
+   sets it (often 1..7) to line the idle pattern up with digits. Phase is now
+   `(x - 24 - XSCROLL) & 7` (MCM uses `& 6`). Test:
+   `test_live_ghost_byte_respects_xscroll`.
+
+2. **Live sprite colour + X** — paint used line-latched `$D027+n` and X.
+   VICE’s colour pipeline / X pipe are near-live; multiplex reassigns colour
+   and X mid-lifetime. Latched colour produced “9 has the 1’s colour”; latched
+   X held digits one line behind. Geometry (expand / MC mode) stays latched.
+   Test: `test_sprite_midline_x_write_affects_remaining_dots` (replaces the
+   old whole-line latch expectation).
+
+#### Still open (harder)
+
+- **Busted shapes / brown ghost digits** when all nine crowd the top edge —
+  likely residual BA / rastercode phase (multiplex priority + crunch MC row
+  sequence + `$D018` section seams). Early-orbit write stream was VICE-matched;
+  device-phase cycle-level `$D011`/`$D021` variants and BA flatness still need
+  a matched VICE SPRDMA/VICLOG at F~5900.
+- Invalid mode `$70` idle colour resolution in the thin gaps between digits.
+- Character-graphics fallback when the circle flattens (Linus: switch early).
+
+**Human check:** rebuild; top-border digits should track ghostbyte phase with
+XSCROLL and pick up colour/X reassignments without a one-line lag. Severe
+overlap frames may remain until BA/kernel phase is nail-matched.
+
+### Session 20 (2026-07-13): device-phase oracle — six-write kernel skew
+
+Matched VICE vs c64m on **202 writes/frame** + `$D017` crunch @ R12 C14
+(identical). Diff is **not** the D018 bank loop (R12–22 C13 exact); it starts
+at the six-write `$D021`/`$D011` kernel on R24+.
+
+#### Kernel cycle tables (first `$D021` / first `$D011` on R24)
+
+| XSCROLL | VICE (examples) | c64m (examples) |
+| --- | --- | --- |
+| 0 | C17/C24 … C15–22 range | C17/C25 |
+| 2 | C16/C23 | C17/C24 |
+| 3 | **C13/C20** | C17/C24 |
+| 5 | **C13/C20** | C19/C26 |
+| 7 | C13/C20 | C18/C25 |
+
+Relative gaps inside the six-write block match (7,6,4,4,4). c64m is **late
+entering** the block for the early variants (XSCROLL 3/5/7 need ~C13; c64m
+stays ~C17–19).
+
+Colour *values* in the splits also differ frame-to-frame (digit palette for
+that rotation) — expected when animation phase differs; structure is the same
+(`color, mode, color, color, $70, $70`).
+
+#### Three kernel bodies (found in RAM)
+
+| addr | prefix | middle `$D021` |
+| --- | --- | --- |
+| `$3000` | `BCS $00` + `BIT $00` | `STA $D021-$70,X` |
+| `$3400` | `BCS $00` + `NOP NOP` | `STA $D021` direct |
+| `$3800` | `BCS $00` + `BIT $0000` | dual `STA $CFxx,X` |
+
+`BCS $00` is a **carry-dependent 1-cycle pad** (taken=3, not=2). Carry comes
+from a CLC/SEC patch at `$9BB0` (`$18`/`$38`) selected by `$64 == 5`.
+
+#### Variant selection (works structurally)
+
+```text
+$8DD5  LDA $62 / AND #7
+       BEQ skip
+       DEX×4 / DEC $64     ; X was #$38
+       STX $9BD7           ; JMP $9BD5 high byte → $3800 or $3400
+```
+
+Live samples in device phase: JMP ∈ {`$3400`,`$3800`} tracks `$62` (0 → `$3800`,
+≠0 → `$3400`). So XSCROLL→body selection is **not** stuck.
+
+#### Remaining root cause (next)
+
+Absolute phase into the six-write block is still late for early variants.
+Suspect chain:
+
+1. Secondary stabiliser near `$9C00` (`CMP $D012 #$32` / Timer B sled), or
+2. Path from D018 loop (`CPX $D012 #$2D` / BCS kernel) burning extra cycles
+   under BA, or
+3. `$64` / `$63` animation residual → wrong CLC/SEC or delay table even when
+   JMP high byte is right.
+
+Also still open: busted glyph shapes (crunch MC row / `$D018` section seams)
+once phase is correct.
+
+**SPRDMA note:** VICE_SPRDMA frame counter can disagree with VICLOG frames;
+do not trust cross-tool frame IDs without a shared counter.
+
+### Session 21 (2026-07-13): detect, deferred collisions, residual entry skew
+
+#### Shipped in this pass (uncommitted with Sessions 18–20 work)
+
+- **Deferred `$D01E`/`$D01F` clear** (VICE-style): read returns latch and sets
+  `clear_collisions`; clear runs after that cycle's pixel sample in
+  `vicii_step_cycle`.
+- **Live DEFER reads of `$D01E`/`$D01F`**: frozen I/O snapshot no longer hides
+  mid-instruction collision latches.
+- Regression: `test_lft_nine_detect_sets_carry` runs the **real** depacked
+  `$9900` detect body on the CPU bus (Timer B free-run + full sled) and
+  expects **C=1** after `LSR` of the second `$D01F`.
+
+#### Detect map (from live depack)
+
+```text
+$82E2 / $28D5  JSR $9900
+               BCS skip          ; C from detect
+               LDA #$38 / STA $8DD4   ; only ever writes $38
+$8DD3          LDX #$38          ; depack default (not $34)
+               … AND $62 … BEQ keep / DEX×4 → $34
+               STX $9BD7         ; JMP $9BD5 high byte
+```
+
+- Depack default is **`LDX #$38`** (seen as soon as `$8DD3` materialises,
+  frame ~430). Patch sites only write `$38`, never `$34`.
+- Live device frames: `JMP ∈ {$3400,$3800}` tracks `$62` (`0→$3800`,
+  `≠0→$3400`) — body select works. `$9BB0` CLC/SEC tracks `$64==5`.
+- Full `$9900` CPU test: **C=1** with current collision timing (sprites Y=$32
+  first paint ~R51C15–18; second `$D01F` after mode `$1C` can still see spr0).
+
+So the old “failed detect forces `$3800` for xs0” lead is weaker than thought:
+default is already `$38`, and detect success leaves it alone. Early XSCROLL
+variants correctly land on `$3400` via DEX×4.
+
+#### Collision timing ground truth (unit probe)
+
+| when | latch |
+| --- | --- |
+| R50 (Y-match line) mid | 0 — DMA-on @C54/55, display too late for X=24/50 |
+| R51 C15–18 | bg/ss → `$03` |
+| Detect 2nd `$D01F` | needs that window (Timer B sled) |
+
+#### Still the top-border bug
+
+Oracle (Session 20) stands: **first `$D021` on R24 is ~C19 on c64m vs ~C13 on
+VICE** for early XSCROLL (3/5/7), while D018 R12–22 C13 and crunch C14 match.
+Relative six-write gaps match once the body is right; **absolute entry is
+~4–6 cycles late**.
+
+Next (hardware-faithful only):
+
+1. Cycle-count the post-`$9B75` path under BA (D018 loop → `$9BBC` sled →
+   first `STA $D021`) vs VICE for a fixed `$61/$64/$62` triple.
+2. Check whether c64m takes `$9BE4→$9C00` (D012≥$2D) more often than VICE —
+   that path is a different stabiliser, not the `$3400` six-write body.
+3. Compare `$64` (BPL offset into `$9BBC`) distribution vs VICE; 2–3 extra
+   `LDA #$A9` in the sled is several cycles of entry lag.
+
+Do **not** hack `$8DD4` to `$34` or force crunch/entry cycles.

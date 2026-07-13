@@ -279,14 +279,22 @@ static void test_sprite_collision_registers_read_clear(void) {
 
     v.sprite_sprite_collision = 0x03;
     expect_u8("d01e first read", 0x03, vicii_read_register(&v, 0xd01e));
-    expect_u8("d01e clears on read", 0x00, vicii_read_register(&v, 0xd01e));
+    /* VICE defers clear to end of the VIC draw cycle; a same-cycle re-read
+       still sees the mask. Stepping one cycle commits the clear. */
+    expect_u8("d01e back-to-back read keeps mask", 0x03, vicii_read_register(&v, 0xd01e));
+    vicii_step_cycle(&v, NULL, 0u);
+    expect_u8("d01e clears after read cycle", 0x00, vicii_read_register(&v, 0xd01e));
     vicii_write_register(&v, 0xd01e, 0xff);
+    vicii_step_cycle(&v, NULL, 1u);
     expect_u8("d01e write ignored", 0x00, vicii_read_register(&v, 0xd01e));
 
     v.sprite_background_collision = 0x04;
     expect_u8("d01f first read", 0x04, vicii_read_register(&v, 0xd01f));
-    expect_u8("d01f clears on read", 0x00, vicii_read_register(&v, 0xd01f));
+    expect_u8("d01f back-to-back read keeps mask", 0x04, vicii_read_register(&v, 0xd01f));
+    vicii_step_cycle(&v, NULL, 2u);
+    expect_u8("d01f clears after read cycle", 0x00, vicii_read_register(&v, 0xd01f));
     vicii_write_register(&v, 0xd01f, 0xff);
+    vicii_step_cycle(&v, NULL, 3u);
     expect_u8("d01f write ignored", 0x00, vicii_read_register(&v, 0xd01f));
 }
 
@@ -769,6 +777,10 @@ static void test_sprite_hires_appears_at_position(void) {
     uint32_t  px;
 
     reset_machine(&machine);
+    /* DEN=1 so the vertical border can clear at the top compare and main can
+       open over the display window; otherwise the whole frame stays main-border. */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
 
     /* sprite data at $0340 (832): solid 24×21 block */
     for (i = 0; i < 63; i++) {
@@ -801,15 +813,19 @@ static void test_sprite_hires_appears_at_position(void) {
     }
 }
 
-static void test_sprite_line_state_stable_after_midline_x_write(void) {
+static void test_sprite_midline_x_write_affects_remaining_dots(void) {
     c64_t     machine;
     c64_frame frame;
     uint64_t  abs;
 
     reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
     setup_solid_sprite(&machine, 5, 0x0340, 100, 100, 7);
 
     abs = 0;
+    /* Stop just before cycle 25 runs: cycles 12..24 have already painted
+       x=0..103, including the sprite at X=100. */
     while (!(machine.vic.timing.raster_line == 101u &&
              machine.vic.timing.cycle_in_line == 25u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
@@ -819,6 +835,8 @@ static void test_sprite_line_state_stable_after_midline_x_write(void) {
     expect_u8("sprite line color before midline x write", 7, machine.vic.sprite_line_color[5]);
     expect_u8("sprite row data before midline x write", 0xff, machine.vic.sprite_data[5][0]);
 
+    /* VICE pipes sprite X by one cycle — mid-line $D00A takes effect for
+       subsequent dots of the same raster (not a whole-line latch). */
     c64_bus_write(&machine.bus, 0xd00a, 200);
 
     while (!vicii_consume_frame_complete(&machine.vic)) {
@@ -826,10 +844,10 @@ static void test_sprite_line_state_stable_after_midline_x_write(void) {
     }
     expect_true("midline sprite x write frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
-    expect_u32("sprite keeps original x for active line", TEST_PALETTE_7,
+    expect_u32("dots already painted keep original x", TEST_PALETTE_7,
                frame.pixels[101 * C64_FRAME_WIDTH + 100]);
-    expect_not_u32("midline x write does not redraw current line at new x", TEST_PALETTE_7,
-                   frame.pixels[101 * C64_FRAME_WIDTH + 200]);
+    expect_u32("midline x write places sprite at new x for later dots", TEST_PALETTE_7,
+               frame.pixels[101 * C64_FRAME_WIDTH + 200]);
 }
 
 static void test_sprite_y50_touches_top_border_fully_revealed(void) {
@@ -871,6 +889,8 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
     c64_frame frame;
 
     reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
     setup_solid_sprite(&machine, 0, 0x0340, 100, 100, 7);
     setup_solid_sprite(&machine, 1, 0x0380, 100, 100, 10);
     c64_bus_write(&machine.bus, 0xd01a, 0x04); /* enable IMMC */
@@ -888,6 +908,11 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
     make_live_frame(&machine, &frame, "sprite-sprite collision retrigger frame");
     expect_u8("immc irq retriggered", 0xf5, vicii_read_register(&machine.vic, 0xd019));
     expect_u8("d01e participants", 0x03, vicii_read_register(&machine.vic, 0xd01e));
+    expect_u8("d01e back-to-back keeps mask", 0x03, vicii_read_register(&machine.vic, 0xd01e));
+    {
+        uint64_t abs = 0;
+        vicii_step_cycle(&machine.vic, &machine.bus, abs);
+    }
     expect_u8("d01e read clear after live collision", 0x00, vicii_read_register(&machine.vic, 0xd01e));
 }
 
@@ -953,6 +978,119 @@ static void test_border_hides_sprites_but_collision_latches(void) {
                frame.pixels[11 * C64_FRAME_WIDTH + 10]);
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
+
+/* Run the real lft-nine detect at $9900 (bytes captured from depacked demo)
+   via the CPU bus. Expect C=1 so LDX #$34 is kept (6569R3 / VICE default). */
+static void test_lft_nine_detect_sets_carry(void) {
+    c64_t     machine;
+    c64_rom_set roms;
+    char      error[256];
+    uint64_t  abs;
+    int       i;
+    /* $9900..$99BE inclusive from live depack (ends with RTS). */
+    static const uint8_t detect_9900[] = {
+        0xa2, 0x00, 0xa9, 0x06, 0x9d, 0x00, 0xdb, 0xa9, 0xff, 0x9d, 0x00, 0x07,
+        0xe8, 0xd0, 0xf3, 0x2c, 0x11, 0xd0, 0x10, 0xfb, 0x2c, 0x11, 0xd0, 0x30,
+        0xfb, 0xa9, 0x32, 0x8d, 0x01, 0xd0, 0x8d, 0x03, 0xd0, 0x8d, 0x00, 0xd0,
+        0xa9, 0x18, 0x8d, 0x02, 0xd0, 0xa9, 0x00, 0x8d, 0x10, 0xd0, 0x8d, 0x17,
+        0xd0, 0x8d, 0x1b, 0xd0, 0x8d, 0x1c, 0xd0, 0xa9, 0x02, 0x8d, 0x1d, 0xd0,
+        0xa9, 0x1c, 0x8d, 0xf8, 0x07, 0x8d, 0xf9, 0x07, 0xa9, 0x06, 0x8d, 0x27,
+        0xd0, 0x8d, 0x28, 0xd0, 0xa9, 0x03, 0x8d, 0x15, 0xd0, 0xac, 0xff, 0x39,
+        0xa2, 0x00, 0x8e, 0xff, 0x3f, 0xca, 0x8e, 0xff, 0x39, 0xa9, 0x08, 0x8d,
+        0x16, 0xd0, 0xa9, 0x5c, 0x8d, 0x11, 0xd0, 0xa9, 0x32, 0xcd, 0x12, 0xd0,
+        0xd0, 0xfb, 0xa9, 0x2d, 0x38, 0xed, 0x06, 0xdc, 0x8d, 0x78, 0x99, 0x10,
+        0x06, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9,
+        0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0xad, 0xa5, 0xea,
+        0x24, 0x00, 0xea, 0xea, 0xea, 0xea, 0xea, 0xea, 0xea, 0xea, 0xea, 0xad,
+        0x1f, 0xd0, 0xa9, 0x1c, 0x8d, 0x11, 0xd0, 0xad, 0x1f, 0xd0, 0x4a, 0x8c,
+        0xff, 0x39, 0xad, 0x12, 0xd0, 0x49, 0x33, 0xf0, 0xf9, 0xce, 0x11, 0xd0,
+        0xa9, 0x00, 0x8d, 0x15, 0xd0, 0x8d, 0x1d, 0xd0, 0x60
+    };
+
+    build_roms(&roms);
+    {
+        static const uint8_t harness[] = {
+            0x78,             /* SEI */
+            0x20, 0x00, 0x99, /* JSR $9900 */
+            0x00,             /* BRK */
+        };
+        copy_to_kernal(&roms, TEST_RESET_VECTOR, harness, sizeof(harness));
+    }
+    reset_machine_with_roms(&machine, &roms);
+
+    for (i = 0; i < (int)sizeof(detect_9900); i++) {
+        machine.bus.ram[0x9900 + i] = detect_9900[i];
+    }
+    /* Demo Timer B setup: latch $xx3E, CRB=$11 (load+start Phi2). */
+    c64_bus_write(&machine.bus, 0xdc0f, 0x00);
+    c64_bus_write(&machine.bus, 0xdc06, 0x3e);
+    c64_bus_write(&machine.bus, 0xdc07, 0x00);
+    c64_bus_write(&machine.bus, 0xdc0e, 0x11); /* Timer A free-run too */
+    c64_bus_write(&machine.bus, 0xdc0f, 0x11);
+
+    for (abs = 0; abs < 500000u; abs++) {
+        if (!c64_step_instruction(&machine, error, sizeof(error))) {
+            fail(error);
+        }
+        if (machine.cpu.cpu.pc == (uint16_t)(TEST_RESET_VECTOR + 4)) {
+            break; /* returned to BRK */
+        }
+    }
+    expect_true("detect returned to BRK",
+        machine.cpu.cpu.pc == (uint16_t)(TEST_RESET_VECTOR + 4));
+    /* LSR of second $D01F: C = sprite 0 bg collision. Needed so the demo's
+       BCS after JSR $9900 skips the LDX #$38 patch path when the ghost+sprite
+       probe hits. */
+    expect_true("lft-nine detect sets carry (sprite0-bg on 2nd $D01F)",
+        machine.cpu.cpu.C != 0);
+}
+
+/* lft-nine VIC-type detect ($9900): solid sprite over idle ghost in the top
+   border must set $D01F. Hardware collides against the graphics sequencer
+   even when the main/vertical border covers the pixel. The full detect
+   routine is covered by test_lft_nine_detect_sets_carry(); this checks the
+   pure latch at R51 mid-line. */
+static void test_sprite_bg_collision_in_top_border_idle(void) {
+    c64_t    machine;
+    uint64_t abs = 0;
+    int      i;
+
+    reset_machine(&machine);
+    /* Mirror lft-nine $9900 probe as closely as practical. */
+    for (i = 0; i < 256; i++) {
+        machine.bus.ram[0x0700 + i] = 0xffu;
+        machine.bus.color_ram[i] = 0x06;
+    }
+    machine.bus.ram[0x07f8] = 0x1cu;
+    machine.bus.ram[0x07f9] = 0x1cu;
+    machine.bus.ram[0x39ff] = 0xffu;
+    machine.bus.ram[0x3fff] = 0x00u;
+    c64_bus_write(&machine.bus, 0xd000, 0x32);
+    c64_bus_write(&machine.bus, 0xd001, 0x32);
+    c64_bus_write(&machine.bus, 0xd002, 0x18);
+    c64_bus_write(&machine.bus, 0xd003, 0x32);
+    c64_bus_write(&machine.bus, 0xd010, 0x00);
+    c64_bus_write(&machine.bus, 0xd017, 0x00);
+    c64_bus_write(&machine.bus, 0xd01b, 0x00);
+    c64_bus_write(&machine.bus, 0xd01c, 0x00);
+    c64_bus_write(&machine.bus, 0xd01d, 0x02);
+    c64_bus_write(&machine.bus, 0xd027, 0x06);
+    c64_bus_write(&machine.bus, 0xd028, 0x06);
+    c64_bus_write(&machine.bus, 0xd015, 0x03);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd011, 0x5c);
+
+    while (!(machine.vic.timing.raster_line == 51u &&
+             machine.vic.timing.cycle_in_line == 40u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("detect-like sprite-bg or sprite-sprite",
+        machine.vic.sprite_background_collision != 0 ||
+        machine.vic.sprite_sprite_collision != 0);
+    expect_u8("detect-like sprite-bg preferred", 0x03,
+        machine.vic.sprite_background_collision | machine.vic.sprite_sprite_collision);
+}
+
 
 static void test_live_bottom_border_can_be_opened_for_sprites(void) {
     c64_t     machine;
@@ -1084,6 +1222,56 @@ static void test_live_deep_bottom_border_sprite_is_painted(void) {
                frame.pixels[255 * C64_FRAME_WIDTH + 46]);
     expect_u32("deep sprite last row", TEST_PALETTE_7,
                frame.pixels[275 * C64_FRAME_WIDTH + 46]);
+}
+
+/* VICE sprite_display_bits is sticky once set while DMA is on: clearing $D015
+   only blocks a new DMA start, not the remainder of an active sprite's rows.
+   lft-nine clears $D015 at R251 while bottom digits still have DMA rows left;
+   re-gating paint on latched enable clipped those digits under the bottom bar. */
+static void test_d015_clear_keeps_active_sprite_display(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    /* Y=250 → first display row 251, last row 271 (21 lines, non-expanded). */
+    setup_solid_sprite(&machine, 0, 0x0340, 46, 250, 7);
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* open vertical border */
+
+    /* After DMA has started and several rows have painted, clear enable the
+       same way lft-nine does at R251. Display must continue while DMA is on. */
+    while (!(machine.vic.timing.raster_line == 251u &&
+             machine.vic.timing.cycle_in_line == 12u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("sprite dma active before d015 clear", machine.vic.sprite_active[0]);
+    expect_true("sprite visible before d015 clear", machine.vic.sprite_visible[0]);
+    c64_bus_write(&machine.bus, 0xd015, 0x00);
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("d015 clear active sprite frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    expect_u32("sprite still paints first open-border row", TEST_PALETTE_7,
+               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+    expect_u32("sprite still paints after d015 clear", TEST_PALETTE_7,
+               frame.pixels[260 * C64_FRAME_WIDTH + 46]);
+    expect_u32("sprite still paints last dma row after d015 clear", TEST_PALETTE_7,
+               frame.pixels[271 * C64_FRAME_WIDTH + 46]);
+    expect_u32("side border still covers sprites", TEST_PALETTE_2,
+               frame.pixels[260 * C64_FRAME_WIDTH + 10]);
 }
 
 /* Step B/C main-border flip-flop: a timed $D016 CSEL 1->0 write in the open
@@ -1229,6 +1417,43 @@ static void test_live_side_border_reveals_sprite(void) {
                frame.pixels[101 * C64_FRAME_WIDTH + 352]);
 }
 
+/* Main-border strips always use $D020 (even when DEN=0). Leave the vertical
+   FF clear via open-bottom, then DEN=0: interior blanks to B0C, sides $D020. */
+static void test_den_clear_main_border_keeps_d020_full_height(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+    uint32_t  y;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* open bottom → vertical stays clear */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, vertical still clear */
+    make_live_frame(&machine, &frame, "den0 main border full height");
+
+    for (y = 60; y < 200u; y++) {
+        expect_u32("left main-border strip is d020 when DEN=0", TEST_PALETTE_0,
+                   frame.pixels[y * C64_FRAME_WIDTH + 10]);
+        expect_u32("right main-border strip is d020 when DEN=0", TEST_PALETTE_0,
+                   frame.pixels[y * C64_FRAME_WIDTH + 360]);
+    }
+    expect_u32("den0 interior is d021", TEST_PALETTE_6,
+               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+}
+
 /* Step D: an opened side border shows idle-state ghost-byte graphics (read from
    $3FFF in non-ECM), not the background colour. With a patterned ghost byte the
    revealed border reproduces that pattern -- the "ghost byte shine-through". */
@@ -1264,6 +1489,68 @@ static void test_live_side_border_shows_ghost_byte(void) {
                frame.pixels[100 * C64_FRAME_WIDTH + 348]);
 }
 
+/* lft-nine uses XSCROLL to phase-align the idle ghostbyte with digit sprites.
+   Opening the right border with CSEL=0 while XSCROLL=3 must shift the
+   0xF0 pattern three dots relative to the XSCROLL=0 case. */
+static void test_live_ghost_byte_respects_xscroll(void) {
+    c64_t     machine;
+    c64_frame frame0;
+    c64_frame frame3;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x3fffu] = 0xf0u; /* 11110000 */
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    /* CSEL=0 opens right; XSCROLL=0 keeps the 0xF0 phase at x=344..351. */
+    c64_bus_write(&machine.bus, 0xd016, 0x00);
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("ghost xscroll0 frame",
+                vicii_copy_completed_frame(&machine.vic, &frame0, abs));
+    expect_u32("xscroll0 ghost fg at x=344", TEST_PALETTE_0,
+               frame0.pixels[100 * C64_FRAME_WIDTH + 344]);
+    expect_u32("xscroll0 ghost bg at x=348", TEST_PALETTE_6,
+               frame0.pixels[100 * C64_FRAME_WIDTH + 348]);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x3fffu] = 0xf0u;
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    /* CSEL=0, XSCROLL=3: phase shifts 3 dots — fg starts at x=347. */
+    c64_bus_write(&machine.bus, 0xd016, 0x03);
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("ghost xscroll3 frame",
+                vicii_copy_completed_frame(&machine.vic, &frame3, abs));
+    expect_u32("xscroll3 ghost bg at x=344", TEST_PALETTE_6,
+               frame3.pixels[100 * C64_FRAME_WIDTH + 344]);
+    expect_u32("xscroll3 ghost bg at x=346", TEST_PALETTE_6,
+               frame3.pixels[100 * C64_FRAME_WIDTH + 346]);
+    expect_u32("xscroll3 ghost fg at x=347", TEST_PALETTE_0,
+               frame3.pixels[100 * C64_FRAME_WIDTH + 347]);
+    expect_u32("xscroll3 ghost fg at x=350", TEST_PALETTE_0,
+               frame3.pixels[100 * C64_FRAME_WIDTH + 350]);
+}
+
 static void test_den_clear_blanks_text_display(void) {
     c64_t machine;
     c64_frame frame;
@@ -1282,31 +1569,46 @@ static void test_den_clear_blanks_text_display(void) {
 
     c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
     expect_true("den clear snapshot", c64_make_frame_snapshot(&machine, &frame));
-    expect_u32("den clear blanks former foreground", TEST_PALETTE_6,
+    /* DEN=0 prevents the top vertical-FF clear, so main never opens and the
+       whole frame is $D020 (including former display pixels). */
+    expect_u32("den clear keeps d020 on former foreground", TEST_PALETTE_2,
                frame.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("den clear blanks background pixel", TEST_PALETTE_6,
+    expect_u32("den clear keeps d020 on background pixel", TEST_PALETTE_2,
                frame.pixels[51 * C64_FRAME_WIDTH + 25]);
-    expect_u32("den clear blanks snapshot border", TEST_PALETTE_6,
+    expect_u32("den clear snapshot border keeps d020", TEST_PALETTE_2,
                frame.pixels[0]);
 }
 
 static void test_den_clear_keeps_sprite_visible(void) {
     c64_t machine;
     c64_frame frame;
+    uint64_t abs;
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
+    /* Open vertical so main can clear; then DEN=0 blanks interior to B0C. */
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 248u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd011, 0x13);
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, vertical still clear */
     setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
 
     make_live_frame(&machine, &frame, "den clear sprite visible frame");
-    expect_u32("den clear live border blanks to d021", TEST_PALETTE_6,
+    expect_u32("den clear live border keeps d020", TEST_PALETTE_2,
                frame.pixels[40 * C64_FRAME_WIDTH + 20]);
-    expect_u32("den clear live crop bottom blanks to d021", TEST_PALETTE_6,
+    expect_u32("den clear live crop bottom keeps d020", TEST_PALETTE_2,
                frame.pixels[270 * C64_FRAME_WIDTH + 20]);
-    expect_u32("den clear live frame bottom blanks to d021", TEST_PALETTE_6,
+    expect_u32("den clear live frame bottom keeps d020", TEST_PALETTE_2,
                frame.pixels[(C64_FRAME_HEIGHT - 1) * C64_FRAME_WIDTH + 20]);
     expect_u32("den clear live display background is d021", TEST_PALETTE_6,
                frame.pixels[51 * C64_FRAME_WIDTH + 60]);
@@ -2055,11 +2357,16 @@ static void test_vicii_debug_read_collision_no_clear(void) {
     expect_u8("d01f debug read", 0x06, vicii_debug_read_register(&v, 0xd01f));
     expect_u8("d01f latch unchanged after debug read", 0x06, v.sprite_background_collision);
 
-    /* normal CPU reads still clear */
+    /* normal CPU reads defer clear to end of VIC cycle */
     vicii_read_register(&v, 0xd01e);
-    expect_u8("d01e cleared by normal read", 0x00, v.sprite_sprite_collision);
+    expect_u8("d01e still set until cycle ends", 0x05, v.sprite_sprite_collision);
+    vicii_step_cycle(&v, NULL, 0u);
+    expect_u8("d01e cleared after read cycle", 0x00, v.sprite_sprite_collision);
+    v.sprite_background_collision = 0x06;
     vicii_read_register(&v, 0xd01f);
-    expect_u8("d01f cleared by normal read", 0x00, v.sprite_background_collision);
+    expect_u8("d01f still set until cycle ends", 0x06, v.sprite_background_collision);
+    vicii_step_cycle(&v, NULL, 1u);
+    expect_u8("d01f cleared after read cycle", 0x00, v.sprite_background_collision);
 }
 
 static void test_vicii_debug_read_irq_status_no_clear(void) {
@@ -2501,19 +2808,24 @@ int main(void) {
     test_invalid_mode_forces_black();
     test_live_raster_border_change_and_text();
     test_sprite_hires_appears_at_position();
-    test_sprite_line_state_stable_after_midline_x_write();
+    test_sprite_midline_x_write_affects_remaining_dots();
     test_sprite_y50_touches_top_border_fully_revealed();
     test_sprite_sprite_collision_priority_and_irq();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
+    test_sprite_bg_collision_in_top_border_idle();
+    test_lft_nine_detect_sets_carry();
     test_live_bottom_border_can_be_opened_for_sprites();
     test_ntsc_live_bottom_border_can_be_opened_for_sprites();
     test_live_deep_bottom_border_sprite_is_painted();
+    test_d015_clear_keeps_active_sprite_display();
     test_live_right_side_border_opens();
     test_live_side_border_wrong_cycle_stays_closed();
     test_live_side_border_flip_flop_persists_left();
     test_live_side_border_reveals_sprite();
+    test_den_clear_main_border_keeps_d020_full_height();
     test_live_side_border_shows_ghost_byte();
+    test_live_ghost_byte_respects_xscroll();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();

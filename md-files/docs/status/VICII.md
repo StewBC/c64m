@@ -16,6 +16,12 @@
   three-cycle lead time and the tested two-cycle release margin.
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
+- Pixel compose follows Bauer 3.9: only the **main** border flip-flop covers sprites
+  with `$D020`; the vertical FF blanks graphics to B0C and blocks main clear at the
+  left compare (Session 15 / `lft-nine.md`). DEN=0 blanks main-border pixels to
+  `$D021` while sprites still mux.
+- Sprite X wrap uses `cycles_per_line × 8` (PAL 504 / NTSC 520), matching VICE
+  `VICII_*_SPRITE_WRAP_X` — not 512 (Session 16).
 - The live renderer models the horizontal border flip-flop for timed `$D016`/CSEL
   side-border opening. The per-cycle sprite sequencer tracks MCBASE and the live
   `$D017` Y-expand bit at VICE's 0-based cycle indices (MCBASE update 15, DMA-on

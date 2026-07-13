@@ -205,6 +205,7 @@ void vicii_reset(vicii *v) {
     v->sprite_priority = 0;
     v->sprite_sprite_collision = 0;
     v->sprite_background_collision = 0;
+    v->clear_collisions = 0;
     v->vertical_border_active = true;
     v->main_border_ff         = true;
     /* Default on; runtime turbo policy re-applies after reset when needed. */
@@ -320,9 +321,17 @@ static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     return g;
 }
 
-static int vicii_sprite_dx_wrapped(uint32_t frame_x, uint16_t spr_x) {
+/* Sprite X vs buffer X distance, with wrap across the end of the line.
+   PAL is 63×8 = 504 dots (VICE VICII_PAL_SPRITE_WRAP_X); NTSC is 65×8 = 520.
+   Using 512 (9-bit) was wrong: an X-expanded sprite at X=480 then only covered
+   buffer columns 0..15 (dx 32..47) instead of the full 24-dot left border
+   (dx 24..47 with wrap 504) — the incomplete left black column in lft-nine. */
+static int vicii_sprite_dx_wrapped(const vicii *v, uint32_t frame_x, uint16_t spr_x) {
+    int wrap = (int)v->timing.cycles_per_line * (int)VICII_CHARACTER_WIDTH;
     int dx = (int)frame_x - (int)(spr_x & 0x01FFu);
-    if (dx < 0) dx += 512;
+    if (dx < 0) {
+        dx += wrap;
+    }
     return dx;
 }
 
@@ -615,6 +624,13 @@ static vicii_sprite_pixel vicii_sprite_pixel_from_latched_data(
     bool    x_expand   = v->sprite_line_x_expand[n];
     bool    multicolor = v->sprite_line_multicolor[n];
     int     spr_width  = x_expand ? 48 : 24;
+    /* Geometry is line-latched; colours are live (VICE colour pipeline is
+       near-live). Multiplex reassigns $D027+n as digits move — a line-start
+       colour latch left the first rows of a new assignment on the previous
+       digit's palette (wrong-colour top-border digits in lft-nine). */
+    uint8_t color = (uint8_t)(v->registers[0x27u + (uint8_t)n] & 0x0Fu);
+    uint8_t mm0 = (uint8_t)(v->registers[VICII_REG_SPR_MM0] & 0x0Fu);
+    uint8_t mm1 = (uint8_t)(v->registers[VICII_REG_SPR_MM1] & 0x0Fu);
 
     if (dx < 0 || dx >= spr_width) {
         return vicii_sprite_pixel_make(0, false);
@@ -628,11 +644,11 @@ static vicii_sprite_pixel vicii_sprite_pixel_from_latched_data(
         case 0u:
             return vicii_sprite_pixel_make(0, false);
         case 1u:
-            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_mm0 & 0x0Fu], true);
+            return vicii_sprite_pixel_make(vicii_palette_argb[mm0], true);
         case 2u:
-            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_color[n] & 0x0Fu], true);
+            return vicii_sprite_pixel_make(vicii_palette_argb[color], true);
         default:
-            return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_mm1 & 0x0Fu], true);
+            return vicii_sprite_pixel_make(vicii_palette_argb[mm1], true);
         }
     } else {
         int     bit_pos = x_expand ? (dx / 2) : dx;
@@ -640,7 +656,7 @@ static vicii_sprite_pixel vicii_sprite_pixel_from_latched_data(
         if (!bit) {
             return vicii_sprite_pixel_make(0, false);
         }
-        return vicii_sprite_pixel_make(vicii_palette_argb[v->sprite_line_color[n] & 0x0Fu], true);
+        return vicii_sprite_pixel_make(vicii_palette_argb[color], true);
     }
 }
 
@@ -685,20 +701,27 @@ static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uin
     bool ecm = (v->registers[0x11] & 0x40u) != 0u;
     bool bmm = (v->registers[0x11] & 0x20u) != 0u;
     bool mcm = (v->registers[0x16] & 0x10u) != 0u;
+    uint8_t xscroll = (uint8_t)(v->registers[0x16] & 0x07u);
     uint16_t vic_bank = c64_bus_vic_bank_base(bus);
     uint16_t addr = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
     uint8_t g = c64_bus_vic_read_ram(bus, addr);
+    /* Idle g-accesses emit the ghost byte every cycle; XSCROLL phase-shifts
+       that repeating 8-dot pattern the same way it delays display-window
+       graphics. lft-nine sets XSCROLL (often 1..7) specifically to line the
+       ghostbyte up with the digit sprites — ignoring it left the device frame
+       misaligned with the top-border digits. Unsigned wrap keeps x<24 valid. */
     uint32_t sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
+    uint32_t phase = (sx_raw - (uint32_t)xscroll);
 
     if (mcm) {
-        uint8_t pair = (uint8_t)((g >> (6u - (sx_raw & 6u))) & 3u);
+        uint8_t pair = (uint8_t)((g >> (6u - (phase & 6u))) & 3u);
         if (pair == 0u) {
             return vicii_bg_pixel_make(b0c, false);
         }
         /* 01/10/11 all resolve through the zero c-data / colour-RAM to black. */
         return vicii_bg_pixel_make(black, pair >= 2u);
     } else {
-        uint8_t bit = (uint8_t)(0x80u >> (sx_raw & 7u));
+        uint8_t bit = (uint8_t)(0x80u >> (phase & 7u));
         if (bmm) {
             /* Standard bitmap idle: both nibbles of the zero c-data are black. */
             return vicii_bg_pixel_make(black, (g & bit) != 0u);
@@ -750,12 +773,10 @@ static vicii_bg_pixel vicii_background_pixel(
            byte shine-through" lft-nine relies on). Rendering the idle pixel here
            instead of b0c is what makes an opened side border reveal that content.
            When the border is closed this value is overridden in
-           vicii_compose_pixel, so ordinary screens are unaffected. (Note: the
-           idle sequencer here does not apply XSCROLL, matching the existing
-           vertical-border idle approximation; exact ghost-byte phase alignment is
-           a VICE-oracle follow-on, see C64MVICII_SIDEBORDER.md §6.)
-           vicii_idle_pixel only uses the low 3 bits of x-24, so x < 24 (unsigned
-           underflow) still selects the correct pixel within the 8-dot group. */
+           vicii_compose_pixel, so ordinary screens are unaffected.
+           vicii_idle_pixel applies XSCROLL to the ghost phase and uses the low
+           bits of x-24 (unsigned underflow for x<24 still indexes the 8-dot
+           group correctly). */
         return vicii_idle_pixel(v, bus, x);
     }
 
@@ -951,22 +972,38 @@ static void vicii_note_sprite_collisions(vicii *v, vicii_bg_pixel bg, const vici
     }
 }
 
+/* Compose one pixel. Bauer 3.9: the *main* border flip-flop alone decides
+   whether $D020 covers everything (including sprites). The vertical border
+   flip-flop only (a) prevents the main FF from clearing at the left compare
+   and (b) forces the graphics sequencer to output background colour — it does
+   *not* blank sprites. Open upper/lower border therefore shows sprites over
+   the (graphics) background.
+
+   DEN=0 blanks *graphics* (and vertical-border output) to $D021, but the main
+   border flip-flop still outputs $D020. VICE draws left/right border strips
+   with border_color regardless of DEN; blanking DEN only to B0C on main-border
+   pixels made lft-nine's side frame go blue wherever spr 5/7 were absent. */
 static uint32_t vicii_compose_pixel(
     vicii *v,
-    bool border_active,
+    bool main_border,
+    bool vertical_border,
     uint32_t border_color,
     vicii_bg_pixel bg,
     const vicii_sprite_pixel sprites[8])
 {
     int n;
+    bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
 
     vicii_note_sprite_collisions(v, bg, sprites);
 
-    if (border_active) {
-        if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
-            return bg.color;
-        }
+    if (main_border) {
         return border_color;
+    }
+
+    /* Vertical border and DEN=0 both force graphics to B0C; sprites still mux. */
+    if (vertical_border || !den) {
+        bg.color = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+        bg.foreground = false;
     }
 
     for (n = 0; n < 8; n++) {
@@ -988,49 +1025,87 @@ static uint32_t vicii_compose_pixel(
     return bg.color;
 }
 
-static uint32_t vicii_live_pixel(vicii *v, const c64_bus_t *bus, const vicii_border_geometry *g, const vicii_line_ctx *lc, uint32_t x, uint32_t y, bool border_active) {
+static uint32_t vicii_live_pixel(
+    vicii *v,
+    const c64_bus_t *bus,
+    const vicii_border_geometry *g,
+    const vicii_line_ctx *lc,
+    uint32_t x,
+    uint32_t y,
+    bool main_border,
+    bool vertical_border)
+{
     uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
+    uint32_t b0c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
     vicii_sprite_pixel sprites[8];
     bool any_sprite_enabled = false;
+    bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
     int n;
 
+    /* Paint from the line-latched row (sprite_visible), not from $D015.
+       VICE's sprite_display_bits is sticky once set at the Y-match/display
+       check while DMA is on; clearing $D015 only prevents a new DMA start,
+       it does not blank an already-active sprite for the rest of its life.
+       Re-gating paint on latched enable each line was clipping lft-nine's
+       bottom digits after $D015←0 @ R251 while DMA still had rows left. */
     for (n = 0; n < 8; n++) {
-        any_sprite_enabled = any_sprite_enabled || v->sprite_line_enabled[n];
+        any_sprite_enabled = any_sprite_enabled || v->sprite_visible[n];
     }
 
     if (!any_sprite_enabled) {
-        if (border_active) {
-            if ((v->registers[VICII_REG_CONTROL_1] & 0x10u) == 0u) {
-                return bg.color;
-            }
+        if (main_border) {
             return border_color;
+        }
+        if (vertical_border || !den) {
+            return b0c;
         }
         return bg.color;
     }
 
     for (n = 0; n < 8; n++) {
         sprites[n] = vicii_sprite_pixel_make(0, false);
-        if (!v->sprite_line_enabled[n]) continue;
         if (!v->sprite_visible[n]) continue;
         {
-            int dx = vicii_sprite_dx_wrapped(x, v->sprite_line_x[n]);
+            /* X is near-live (VICE pipes it by one cycle). Line-latching X left
+               multiplexed digits one line behind their new position when the
+               demo rewrote $D000+ mid-lifetime. Expand/MC mode stay latched. */
+            uint16_t spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
+                (uint16_t)(((v->registers[VICII_REG_SPR_X_MSB] >> n) & 1u) << 8));
+            int dx = vicii_sprite_dx_wrapped(v, x, spr_x);
             sprites[n] = vicii_sprite_pixel_from_latched_data(v, v->sprite_data[n], n, dx);
         }
     }
 
-    return vicii_compose_pixel(v, border_active, border_color, bg, sprites);
+    return vicii_compose_pixel(v, main_border, vertical_border, border_color, bg, sprites);
 }
 
-static void vicii_update_live_vertical_border(vicii *v) {
+/* Bauer 3.9 rules 2/3: vertical FF is set/cleared at the end of the matching
+   raster line (cycle 63 / our last cycle). DEN is required to clear at top. */
+static void vicii_update_live_vertical_border_line_end(vicii *v) {
     vicii_border_geometry g;
+    bool den;
 
     g = vicii_get_border_geometry(v);
-    if (v->timing.raster_line == g.top) {
-        v->vertical_border_active = false;
-    }
+    den = (v->registers[0x11] & 0x10u) != 0u;
     if (v->timing.raster_line == g.bottom) {
         v->vertical_border_active = true;
+    }
+    if (v->timing.raster_line == g.top && den) {
+        v->vertical_border_active = false;
+    }
+}
+
+/* Bauer 3.9 rules 4/5: at the left compare, Y==bottom sets vertical FF and
+   Y==top && DEN clears it (then rule 6 may clear main). */
+static void vicii_update_vertical_border_at_left(vicii *v, const vicii_border_geometry *g) {
+    bool den = (v->registers[0x11] & 0x10u) != 0u;
+
+    if (v->timing.raster_line == g->bottom) {
+        v->vertical_border_active = true;
+    }
+    if (v->timing.raster_line == g->top && den) {
+        v->vertical_border_active = false;
     }
 }
 
@@ -1076,22 +1151,23 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     for (x = x0; x < x1; x++) {
-        /* Main border flip-flop (Bauer 3.9 rules 1 & 6), advanced per dot in
-           increasing X with the CSEL live for this cycle (g is per-cycle). Rule 1:
-           set at the right compare. Rule 6: reset at the left compare when the
-           vertical border is not active. Both are applied before the dot is drawn,
-           so the compare column itself takes the new state. A timed $D016 CSEL
-           change moves g.left/g.right and can leave the FF set (side border open)
-           for the rest of the line. */
+        /* Main border flip-flop (Bauer 3.9). Rule 1: set at the right compare.
+           Rules 4/5: at the left compare, also update the vertical FF from Y.
+           Rule 6: reset main at left only when vertical is clear. A timed
+           $D016 CSEL change moves g.left/g.right and can leave main clear
+           (side border open) for the rest of the line. */
         if (x == g.right) {
             v->main_border_ff = true;
         }
-        if (x == g.left && !v->vertical_border_active) {
-            v->main_border_ff = false;
+        if (x == g.left) {
+            vicii_update_vertical_border_at_left(v, &g);
+            if (!v->vertical_border_active) {
+                v->main_border_ff = false;
+            }
         }
         v->working_frame.pixels[y * C64_FRAME_WIDTH + x] =
             vicii_live_pixel(v, bus, &g, &lc, x, y,
-                             v->main_border_ff || v->vertical_border_active);
+                             v->main_border_ff, v->vertical_border_active);
     }
 }
 
@@ -1369,7 +1445,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
             vicii_assert_raster_irq(v);
         }
 
-        vicii_update_live_vertical_border(v);
+        /* Vertical FF top/bottom compares also run at cycle 63 of the matching
+           line (see end-of-line). Cycle 0 does not re-evaluate them. */
 
         /* VC is reloaded from VCBASE at the start of every line (the hardware
            cycle-14 load), not only on bad lines. Within a character row VCBASE is
@@ -1461,6 +1538,15 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         vicii_render_live_cycle(v, bus);
     }
 
+    /* Deferred $D01E/$D01F clear (after this cycle's pixel/collision sample). */
+    if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {
+        v->sprite_sprite_collision = 0;
+        v->clear_collisions = 0;
+    } else if (v->clear_collisions == VICII_REG_SPR_BG_COLL) {
+        v->sprite_background_collision = 0;
+        v->clear_collisions = 0;
+    }
+
     /* ------------------------------------------------------------------
      * Advance cycle counter
      * ------------------------------------------------------------------ */
@@ -1470,8 +1556,9 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* ------------------------------------------------------------------
-     * End-of-line events
+     * End-of-line events (Bauer cycle 63: vertical border top/bottom)
      * ------------------------------------------------------------------ */
+    vicii_update_live_vertical_border_line_end(v);
     v->timing.cycle_in_line = 0;
 
     if (v->display_state) {
@@ -1581,15 +1668,14 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
     }
 
     if (reg == VICII_REG_SPR_SPR_COLL) {
-        uint8_t value = v->sprite_sprite_collision;
-        v->sprite_sprite_collision = 0;
-        return value;
+        /* Return live latch; clear at end of this VIC cycle (VICE viciisc). */
+        v->clear_collisions = VICII_REG_SPR_SPR_COLL;
+        return v->sprite_sprite_collision;
     }
 
     if (reg == VICII_REG_SPR_BG_COLL) {
-        uint8_t value = v->sprite_background_collision;
-        v->sprite_background_collision = 0;
-        return value;
+        v->clear_collisions = VICII_REG_SPR_BG_COLL;
+        return v->sprite_background_collision;
     }
 
     /* Phase G: $D016 — bits 7:5 are unused and read as 1 */
@@ -1899,9 +1985,12 @@ static bool vicii_make_frame_snapshot_internal(
         vicii_snapshot_sprite_row spr_rows[8];
         vicii_line_ctx lc = vicii_snapshot_line_ctx(v, y);
 
-        /* Vertical flip-flop transitions (Bauer §3.9) */
-        if (y == g.top)    vborder = false;
-        if (y == g.bottom) vborder = true;
+        /* Vertical flip-flop transitions (Bauer §3.9; DEN required to clear). */
+        {
+            bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
+            if (y == g.top && den) vborder = false;
+            if (y == g.bottom) vborder = true;
+        }
 
         vicii_snapshot_sprite_line(v, bus, y, spr_rows);
 
@@ -1914,7 +2003,12 @@ static bool vicii_make_frame_snapshot_internal(
 
             /* Horizontal flip-flop transitions (Bauer §3.9) */
             if (x == g.right) hborder = true;
-            if (x == g.left && !vborder) hborder = false;
+            if (x == g.left) {
+                bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
+                if (y == g.bottom) vborder = true;
+                if (y == g.top && den) vborder = false;
+                if (!vborder) hborder = false;
+            }
 
             bg = vicii_background_pixel(v, bus, &g, &lc, x, y);
             enable_reg = v->registers[VICII_REG_SPR_ENABLE];
@@ -1925,12 +2019,13 @@ static bool vicii_make_frame_snapshot_internal(
                 {
                     uint16_t spr_x = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
                         ((v->registers[VICII_REG_SPR_X_MSB] >> n & 1u) << 8));
-                    int dx = vicii_sprite_dx_wrapped(x, spr_x);
+                    int dx = vicii_sprite_dx_wrapped(v, x, spr_x);
                     sprites[n] = vicii_sprite_pixel_from_data(v, spr_rows[n].data, n, dx);
                 }
             }
 
-            pixel = vicii_compose_pixel(v, vborder || hborder, border_color, bg, sprites);
+            /* Snapshot path: hborder stands in for main_border_ff. */
+            pixel = vicii_compose_pixel(v, hborder, vborder, border_color, bg, sprites);
             out_frame->pixels[y * C64_FRAME_WIDTH + x] = pixel;
         }
     }

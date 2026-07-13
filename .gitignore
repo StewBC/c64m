@@ -9,6 +9,7 @@ disks/
 programs/
 samples/
 Testing/
+agents/
 *.ini
 trace*.log
 TODO.txt

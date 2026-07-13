@@ -99,7 +99,7 @@ struct vicii {
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
     uint8_t  sprite_pointer[8];     /* pointer fetched in the sprite p-access */
     uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes (committed to renderer) */
-    bool     sprite_line_enabled[8]; /* display controls latched for the current raster line */
+    bool     sprite_line_enabled[8]; /* $D015 latched at line start / DMA-on (DMA start only; paint uses sprite_visible) */
     uint16_t sprite_line_x[8];
     bool     sprite_line_x_expand[8];
     bool     sprite_line_multicolor[8];
@@ -109,8 +109,13 @@ struct vicii {
 
     /* Phase E: sprite priority and collision latches */
     uint8_t  sprite_priority;              /* $D01B: 1 = sprite behind foreground graphics */
-    uint8_t  sprite_sprite_collision;      /* $D01E: sprite-sprite collision latch, clear on read */
-    uint8_t  sprite_background_collision;  /* $D01F: sprite-background collision latch, clear on read */
+    uint8_t  sprite_sprite_collision;      /* $D01E: sprite-sprite collision latch */
+    uint8_t  sprite_background_collision;  /* $D01F: sprite-background collision latch */
+    /* VICE: $D01E/$D01F reads return the latch but defer the clear until the
+       end of the current draw cycle. Two back-to-back LDA $D01F therefore see
+       the same mask — lft-nine's VIC-type detect depends on that. 0 = idle;
+       0x1E / 0x1F = clear that register after this cycle's pixels. */
+    uint8_t  clear_collisions;
 
     /* Live vertical border-unit state. Snapshot rendering keeps using conventional
        geometry; completed live frames preserve mid-frame RSEL timing effects. */
