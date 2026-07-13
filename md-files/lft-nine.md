@@ -566,22 +566,43 @@ from `$48/$49`) and `STA $CD` at `$1C61`. Main-loop sync at **`$931A`**:
 $CF` are a main-loop <-> raster-IRQ handshake: the IRQ side sets/consumes them,
 the main loop waits on them.
 
-**Two candidate root causes (need to disambiguate):**
-1. **CPU-budget starvation.** On a device frame the raster IRQs run R9-R294 (lots
-   of stolen CPU + sprite-DMA BA stalls), leaving the main loop too little time to
-   finish its work and re-request the next device frame in time -- so `$CD` is 0
-   the following frame. If c64m's sprite-DMA/BA budget differs from VICE (the
-   original items 4-6 thesis), the main loop would starve every other frame here
-   where VICE does not. **This ties the bug back to sprite-DMA/BA cycle timing.**
-2. **IRQ-count divergence.** `$CD` is `INC`/cleared by IRQ vs main-loop races; an
-   extra or missing raster IRQ per frame in c64m would flip the parity.
+**CONFIRMED A c64m BUG (not demo design) -- VICE oracle, 2026-07-13.** VICE
+(`x64sc`, `VICE_VICLOG`) emits a rock-steady **202 VIC writes on every frame**
+(F5980-F6000: 203,202,202,...,202 with zero alternation) in the same multiplex
+window where c64m alternates **192/16**. So the device kernel is meant to run
+**every frame**; c64m running it every other frame is the defect.
 
-**Next work:** (a) capture the per-raster CPU budget (`C64M_BALOG`) on a device
-frame vs an off frame and check whether the main loop gets starved; (b) re-run the
-VICE write-stream diff aligned on `$CD` -- confirm VICE keeps `$CD=1` (device)
-every frame where c64m alternates; (c) trace the exact producer/consumer of `$CD`
-(`$904E` INC vs `$1C61` STA vs the device-kernel clear) to see which side loses
-the race in c64m.
+**Where it's gated in c64m (measured):**
+- `INC $CD @ $904E` fires only **every other frame** (frame deltas +2). `$CD` is 0
+  before each INC. So the thing that sets `$CD=1` runs half as often as it should.
+- `JSR $1003` (right before the `$9A05` `$CD` test) does **not** modify `$CD`.
+- The `INC $CD` sub is reached, every time, via the same chain (control-port
+  call-stack at `$904E`): the **animation sequencer at `$8600+`**
+  (`... $8619: LDA #$6E / JSR $88DA -> $88DA -> $88DC -> $8A1C -> $904E`). The
+  `$8600` sequencer is a run of `LDA #imm / JSR $88DA` sprite-positioning calls
+  with `$22` bit-toggles (`EOR #$02`/`#$01`). (The call-stack's outer
+  `$0909->$8000` frame is a stale/bogus entry -- `$0900` is the exit-to-BASIC
+  path, `$093C JMP $A474`.)
+
+**So the open question is now narrow:** why does the `$8600` animation sequencer
+(or the IRQ that drives it) execute only every other frame in c64m when VICE runs
+the equivalent work every frame? Candidate mechanisms:
+1. The IRQ that invokes `$8600` is the **device kernel itself** (which already runs
+   every other frame), making `$CD`/device self-perpetuate a 2-frame cycle once it
+   slips -- i.e. a one-time phase slip that never recovers. Find `$8600`'s caller
+   (which raster IRQ) and whether it should run every frame.
+2. **CPU-budget / cycle timing:** an off-by-timing in sprite-DMA/BA or raster-IRQ
+   acceptance makes the per-frame IRQ work overrun into the next frame, so the
+   sequencer only completes every other frame (ties back to items 4-6).
+
+**Next work:** (a) find `$8600`'s caller and the raster it runs at (break at
+`$8611`/`$8617`, read `$D012`, count frame frequency); (b) `C64M_BALOG` budget on
+a device vs off frame; (c) with VICE now confirmed as oracle, diff the c64m vs
+VICE IRQ/`$D012` sequence around R249->R9 to find the exact cycle where c64m drops
+the every-frame cadence. VICE capture recipe: `VICE_VICLOG=/tmp/v.txt
+VICE_VICLOG_F0=5980 VICE_VICLOG_F1=6000 VICE_VICLOG_EXIT=1 timeout 120
+src/x64sc -directory data -console -sounddev dummy -warp -autostart <prg>` from
+`/Users/swessels/Develop/svm/vice-emu-code/vice` (x64sc built, patch in place).
 
 **Control-port tooling (committed).** `tools/c64_control_client.py` is a minimal
 Python client for the C64M/1 control protocol (connect, `get-state`/`get-cpu`,
