@@ -22,6 +22,10 @@
   active on the raster line that matches the sprite Y. The full cycle-accurate
   sprite crunch that `samples/lft-nine.prg` relies on is not yet reproduced (the
   timed raster kernel's entry still diverges from VICE; see `md-files/lft-nine.md`).
+- Sprite bus arbitration follows the live DMA state, not the renderer's
+  per-line `sprite_visible` data latch. In particular, after the cycle-16
+  MCBASE==63 DMA-off check, later sprite slots on that line no longer steal
+  Phi2 cycles. The renderer retains its data latch independently.
 
 ## Turbo scales back rendering (capture trap)
 
@@ -120,6 +124,9 @@ geometric snapshot. This trap cost a full lft-nine debugging pass; see
 - A single sprite's derived BA/RDY interval remains six cycles where required
   for the `samples/dkarcade2016.prg` PAL stable-raster reveal (matches VICE
   x64sc `$D001` multiplex at r53/c~30 and r272/c~36).
+- The trace build (`-DC64M_VIC_TRACE`) has `C64M_SPRDMA=<path>` in addition to
+  `C64M_VICLOG` and `C64M_BALOG`. It records the cycle-58 active-DMA mask,
+  `$D015`, sprite Y values, and MCBASE latches for lft-nine/VICE comparison.
 
 ## Tests / smoke checks
 

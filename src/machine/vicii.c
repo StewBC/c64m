@@ -433,6 +433,54 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
     }
 }
 
+#ifdef C64M_VIC_TRACE
+/* Oracle companion to VICE_SPRDMA.  At the hardware's cycle-58 display check,
+   record the sequencer state that decides later sprite DMA/BA slots.  This is
+   deliberately compile- and runtime-gated like C64M_VICLOG: normal builds do
+   not contain the file I/O path. */
+static void vicii_trace_sprite_dma(const vicii *v) {
+    static FILE *trace = NULL;
+    static int init = 0;
+    static unsigned long f0 = 0, f1 = 0xffffffffUL;
+    uint8_t active = 0;
+    int n;
+
+    if (!init) {
+        const char *path = getenv("C64M_SPRDMA");
+        const char *first = getenv("C64M_VICLOG_F0");
+        const char *last = getenv("C64M_VICLOG_F1");
+
+        if (path) trace = fopen(path, "wb");
+        if (first) f0 = strtoul(first, NULL, 10);
+        if (last) f1 = strtoul(last, NULL, 10);
+        init = 1;
+    }
+    if (!trace) return;
+
+    for (n = 0; n < 8; ++n) {
+        if (v->sprite_active[n]) active |= (uint8_t)(1u << n);
+    }
+
+    if (v->timing.frame_number >= f0 && v->timing.frame_number <= f1) {
+        fprintf(trace, "F%llu R%u dma=%02X en=%02X y=",
+                (unsigned long long)v->timing.frame_number,
+                v->timing.raster_line,
+                (unsigned)active,
+                (unsigned)v->registers[VICII_REG_SPR_ENABLE]);
+        for (n = 0; n < 8; ++n) {
+            fprintf(trace, "%02X", (unsigned)v->registers[1 + n * 2]);
+        }
+        fputs(" mcbase=", trace);
+        for (n = 0; n < 8; ++n) {
+            fprintf(trace, "%02X", (unsigned)v->sprite_mcbase[n]);
+        }
+        fputc('\n', trace);
+    }
+}
+#else
+#define vicii_trace_sprite_dma(v) ((void)0)
+#endif
+
 /* Per-cycle sprite DMA/MCBASE sequencer, ported from VICE's viciisc model
    (vicii-cycle.c) so the cycle-exact sprite crunch is reproduced. PAL cycle
    numbers; NTSC shares the logic. The Y-expand flip-flop semantics match VICE:
@@ -488,6 +536,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
         for (n = 0; n < 8; ++n) {
             v->sprite_mc[n] = v->sprite_mcbase[n];
         }
+        vicii_trace_sprite_dma(v);
     }
 }
 
@@ -1064,7 +1113,13 @@ static bool vicii_sprite_dma_current_line(const vicii *v, int n) {
     uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t spr_y = v->registers[1 + n * 2];
 
-    if (v->sprite_visible[n] || v->sprite_active[n]) {
+    /* sprite_visible is a renderer latch made at cycle 0.  It intentionally
+       survives until the next line so presentation can use the bytes already
+       fetched, but it must not keep stealing Phi2 slots after the cycle-16
+       MCBASE==63 DMA-off check.  Bus arbitration follows the live DMA flag,
+       matching VICE's sprite_dma mask; the Y-match clause covers the line on
+       which DMA turns on at cycles 55/56. */
+    if (v->sprite_active[n]) {
         return true;
     }
     return ((enable >> n) & 1u) != 0u &&

@@ -1,17 +1,16 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 7, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 10, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest and sharpest finding: jump to "### Session 7" below.** The bug is now
-> localized: c64m runs the lft-nine device kernel **only every other frame**
-> (192/16 VIC-write alternation vs VICE's ~202 every frame). The gate is the
-> zero-page flag **`$CD`**, tested at `$9A05` in the shared raster-IRQ dispatcher
-> `$99BF`; it toggles a clean `0,1,0,1` per frame where VICE keeps it set. Two
-> candidate root causes are written up at the end of Session 7 (CPU-budget
-> starvation tied to sprite-DMA/BA timing, or IRQ-count parity). The decisive
-> next step is a VICE write-stream + `$CD` diff aligned on the `$CD` handshake.
+> **Latest finding: jump to "### Session 10" below.** The every-other-frame
+> device-kernel failure is fixed on `main`; the current visual gap is the
+> non-black side frame. Session 10 fixes a smaller, independent sprite-arbitration
+> error: a renderer row latch incorrectly kept stealing Phi2 slots after the
+> cycle-16 sprite DMA-off event. The remaining investigation needs a
+> semantically aligned VICE/c64m `$D015/$D017` and sprite-Y trace; raw temporary
+> trace frame numbers do not share an origin.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -1014,3 +1013,36 @@ staircase to find why c64m activates sprites at R9-R60 (wrong Y latch timing in
 the multiplex? DMA-on not matching VICE's cycle-55/56 exactly?). Target: c64m
 sprite theft matches VICE's staircase (none R8-R48; bands R63+). VICE trace tool:
 `VICE_SPRDMA` in `src/viciisc/vicii-cycle.c` check_sprite_display.
+
+### Session 10 (2026-07-13): terminal sprite-DMA line no longer steals from a stale renderer latch
+
+Added a compile-gated c64m counterpart to the VICE sprite-DMA trace:
+`C64M_SPRDMA=<path>` (with the usual `C64M_VICLOG_F0/F1` frame window) emits a
+cycle-58 line record with the active-DMA mask, `$D015`, sprite Y values, and
+MCBASE values. It makes the distinction between the renderer's row latch and
+the bus sequencer observable.
+
+The trace exposed one concrete arbitration bug: when the cycle-16 MCBASE check
+reached 63, c64m correctly cleared `sprite_active`, but
+`vicii_sprite_dma_current_line()` continued to schedule the later Phi2 sprite
+slots from `sprite_visible`. `sprite_visible` is a cycle-0 renderer/data latch,
+not the VIC's live DMA bit. VICE clears its `sprite_dma` mask at cycle 16, so
+those later slots must not steal CPU cycles. The predicate now follows the live
+DMA state; its existing Y-match case still covers DMA turning on at cycles 55/56.
+
+Measured result in the lft-nine device capture: the terminal R30 line changes
+from `stall=15` to `stall=6`. The remaining six are the legitimate early
+cross-line sprite-3/4 slots before the R30 cycle-16 DMA-off check. This is a
+narrow correctness fix, not a claim that the black-frame issue is solved.
+
+Focused `c64_vicii`, `c64_snapshot`, `c64_boot_progression`, and
+`c64_cpu_validation` pass. The full-suite run again reached the known unrelated
+`c1541_media` `step out` failure; no VIC-II regression was observed before it.
+
+The larger diagnosis remains open: c64m's top device phase enables sprites at
+Y=9 (`dma=35` at R9-R29 in the new trace), whereas a properly semantic-aligned
+VICE capture is still required before changing the program-visible Y/multiplex
+timing. Do not compare the two trace helpers' raw frame counters: VICE's
+register logger begins counting at its first VIC store while the temporary DMA
+logger counts raster wraps from process start, so their numbers have different
+origins. Align on the `$D015/$D017` handshake and register sequence instead.

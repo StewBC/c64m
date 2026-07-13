@@ -43,11 +43,10 @@
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
 - `samples/lft-nine.prg` is the selected cycle-sensitive VIC-II milestone
   target (in progress, not yet passing). The oracle capture (build with
-  `-DC64M_VIC_TRACE`, see `md-files/lft-nine.md`) checks that the flanking
-  sprites keep stealing BA cycles through the timed raster kernel: the current
-  c64m capture shows `exec=48, stall=15` through R24-R42, driven by DMA
-  activating on the sprite Y-match line. Full acceptance (the six-write kernel
-  on every R24-R44 line and settled visual parity) is not yet reached.
+  `-DC64M_VIC_TRACE`, see `md-files/lft-nine.md`) includes VIC-write,
+  per-raster CPU-budget, and cycle-58 sprite-DMA state traces
+  (`C64M_VICLOG`, `C64M_BALOG`, `C64M_SPRDMA`). Full acceptance (the six-write
+  kernel on every R24-R44 line and settled visual parity) is not yet reached.
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
   format v5 carries the added sprite MCBASE latch, sprite-pointer latch, and

@@ -1595,6 +1595,32 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
         (uint8_t)vicii_bus_access_phi1(&ntsc));
 }
 
+/* The renderer latches a complete sprite row at cycle 0, but that latch must
+   not extend bus DMA past the cycle-16 MCBASE==63 shutdown. Sprite 0's slots
+   are late in the line, so this exercises the exact stale-latch seam. */
+static void test_sprite_dma_off_stops_late_phi2_slots(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_write_register(&v, 0xd011, 0x03u); /* DEN=0 */
+    v.timing.raster_line = 100u;
+    vicii_write_register(&v, 0xd015, 0x01u);
+    vicii_write_register(&v, 0xd017, 0x01u);
+    vicii_write_register(&v, 0xd001, 99u); /* no new Y-match on this line */
+    v.sprite_active[0] = true;
+    v.sprite_y_exp_ff[0] = true;
+    v.sprite_mc[0] = 60u;
+    v.sprite_mcbase[0] = 60u;
+
+    /* Cycle 0 advances MC to 63; cycle 16 drops DMA. Processing through
+       cycle 57 reaches sprite 0's late pointer/data slot. */
+    (void)advance_vicii(&v, 0u, 58u);
+    expect_true("sprite dma off at MCBASE 63", !v.sprite_active[0]);
+    expect_u8("dma-off sprite0 has no Phi2 slot", VICII_BUS_ACCESS_NONE,
+        (uint8_t)vicii_bus_access(&v));
+}
+
 /* Phase H test 3: sprites 5, 6, 7 active simultaneously; union window [1, 11). */
 static void test_sprites567_adjacent_ba_union(void) {
     vicii v;
@@ -2416,6 +2442,7 @@ int main(void) {
     /* Phase H: sprite BA windows */
     test_sprite5_ba_window_within_line();
     test_vicii_bus_schedule_reports_c_and_sprite_accesses();
+    test_sprite_dma_off_stops_late_phi2_slots();
     test_sprites567_adjacent_ba_union();
     test_6sprite_ba_early_and_late_windows();
     test_ntsc_sprites012_late_ba_window();
