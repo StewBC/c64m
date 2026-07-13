@@ -55,20 +55,21 @@ static void test_stepper_and_head_stop(void) {
     drive.media.half_track = 10;
     drive.media.stepper_phase = 0;
 
-    /* PB0/PB1 outputs, step +1 phase (00 -> 01). */
-    drive.via2.ddrb = 0x03u;
-    drive.via2.orb = 0x01u;
+    /* PB0/PB1 = STP outputs, PB2 = MTR. Hardware/VICE only advance the
+       stepper while the spindle motor is on; step with MTR high. */
+    drive.via2.ddrb = 0x07u;
+    drive.via2.orb = 0x05u; /* motor on, phase 01 (was 00) */
     c1541_media_step(&drive);
     if (drive.media.half_track != 11) fail("step out");
 
-    drive.via2.orb = 0x00u; /* 01 -> 00 is reverse (diff 3) */
+    drive.via2.orb = 0x04u; /* motor on, 01 -> 00 reverse (diff 3) */
     c1541_media_step(&drive);
     if (drive.media.half_track != 10) fail("step in");
 
     drive.media.half_track = C1541_MEDIA_MIN_HALF_TRACK;
     drive.media.stepper_phase = 0;
-    drive.via2.orb = 0x03u; /* would step in further */
-    /* 00 -> 11 is diff 3? (3-0)&3 = 3 → step in, clamped */
+    drive.via2.orb = 0x07u; /* motor on; would step in further */
+    /* 00 -> 11 is diff 3 → step in, clamped at head-stop */
     c1541_media_step(&drive);
     if (drive.media.half_track < C1541_MEDIA_MIN_HALF_TRACK) fail("underflow");
 
