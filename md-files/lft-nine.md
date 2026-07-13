@@ -338,6 +338,61 @@ frame visual comparison against VICE. The renderer's row presentation latch and
 the exact per-access MC progression still need to be reconciled before claiming
 full visual parity.
 
+### Session 4 handoff (2026-07-12)
+
+Two follow-up commits refined the sequencer without changing the remaining
+oracle result:
+
+- `9e36917 Align sprite DMA with VIC raster match` moves DMA activation to the
+  raster-Y match while keeping the first visible row on the following line.
+- `eba06c4 Model D017 falling edges without forced sprite crunch` removes the
+  incorrect forced-MC reset on a live `$D017` falling edge. VICE only toggles
+  the expansion flip-flop when the live expand bit is set; treating a falling
+  edge as a reset was not hardware-faithful.
+
+Focused `test_c64_vicii`, `test_c64_snapshot`, and
+`test_c64_cpu_validation` pass (the last needs an unlimited process stack on
+this macOS host because the enlarged `c64_t` test fixture exceeds the default
+stack limit). The corrected DMA lifetime gives the intended sprite contention:
+c64m reports `exec=48 stall=15` through R24-R42. This is necessary but not
+sufficient.
+
+The remaining measured divergence is the raster-kernel entry path:
+
+- VICE performs the six-write `$D021/$D011` kernel on every R24-R44 line.
+- c64m instead repeatedly writes `$D018` and polls `$D012` at PC `$9B7C`; at
+  R24 it reads `$18` and remains in the wait loop until approximately R42-R44,
+  when it finally emits a delayed six-write burst.
+- The two emulators poll `$D012` with the same values through R21. VICE leaves
+  that path after R21; c64m continues polling. The c64m interrupt-disable flag
+  is set during this wait, so this is not an IRQ-acceptance race.
+- The self-modifying code block `$9B70-$9BAF` was captured from both emulators
+  and is byte-identical, including the `$2D` comparison operand at `$9B7D`.
+
+Do **not** compare identical frame numbers as though they were equivalent demo
+states. A zero-page state byte (`$61`) differed in a trial (`$1e` in c64m frame
+6000 versus `$0a` in VICE's frame-6000 capture), proving the emulators' frame
+counters have a substantial boot/demo-phase offset. A trial around c64m frame
+5960 still showed the delayed kernel, but it did not align `$61`; a later
+capture window at frame 9500 produced no writes because the current env-gated
+write logger exits only when a write occurs beyond its requested frame window.
+
+Next work, in order:
+
+1. Make the oracle capture stop on a semantic state (for example `$61==$0a` at
+   the R74 update), rather than a raw frame number, and capture both VIC writes
+   and the `$D012` polling sequence there.
+2. Trace the producer of `$61` (c64m reports writes from PC `$8D0D`) and the
+   control-flow state that selects the `$9B75` wait path. Compare the update
+   sequence with VICE at the matched state.
+3. Fix that upstream phase/state divergence, then re-run the exact acceptance:
+   six writes on each R24-R44 line, approximately 202 VIC writes per frame,
+   and settled visual parity. Do not change broad BA release timing or sprite
+   composition without new trace evidence.
+
+All temporary c64m and VICE tracing additions from this session were removed;
+the c64m worktree was clean before this documentation update.
+
 ## Reproduction
 
 The sample is a BASIC wrapper:
