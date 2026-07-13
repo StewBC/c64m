@@ -483,16 +483,48 @@ per-scanline sprite repositioning is not landing consistently, so digits pile up
 This is consistent with the original cycle-timing thesis (items 4-6), not a
 simple "sprites off" fault.
 
-Suggested next work:
-1. Capture at `--turbo<=7`. Compare two consecutive live frames' sprite register
-   writes: break at the sprite-register rewrite block (~raster 216, item 5) on
-   successive frames and dump `$D000-$D02E` + `$D015`/`$D017`/`$D01D` to see which
-   sprites get repositioned late/not at all.
-2. Correlate the good-vs-bad multiplex frames with the `$D011`/`$D021`/`$D018`
-   raster-kernel write timing (is the kernel running a different number of lines
-   on bad frames?).
-3. Only then return to the VICE write-stream diff, aligned on a semantic anchor
-   (e.g. matched `$61` and intra-frame raster), not on raw frame numbers.
+### Session 7 (2026-07-13): the device kernel runs only every OTHER frame
+
+VIC write-stream capture (build `-DC64M_VIC_TRACE`, `C64M_VICLOG*`, `--turbo=200`
+-- turbo does not affect emulation/register writes, only the display path) over
+11 consecutive frames in the multiplex window (F5850-5860) shows a **strict,
+deterministic alternation**:
+
+| frame parity | VIC writes | raster range | content |
+| --- | --- | --- | --- |
+| even (5850,5852,...) | **192** | R9-R294  | full device kernel: per-line `$D018` bank-switch (R9-R25) + `$D021`/`$D011` six-write kernel (R27+) + sprite colour/data (R249-294) |
+| odd  (5851,5853,...) | **16**  | R249-R261 | only the `$F9` (R249) end-of-frame handler: sets sprite Y (`$D001/03/05/...`), arms `$D012=$09` |
+
+VICE emits ~202 writes **every** frame (session 4). So **c64m executes the
+lft-nine device kernel only every other frame.** On the "off" frames the sprites
+keep their base Y positions (no per-line multiplex), which is the clumping /
+flicker in the rendered output.
+
+**The IRQ chain (measured from `$D012` writes):**
+- even frame: `$09`(R9, device kernel) -> arms `$48`(R53) -> `$50`(R73) ->
+  `$C8`(R80) -> `$F9`(R200). The even-frame `$F9` handler (R249-294) does the
+  sprite colour/data end-work but **does NOT re-arm `$D012`** (no `$09` write in
+  even frames), so the compare stays `$F9`.
+- odd frame: `$F9` fires **again** at R249 (compare still `$F9`); this handler
+  (R249-261) arms `$D012=$09` for the next even frame.
+
+So the `$F9` (R249) raster IRQ fires on **every** frame, but its handler only
+arms `$09` on odd frames -- a two-frame cycle where VICE has a one-frame cycle.
+The decision therefore lives in the `$F9` handler: it branches on some
+frame-parity/state variable (or an extra/late `$F9` IRQ corrupts that state) and
+takes the "arm `$09`" branch only every other execution.
+
+**Next work (pinpointed):**
+1. Find and disassemble the `$F9` (raster 249) IRQ handler. Read the IRQ vector
+   (`$FFFE/$FFFF` with ROM banked, or `$0314/$0315`) from a running instance,
+   and the code that does `STA $D012` (`8D 12 D0`) with value `$09`. Identify the
+   state byte it branches on and where that byte is updated.
+2. Determine whether c64m is taking the wrong branch (state-byte value wrong) or
+   whether an extra/mis-timed `$F9` raster IRQ is firing (double-fire at line
+   249). Compare the raster-IRQ acceptance cycle for the `$F9` compare against
+   VICE -- this is the first place the two-frame vs one-frame cycle could diverge.
+3. Only then re-run the VICE write-stream diff, aligned on this `$F9`-handler
+   state, to confirm VICE arms `$09` every frame where c64m arms it every other.
 
 **Control-port tooling.** A minimal Python client for the C64M/1 control
 protocol was written during this session (connect, `get-state`/`get-cpu`,
