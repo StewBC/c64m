@@ -413,7 +413,7 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
         uint8_t  spr_y    = v->registers[1 + n * 2];
         uint32_t raster_y = v->timing.raster_line;
         if ((enable >> n) & 1u) {
-            if (raster_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
+            if (raster_y == (uint32_t)spr_y) {
                 v->sprite_mc[n]       = 0;
                 v->sprite_active[n]   = true;
                 v->sprite_crunched[n] = false;
@@ -431,7 +431,7 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
            while the schedule below records the real split pointer/data slots;
            a later renderer-pipeline change can retire this pre-latch without
            changing the schedule or BA interface. */
-        if (bus && v->sprite_active[n]) {
+        if (bus && v->sprite_active[n] && raster_y != (uint32_t)spr_y) {
             uint8_t mc = v->sprite_mc[n];
             bool advance_mc;
             uint16_t vic_bank = c64_bus_vic_bank_base(bus);
@@ -544,7 +544,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
             uint8_t spr_y = v->registers[1 + n * 2];
             if ((enable & (uint8_t)(1u << n)) != 0u &&
                 !v->sprite_active[n] &&
-                raster == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
+                raster == (uint32_t)spr_y) {
                 v->sprite_active[n] = true;
                 v->sprite_mc[n] = 0u;
                 v->sprite_mcbase[n] = 0u;
@@ -1108,18 +1108,18 @@ static void vicii_assert_raster_irq(vicii *v) {
 /* Returns true if sprite n will perform a DMA fetch on the NEXT raster line.
    Called during the previous line (at the sprite's BA-assert cycle) to determine
    whether to open a sprite BA window that spans the line boundary.
-   Sprites 3-4 display on the line whose number equals spr_y (no +1 offset);
-   the next_y == spr_y check mirrors the Y-match logic in vicii_fetch_sprites(). */
+   DMA starts on the line whose number equals spr_y, matching the VIC-II
+   cycle-55/56 DMA check. Border masking may defer visible pixels to the next
+   line, but the sprite sequencer is already active on the Y-match line. */
 static bool vicii_sprite_dma_next_line(const vicii *v, int n) {
     uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t  spr_y    = v->registers[1 + n * 2];
-    uint32_t next_y   = (v->timing.raster_line + 1u) % v->timing.lines_per_frame;
 
     if (v->sprite_active[n]) {
         return true;
     }
     if ((enable >> n) & 1u) {
-        if (next_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
+        if (v->timing.raster_line == (uint32_t)spr_y) {
             return true;
         }
     }
@@ -1134,7 +1134,7 @@ static bool vicii_sprite_dma_current_line(const vicii *v, int n) {
         return true;
     }
     return ((enable >> n) & 1u) != 0u &&
-        v->timing.raster_line == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame;
+        v->timing.raster_line == (uint32_t)spr_y;
 }
 
 static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {
