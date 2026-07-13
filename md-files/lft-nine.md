@@ -597,34 +597,67 @@ window where c64m alternates **192/16**. So the device kernel is meant to run
 - `INC $CD @ $904E` runs at **raster ~$22-$25 (34-37)**, i.e. *inside* the device
   kernel (R9-R200) -- so the `$CD`-setting sequencer runs only on device frames.
 
-**So `$CD` has (at least) two actors and a race:** on a c64m DEVICE frame the R35
-`INC` sets `$CD=1`, yet the same frame's `$9A05` (R249) reads `$CD=0` -> `$CD` is
-**cleared between R35 and R249 on device frames**; on an OFF frame `$9A05` reads
-`$CD!=0` (arms `$09`) even though the R35 `INC` did not run -> `$CD` is **set by
-something other than the `$904E` INC**. The other writer is `STA $CD @ $1C61`
-(in a region that disassembles as SMC/undocumented-opcode code -- needs careful
-alignment or a live break to read). In VICE this settles to `$CD!=0` at `$9A05`
-every frame; in c64m it alternates.
+### Session 7 (cont.): full mechanism -- a 3-flag IRQ producer/consumer that c64m can't complete every frame
+
+Interleaved live breaks (`$904E` INC, `$9A05` CHK, `$9B75` device kernel,
+`$9A09` arm-path) reconstruct the exact 2-frame cycle. **Correcting earlier
+guesses in this note:** the `$99BF`/`$9A05` check runs at **raster ~2-6 (top of
+frame), NOT R249**; and **`STA $CD @ $1C61` NEVER executes** in this phase, so
+`INC $CD @ $904E` is `$CD`'s only *direct* writer.
+
+Measured 2-frame cycle:
+- **Device frame:** CHK@R~5 reads `$CD=1` -> arm path (`$9A09`) arms `$09`, vector
+  `$9B00`; **device kernel runs** (`$9B75` seen at R12+). No `INC`. `$CD` is
+  cleared to 0 later in this frame.
+- **Non-device frame:** CHK@R~3 reads `$CD=0` -> **colour path** (`$9A46`); then
+  **`INC $CD @ $904E`** at R34 sets `$CD=1` (via the `$8600` sprite sequencer).
+
+So c64m runs **either** the device kernel **or** the `$CD`-setting sequencer per
+frame, alternating. VICE runs **both every frame** (device kernel + the sprite
+sequencer + arms `$09`), which is why VICE displays every frame.
+
+**It's a three-flag state machine.** The `$99BF` dispatcher and colour path branch
+on `$CD`, `$CE`, `$CF`: `$CD` gates the device kernel; the colour path
+(`$9A46: LDA $CE / BEQ; ... $9A92: LDA $CF / BEQ`) gates two colour-split work
+items (it arms handler `$9CBA` at ~R111). The main loop `$931A` spins until
+`$CD|$CE|$CF == 0`. These flags are the main-loop <-> IRQ work queue.
+
+**`$CD` clear:** only-`INC` can't produce 0->1->0, so the clear is an
+indexed/indirect store or a zero-page memset. Strong candidate: the routine at
+**`$8000`** (reached per frame) does `JSR $8017`, and `$8017` runs
+`LDA #$00 / LDX #$02 / $801B: STA $00,X / INX / BNE` -- a **zero-page memset of
+`$02-$FF` that clears `$CD/$CE/$CF`** -- then sets IRQ vector `$99BF`, `CLI`,
+`JMP $8304`. (Unverified: confirm `$8000`/`$8017` runs once per frame and is the
+clear.)
+
+**ROOT CAUSE (now firmly localized):** c64m fails to complete all of the demo's
+per-frame IRQ work; specifically the device-kernel + sprite-sequencer pair does
+not both fit in one c64m frame, so `$CD` (device) is serviced only every other
+frame. VICE fits both every frame. This is a **CPU-budget / cycle-timing
+shortfall** -- almost certainly the sprite-DMA/BA stall accounting or raster-IRQ
+acceptance cycle (items 4-6): c64m spends more stolen/stalled cycles per device
+frame than real hardware, pushing the sequencer's work into the next frame.
 
 **Next work (final mile):**
-1. Nail the `$CD` clear: find what executes `STA $CD @ $1C61` (and any other
-   `$CD` write) and at which raster on device vs off frames -- break there
-   live (`break-create exec $1C61`) or interleave breaks at `$904E`(R35) and
-   `$9A05`(R249) logging `$CD` to get the exact set/clear timeline in one frame.
-2. Then find WHY that clear/set lands differently than VICE -- almost certainly a
-   cycle-timing difference (sprite-DMA/BA stall count or raster-IRQ acceptance
-   cycle) that shifts when `$1C61`/the device kernel runs relative to R249. Use
-   `C64M_BALOG` on a device vs off frame and the c64m-vs-VICE `$D012`/IRQ diff.
-   VICE recipe: `VICE_VICLOG=/tmp/v.txt VICE_VICLOG_F0=5980 VICE_VICLOG_F1=6000
-   VICE_VICLOG_EXIT=1 timeout 120 src/x64sc -directory data -console -sounddev
-   dummy -warp -autostart <prg>` from `/Users/swessels/Develop/svm/vice-emu-code/
-   vice` (x64sc built, patch in place).
+1. Confirm the `$CD` clear is the `$8017` memset via `$8000` (break `exec $8000`
+   / `$8017`; if they time out under banking, bracket with `$904E`/`$9B75` breaks
+   reading `$CD`).
+2. **Decisive:** `C64M_BALOG` per-raster CPU budget on a device frame -- does the
+   device kernel + sprite DMA consume so much of the frame that the R34 sequencer
+   IRQ can't run? Compare the c64m device-frame budget/IRQ timing against VICE
+   (add the same exec/stall trace to VICE's core, or compare the `$D012`/IRQ
+   acceptance rasters). VICE recipe: `VICE_VICLOG=/tmp/v.txt VICE_VICLOG_F0=5980
+   VICE_VICLOG_F1=6000 VICE_VICLOG_EXIT=1 timeout 120 src/x64sc -directory data
+   -console -sounddev dummy -warp -autostart <prg>` from
+   `/Users/swessels/Develop/svm/vice-emu-code/vice` (x64sc built, patch in place).
+3. When the cycle discrepancy is found, fix it under the existing sprite-BA/DMA
+   PAL/NTSC tests + boot/robocop suites (no regressions).
 
 NOTE: control-port `break-create exec` sometimes times out on addresses in
-banked/low-RAM code that runs under IRQ banking (`$8619`, `$8606`, `$9322` never
-hit) while `$904E`/`$9A05` work -- prefer VIC-write-trace or addresses proven by
-a call-stack `dest`. Also: turbo blows past the ~5700-6200 window fast; relaunch
-fresh before each measurement.
+banked/low-RAM code that runs under IRQ banking (`$8619`, `$8606`, `$9322`, `$1C61`
+never hit) while `$904E`/`$9A05`/`$9B75`/`$9A09` work -- prefer VIC-write-trace or
+addresses proven by a call-stack `dest`. Also: turbo blows past the ~5700-6200
+window fast; relaunch fresh before each measurement.
 
 **Control-port tooling (committed).** `tools/c64_control_client.py` is a minimal
 Python client for the C64M/1 control protocol (connect, `get-state`/`get-cpu`,
