@@ -975,3 +975,42 @@ verify VICE_SPRDMA fopen and the independent frame counter) to see exactly which
 sprites stay active through R42 and reproduce that lifetime. Then re-measure:
 BALOG stall flat ~15 across R26-R44, ~202 writes/frame, digits spread. The branch
 is a strict improvement (alternation fixed, tests green) pending that final piece.
+
+### Session 9 (2026-07-13): VICE sprite-DMA ground truth reframes the remaining bug
+
+Merged the Session-8 sprite-DMA fix to `main` (every-other-frame alternation
+fixed; the user confirms the nine digits now multiplex correctly around all four
+borders in the SDL build). Remaining visible issue: the **side borders are not
+black** -- they should form a black rectangle framing the blue field ("full
+border mode"), but show blue.
+
+Added a per-line `sprite_dma` bitmask trace to VICE viciisc `check_sprite_display`
+(env `VICE_SPRDMA`/`_F0`/`_F1`/`_EXIT`; **must rebuild `src/viciisc` then relink,
+`make -C src/viciisc && make -C src x64sc`** -- relinking x64sc alone silently
+keeps the old lib). Captured VICE's true multiplex (one frame, cross-checked
+against VICLOG in the same run so frames align):
+
+- **VICE has NO sprites DMA-active at R8-R48** (dma=00). Sprites multiplex in a
+  **staircase** down the screen: R63-84 (spr 6,7) -> R96-120 (5,4) -> R149-173
+  (3,2) -> R196-236 (0,1,7). Eight sprites reused for nine digits.
+- **c64m over-activates**: BALOG sprite theft is **continuous R9-R60** (plus
+  sparse single-line theft every ~8 lines after). So c64m keeps sprites
+  DMA-active in the top-border region where VICE has none.
+
+**This corrects the earlier model:** the crunch's job is NOT to keep flanking
+sprites active through R42 -- it is (at least in part) to keep the top region
+CLEAR of sprites so the $D021/$D011 six-write kernel can paint the black frame,
+and to free sprites for the staircase multiplex. c64m's residual over-activation
+at R9-R60 steals cycles the top-border kernel needs and is the likely cause of
+the non-black side borders.
+
+Tried firing the `$D017` crunch bit-magic at the write cycle (C14/15 instead of
+hardcoded 15): made it WORSE (theft R9-R75). Reverted. So the bit-magic is not
+the mechanism here; the over-activation is driven by sprite **Y positions / DMA
+on-timing** during the multiplex, not the crunch bit-magic.
+
+**Next:** trace c64m's per-line sprite `enable`/Y/`sprite_active` vs VICE's
+staircase to find why c64m activates sprites at R9-R60 (wrong Y latch timing in
+the multiplex? DMA-on not matching VICE's cycle-55/56 exactly?). Target: c64m
+sprite theft matches VICE's staircase (none R8-R48; bands R63+). VICE trace tool:
+`VICE_SPRDMA` in `src/viciisc/vicii-cycle.c` check_sprite_display.
