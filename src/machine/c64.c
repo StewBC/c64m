@@ -234,7 +234,7 @@ static void c64_balog_maybe_emit(c64_t *machine) {
                         (unsigned long long)g_balog_exec, (unsigned long long)g_balog_stall);
             } else if (fr > f1) {
                 fflush(balog);
-                if (do_exit) { _Exit(0); }
+                if (do_exit) { exit(0); }
             }
             g_balog_exec = 0; g_balog_stall = 0;
             prev_raster = rl;
