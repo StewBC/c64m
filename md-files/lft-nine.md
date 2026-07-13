@@ -1,6 +1,27 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); progress update 2026-07-12.
+Date: 2026-07-11 (original diagnosis); updated through Session 7, 2026-07-13.
+
+> ## START HERE (current state, 2026-07-13)
+>
+> **Latest and sharpest finding: jump to "### Session 7" below.** The bug is now
+> localized: c64m runs the lft-nine device kernel **only every other frame**
+> (192/16 VIC-write alternation vs VICE's ~202 every frame). The gate is the
+> zero-page flag **`$CD`**, tested at `$9A05` in the shared raster-IRQ dispatcher
+> `$99BF`; it toggles a clean `0,1,0,1` per frame where VICE keeps it set. Two
+> candidate root causes are written up at the end of Session 7 (CPU-budget
+> starvation tied to sprite-DMA/BA timing, or IRQ-count parity). The decisive
+> next step is a VICE write-stream + `$CD` diff aligned on the `$CD` handshake.
+>
+> **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
+> and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
+> trace build is `cmake -B build-trace -DCMAKE_C_FLAGS=-DC64M_VIC_TRACE`.
+> **Capture lft-nine at `--turbo<=7`** or the live renderer is off and `get-frame`
+> returns a misleading geometric debug frame (see Session 6).
+>
+> Earlier sessions below are kept for the full trail. Two superseded leads: the
+> "sprite crunch (MCBASE)" root-cause (Session 2, scaffolding since removed) and
+> the "$61/$9B75 wait-path" lead (Session 6, a frame-misalignment artifact).
 
 > **See "## Implementation progress (2026-07-12)" below** for what has since been
 > built (side-border flip-flop, dot-anchored render mapping, idle graphics in the
@@ -562,15 +583,16 @@ every frame where c64m alternates; (c) trace the exact producer/consumer of `$CD
 (`$904E` INC vs `$1C61` STA vs the device-kernel clear) to see which side loses
 the race in c64m.
 
-**Control-port tooling.** A minimal Python client for the C64M/1 control
-protocol was written during this session (connect, `get-state`/`get-cpu`,
-`get-memory`, `get-frame`, `break-create exec`, `run`/`pause`/`wait-paused`).
-It is currently in the session scratchpad, not committed. Notes for reuse:
-addresses take `$`-hex (base-0 parse); `get-memory` length must be decimal;
-`break-create` via the control port only supports **`exec`** breakpoints (the
-runtime engine supports read/write access, but `control_parse_breakpoint_
-definition` in `src/main.c` hard-requires the `exec` keyword) -- a read/write
-watchpoint would need a small control-protocol extension.
+**Control-port tooling (committed).** `tools/c64_control_client.py` is a minimal
+Python client for the C64M/1 control protocol (connect, `get-state`/`get-cpu`,
+`get-memory`, `get-frame`, `break-create exec`, `run`/`pause`/`wait-paused`);
+`tools/dis6502.py` is a small 6502 disassembler for reading depacked demo code.
+Both have usage headers. Reuse notes: addresses take `$`-hex (base-0 parse);
+`get-memory` length must be decimal (max 1024/call); `break-create` via the
+control port only supports **`exec`** breakpoints (the runtime engine supports
+read/write access, but `control_parse_breakpoint_definition` in `src/main.c`
+hard-requires the `exec` keyword) -- a read/write watchpoint (which would let a
+future agent break on writes to `$CD`) needs a small control-protocol extension.
 
 ## Reproduction
 

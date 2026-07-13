@@ -4,6 +4,7 @@
 snapshots/
 assets/
 build/
+build-trace/
 disks/
 programs/
 samples/
