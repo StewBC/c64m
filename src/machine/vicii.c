@@ -466,16 +466,11 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
 static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t y_expand = v->registers[VICII_REG_SPR_Y_EXPAND];
-    bool d017_changed[8];
     int n;
 
     for (n = 0; n < 8; ++n) {
         bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
-        d017_changed[n] = live_expand != v->sprite_y_expand_prev[n];
         v->sprite_y_expand_prev[n] = live_expand;
-        if (d017_changed[n] && v->sprite_active[n]) {
-            v->sprite_y_expand_pending[n] = true;
-        }
     }
 
     if (cycle == 15u) {
@@ -490,20 +485,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     if (cycle == 16u) {
         for (n = 0; n < 8; ++n) {
             bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
-            bool crunched = v->sprite_y_expand_pending[n];
-
             if (!v->sprite_active[n]) continue;
-
-            if (crunched) {
-                /* A live D017 transition changes the expansion branch and
-                   prevents the ordinary end-of-row DMA shutdown. */
-                v->sprite_mcbase[n] = 0u;
-                v->sprite_mc[n] = 0u;
-                v->sprite_crunched[n] = true;
-                v->sprite_y_exp_ff[n] = live_expand;
-                v->sprite_y_expand_pending[n] = false;
-                continue;
-            }
 
             if (live_expand) {
                 v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
@@ -523,16 +505,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
         for (n = 0; n < 8; ++n) {
             bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
             if (!v->sprite_active[n]) continue;
-            if (v->sprite_y_expand_pending[n]) {
-                /* D017 can change on the preceding line and be sampled by
-                   the cycle-55 expansion step. Preserve the resulting crunch
-                   instead of allowing the normal row-end shutdown. */
-                v->sprite_y_exp_ff[n] = live_expand;
-                v->sprite_mcbase[n] = 0u;
-                v->sprite_mc[n] = 0u;
-                v->sprite_crunched[n] = true;
-                v->sprite_y_expand_pending[n] = false;
-            } else if (live_expand) {
+            if (live_expand) {
                 v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
             }
         }
