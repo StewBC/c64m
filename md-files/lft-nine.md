@@ -1,20 +1,21 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 13, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 14, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest finding: jump to "### Session 13" below.** Sprite crunch is now
-> **stable every frame**: `$D015` @ C48, `$D017` $35 @ C38 / $00 @ **C14**
-> (100/100 frames), flanking DMA R9-R73. Root cause of the remaining 25% miss
-> was missing VICE `INTERRUPT_DELAY` (2 Phi2 clocks) on the CPU-visible VIC
-> IRQ line — without it the `$9B05` Timer B stabiliser saw too many early
-> arrivals and could not lock the crunch cycle.
+> **Latest finding: jump to "### Session 14" below.** Crunch stays **100%
+> locked** (C48/C38/C14). The write-count / first-`$D021`-raster sweep
+> (119–205 writes, first kernel line R24–R44) is **the same pattern in VICE**
+> — it is `$61` animation, not a c64m defect. At matched phase (202 writes,
+> first `$D021` @ R24) structural VIC-write match is **~96%** and `$D021/$D011`
+> values match exactly; six-write phase is C17 vs VICE C16 (within VICE's own
+> C13–C21 spread for R24 frames).
 >
-> **Still open for full visual 1:1:** six-write kernel line range still varies
-> with animation (first `$D021` often R33-R44, sometimes R24-R27; write count
-> 119-205, with many frames at VICE's ~202). Re-check settled black frame at
-> `--turbo<=7`.
+> **Still open for full visual 1:1:** fine multiplex X/cycle residuals mid-frame;
+> settled black-frame look at `--turbo<=7` (border sprites 5/7 + opened
+> border). Y-match-line sprite presentation is primed after DMA-on so border
+> digits are not blank on their first raster.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -1185,3 +1186,34 @@ crunch-stability failure.
 **Tests:** focused VIC-II/CIA/boot/snapshot green; cross-line BA fixture updated
 to set `sprite_active` (DMA already on by cycle 60 of the Y-match line under
 the live-DMA-only BA model).
+
+### Session 14 (2026-07-13): write-count sweep is VICE-identical animation
+
+**Hypothesis killed:** varying six-write entry (R24 vs R44) and write totals
+(119 vs 202) looked like a residual budget bug. A 600-frame VICE oracle
+(F5500–F6100) shows the **same** first-`$D021` distribution (R24–R44) and the
+**same** write-count histogram (119…205, with peaks at 202–205). Both emulators
+sweep `$61` (digit animation → `$D018` multiplex loop length); when `$61` is
+large the six-write starts later and fewer colour-split lines fit before the
+region ends.
+
+**Matched-phase compare** (c64m F5893 vs VICE F5569, both w=202, first `$D021`
+@ R24):
+
+| item | result |
+| --- | --- |
+| `$D015/$D017` | identical C48 / C38 / C14 |
+| `$D018` R12–R22 | identical cycles and values |
+| `$D021/$D011` kernel values R24–R45 | **identical** (04/1E/03/70 pattern) |
+| first `$D021` cycle | c64m C17 flat; VICE C16 on this frame (VICE R24 frames span C13–C21) |
+| `(raster,reg,val)` sequence | **194/202 (96%)** match; first miss ~R50–R51 multiplex packing |
+
+So the device kernel is no longer the main structural gap. Remaining visual
+work is presentation/multiplex fine timing and human check of the black sprite
+frame.
+
+**Presentation fix:** when DMA turns on at cycles 54/55, prime
+`sprite_visible` + first-row data + line latches for that sprite. Previously
+cycle-0 `prepare_sprite_line` ran before DMA-on on the Y-match line, so border
+sprites were blank for their first raster (bad for digits jammed in the top
+border).

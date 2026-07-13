@@ -522,6 +522,12 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
                 v->sprite_active[n]   = true;
                 v->sprite_mcbase[n]   = 0u;
                 v->sprite_y_exp_ff[n] = true;
+                /* Mark for a same-line presentation fetch (see
+                   vicii_prime_sprite_row_after_dma_on). cycle-0 prepare ran
+                   before DMA-on so the Y-match line would otherwise stay
+                   invisible for the rest of this raster. */
+                v->sprite_visible[n] = true;
+                v->sprite_mc[n] = 0u;
             }
         }
     }
@@ -1391,11 +1397,58 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         }
     }
 
-    vicii_step_sprite_sequencer(v, cycle);
+    {
+        uint8_t active_before = 0;
+        int n;
+        for (n = 0; n < 8; ++n) {
+            if (v->sprite_active[n]) {
+                active_before |= (uint8_t)(1u << n);
+            }
+        }
+        vicii_step_sprite_sequencer(v, cycle);
 
-    if (cycle == 0) {
-        vicii_prepare_sprite_line(v, bus);
-        vicii_latch_sprite_line_state(v);
+        if (cycle == 0) {
+            vicii_prepare_sprite_line(v, bus);
+            vicii_latch_sprite_line_state(v);
+        } else if ((cycle == 54u || cycle == 55u) && bus != NULL) {
+            /* Same-line presentation fetch for sprites that just turned DMA on.
+               cycle-0 prepare ran before DMA-on, so without this the Y-match
+               line never latches a row for the renderer. */
+            for (n = 0; n < 8; ++n) {
+                uint8_t bit = (uint8_t)(1u << n);
+                uint16_t vic_bank;
+                uint16_t screen_base;
+                uint16_t ptr_addr;
+                uint16_t data_base;
+                uint8_t enable;
+                uint8_t x_msb;
+
+                if ((active_before & bit) != 0u || !v->sprite_active[n]) {
+                    continue;
+                }
+
+                vic_bank = c64_bus_vic_bank_base(bus);
+                screen_base = (uint16_t)(((v->registers[0x18] >> 4) & 0x0fu) * 0x0400u);
+                ptr_addr = (uint16_t)(vic_bank + screen_base + 0x03f8u + (uint16_t)n);
+                v->sprite_pointer[n] = c64_bus_vic_read_ram(bus, ptr_addr);
+                data_base = (uint16_t)(vic_bank + (uint16_t)v->sprite_pointer[n] * 64u);
+                v->sprite_data[n][0] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + 0u));
+                v->sprite_data[n][1] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + 1u));
+                v->sprite_data[n][2] = c64_bus_vic_read_ram(bus, (uint16_t)(data_base + 2u));
+
+                enable = v->registers[VICII_REG_SPR_ENABLE];
+                x_msb = v->registers[VICII_REG_SPR_X_MSB];
+                v->sprite_line_enabled[n] = ((enable >> n) & 1u) != 0;
+                v->sprite_line_x[n] = (uint16_t)(v->registers[(uint8_t)(n * 2)] |
+                    (uint16_t)(((x_msb >> n) & 1u) << 8));
+                v->sprite_line_x_expand[n] =
+                    ((v->registers[VICII_REG_SPR_X_EXPAND] >> n) & 1u) != 0;
+                v->sprite_line_multicolor[n] =
+                    ((v->registers[VICII_REG_SPR_MULTICOLOR] >> n) & 1u) != 0;
+                v->sprite_line_color[n] =
+                    (uint8_t)(v->registers[0x27u + (uint8_t)n] & 0x0Fu);
+            }
+        }
     }
 
     vicii_schedule_bus_access(v, cycle);
