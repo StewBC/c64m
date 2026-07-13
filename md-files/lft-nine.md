@@ -141,6 +141,203 @@ The Steps A-D border-opening substrate (main-border flip-flop, dot-anchored
 mapping, idle over-border graphics) is a prerequisite and appears correct; it is
 not the remaining blocker.
 
+## Root cause found via VICE write-stream diff (2026-07-12, session 2)
+
+Using the VICE-oracle method (`md-files/vice-oracle-tracing.md`) a bidirectional
+VIC-register write trace was built in **both** emulators and diffed at the
+multiplex phase (~frame 6000, ~1m49s after RUN, reached fast with `--turbo=200`;
+note `RUNTIME_TURBO_MAX_MULTIPLIER=256`).
+
+Instrumentation (throwaway, env-gated, **uncommitted**):
+- c64m `vicii_write_register` logs `F<frame> R<raster> C<cycle> r<reg> v<val>`
+  via `C64M_VICLOG` / `C64M_VICLOG_F0`/`F1`/`_EXIT`.
+- c64m `c64.c` logs per-raster CPU budget `F R exec=<n> stall=<n>` via
+  `C64M_BALOG` (reuses the same frame-window env vars).
+- VICE `src/viciisc/vicii-mem.c` `vicii_store` mirrors the write log via
+  `VICE_VICLOG` / `VICE_VICLOG_F0`/`F1`/`_EXIT` (frame counter derived from
+  raster wraps).
+
+### The measured divergence
+
+- VICE emits a stable **202-204 VIC writes/frame**; c64m only **134**. Sprite
+  setup, IRQ acks (10), and `$D012` writes (5) match exactly; the deficit is
+  entirely in the timed kernel (`$D021` 86 vs 30, `$D011` 49 vs 21).
+- Per raster line in the top "device" region: **VICE runs the 6-write kernel on
+  every line R24-R44** (`$D021=07 @C16, $D011=18 @C23, $D021=18 @C30,
+  $D021=02 @C34, $D021=70 @C38, $D011=70 @C42`). **c64m runs only `$D018` once
+  per line R24-R37**, then crams a desynced, cycle-walking burst into R38-R43.
+  The kernel *exit* (~R44/R50) re-aligns because it is raster-IRQ triggered.
+- The c64m per-raster CPU budget is decisive:
+  `R20-R30 exec=48 stall=15` (sprites stealing) then **`R31-R40 exec=63
+  stall=0`** -- c64m hands the CPU the entire line because the flanking sprites
+  have **stopped stealing DMA cycles** at R31, exactly where the kernel needs
+  their theft to stay cycle-locked.
+
+### Root cause: no cycle-accurate sprite crunch (MCBASE) modelling
+
+The demo keeps its four flanking sprites (0,2,4,6) DMA-active across the whole
+device by **crunching** them: it toggles `$D017` (Y-expand) `$35`->`$00`
+*mid-line* (measured at c64m R11 C30->C54; VICE R11 C38 -> R12 C14) so the toggle
+straddles the VIC's real per-cycle sprite-sequencer steps (the cycle 15/16
+MCBASE increment + `MCBASE==63` DMA-off check, and the cycle 55/56 Y-expand
+flip-flop toggle). This corrupts MCBASE so the sprite never reaches 63 and stays
+DMA-active (stretched), preserving the fixed BA/cycle-theft pattern the timed
+kernel depends on.
+
+c64m's `vicii_prepare_sprite_line` (`src/machine/vicii.c:401`) collapses **all**
+of that -- `sprite_mc` advance, the `sprite_y_exp_ff` toggle, and the
+`mc >= 63 -> sprite_active=false` check -- into a **single batch at cycle 0**,
+reading `$D017` at that one instant (`vicii.c:435`). A mid-line `$D017` write
+therefore has no effect: the flanking sprites deactivate after the normal 21
+rows (R31), stop stealing cycles, and the cycle-exact kernel loses sync. This is
+the source of both the "blue where it should be black" (the black-frame `$D021`
+kernel never runs per-line) and the downstream multiplex/bottom-border errors.
+
+### Fix direction (the authorised core rework)
+
+Model the VIC-II sprite sequencer per cycle instead of batching at cycle 0, at
+least for the MCBASE/MC path:
+- cycle 15: `MCBASE` increment gated by the Y-expand flip-flop (Bauer 3.8.1);
+- cycle 16: second increment + `MCBASE==63` -> clear sprite DMA;
+- cycle 55/56: Y-expand flip-flop toggle and DMA-on check (sprite becomes
+  active when `$D015` set and `MCBASE` reload conditions hold);
+- read `$D017` live at each of those cycles so a mid-line toggle lands correctly.
+
+This must stay guarded by the existing sprite-BA/DMA tests (PAL/NTSC tables) and
+the boot/robocop suites so other titles do not regress. Re-verify with the same
+VICE write-stream diff: success is the c64m budget showing `stall>0` continuing
+through R31-R40 and the 6-write kernel running on every line R24-R44.
+
+### Decision on resume (2026-07-12)
+
+Chosen approach: **Full per-cycle sprite sequencer** (not the targeted-crunch
+approximation). The implementation is now in progress in `src/machine/vicii.c`;
+the existing renderer row latch remains temporarily as the presentation path
+while the DMA/MCBASE state becomes cycle-driven.
+
+### Instrumentation still in the tree (uncommitted, env-gated, throwaway)
+
+All three are debug-only and inert unless their env var is set. Remove (or keep
+behind the env gate) once the fix lands; they are the verification harness so do
+not delete them before re-verifying.
+
+- **c64m VIC write log** -- `src/machine/vicii.c`, top of
+  `vicii_write_register` (just after `reg = addr & 0x3F`), plus `#include
+  <stdlib.h>`. Env: `C64M_VICLOG`, `C64M_VICLOG_F0`, `C64M_VICLOG_F1`,
+  `C64M_VICLOG_EXIT`.
+- **c64m per-raster CPU budget** -- `src/machine/c64.c`: `c64_balog_*`
+  helpers above `c64_advance_one_cycle`, with `c64_balog_mark(...)` calls in
+  `c64_step_micro_cycle`, `c64_step_host_ba_stall`, and the pending-trace
+  advance branch. Env: `C64M_BALOG` (reuses the `C64M_VICLOG_F0/F1/EXIT`
+  window). exec+stall sums to 63/line (classification is complete).
+- **VICE VIC write log** -- `/Users/swessels/Develop/svm/vice-emu-code/vice/`
+  `src/viciisc/vicii-mem.c`, top of `vicii_store` (just after `addr &= 0x3f`).
+  Env: `VICE_VICLOG`, `VICE_VICLOG_F0`, `VICE_VICLOG_F1`, `VICE_VICLOG_EXIT`.
+  Rebuild per `md-files/vice-oracle-tracing.md` (the doc-gen step fails on
+  macOS bash 3.2 *after* `src/x64sc` links -- that is expected; `rm -f
+  src/x64sc` first and check the timestamp).
+
+### Exact capture commands (multiplex phase, ~frame 6000)
+
+```sh
+# c64m -- VIC writes for one frame (turbo <=256; 300 silently falls back to 1x)
+rm -f /tmp/c64m_vic.txt
+C64M_VICLOG=/tmp/c64m_vic.txt C64M_VICLOG_F0=6000 C64M_VICLOG_F1=6000 \
+  C64M_VICLOG_EXIT=1 timeout 90 ./build/c64m --headless --control-port 17652 \
+  --pal -a --turbo=200 -p samples/lft-nine.prg
+
+# c64m -- per-raster CPU budget (same window)
+rm -f /tmp/c64m_ba.txt
+C64M_BALOG=/tmp/c64m_ba.txt C64M_VICLOG_F0=6000 C64M_VICLOG_F1=6000 \
+  C64M_VICLOG_EXIT=1 timeout 90 ./build/c64m --headless --control-port 17652 \
+  --pal -a --turbo=200 -p samples/lft-nine.prg
+
+# VICE -- VIC writes (warp; frame counter has a boot-offset vs c64m, so grab a
+# window and align by content/structure, not by absolute frame number)
+cd /Users/swessels/Develop/svm/vice-emu-code/vice
+rm -f /tmp/vice_vic.txt
+VICE_VICLOG=/tmp/vice_vic.txt VICE_VICLOG_F0=6000 VICE_VICLOG_F1=6010 \
+  VICE_VICLOG_EXIT=1 timeout 90 src/x64sc -directory data -console \
+  -sounddev dummy -warp \
+  -autostart /Users/swessels/Develop/github/personal/c64m/samples/lft-nine.prg
+```
+
+Useful diffs: per-raster write counts
+`grep '^F6000 ' f | grep -oE '^F6000 R[0-9]+' | sort ... | uniq -c`; per-line
+detail `grep -E '^F6000 R2[4-8] '`; content sequence
+`grep '^F6000 ' f | grep -oE 'r[0-9A-F]{2} v[0-9A-F]{2}'` then `diff`.
+
+### Full-sequencer implementation plan (resume here)
+
+Goal: replace the batch-at-cycle-0 sprite DMA/MCBASE evaluation in
+`vicii_prepare_sprite_line` (`src/machine/vicii.c:401-454`) with per-cycle
+sprite-sequencer steps so a mid-line `$D017` write lands correctly. Reference:
+Bauer "The MOS 6567/6569 video controller" sections 3.8.1-3.8.2. Per-sprite
+state today: `sprite_mc[n]` (=MC), `sprite_active[n]` (=DMA), `sprite_y_exp_ff[n]`
+(=expansion flip-flop), `sprite_visible[n]`, `sprite_mcbase` does **not** exist
+yet -- add `sprite_mcbase[n]` (MC and MCBASE are distinct on hardware).
+
+Cycle rules to implement (PAL cycle numbers; NTSC shares the logic):
+1. **Sprite s-accesses** (already scheduled via `vicii_sprite_slot`): each
+   active sprite reads 3 bytes across its two cycles; MC increments by 1 per
+   byte during the accesses (0x00..0x3F). Keep the existing fetch, but drive MC
+   per access rather than `+3` in one shot if needed for exactness.
+2. **Cycle 15**: `MCBASE = MC` for every sprite (latch back).
+3. **Cycle 16**: for each sprite, if the expansion flip-flop is set, toggle it;
+   then if the flip-flop is now clear, `MCBASE += 2` and, immediately after, if
+   `MCBASE == 63` (i.e. crossed) advance by 1 more and **turn DMA off**
+   (`sprite_active=false`). This cycle-16 `MCBASE==63` check is what the crunch
+   defeats. (Follow Bauer exactly -- the +2/+1 and the 63 test order matter.)
+4. **Cycle 55 and 58**: expansion flip-flop toggle for expanded sprites
+   (cycle 55), and the **DMA-on check** (cycles 55/56): if `$D015` bit set and
+   `sprite_y == raster & 0xFF` and DMA off, turn DMA on, `MCBASE=0`, and set the
+   flip-flop from `$D017`.
+5. **Cycle 58**: `MC = MCBASE` (reload for the display row); DMA-off recheck.
+6. Read `$D017`/`$D015` **live** at cycles 16/55/56/58 (do not cache at cycle 0).
+
+Integrate with the existing BA schedule: `vicii_derive_ba_from_schedule` /
+`vicii_sprite_dma_current_line`/`_next_line` must consult the new per-cycle DMA
+state so BA windows track crunched (still-active) sprites. The renderer's
+"pre-latch a full sprite row at cycle 0" shortcut (comment at
+`vicii.c:422-426`) will need to move to the real per-cycle fetch or be proven
+equivalent under crunch.
+
+Verification (must all hold):
+- `ctest` green, esp. the sprite-BA/DMA PAL/NTSC tests, `c64_boot_progression`
+  region, and the side-border live tests. (Pre-existing unrelated failures at
+  session start: `c64_boot_progression` irq-vector and `c64_robocop_g64`
+  gap-table -- confirm they are unchanged, not newly broken.)
+- c64m budget capture shows **`stall>0` continuing through R31-R40** (sprites
+  still stealing), matching VICE.
+- c64m VIC-write capture shows the **6-write kernel on every line R24-R44** with
+  values `$D021=07/$D011=18/$D021=18/$D021=02/$D021=70/$D011=70`, and the
+  per-frame write count rising from 134 toward VICE's ~202.
+- Then re-check the settled frame visually (goal = settled visual parity): the
+  black frame should render black, not blue.
+
+Optional first step chosen-against this session but still cheap if wanted:
+add the same `exec/stall` budget trace to VICE's per-cycle core to pin the exact
+target stall pattern per line before coding.
+
+## Implementation progress (2026-07-12, session 3)
+
+- Added per-sprite MCBASE, live `$D017` edge sampling, pending edge delivery at
+  the cycle-15/16 and cycle-55/56 sequencer boundaries, and explicit crunched
+  DMA state. The state is included in snapshot version 4.
+- Preserved the existing pre-latched sprite-row presentation while the bus/BA
+  path uses the new sequencer lifetime. This keeps the existing sprite display
+  tests stable while isolating the timing change.
+- The c64m oracle budget now matches the required timing: at frame 6000,
+  raster lines R24-R40 each report `exec=48 stall=15`, rather than the prior
+  `exec=63 stall=0` failure.
+- Full `ctest` remains 48/49: all VIC-II and runtime tests pass; the sole
+  failure is the pre-existing `c1541_media` `stepper_and_head_stop` test.
+
+Remaining validation is the VIC-register write-stream comparison and settled
+frame visual comparison against VICE. The renderer's row presentation latch and
+the exact per-access MC progression still need to be reconciled before claiming
+full visual parity.
+
 ## Reproduction
 
 The sample is a BASIC wrapper:

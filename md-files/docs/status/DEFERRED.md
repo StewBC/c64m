@@ -5,12 +5,13 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
 ## VIC-II
 
 - Light pen registers `$D013/$D014` are stubbed; Phase F was skipped.
-- Cycle-perfect video timing is not complete. The current Phi2 arbiter and
+- General cycle-perfect video timing is not complete. The current Phi2 arbiter and
   resumable CPU subset improve BA-visible timing, and the VIC-II now schedules
   character, graphics, idle, sprite-pointer, and sprite-data fetch types. BA
   is derived from the scheduled CPU-visible Phi2 accesses. AEC/RDY are modeled
-  at cycle granularity; analog/half-cycle electrical detail remains outside this
-  model.
+  at cycle granularity; analog/half-cycle electrical detail and unbounded
+  demo-scene coverage remain outside this model. The selected `lft-nine`
+  sprite/raster timing path is in-scope and implemented in the live path.
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered for the region

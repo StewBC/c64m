@@ -16,6 +16,9 @@
   three-cycle lead time and the tested two-cycle release margin.
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
+- The live renderer models the horizontal border flip-flop for timed `$D016`/CSEL
+  side-border opening. The per-cycle sprite sequencer tracks MCBASE, live
+  `$D017` edges, and the crunched DMA lifetime needed by `samples/lft-nine.prg`.
 
 ## Important invariants
 
@@ -86,7 +89,11 @@
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered outside the vertical display window (opened-border pictures); it is a per-mode approximation, not a full cycle-exact idle sequencer.
-- Horizontal border opening is not modeled as a cycle-exact VIC dot flip-flop; side borders still use the current CSEL geometry in the live renderer.
+- The snapshot/debug renderer still uses geometric side borders; the live path
+  uses the horizontal border flip-flop and dot-anchored CSEL timing.
+- General demo-scene cycle-perfect behavior remains unclaimed beyond selected
+  milestone targets; `samples/lft-nine.prg` is now an in-scope VIC-II timing
+  target.
 - AEC/RDY are cycle-level signal states, not an analog or half-cycle waveform
   simulation.
 - The renderer's sprite-row pre-latch remains an implementation pipeline rather

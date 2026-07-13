@@ -94,8 +94,12 @@ struct vicii {
     /* Phase D: per-sprite state */
     uint8_t  sprite_mc[8];          /* next byte offset into 63-byte sprite block (0,3,6…60) */
     bool     sprite_active[8];      /* sprite sequencer remains active for future lines */
+    uint8_t  sprite_mcbase[8];      /* MCBASE latch used by the line sequencer */
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
+    bool     sprite_y_expand_prev[8]; /* previous live $D017 sample */
+    bool     sprite_y_expand_pending[8]; /* edge waiting for sequencer boundary */
+    bool     sprite_crunched[8];         /* MCBASE crunch keeps DMA active */
     uint8_t  sprite_pointer[8];     /* pointer fetched in the sprite p-access */
     uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes (committed to renderer) */
     bool     sprite_line_enabled[8]; /* display controls latched for the current raster line */

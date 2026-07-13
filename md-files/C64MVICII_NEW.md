@@ -26,6 +26,7 @@ Required for this milestone:
 
 ```text
 - NTSC sprite BA timing table and selection.
+- Selected cycle-sensitive VIC-II sprite/raster paths, including lft-nine.
 ```
 
 Important but not blocking:
@@ -42,7 +43,8 @@ Explicitly out of scope for this milestone:
 - Last-byte-on-bus recreation.
 - Exact RDY/AEC sub-cycle pin timing.
 - NTSC color generation differences.
-- Full demo-scene cycle-perfect validation.
+- Unbounded full demo-scene cycle-perfect validation beyond selected milestone
+  targets such as `samples/lft-nine.prg`.
 ```
 
 ## Work Area A - NTSC Sprite BA Timing

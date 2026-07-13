@@ -41,9 +41,14 @@
   ownership for bad-line and sprite-data slots, and prove AEC blocks a pending
   CPU write while BA/RDY-only time still permits one.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
+- `samples/lft-nine.prg` is the selected cycle-sensitive VIC-II milestone
+  target. Its acceptance capture verifies that crunched sprites continue
+  stealing BA cycles through the timed raster kernel (R31-R40); the current
+  c64m capture shows `exec=48, stall=15` throughout that range.
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
-  format v3 carries the added sprite-pointer latch and cycle-level AEC/RDY
+  format v4 carries the added sprite MCBASE/expansion state, sprite-pointer
+  latch, and cycle-level AEC/RDY
   timing state.
 - CIA: tests confirm CIA #1 IRQ routing, CIA #2 NMI edge-latch routing, RESTORE
   isolation, ICR read side effects, and debugger-safe peeks. The C64MFULL pin/

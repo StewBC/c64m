@@ -203,7 +203,47 @@ static void c64_drive_catch_up_at_iec_write(c64_t *machine) {
     c64_drive_sync_to(machine, machine->clock.cycle + 1u);
 }
 
+/* DEBUG (throwaway): per-raster CPU-exec vs BA-stall cycle budget trace for the
+   lft-nine oracle work. C64M_BALOG=<path> enables; reuses C64M_VICLOG_F0/F1/EXIT
+   for the frame window. Emits "F<frame> R<raster> exec=<n> stall=<n>" per line. */
+static uint64_t g_balog_exec = 0, g_balog_stall = 0;
+static void c64_balog_mark(int stall) { if (stall) g_balog_stall++; else g_balog_exec++; }
+static void c64_balog_maybe_emit(c64_t *machine) {
+    static FILE *balog = NULL;
+    static int   init = 0;
+    static unsigned long f0 = 0, f1 = 0xffffffffUL;
+    static int   do_exit = 0;
+    static int   prev_raster = -1;
+    if (!init) {
+        const char *p = getenv("C64M_BALOG");
+        const char *a = getenv("C64M_VICLOG_F0");
+        const char *b = getenv("C64M_VICLOG_F1");
+        if (p) { balog = fopen(p, "wb"); }
+        if (a) { f0 = strtoul(a, NULL, 10); }
+        if (b) { f1 = strtoul(b, NULL, 10); }
+        if (getenv("C64M_VICLOG_EXIT")) { do_exit = 1; }
+        init = 1;
+    }
+    if (!balog) return;
+    {
+        int rl = (int)machine->vic.timing.raster_line;
+        if (rl != prev_raster) {
+            unsigned long fr = (unsigned long)machine->vic.timing.frame_number;
+            if (prev_raster >= 0 && fr >= f0 && fr <= f1) {
+                fprintf(balog, "F%lu R%d exec=%llu stall=%llu\n", fr, prev_raster,
+                        (unsigned long long)g_balog_exec, (unsigned long long)g_balog_stall);
+            } else if (fr > f1) {
+                fflush(balog);
+                if (do_exit) { _Exit(0); }
+            }
+            g_balog_exec = 0; g_balog_stall = 0;
+            prev_raster = rl;
+        }
+    }
+}
+
 static void c64_advance_one_cycle(c64_t *machine) {
+    c64_balog_maybe_emit(machine);
     c64_step_vic(machine);
     c64_step_cia1(machine);
     c64_step_cia2(machine);
@@ -1153,6 +1193,7 @@ static void c64_step_micro_cycle(c64_t *machine) {
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_ARBITER;
     completed = c6510_micro_step(&machine->cpu);
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
+    c64_balog_mark(0);
     c64_advance_one_cycle(machine);
     machine->clock.cpu_cycles++;
 
@@ -1176,6 +1217,7 @@ static void c64_step_micro_cycle(c64_t *machine) {
  */
 static void c64_step_host_ba_stall(c64_t *machine) {
     /* 6510 held; 1541 continues (media + drive CPU + VIAs). */
+    c64_balog_mark(1);
     c64_advance_one_cycle(machine);
 }
 
@@ -1216,6 +1258,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
             return true;
         }
         c64_apply_pending_cpu_events_at_elapsed(machine);
+        c64_balog_mark(0);
         c64_advance_one_cycle(machine);
         machine->pending_cpu_elapsed++;
         machine->clock.cpu_cycles++;

@@ -28,9 +28,10 @@ For this milestone, acceptable fidelity means:
 - generic 8K/16K `.crt` cartridges can load through host convenience paths.
 ```
 
-This is not a promise of full demo-scene compatibility, bit-perfect analog
+This is not a promise of unbounded demo-scene compatibility, bit-perfect analog
 SID behavior, complete media-level drive emulation, broad fast-loader
-compatibility, or cycle-perfect hardware recreation.
+compatibility, or cycle-perfect hardware recreation beyond selected milestone
+targets.
 
 ## Scope Limits
 
@@ -52,7 +53,8 @@ In scope for the current milestone:
   `[disk] emulate_1541=1` and a supported 16 KB 1541 DOS 2.6 ROM is loaded,
   including ROM-level LOAD, job-intercepted sector READ/WRITE, and the currently
   implemented DOS command/error-channel behavior.
-- Selected diagnostics only where they validate in-scope behavior.
+- Selected diagnostics and cycle-sensitive software targets where they validate
+  in-scope PAL/NTSC behavior, including the `lft-nine` VIC-II sprite/raster path.
 ```
 
 Explicitly out of scope for the current milestone:
@@ -78,6 +80,8 @@ Explicitly out of scope for the current milestone:
 - Bit-perfect SID filter or SID chip variant modeling.
 - SID 8580 support or runtime SID variant switching.
 - NTSC color generation differences.
+- Unbounded full demo-scene cycle-perfect validation beyond selected milestone
+  targets such as `samples/lft-nine.prg`.
 - Full cartridge mapper support beyond generic 8K/16K CRT cartridges.
 ```
 

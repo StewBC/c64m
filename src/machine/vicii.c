@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -188,9 +189,13 @@ void vicii_reset(vicii *v) {
     memset(v->video_matrix, 0, sizeof(v->video_matrix));
     memset(v->color_line,   0, sizeof(v->color_line));
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
+    memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
+    memset(v->sprite_y_expand_prev, 0, sizeof(v->sprite_y_expand_prev));
+    memset(v->sprite_y_expand_pending, 0, sizeof(v->sprite_y_expand_pending));
+    memset(v->sprite_crunched, 0, sizeof(v->sprite_crunched));
     memset(v->sprite_pointer,  0, sizeof(v->sprite_pointer));
     memset(v->sprite_data,         0, sizeof(v->sprite_data));
     memset(v->sprite_line_enabled,    0, sizeof(v->sprite_line_enabled));
@@ -411,10 +416,13 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
             if (raster_y == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
                 v->sprite_mc[n]       = 0;
                 v->sprite_active[n]   = true;
-                v->sprite_y_exp_ff[n] = false;
+                v->sprite_crunched[n] = false;
+                v->sprite_y_exp_ff[n] =
+                    (v->registers[VICII_REG_SPR_Y_EXPAND] & (uint8_t)(1u << n)) != 0u;
             }
         } else {
             v->sprite_active[n]  = false;
+            v->sprite_crunched[n] = false;
             v->sprite_visible[n] = false;
         }
 
@@ -433,7 +441,6 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
 
             if ((v->registers[VICII_REG_SPR_Y_EXPAND] & (uint8_t)(1u << n)) != 0u) {
                 advance_mc = v->sprite_y_exp_ff[n];
-                v->sprite_y_exp_ff[n] ^= 1u;
             } else {
                 advance_mc = true;
             }
@@ -445,11 +452,109 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
             v->sprite_visible[n] = true;
             if (advance_mc) {
                 mc = (uint8_t)(mc + 3u);
-                if (mc >= 63u) v->sprite_active[n] = false;
-                else v->sprite_mc[n] = mc;
+                v->sprite_mc[n] = mc >= 63u ? 60u : mc;
+                v->sprite_mcbase[n] = mc >= 63u ? 63u : mc;
             }
         }
     }
+}
+
+/* The presentation row is still prepared at line start, but DMA lifetime and
+   MCBASE now follow the VIC-II sequencer's control steps.  Keeping this state
+   live is important for kernels which change D017 between cycles 15 and 16:
+   that write can defeat the normal MCBASE==63 DMA-off transition. */
+static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
+    uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
+    uint8_t y_expand = v->registers[VICII_REG_SPR_Y_EXPAND];
+    bool d017_changed[8];
+    int n;
+
+    for (n = 0; n < 8; ++n) {
+        bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
+        d017_changed[n] = live_expand != v->sprite_y_expand_prev[n];
+        v->sprite_y_expand_prev[n] = live_expand;
+        if (d017_changed[n] && v->sprite_active[n]) {
+            v->sprite_y_expand_pending[n] = true;
+        }
+    }
+
+    if (cycle == 15u) {
+        for (n = 0; n < 8; ++n) {
+            if (v->sprite_active[n] && !v->sprite_crunched[n] &&
+                v->sprite_mcbase[n] < 63u) {
+                v->sprite_mcbase[n] = v->sprite_mc[n];
+            }
+        }
+    }
+
+    if (cycle == 16u) {
+        for (n = 0; n < 8; ++n) {
+            bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
+            bool crunched = v->sprite_y_expand_pending[n];
+
+            if (!v->sprite_active[n]) continue;
+
+            if (crunched) {
+                /* A live D017 transition changes the expansion branch and
+                   prevents the ordinary end-of-row DMA shutdown. */
+                v->sprite_mcbase[n] = 0u;
+                v->sprite_mc[n] = 0u;
+                v->sprite_crunched[n] = true;
+                v->sprite_y_exp_ff[n] = live_expand;
+                v->sprite_y_expand_pending[n] = false;
+                continue;
+            }
+
+            if (live_expand) {
+                v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
+            }
+            if (!v->sprite_y_exp_ff[n]) {
+                if (v->sprite_crunched[n]) continue;
+                v->sprite_mcbase[n] = (uint8_t)(v->sprite_mcbase[n] + 2u);
+                if (v->sprite_mcbase[n] >= 63u) {
+                    v->sprite_mcbase[n] = 63u;
+                    v->sprite_active[n] = false;
+                }
+            }
+        }
+    }
+
+    if (cycle == 55u) {
+        for (n = 0; n < 8; ++n) {
+            bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
+            if (!v->sprite_active[n]) continue;
+            if (v->sprite_y_expand_pending[n]) {
+                /* D017 can change on the preceding line and be sampled by
+                   the cycle-55 expansion step. Preserve the resulting crunch
+                   instead of allowing the normal row-end shutdown. */
+                v->sprite_y_exp_ff[n] = live_expand;
+                v->sprite_mcbase[n] = 0u;
+                v->sprite_mc[n] = 0u;
+                v->sprite_crunched[n] = true;
+                v->sprite_y_expand_pending[n] = false;
+            } else if (live_expand) {
+                v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
+            }
+        }
+    }
+
+    if (cycle == 56u) {
+        uint32_t raster = v->timing.raster_line;
+        for (n = 0; n < 8; ++n) {
+            uint8_t spr_y = v->registers[1 + n * 2];
+            if ((enable & (uint8_t)(1u << n)) != 0u &&
+                !v->sprite_active[n] &&
+                raster == ((uint32_t)spr_y + 1u) % v->timing.lines_per_frame) {
+                v->sprite_active[n] = true;
+                v->sprite_mc[n] = 0u;
+                v->sprite_mcbase[n] = 0u;
+                v->sprite_crunched[n] = false;
+                v->sprite_y_exp_ff[n] =
+                    (y_expand & (uint8_t)(1u << n)) != 0u;
+            }
+        }
+    }
+
 }
 
 static vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
@@ -1315,6 +1420,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         }
     }
 
+    vicii_step_sprite_sequencer(v, cycle);
+
     if (cycle == 0) {
         vicii_prepare_sprite_line(v, bus);
         vicii_latch_sprite_line_state(v);
@@ -1542,6 +1649,38 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
 
     assert(v);
     reg = (uint8_t)(addr & 0x3Fu);
+
+    /* DEBUG (throwaway): env-gated VIC write trace for the lft-nine oracle diff.
+       C64M_VICLOG=<path> enables; optional C64M_VICLOG_F0/F1 bound the frame
+       window (inclusive). Record: "F<frame> R<raster> C<cycle> r<reg> v<val>". */
+    {
+        static FILE *viclog = NULL;
+        static int   vic_init = 0;
+        static unsigned long f0 = 0, f1 = 0xffffffffUL;
+        if (!vic_init) {
+            const char *p = getenv("C64M_VICLOG");
+            const char *a = getenv("C64M_VICLOG_F0");
+            const char *b = getenv("C64M_VICLOG_F1");
+            if (p) { viclog = fopen(p, "wb"); }
+            if (a) { f0 = strtoul(a, NULL, 10); }
+            if (b) { f1 = strtoul(b, NULL, 10); }
+            vic_init = 1;
+        }
+        if (viclog) {
+            unsigned long fr = (unsigned long)v->timing.frame_number;
+            if (fr >= f0 && fr <= f1) {
+                fprintf(viclog, "F%lu R%u C%u r%02X v%02X\n",
+                        fr, v->timing.raster_line, v->timing.cycle_in_line,
+                        (unsigned)reg, (unsigned)value);
+            } else if (fr > f1) {
+                /* Past the capture window: flush and (optionally) exit fast. */
+                fflush(viclog);
+                if (getenv("C64M_VICLOG_EXIT")) {
+                    _Exit(0);
+                }
+            }
+        }
+    }
 
     switch (reg) {
     case 0x11: /* CONTROL_1: bit 7 is RST8, updates raster_compare bit 8 */
