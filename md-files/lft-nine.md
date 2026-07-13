@@ -422,9 +422,71 @@ following cleanup was applied on top (no behavior change; full `ctest` stays
   this file were corrected to "committed, compile-gated".
 
 **Net effect on the actual bug: unchanged.** The removed state carried no
-behavior, so the raster-kernel-entry divergence documented in the Session 4
-handoff above is still the open problem. Resume at the "Next work, in order"
-list: semantic-state oracle capture (`$61==$0a`) and the `$9B75` wait-path trace.
+behavior, so the visual divergence documented above is still the open problem.
+
+### Session 6 (2026-07-13): control-port introspection retargets the bug
+
+Investigated live via a new reusable control-port client (see "Control-port
+tooling" below). Two findings materially change the plan:
+
+**1. The Session-4 `$61`/`$9B75` lead is a dead end (frame-misalignment
+artifact).** Disassembling the depacked demo from a running instance:
+- `$8D08: LDA $3D / LSR / STA $61` -> **`$61 = $3D >> 1`**.
+- `$9B75: LDY $61 / ... / LDX $D012 / CPX #$2D / BCS exit / STA $D018 / DEY /
+  BNE` -> the `$61`-count loop Session 4 saw is a per-line `$D018` multiplex
+  loop; its length is `$61`.
+- `$3D` is written at `$8B3F` as `$3D = $AE72[$3E] + f($B000[$3B])` -- a
+  **computed animation position** indexed by the digit-animation phase counters
+  `$3B`/`$3E`, not a raster/timing sample. Measured live it drifts smoothly
+  ($3D=$4A..$49, $61=$25..$24 across frames 5593-5605).
+
+Because `$61` is animation state that changes every frame, Session 4's "c64m
+`$61`=$1e vs VICE `$0a` at frame 6000" was almost certainly comparing two
+**different animation phases** (the known frame-counter offset), not a bug. Do
+not resume the `$9B75` wait-path chase as a suspected defect. (Aligning both
+emulators on the same `$61` is still a *valid semantic anchor* for a matched
+comparison -- just not evidence of a fault by itself.)
+
+**2. Visual ground truth re-localizes the defect to the multiplexed digits.**
+Captured `get-frame` output during the device/multiplex phase (frame ~5723):
+- The **wizard** (sprites 1&3) renders correctly as a black figure.
+- The **black frame border** (sprites 5&7) renders correctly (it is black, not
+  blue). This **contradicts the Session-2 theory** that "blue-where-black" is
+  caused by missing border sprites 5/7.
+- The **nine multiplexed digits** (sprites 2,4,6) are **entirely absent**,
+  exposing the blue ghost-byte field (`b0c`) underneath -- that exposed field is
+  the "blue where it should be black".
+- Many frames render **fully black** (border + centre), i.e. a whole-frame
+  dropout on some cadence.
+
+So the real open bug is: **the heavily-multiplexed digit sprites fail to display
+in the device phase, and some frames drop out entirely.** The less-multiplexed
+always-on sprites (wizard, border frame) work. This points at the sprite
+fetch/multiplex + raster-kernel timing for the digit sprites, consistent with
+the original item-5 ("late top-border sprite multiplex"), and *away* from the
+side-border-colour and border-sprite theories.
+
+Suggested next work (supersedes the Session-4 list):
+1. In the device phase, trace why the digit sprites (2,4,6) produce no visible
+   pixels: check `$D015` enable, per-sprite DMA-active, `$D000`-`$D010` X/Y and
+   `$D017`/`$D01D` expansion across the multiplex rasters. The control port can
+   break at the sprite-register rewrite block (~raster 216 per item 5) and dump
+   `$D000-$D02E`.
+2. Characterise the whole-frame black dropout: is it a real per-frame demo
+   cadence, or a c64m frame-publication/timing artifact? Step exact single
+   frames and correlate with the `$D011`/`$D021` kernel writes.
+3. Only then return to the VICE write-stream diff, aligned on a semantic anchor
+   (e.g. matched `$61` and intra-frame raster), not on raw frame numbers.
+
+**Control-port tooling.** A minimal Python client for the C64M/1 control
+protocol was written during this session (connect, `get-state`/`get-cpu`,
+`get-memory`, `get-frame`, `break-create exec`, `run`/`pause`/`wait-paused`).
+It is currently in the session scratchpad, not committed. Notes for reuse:
+addresses take `$`-hex (base-0 parse); `get-memory` length must be decimal;
+`break-create` via the control port only supports **`exec`** breakpoints (the
+runtime engine supports read/write access, but `control_parse_breakpoint_
+definition` in `src/main.c` hard-requires the `exec` keyword) -- a read/write
+watchpoint would need a small control-protocol extension.
 
 ## Reproduction
 
