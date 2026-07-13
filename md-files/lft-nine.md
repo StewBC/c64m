@@ -658,16 +658,47 @@ from `15` to `18-19`; the crunch / MCBASE per-cycle DMA-active accounting is the
 prime suspect for the extra theft. (Verify the stall=15 baseline wasn't just a
 narrower window in Session 4 before concluding.)
 
-**Next work (final mile):**
-1. **Decisive:** get VICE's per-line stall in R26-R44 (add an exec/stall trace to
-   VICE's `viciisc` core like `C64M_BALOG`, or infer from VICE's `$D012`/IRQ
-   acceptance rasters) and compare to c64m's `18-19`. If VICE is `15`, the bug is
-   confirmed as c64m over-stalling ~3-4 cyc/line in the multiplex/crunch region.
-2. Then fix the sprite-DMA/BA cycle accounting for that region (revisit the crunch
-   / per-cycle MCBASE DMA-active window) under the existing sprite-BA/DMA PAL/NTSC
-   tests + boot/robocop suites (no regressions). Success = c64m 202 writes every
-   frame and the multiplex renders stably.
+**SMOKING GUN (cycle-position diff, c64m vs VICE, no VICE core mod needed):**
+- Six-write kernel *internal* gaps are identical (7,6,4,4,4) -- the timed loop is
+  right. But c64m starts each line **~7-9 cycles later** than VICE (VICE flat at
+  C21 every line R26-R44; c64m ramps **C25@R27 -> +1/line -> C30@R32**, then holds
+  C30). A clean `+1 cycle/line for 5 lines` ramp = **one extra stall cycle per
+  line while sprites activate**, then stable -- i.e. c64m over-stalls during the
+  sprite-DMA activation ramp.
+- The demo does a **sprite crunch**: `$D017 <- $35` at R11 then `$D017 <- $00` at
+  R12 (Y-expand toggled on sprites 0,2,4,5 across the sequencer's cycle-15/16
+  MCBASE steps to keep them DMA-active). **VICE writes it at a rock-stable
+  R11 C38 / R12 C14 every frame; c64m jitters +/-2 cycles (C36 or C38 / C12 or
+  C14) frame-to-frame.** The crunch is cycle-exact, so c64m's jittery write timing
+  lands the toggle on the wrong sequencer cycle intermittently, corrupting which
+  sprites stay DMA-active -> variable stall -> kernel drift -> device kernel only
+  completes every other frame.
+
+**ROOT CAUSE (confirmed region):** c64m's sprite-DMA/BA cycle accounting in the
+crunch/activation region (R11-R44) diverges from hardware -- extra stall on the
+activation ramp AND a +/-2 cycle jitter in when the `$D017` crunch write lands.
+Both are the sprite-crunch / per-cycle MCBASE DMA-active modelling (Session 2's
+MCBASE thesis; `eba06c4` removed the forced-crunch model). The current
+`vicii_step_sprite_sequencer` samples `$D017` live at cycles 15/16/55 but does not
+reproduce the crunch's cycle-exact DMA-active outcome, and the surrounding BA
+schedule over/under-counts stolen cycles during activation.
+
+**Next work (the fix):**
+1. In `vicii.c`, make the sprite-DMA-active state (and thus the derived BA/stall
+   schedule) reproduce the crunch exactly: a mid-line `$D017` toggle straddling
+   cycles 15/16 must prevent the `MCBASE==63` DMA-off so sprites 0,2,4,5 stay
+   active with the hardware cycle pattern. Target: c64m's six-write kernel flat at
+   a fixed cycle every line (no +1/line ramp), the `$D017` write cycle-stable, and
+   ~202 VIC writes every frame. Guard with the sprite-BA/DMA PAL/NTSC tests +
+   boot/robocop suites (no regressions).
+2. Re-verify: BALOG `stall` flat across R26-R44, and the multiplex renders stably
+   (turbo<=7 `get-frame`, or on your SDL build).
 3. (Lower priority) confirm the `$CD` clear is the `$8017` memset via `$8000`.
+
+Caveat: the six-write kernel *values* ($D021=02 VICE vs 05 c64m, etc.) differ,
+but that is the known frame-counter phase offset between the two captures -- the
+robust signals are the cycle-position drift and the `$D017` jitter, which do not
+depend on frame alignment.
 
 VICE recipe: `VICE_VICLOG=/tmp/v.txt VICE_VICLOG_F0=5980 VICE_VICLOG_F1=6000
 VICE_VICLOG_EXIT=1 timeout 120 src/x64sc -directory data -console -sounddev dummy
