@@ -935,3 +935,43 @@ $3FFF).  But this demo uses ECM mode that moves the ghost bytes to address
 $39FF.  Also uses the horz scroll position to delay the fetch of the ghost byte
 to align the pattern of the ghost byte with the sprites.  So perfect timing is
 needed here.
+
+### Session 8 (2026-07-13): sprite-DMA rewrite fixes the alternation (branch `lft-nine-sprite-crunch`)
+
+Ported VICE's viciisc sprite DMA/MCBASE model into `src/machine/vicii.c`
+(commit `df7f955`): cycle-16 MCBASE=MC + DMA-off at 63, cycles 55/56 DMA-on,
+cycle-56 exp-flop toggle, cycle-58 MC=MCBASE, MC += 3/line in
+`vicii_prepare_sprite_line`, and a `$D017` write handler (force exp-flop set on a
+Y-expand clear, plus the cycle-15 MC crunch bit-magic from VICE `d017_store`).
+
+**Result -- primary bug FIXED:**
+- VIC write stream goes from strict **192/16 alternation to the device kernel
+  running EVERY frame** (~139+ writes/frame). The `$CD` toggle is gone.
+- The **wizard renders cleanly and stably** (was garbled/flickering).
+- Early-region sprite stall is now correct: BALOG `stall=15` through R23-R30
+  (was 18-19).
+- All VIC-II/snapshot/boot tests pass; full ctest 48/49 (only the pre-existing
+  `c1541_media`). No regressions.
+
+**Remaining (incomplete):**
+- The flanking-sprite **crunch does not yet keep DMA active through R42**: BALOG
+  shows sprites stop stealing at R31 (stall dips to 0 at R31-R32, 5-9 through
+  R38, back to 15 at R39) -- Session 4's "sprites stop at R31" symptom. So c64m
+  runs the `$D018` multiplex loop on R26-R39 instead of VICE's `$D021/$D011`
+  six-write kernel, the per-frame write count is ~139 vs VICE's 202, and the
+  **digits still clump at the top** instead of multiplexing around all four
+  borders.
+- The crunch bit-magic never fires: the demo's `$D017<-$00` write lands at C14,
+  but VICE's `ChkSprCrunch` is at cycle 15 -- so for THIS demo the crunch must
+  work through the exp-flop/MCBASE dance, not the bit-magic. Replicating exactly
+  how VICE keeps the flanking sprites (0,2,4,5) DMA-active past 21 rows is the
+  final piece.
+- Also still present: the `$D017` write-cycle jitter (c64m C12/C14 vs VICE stable
+  C14) -- a CPU-timing residue to chase after the DMA lifetime is right.
+
+**Next:** trace VICE's per-line `sprite_dma` bitmask (add a counter to viciisc
+`check_sprite_display`; my attempt this session had an env/frame-counter issue --
+verify VICE_SPRDMA fopen and the independent frame counter) to see exactly which
+sprites stay active through R42 and reproduce that lifetime. Then re-measure:
+BALOG stall flat ~15 across R26-R44, ~202 writes/frame, digits spread. The branch
+is a strict improvement (alternation fixed, tests green) pending that final piece.
