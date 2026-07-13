@@ -464,7 +464,10 @@ where the 1541 (drive PC `$06D3` vs VICE `$06CC`) had already released the lines
 one sample early. Calibrating the read/write catch-up (read = current cycle,
 write = +1 cycle) made **all 259804** Arkanoid sampler reads and the first ~106
 Robocop sampler bytes match VICE. Both traces + oracle captures live under
-`/private/tmp/g64fix/`; the VICE log patch was reverted after use.
+`/private/tmp/g64fix/`; the VICE log patch was reverted after use. The full VICE
+build / headless-run / trace-patch recipe (including the inconsequential bash-4
+doc build error, the glew env vars, and the headless `-moncommands` capture
+flow) is written up in `md-files/vice-oracle-tracing.md`.
 
 ### Regression tests
 
