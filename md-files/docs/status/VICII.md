@@ -17,8 +17,11 @@
 - DEN-off blanking is implemented.
 - The live renderer models the vertical border as state, so timed `$D011`/RSEL changes can open the top/bottom border area and reveal sprites in the central display-width region.
 - The live renderer models the horizontal border flip-flop for timed `$D016`/CSEL
-  side-border opening. The per-cycle sprite sequencer tracks MCBASE, live
-  `$D017` edges, and the crunched DMA lifetime needed by `samples/lft-nine.prg`.
+  side-border opening. The per-cycle sprite sequencer tracks MCBASE and samples
+  the live `$D017` Y-expand bit at the cycle-16/55 boundaries; sprite DMA becomes
+  active on the raster line that matches the sprite Y. The full cycle-accurate
+  sprite crunch that `samples/lft-nine.prg` relies on is not yet reproduced (the
+  timed raster kernel's entry still diverges from VICE; see `md-files/lft-nine.md`).
 
 ## Important invariants
 

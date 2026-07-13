@@ -193,9 +193,6 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
-    memset(v->sprite_y_expand_prev, 0, sizeof(v->sprite_y_expand_prev));
-    memset(v->sprite_y_expand_pending, 0, sizeof(v->sprite_y_expand_pending));
-    memset(v->sprite_crunched, 0, sizeof(v->sprite_crunched));
     memset(v->sprite_pointer,  0, sizeof(v->sprite_pointer));
     memset(v->sprite_data,         0, sizeof(v->sprite_data));
     memset(v->sprite_line_enabled,    0, sizeof(v->sprite_line_enabled));
@@ -416,13 +413,11 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
             if (raster_y == (uint32_t)spr_y) {
                 v->sprite_mc[n]       = 0;
                 v->sprite_active[n]   = true;
-                v->sprite_crunched[n] = false;
                 v->sprite_y_exp_ff[n] =
                     (v->registers[VICII_REG_SPR_Y_EXPAND] & (uint8_t)(1u << n)) != 0u;
             }
         } else {
             v->sprite_active[n]  = false;
-            v->sprite_crunched[n] = false;
             v->sprite_visible[n] = false;
         }
 
@@ -460,23 +455,17 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
 }
 
 /* The presentation row is still prepared at line start, but DMA lifetime and
-   MCBASE now follow the VIC-II sequencer's control steps.  Keeping this state
-   live is important for kernels which change D017 between cycles 15 and 16:
-   that write can defeat the normal MCBASE==63 DMA-off transition. */
+   MCBASE now follow the VIC-II sequencer's control steps.  The Y-expand
+   flip-flop is sampled live at cycles 16/55 so a mid-line $D017 write lands on
+   the correct sequencer boundary. */
 static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t y_expand = v->registers[VICII_REG_SPR_Y_EXPAND];
     int n;
 
-    for (n = 0; n < 8; ++n) {
-        bool live_expand = (y_expand & (uint8_t)(1u << n)) != 0u;
-        v->sprite_y_expand_prev[n] = live_expand;
-    }
-
     if (cycle == 15u) {
         for (n = 0; n < 8; ++n) {
-            if (v->sprite_active[n] && !v->sprite_crunched[n] &&
-                v->sprite_mcbase[n] < 63u) {
+            if (v->sprite_active[n] && v->sprite_mcbase[n] < 63u) {
                 v->sprite_mcbase[n] = v->sprite_mc[n];
             }
         }
@@ -491,7 +480,6 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
                 v->sprite_y_exp_ff[n] = !v->sprite_y_exp_ff[n];
             }
             if (!v->sprite_y_exp_ff[n]) {
-                if (v->sprite_crunched[n]) continue;
                 v->sprite_mcbase[n] = (uint8_t)(v->sprite_mcbase[n] + 2u);
                 if (v->sprite_mcbase[n] >= 63u) {
                     v->sprite_mcbase[n] = 63u;
@@ -521,7 +509,6 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
                 v->sprite_active[n] = true;
                 v->sprite_mc[n] = 0u;
                 v->sprite_mcbase[n] = 0u;
-                v->sprite_crunched[n] = false;
                 v->sprite_y_exp_ff[n] =
                     (y_expand & (uint8_t)(1u << n)) != 0u;
             }
@@ -1623,9 +1610,12 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
     assert(v);
     reg = (uint8_t)(addr & 0x3Fu);
 
-    /* DEBUG (throwaway): env-gated VIC write trace for the lft-nine oracle diff.
-       C64M_VICLOG=<path> enables; optional C64M_VICLOG_F0/F1 bound the frame
-       window (inclusive). Record: "F<frame> R<raster> C<cycle> r<reg> v<val>". */
+    /* DEBUG oracle harness (compile-gated behind C64M_VIC_TRACE; inert in normal
+       builds). VIC write trace for the lft-nine oracle diff. C64M_VICLOG=<path>
+       enables at runtime; optional C64M_VICLOG_F0/F1 bound the frame window
+       (inclusive). Record: "F<frame> R<raster> C<cycle> r<reg> v<val>".
+       See md-files/lft-nine.md for the capture recipe. */
+#ifdef C64M_VIC_TRACE
     {
         static FILE *viclog = NULL;
         static int   vic_init = 0;
@@ -1649,11 +1639,12 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
                 /* Past the capture window: flush and (optionally) exit fast. */
                 fflush(viclog);
                 if (getenv("C64M_VICLOG_EXIT")) {
-                    _Exit(0);
+                    exit(0);
                 }
             }
         }
     }
+#endif /* C64M_VIC_TRACE */
 
     switch (reg) {
     case 0x11: /* CONTROL_1: bit 7 is RST8, updates raster_compare bit 8 */

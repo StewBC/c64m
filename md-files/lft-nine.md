@@ -148,7 +148,8 @@ VIC-register write trace was built in **both** emulators and diffed at the
 multiplex phase (~frame 6000, ~1m49s after RUN, reached fast with `--turbo=200`;
 note `RUNTIME_TURBO_MAX_MULTIPLIER=256`).
 
-Instrumentation (throwaway, env-gated, **uncommitted**):
+Instrumentation (env-gated at runtime, **compile-gated behind `C64M_VIC_TRACE`**
+so it is inert and absent from normal builds; committed as the oracle harness):
 - c64m `vicii_write_register` logs `F<frame> R<raster> C<cycle> r<reg> v<val>`
   via `C64M_VICLOG` / `C64M_VICLOG_F0`/`F1`/`_EXIT`.
 - c64m `c64.c` logs per-raster CPU budget `F R exec=<n> stall=<n>` via
@@ -215,18 +216,21 @@ approximation). The implementation is now in progress in `src/machine/vicii.c`;
 the existing renderer row latch remains temporarily as the presentation path
 while the DMA/MCBASE state becomes cycle-driven.
 
-### Instrumentation still in the tree (uncommitted, env-gated, throwaway)
+### Instrumentation in the tree (committed, compile-gated behind `C64M_VIC_TRACE`)
 
-All three are debug-only and inert unless their env var is set. Remove (or keep
-behind the env gate) once the fix lands; they are the verification harness so do
-not delete them before re-verifying.
+The two c64m traces are compiled out of normal builds and are additionally
+inert at runtime unless their env var is set. To use them, configure a build
+with the flag, e.g. `cmake -B build-trace -DCMAKE_C_FLAGS=-DC64M_VIC_TRACE` (or
+add it to your existing build's flags), then run the capture commands below.
+They are the verification harness, so do not delete them before re-verifying.
 
 - **c64m VIC write log** -- `src/machine/vicii.c`, top of
-  `vicii_write_register` (just after `reg = addr & 0x3F`), plus `#include
-  <stdlib.h>`. Env: `C64M_VICLOG`, `C64M_VICLOG_F0`, `C64M_VICLOG_F1`,
-  `C64M_VICLOG_EXIT`.
+  `vicii_write_register` (just after `reg = addr & 0x3F`), inside
+  `#ifdef C64M_VIC_TRACE`; `#include <stdlib.h>` is present. Env: `C64M_VICLOG`,
+  `C64M_VICLOG_F0`, `C64M_VICLOG_F1`, `C64M_VICLOG_EXIT`.
 - **c64m per-raster CPU budget** -- `src/machine/c64.c`: `c64_balog_*`
-  helpers above `c64_advance_one_cycle`, with `c64_balog_mark(...)` calls in
+  helpers above `c64_advance_one_cycle` (inside `#ifdef C64M_VIC_TRACE`, with
+  no-op macro fallbacks otherwise), with `c64_balog_mark(...)` calls in
   `c64_step_micro_cycle`, `c64_step_host_ba_stall`, and the pending-trace
   advance branch. Env: `C64M_BALOG` (reuses the `C64M_VICLOG_F0/F1/EXIT`
   window). exec+stall sums to 63/line (classification is complete).
@@ -392,6 +396,35 @@ Next work, in order:
 
 All temporary c64m and VICE tracing additions from this session were removed;
 the c64m worktree was clean before this documentation update.
+
+### Session 5 handoff (2026-07-13): peer review + cleanup of `ca94696..7089137`
+
+The `ca94696..7089137` sprite-sequencer series was peer reviewed and the
+following cleanup was applied on top (no behavior change; full `ctest` stays
+48/49, only the pre-existing `c1541_media` `stepper_and_head_stop` failure):
+
+- **Dead crunch scaffolding removed.** `eba06c4` ("Model D017 falling edges
+  without forced sprite crunch") removed the forced-crunch mechanism but left
+  its state behind. `sprite_crunched` was never set true, `sprite_y_expand_prev`
+  was write-only, and `sprite_y_expand_pending` was fully dead. All three arrays
+  are removed from `struct vicii`, `vicii_reset`, the sequencer, and the
+  snapshot. `sprite_mcbase` (still used) is kept. **Snapshot version bumped 4 ->
+  5** so intermediate v4 states are rejected cleanly rather than mis-parsed.
+- **Oracle instrumentation is now compile-gated behind `C64M_VIC_TRACE`** (it
+  was committed in `ca94696` but still called `getenv`/`exit()` from
+  `vicii_write_register` in normal builds). It is absent from normal builds and
+  still runtime-env-gated when compiled in. The VIC-log exit path now uses
+  `exit(0)` (was `_Exit(0)`) to match the budget-log path and flush stdio.
+- **Docs corrected for overclaims.** `VICII.md`/`DEFERRED.md` claimed the
+  crunched DMA lifetime was modeled and lft-nine "implemented"; they now say the
+  crunch is not yet reproduced and the target is in progress. `TESTING.md`
+  snapshot version corrected to v5. The "uncommitted" instrumentation labels in
+  this file were corrected to "committed, compile-gated".
+
+**Net effect on the actual bug: unchanged.** The removed state carried no
+behavior, so the raster-kernel-entry divergence documented in the Session 4
+handoff above is still the open problem. Resume at the "Next work, in order"
+list: semantic-state oracle capture (`$61==$0a`) and the `$9B75` wait-path trace.
 
 ## Reproduction
 

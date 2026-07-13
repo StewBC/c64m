@@ -203,9 +203,12 @@ static void c64_drive_catch_up_at_iec_write(c64_t *machine) {
     c64_drive_sync_to(machine, machine->clock.cycle + 1u);
 }
 
-/* DEBUG (throwaway): per-raster CPU-exec vs BA-stall cycle budget trace for the
-   lft-nine oracle work. C64M_BALOG=<path> enables; reuses C64M_VICLOG_F0/F1/EXIT
-   for the frame window. Emits "F<frame> R<raster> exec=<n> stall=<n>" per line. */
+/* DEBUG oracle harness (compile-gated behind C64M_VIC_TRACE; inert in normal
+   builds). Per-raster CPU-exec vs BA-stall cycle budget trace for the lft-nine
+   oracle work. C64M_BALOG=<path> enables at runtime; reuses C64M_VICLOG_F0/F1/EXIT
+   for the frame window. Emits "F<frame> R<raster> exec=<n> stall=<n>" per line.
+   See md-files/lft-nine.md for the capture recipe. */
+#ifdef C64M_VIC_TRACE
 static uint64_t g_balog_exec = 0, g_balog_stall = 0;
 static void c64_balog_mark(int stall) { if (stall) g_balog_stall++; else g_balog_exec++; }
 static void c64_balog_maybe_emit(c64_t *machine) {
@@ -241,6 +244,10 @@ static void c64_balog_maybe_emit(c64_t *machine) {
         }
     }
 }
+#else
+#define c64_balog_mark(stall)        ((void)0)
+#define c64_balog_maybe_emit(machine) ((void)0)
+#endif /* C64M_VIC_TRACE */
 
 static void c64_advance_one_cycle(c64_t *machine) {
     c64_balog_maybe_emit(machine);

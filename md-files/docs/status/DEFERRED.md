@@ -11,7 +11,10 @@ This file centralizes known gaps so agents do not rediscover or misclassify them
   is derived from the scheduled CPU-visible Phi2 accesses. AEC/RDY are modeled
   at cycle granularity; analog/half-cycle electrical detail and unbounded
   demo-scene coverage remain outside this model. The selected `lft-nine`
-  sprite/raster timing path is in-scope and implemented in the live path.
+  sprite/raster timing path is in-scope and in progress: the side-border
+  flip-flop and per-cycle sprite MCBASE sequencer are in the live path, but the
+  cycle-accurate sprite crunch and the timed raster kernel are not yet correct
+  (see `md-files/lft-nine.md`).
 - Last-byte-on-bus open-bus behavior is not implemented.
 - Unused VIC registers currently return fixed values per Phase G.
 - VIC idle-state g-access (`$3FFF` / `$39FF`) is now rendered for the region
