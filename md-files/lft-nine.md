@@ -1574,3 +1574,24 @@ Next (hardware-faithful only):
    `LDA #$A9` in the sled is several cycles of entry lag.
 
 Do **not** hack `$8DD4` to `$34` or force crunch/entry cycles.
+
+#### Entry skew, quantified (post-commit fresh VICLOG F5890–5920)
+
+Matched **202-write** frames, last `$D018` always **R22 C13** (same as VICE):
+
+| | first `$D021` | dist (last D018→first D021) |
+| --- | --- | --- |
+| VICE xs=3/5/7 | **R24 C13** | **126** |
+| VICE xs=0 | R24 C17 | ~130 |
+| c64m all xs | **R24 C17–20** | **130–133** |
+
+c64m **never** reaches C13. Structure on the first six-write line is still the
+`$3400` body (gaps **7,6,4,4,4**), just translated +4..6 cycles — so the bug is
+pure entry lag after D018, not the wrong unrolled body.
+
+BA on the path (c64m): R12–23 `exec=48 stall=15`; first six-write line jumps to
+`stall=19` (+4). VICE BA for the same window not yet captured.
+
+`$64` sled values sampled at `$9BAB` in partial-open phase were 6–10 (plausible);
+need the same sample in **full-open** (`$61≈$0B`) matched to a VICE frame with
+the same `$63/$62`.
