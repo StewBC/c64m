@@ -1804,6 +1804,9 @@ static void test_timing_fixture_records_cross_line_sprite_ba_stall(void) {
     vicii_write_register(&machine.vic, 0xd007, 49u);
     machine.vic.timing.raster_line = 49u;
     machine.vic.timing.cycle_in_line = 60u;
+    /* DMA turns on at cycles 54/55 of the Y-match line; by cycle 60 the live
+       DMA flag is set. Bus BA follows sprite_active only (VICE sprite_dma). */
+    machine.vic.sprite_active[3] = true;
 
     /* Sprite 3 asserts on line N-1 for its line-N fetch. */
     capture_timing_step(&machine, &sample);

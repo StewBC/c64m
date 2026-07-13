@@ -30,6 +30,10 @@
   and not a pure Y-match before DMA-on. After MCBASE==63 clears DMA, later
   slots on that line no longer steal Phi2. DMA-on at cycles 54/55 still feeds
   the 3-cycle BA lead into the first p/s slots.
+- CPU-visible VIC IRQ is delayed by two Phi2 clocks after
+  `irq_status & irq_enable` becomes true (`vic_irq_delay`, matching VICE
+  `INTERRUPT_DELAY`). Required for cycle-locked raster kernels that probe CIA
+  timers (e.g. `samples/lft-nine.prg` `$9B05` stabiliser).
 
 ## Turbo scales back rendering (capture trap)
 

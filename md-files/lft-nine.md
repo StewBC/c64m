@@ -1,21 +1,20 @@
 # lft-nine investigation
 
-Date: 2026-07-11 (original diagnosis); updated through Session 12, 2026-07-13.
+Date: 2026-07-11 (original diagnosis); updated through Session 13, 2026-07-13.
 
 > ## START HERE (current state, 2026-07-13)
 >
-> **Latest finding: jump to "### Session 12" below.** Session 11 fixed sprite
-> crunch (VICE 0-based cycle-14 bit-magic). Session 12 found why it is only
-> intermittent: the device kernel opens with a **CIA1 Timer B stabiliser**
-> (`SBC $DC06` at `$9B05`) that only partially cancels a residual 2-cycle
-> IRQ-acceptance phase error, so `$D017<-$00` lands on C14 (~70-75%) or C12
-> (~25-30%). Crunch only fires on C14. Some frames already reach ~202 VIC
-> writes and six-write entry near R25 — the gap is **stability**, not a missing
-> feature. Session 9's "VICE has no DMA at R8-R48" remains **retracted**.
+> **Latest finding: jump to "### Session 13" below.** Sprite crunch is now
+> **stable every frame**: `$D015` @ C48, `$D017` $35 @ C38 / $00 @ **C14**
+> (100/100 frames), flanking DMA R9-R73. Root cause of the remaining 25% miss
+> was missing VICE `INTERRUPT_DELAY` (2 Phi2 clocks) on the CPU-visible VIC
+> IRQ line — without it the `$9B05` Timer B stabiliser saw too many early
+> arrivals and could not lock the crunch cycle.
 >
-> **Still open for visual 1:1:** lock the `$9B05` stabiliser so `$D015/$D017`
-> always land on VICE's C48/C38/C14. Then re-check six-write R25-R45 and the
-> black frame at `--turbo<=7`.
+> **Still open for full visual 1:1:** six-write kernel line range still varies
+> with animation (first `$D021` often R33-R44, sometimes R24-R27; write count
+> 119-205, with many frames at VICE's ~202). Re-check settled black frame at
+> `--turbo<=7`.
 >
 > **Tooling (committed):** `tools/c64_control_client.py` (control-port client)
 > and `tools/dis6502.py` (6502 disassembler) drove the whole investigation; the
@@ -1153,3 +1152,36 @@ closely; focused VIC-II tests green.
 2. Confirm 100-frame `$D017` clear is 100% @ C14 and flanking DMA R9-R73 every
    frame.
 3. Then re-measure six-write R25-R45 and settled `--turbo<=7` black frame.
+
+### Session 13 (2026-07-13): VICE INTERRUPT_DELAY on VIC IRQ — crunch 100% locked
+
+**Cause:** VICE's 6510 core will not dispatch an IRQ until
+`cpu_clk >= irq_clk + INTERRUPT_DELAY` with `INTERRUPT_DELAY == 2`
+(`interrupt.h`). c64m presented VIC IRQ to the CPU the moment
+`irq_status & irq_enable` was set (CIA already had a one-cycle pin delay;
+VIC had none). The `$9B05` Timer B stabiliser therefore saw a bimodal early
+arrival (`A ∈ {$FF,$00,$01}` after `SBC $DC06`); BPL+$00 and A=`$FF` share the
+same sled, so early arrivals were not corrected and `$D017<-$00` hit C12 on
+~25% of frames.
+
+**Fix:** `c64_t.vic_irq_delay` counts up to 2 while the raw VIC IRQ condition
+holds and clears when it drops. `c64_cpu_irq_pending` requires
+`vic_irq_delay >= 2` (same 2-cycle delay as VICE). Updated each
+`c64_advance_one_cycle` after the VIC step.
+
+**100-frame oracle F5800-5899 after fix:**
+
+| signal | result |
+| --- | --- |
+| `$D015` $FF | **C48 on 100/100** |
+| `$D017` $35 | **C38 on 100/100** |
+| `$D017` $00 | **C14 on 100/100** |
+| flanking DMA | R9-R73 every sampled frame |
+
+Six-write entry raster still tracks free-sprite Y / animation (`$61` multiplex
+loop); write counts 119-205 with a solid share at 202-205. That is no longer a
+crunch-stability failure.
+
+**Tests:** focused VIC-II/CIA/boot/snapshot green; cross-line BA fixture updated
+to set `sprite_active` (DMA already on by cycle 60 of the Y-match line under
+the live-DMA-only BA model).

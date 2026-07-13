@@ -42,13 +42,14 @@
   CPU write while BA/RDY-only time still permits one.
 - VIC-II: PAL sprite BA tests cover single, adjacent, split-window, cross-line, inactive, and unified BA-predicate behavior. NTSC tests cover the 65-cycle late sprite window and sprite 4 cross-line window. Tests also verify the current per-cycle c-access and sprite-fetch schedule markers.
 - `samples/lft-nine.prg` is the selected cycle-sensitive VIC-II milestone
-  target (in progress, not yet passing). Sprite-crunch unit tests cover the
-  cycle-14 `$D017` bit-magic path and the off-cycle clear control. The oracle
-  capture (build with `-DC64M_VIC_TRACE`, see `md-files/lft-nine.md`) includes
-  VIC-write, per-raster CPU-budget, and sprite-DMA state traces
-  (`C64M_VICLOG`, `C64M_BALOG`, `C64M_SPRDMA`). Crunched flanking DMA now
-  matches VICE through R73; full acceptance (six-write kernel on every
-  R24-R44 line and settled visual parity) is not yet reached.
+  target (in progress). Sprite-crunch unit tests cover the cycle-14 `$D017`
+  bit-magic path and the off-cycle clear control. The oracle capture (build
+  with `-DC64M_VIC_TRACE`, see `md-files/lft-nine.md`) includes VIC-write,
+  per-raster CPU-budget, and sprite-DMA state traces (`C64M_VICLOG`,
+  `C64M_BALOG`, `C64M_SPRDMA`). With VIC `INTERRUPT_DELAY` (2), the device
+  kernel locks `$D015/$D017` to VICE's C48/C38/C14 every frame and flanking
+  DMA stays active through R73. Full acceptance (six-write on every R24-R44
+  line for matched animation phase, settled visual parity) is not yet claimed.
 - VIC fetch tests distinguish Phi1 idle/g/sprite-pointer work from Phi2
   c-access/sprite-data work, including PAL and NTSC sprite-0 slots. Snapshot
   format v5 carries the added sprite MCBASE latch, sprite-pointer latch, and

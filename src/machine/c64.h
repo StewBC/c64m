@@ -389,6 +389,11 @@ typedef struct c64_t {
     bool instruction_complete;
     bool restore_pending;
     bool cia2_nmi_line;
+    /* VICE INTERRUPT_DELAY (2): CPU-visible VIC IRQ lags the internal
+       irq_status/enable condition by two Phi2 clocks. Without this, lft-nine's
+       CIA Timer B raster stabiliser sees too many "early" arrivals and cannot
+       lock $D015/$D017 to the crunch cycle. */
+    uint8_t vic_irq_delay;
     size_t cpu_cycles_remaining;
     bool has_basic_rom;
     bool has_kernal_rom;

@@ -249,12 +249,28 @@ static void c64_balog_maybe_emit(c64_t *machine) {
 #define c64_balog_maybe_emit(machine) ((void)0)
 #endif /* C64M_VIC_TRACE */
 
+/* Advance the CPU-visible VIC IRQ delay line. Raw pending comes from
+   irq_status & irq_enable (already reflected in $D019 bit 7). VICE does not
+   let the 6510 act on that line until INTERRUPT_DELAY (2) cycles later. */
+static void c64_update_vic_irq_delay(c64_t *machine) {
+    bool raw = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
+
+    if (!raw) {
+        machine->vic_irq_delay = 0;
+        return;
+    }
+    if (machine->vic_irq_delay < 2u) {
+        machine->vic_irq_delay++;
+    }
+}
+
 static void c64_advance_one_cycle(c64_t *machine) {
     c64_balog_maybe_emit(machine);
     c64_step_vic(machine);
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
+    c64_update_vic_irq_delay(machine);
     machine->clock.cycle++;
     /* Per-cycle backstop: keep the drive current when no IEC access catches it
        up. IEC accesses advance it precisely ahead of this point. */
@@ -1415,7 +1431,9 @@ static uint8_t c64_cpu_irq_pending(void *user) {
      * delay), not the immediate ICR latched state. See C64MFULL_CIA Phase 4
      * Option 2 and md-files/corpus/cia-timing/. */
     bool cia_irq = cia_interrupt_line(&machine->cia1);
-    bool vic_irq = (machine->vic.irq_status & machine->vic.irq_enable) != 0;
+    /* VIC IRQ uses VICE's INTERRUPT_DELAY (2 Phi2 clocks) so the 6510 cannot
+     * enter the interrupt sequence on the same cycle the VIC sets the flag. */
+    bool vic_irq = machine->vic_irq_delay >= 2u;
     return (cia_irq || vic_irq) ? 1u : 0u;
 }
 
