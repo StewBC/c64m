@@ -41,7 +41,8 @@ enum {
     FRONTEND_DISPLAY_PAL_CROP_Y = 28,
     FRONTEND_DISPLAY_NTSC_CROP_Y = 28,
     FRONTEND_DISPLAY_CROP_W = 352,
-    FRONTEND_DISPLAY_CROP_H = 248
+    FRONTEND_DISPLAY_CROP_H = 248,
+    FRONTEND_CRT_RENDER_SCALE = 2
 };
 
 typedef enum frontend_register_field {
@@ -782,7 +783,9 @@ static bool frontend_update_crt_texture(frontend *ui)
     ui->crt_texture_valid = false;
     if (ui->crt_pixels == NULL) {
         ui->crt_pixels = malloc(
-            (size_t)C64_FRAME_WIDTH * (size_t)C64_FRAME_PAL_HEIGHT * sizeof(*ui->crt_pixels));
+            (size_t)(C64_FRAME_WIDTH * FRONTEND_CRT_RENDER_SCALE) *
+            (size_t)(C64_FRAME_PAL_HEIGHT * FRONTEND_CRT_RENDER_SCALE) *
+            sizeof(*ui->crt_pixels));
         if (ui->crt_pixels == NULL) {
             return false;
         }
@@ -792,14 +795,17 @@ static bool frontend_update_crt_texture(frontend *ui)
             ui->renderer,
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
-            C64_FRAME_WIDTH,
-            C64_FRAME_PAL_HEIGHT);
+            C64_FRAME_WIDTH * FRONTEND_CRT_RENDER_SCALE,
+            C64_FRAME_PAL_HEIGHT * FRONTEND_CRT_RENDER_SCALE);
         if (ui->crt_texture == NULL) {
             SDL_Log("SDL_CreateTexture for CRT output failed: %s", SDL_GetError());
             return false;
         }
         SDL_SetTextureBlendMode(ui->crt_texture, SDL_BLENDMODE_NONE);
     }
+    SDL_SetTextureScaleMode(
+        ui->crt_texture,
+        ui->crt_effects.curvature ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
 
     crop_y = frontend_display_crop_y_for_frame(&ui->current_frame);
     frontend_crt_process(
@@ -811,9 +817,11 @@ static bool frontend_update_crt_texture(frontend *ui)
         crop_y,
         FRONTEND_DISPLAY_CROP_W,
         FRONTEND_DISPLAY_CROP_H,
+        FRONTEND_CRT_RENDER_SCALE,
         &ui->crt_effects);
     if (SDL_UpdateTexture(ui->crt_texture, NULL, ui->crt_pixels,
-            C64_FRAME_WIDTH * (int)sizeof(*ui->crt_pixels)) != 0) {
+            C64_FRAME_WIDTH * FRONTEND_CRT_RENDER_SCALE *
+                (int)sizeof(*ui->crt_pixels)) != 0) {
         SDL_Log("SDL_UpdateTexture for CRT output failed: %s", SDL_GetError());
         return false;
     }
@@ -2635,15 +2643,18 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
 
         if (ui->has_frame && ui->display_texture != NULL) {
             SDL_Texture *render_texture = frontend_display_texture_for_render(ui);
+            int texture_scale = render_texture == ui->crt_texture ?
+                FRONTEND_CRT_RENDER_SCALE : 1;
             struct nk_image image = nk_subimage_handle(
                 nk_handle_ptr(render_texture),
-                (nk_ushort)ui->current_frame.width,
-                C64_FRAME_PAL_HEIGHT,
+                (nk_ushort)(ui->current_frame.width * texture_scale),
+                (nk_ushort)(C64_FRAME_PAL_HEIGHT * texture_scale),
                 nk_rect(
-                    (float)FRONTEND_DISPLAY_CROP_X,
-                    (float)frontend_display_crop_y_for_frame(&ui->current_frame),
-                    (float)FRONTEND_DISPLAY_CROP_W,
-                    (float)FRONTEND_DISPLAY_CROP_H));
+                    (float)(FRONTEND_DISPLAY_CROP_X * texture_scale),
+                    (float)(frontend_display_crop_y_for_frame(&ui->current_frame) *
+                        texture_scale),
+                    (float)(FRONTEND_DISPLAY_CROP_W * texture_scale),
+                    (float)(FRONTEND_DISPLAY_CROP_H * texture_scale)));
             struct nk_rect image_bounds = frontend_fit_nk_rect(
                 canvas_bounds,
                 ui->crt_aspect ? 4u : FRONTEND_DISPLAY_CROP_W,
@@ -9533,6 +9544,7 @@ static void frontend_render_display_only(frontend *ui)
     SDL_Rect dest;
     SDL_Rect src;
     SDL_Texture *render_texture;
+    int texture_scale;
 
     if (ui == NULL || ui->display_texture == NULL || !ui->has_frame) {
         return;
@@ -9547,11 +9559,12 @@ static void frontend_render_display_only(frontend *ui)
         return;
     }
 
-    src.x = FRONTEND_DISPLAY_CROP_X;
-    src.y = frontend_display_crop_y_for_frame(&ui->current_frame);
-    src.w = FRONTEND_DISPLAY_CROP_W;
-    src.h = FRONTEND_DISPLAY_CROP_H;
     render_texture = frontend_display_texture_for_render(ui);
+    texture_scale = render_texture == ui->crt_texture ? FRONTEND_CRT_RENDER_SCALE : 1;
+    src.x = FRONTEND_DISPLAY_CROP_X * texture_scale;
+    src.y = frontend_display_crop_y_for_frame(&ui->current_frame) * texture_scale;
+    src.w = FRONTEND_DISPLAY_CROP_W * texture_scale;
+    src.h = FRONTEND_DISPLAY_CROP_H * texture_scale;
     SDL_RenderCopy(ui->renderer, render_texture, &src, &dest);
 }
 
