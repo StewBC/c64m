@@ -28,6 +28,16 @@ Phi2 schedule; frontend frames are copies.
   follows the Bauer 3.9 rule used by the `lft-nine` work: main border covers
   sprites with `$D020`; vertical border blanks graphics to B0C and does not blank
   sprites. DEN=0 uses B0C for main-border pixels while sprites still mux.
+- Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
+  clear from DEN + range + YSCROLL; not sticky for the whole line). RC is
+  cleared only at cycle 14 if the condition still holds (Bauer 3.7.2). End-of-line
+  advances VC in display state, then applies VICE UpdateRc:
+  `if (RC==7) idle+VCBASE; if (!idle || bad_line) RC=(RC+1)&7`.
+- Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
+  only re-checks the compare when the 9-bit line actually changes (RST8). A
+  mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert
+  IRQ (Arkanoid dual-zone soft-scroll chain). Writing `$D012` to the *current*
+  line still triggers immediately (Galencia bottom-border chain).
 - Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
   not a fixed 512-dot wrap.
 - Turbo can disable host pixel output while retaining raster, BA, IRQ, sprite-DMA,

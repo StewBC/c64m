@@ -1458,45 +1458,32 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
         /* Vertical FF top/bottom compares also run at cycle 63 of the matching
            line (see end-of-line). Cycle 0 does not re-evaluate them. */
+    }
 
-        /* Clear the per-line c-access latch. Bad Line Condition is re-checked
-           every cycle (Bauer 3.5); RC clear and bulk line-latch happen only at
-           cycle 14 (rule 2 below), so a mid-line $D011 write that removes the
-           condition before cycle 14 does not force a false bad line. Fort
-           Apocalypse soft-scroll relies on this: STA $D011 at ~cycle 9 of
-           raster 119 after the upper zone left YSCROLL=7. */
+    /* Bad Line Condition (Bauer 3.5 / VICE viciisc check_badline): evaluated
+       every cycle from DEN, raster range, and (RASTER & 7) == YSCROLL. Mid-line
+       $D011 YSCROLL writes can assert or drop it immediately. VICE sets
+       bad_line = condition each cycle (does not sticky-latch for the whole
+       line). idle → display as soon as the condition holds (3.7.1). */
+    if (vicii_is_bad_line(v)) {
+        v->bad_line      = true;
+        v->display_state = true;
+    } else {
         v->bad_line = false;
     }
 
-    /* Bad Line Condition (Bauer 3.5): true whenever RASTER is in [$30,$f7],
-       (RASTER & 7) == YSCROLL and DEN is set. It can appear or disappear mid-line
-       when $D011 changes YSCROLL (FLI / dual-zone soft scroll). */
-    if (vicii_is_bad_line(v)) {
-        /* 3.7.1: idle → display as soon as the condition holds. */
-        v->display_state = true;
-
-        /* C-accesses (3.7.2 rule 3): if the condition holds in the BA/c-access
-           window, start them; once started they continue for the rest of the
-           line even if YSCROLL later changes. */
-        if (!v->bad_line &&
-            cycle >= 12u &&
-            cycle <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
-            v->bad_line = true;
-        }
-    }
-
-    /* Bauer 3.7.2 rules 2/3 at cycle 14:
-       - VC ← VCBASE every line (and VMLI clear; not modelled as a separate index)
-       - RC ← 0 only if Bad Line Condition still holds in this phase
+    /* Bauer 3.7.2 / VICE UpdateVc at cycle 14 (0-based; VICII_PAL_CYCLE(15)):
+       - VC ← VCBASE every line (VMLI clear not modelled separately)
+       - RC ← 0 only if Bad Line Condition holds in this phase
        - bulk line latch when RC is cleared (ordinary / early-FLI bad line)
        Visible g-pixels begin at cycle 15, so RC is correct before the first
-       character column is painted. */
+       character column is painted. Fort Apocalypse soft STA $D011 at ~cycle 9
+       of rast 119 drops the condition before this phase so RC is not cleared. */
     if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
         v->vc = v->vc_base;
-        if (vicii_is_bad_line(v)) {
+        if (v->bad_line) {
             v->rc            = 0;
             v->display_state = true;
-            v->bad_line      = true;
             if (bus) {
                 vicii_fill_line_latch(v, bus);
             }
@@ -1590,20 +1577,25 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     vicii_update_live_vertical_border_line_end(v);
     v->timing.cycle_in_line = 0;
 
+    /* End-of-line VC advance + RC/idle (VICE UpdateRc at cycle 58, applied
+       here after the line's g-access equivalent VC+=40). With per-cycle
+       bad_line matching VICE check_badline:
+         if (display) VC += 40
+         if (RC == 7) { idle; VCBASE = VC }
+         if (!idle || bad_line) { RC = (RC + 1) & 7; leave idle }
+       bad_line here is the condition on the last cycle of the line, not a
+       sticky mid-line latch. */
     if (v->display_state) {
-        /* This display line advanced VC by one character row's worth of cells.
-           At RC==7 the character row is finished: latch VCBASE forward by 40 and
-           leave display state (idle) until the next bad line re-enters it. Bauer
-           only increments RC while it is below 7, so RC is not wrapped here; the
-           next bad line resets it to 0. */
         v->vc = (uint16_t)((v->vc + VICII_TEXT_COLUMNS) & (uint16_t)VICII_VC_MAX);
+    }
 
-        if (v->rc == VICII_RC_MAX) {
-            v->vc_base       = v->vc;
-            v->display_state = false;
-        } else {
-            v->rc = (uint8_t)(v->rc + 1u);
-        }
+    if (v->rc == VICII_RC_MAX) {
+        v->display_state = false;
+        v->vc_base       = v->vc;
+    }
+    if (v->display_state || v->bad_line) {
+        v->rc            = (uint8_t)((v->rc + 1u) & (uint8_t)VICII_RC_MAX);
+        v->display_state = true;
     }
 
     v->timing.raster_line++;
@@ -1770,13 +1762,15 @@ uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr) {
     return v->registers[reg];
 }
 
-/* After $D011/$D012 update the 9-bit raster compare: if it now equals the
-   current raster line, raise the raster IRQ immediately. Hardware does this
-   on the write (not only at the start of a matching line). Galencia NTSC's
-   bottom-border IRQ chain writes compare == current line mid-line to chain
-   the next slice; without re-trigger the cleanup IRQ is skipped, RST8 is left
-   set, and every other frame misses the top-of-frame multiplex (flashing HUD,
-   half-rate music). */
+/* After a $D011/$D012 write that *changes* the 9-bit raster compare: if the
+   new compare equals the current raster line, raise the raster IRQ immediately.
+   Hardware (and VICE viciisc) only edge-triggers on non-match → match. Writing
+   $D011 YSCROLL/mode bits while the compare still matches the current line must
+   NOT re-assert IRQ — Arkanoid's soft-scroll handler STA $D011 on the same
+   raster that just IRQed; re-triggering ran the next chain handler ~9 lines
+   early (ECM clear at 104 instead of 113) and destroyed dual-zone YSCROLL.
+   Galencia still works: its chain writes a *new* D012 equal to the current
+   line (compare changes → edge → trigger). */
 static void vicii_raster_compare_maybe_trigger(vicii *v) {
     if (v->timing.raster_line == (uint32_t)v->timing.raster_compare) {
         vicii_assert_raster_irq(v);
@@ -1827,20 +1821,33 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
 
     switch (reg) {
     case 0x11: /* CONTROL_1: bit 7 is RST8, updates raster_compare bit 8 */
+    {
+        uint16_t old_compare = v->timing.raster_compare;
         v->registers[reg] = value & 0x7Fu;
         if (value & 0x80u) {
             v->timing.raster_compare |= 0x100u;
         } else {
             v->timing.raster_compare &= 0x00FFu;
         }
-        vicii_raster_compare_maybe_trigger(v);
+        /* Only edge-trigger when the 9-bit compare actually changed. */
+        if (v->timing.raster_compare != old_compare) {
+            vicii_raster_compare_maybe_trigger(v);
+        }
         break;
+    }
 
     case 0x12: /* RASTER compare low byte */
-        v->timing.raster_compare =
-            (v->timing.raster_compare & 0x100u) | (uint16_t)value;
+    {
+        uint16_t old_compare = v->timing.raster_compare;
+        uint16_t new_compare =
+            (uint16_t)((old_compare & 0x100u) | (uint16_t)value);
+        if (new_compare == old_compare) {
+            break; /* VICE d012_store: ignore same value */
+        }
+        v->timing.raster_compare = new_compare;
         vicii_raster_compare_maybe_trigger(v);
         break;
+    }
 
     case 0x19: /* IRQ_STATUS: write-1-to-clear */
         v->irq_status &= (uint8_t)(~value & 0x0Fu);

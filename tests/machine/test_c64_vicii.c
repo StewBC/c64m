@@ -268,6 +268,50 @@ static void test_raster_compare_write_triggers_same_line_irq(void) {
               vicii_read_register(&v, 0xd019));
 }
 
+/* Arkanoid dual-zone: soft-scroll IRQ runs on the matching raster, acks $D019,
+   then STA $D011 with a new YSCROLL (same RST8 / same 9-bit compare). That
+   write must not re-assert the raster IRQ — otherwise the next chain handler
+   runs immediately instead of at the programmed next D012 line (ECM clear at
+   104 instead of 113). VICE only edge-triggers on non-match → match. */
+static void test_d011_yscroll_write_does_not_retrigger_same_line_irq(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs;
+    uint32_t i;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_NTSC);
+    vicii_write_register(&v, 0xd01a, 0x01); /* enable raster IRQ */
+    vicii_write_register(&v, 0xd012, 103);  /* compare = 103 (Arkanoid soft line) */
+    vicii_write_register(&v, 0xd011, 0x1b); /* DEN|RSEL|Y=3, RST8=0 */
+
+    abs = 0;
+    for (i = 0; i < VICII_NTSC_CYCLES_PER_LINE * 103u + 20u; i++) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    expect_u32("at raster 103", 103u, v.timing.raster_line);
+    /* Line-start already raised raster IRQ for compare 103. */
+    expect_u8("line-start raster irq pending", 0xf1,
+              vicii_read_register(&v, 0xd019));
+
+    vicii_write_register(&v, 0xd019, 0x01); /* ack, as the IRQ handler does */
+    expect_u8("irq acked before soft $D011", 0x70,
+              (uint8_t)(vicii_read_register(&v, 0xd019) & 0xf1u));
+
+    /* Soft-scroll style write: change YSCROLL only; 9-bit compare unchanged. */
+    vicii_write_register(&v, 0xd011, 0x58u | 4u); /* ECM|DEN|RSEL|Y=4, RST8=0 */
+    expect_u8("YSCROLL $D011 does not re-raise same-line raster irq", 0x70,
+              (uint8_t)(vicii_read_register(&v, 0xd019) & 0xf1u));
+
+    /* Control: writing a new D012 equal to the current line still triggers
+       (Galencia mid-line chain). */
+    vicii_write_register(&v, 0xd012, 50); /* leave match */
+    vicii_write_register(&v, 0xd019, 0x01);
+    vicii_write_register(&v, 0xd012, 103); /* back to current line */
+    expect_u8("D012 change to current line still raises irq", 0xf1,
+              vicii_read_register(&v, 0xd019));
+}
+
 static void test_sprite_collision_registers_read_clear(void) {
     vicii v;
     char error[256];
@@ -3187,6 +3231,7 @@ int main(void) {
     test_raster_progression();
     test_irq_status_high_bit_reports_enabled_pending_irq();
     test_raster_compare_write_triggers_same_line_irq();
+    test_d011_yscroll_write_does_not_retrigger_same_line_irq();
     test_sprite_collision_registers_read_clear();
     test_bad_line_ba_asserts_at_cycle_12();
     test_frame_snapshot_geometry_and_regions();

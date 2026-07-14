@@ -13,6 +13,12 @@ Read in this order:
 3. `testing.md`
 4. The source and tests named by that handoff
 
+When using **VICE as the oracle** against titles under `assets/prg/`, also read
+**`vice-oracle.md` before launching VICE**. Those files are one-load collection
+PRGs (full inject, IRQ vector override); the wrong VICE flags look like an
+emulator bug. See that note for the required `-autostartprgmode 1` / `-autoload`
+command line.
+
 No hacks allowed. This is an emulator and the goal is to meet hardware so all
 future software that works on hardware (or vice) also "just works" here.
 
@@ -32,6 +38,8 @@ Component handoffs:
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
+- `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
+  (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
 
 Current baseline as 49/49 passing. That baseline includes the real 1541 ROM/IEC,
 G64, Arkanoid, and Robocop paths.

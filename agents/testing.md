@@ -37,6 +37,9 @@ verify it.
   it is evidence, not a full ctest gate.
 - Use the VIC trace build and `C64M_VICLOG`, `C64M_BALOG`, `C64M_SPRDMA` for
   `lft-nine` or sprite/raster investigations.
+- **VICE vs c64m on `assets/prg/` games:** follow `vice-oracle.md`. Collection
+  PRGs need VICE `-autostartprgmode 1` and `-autoload "<path.prg>"` (IRQ after
+  inject starts the game). Do not use a plain small-PRG autostart for those.
 
 ## Known gaps
 
