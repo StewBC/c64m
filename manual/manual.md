@@ -1238,6 +1238,14 @@ other Machine settings apply immediately when you press **[OK]** or **[Save INI 
 |-------------------|--------|
 | Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
 | Symbol Files      | Add symbol files and display the comma-separated list of selected files |
+| CRT Aspect        | Correct the C64 crop to a 4:3 CRT display aspect using non-square pixels |
+| Scanlines         | Enable alternating dark raster lines; the slider sets strength from 0-100% |
+| CRT Curvature     | Bend the picture toward a curved CRT surface; the slider sets amount from 0-100% |
+
+The CRT controls are a live preview: checkboxes and sliders update the C64 display while
+Configure remains open. **[Cancel]** or the dialog close button restores the values that
+were active when Configure opened. **[OK]** accepts them. All three effects are optional
+and independent; with them disabled, c64m uses the original rectangular render path.
 
 ### Paths
 
@@ -1322,6 +1330,11 @@ emulator removes comments.
 | Key              | Value                                                    |
 |------------------|----------------------------------------------------------|
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
+| `crt_aspect`     | `true`/`false`; correct the displayed crop to 4:3       |
+| `crt_scanlines`  | `true`/`false`; enable scanlines                         |
+| `crt_scanline_strength` | Integer 0-100; scanline darkness (default `35`) |
+| `crt_curvature`  | `true`/`false`; enable curved-screen distortion          |
+| `crt_curvature_amount` | Integer 0-100; curvature amount (default `30`)   |
 
 ### [input]
 
@@ -2195,7 +2208,10 @@ uses keypad key codes, so Num Lock must be on. The port and layout are saved in 
 ### Display and Scaling
 
 The C64 display is scaled to fit its panel with aspect-ratio correction. Letterbox or
-pillarbox fills the unused space (black).
+pillarbox fills the unused space (black). Optional CRT presentation controls are under
+**Misc -> Machine -> Configure -> Emulator**. CRT Aspect corrects the displayed crop to
+4:3; Scanlines and CRT Curvature add adjustable post-processing. These controls preview
+live and Cancel restores their previous values.
 
 ### Vendored third-party code and assets
 - `C64_TrueType_v1.2.1-STYLE`

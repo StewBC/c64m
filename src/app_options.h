@@ -30,6 +30,12 @@ typedef struct app_options {
     char *turbo_multipliers;
     char *symbol_files;
     char *video_standard;
+    /* Optional frontend-only CRT presentation. Strength/amount are 0..100. */
+    bool crt_aspect;
+    bool crt_scanlines;
+    int crt_scanline_strength;
+    bool crt_curvature;
+    int crt_curvature_amount;
     int window_width;
     int window_height;
     float layout_split_display_right;

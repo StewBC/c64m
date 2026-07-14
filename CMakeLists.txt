@@ -368,6 +368,19 @@ target_link_libraries(test_frontend_joystick PRIVATE
 
 add_test(NAME frontend_joystick COMMAND test_frontend_joystick)
 
+add_executable(test_crt_renderer
+    src/frontend/crt_renderer.c
+    tests/frontend/test_crt_renderer.c
+)
+
+target_compile_features(test_crt_renderer PRIVATE c_std_99)
+
+target_include_directories(test_crt_renderer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+)
+
+add_test(NAME crt_renderer COMMAND test_crt_renderer)
+
 add_executable(test_platform_fs
     tests/platform/test_platform_fs.c
 )

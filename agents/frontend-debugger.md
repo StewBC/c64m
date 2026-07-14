@@ -44,7 +44,14 @@ code. Dialogs are modal: outside clicks must not focus or activate base views.
 Machine dialogs support D64 queue management, writable toggle, PRG/BASIC/BASIC Text
 load/save, T64 host extraction, CRT attach, state save/load, ROM endpoint selection,
 single combined-vs-split C64 ROM selection, video standard, audio, 1541 emulation,
-and media mode. ROM changes apply by reboot/reload; 1541 emulation applies live.
+and media mode. The Emulator configuration tab also owns frontend-only CRT
+presentation: optional 4:3 pixel-aspect correction, scanlines with adjustable
+strength, and screen curvature with adjustable amount. Scanline/curvature output
+uses a second processed texture so the original SDL texture remains the fallback;
+the same fitted texture selection is used by debugger and display-only views.
+CRT controls preview their editable copy live; cancelling or closing Configure
+restores the original presentation values. ROM changes apply by reboot/reload;
+1541 emulation applies live.
 
 Basic Text is stock BASIC V2 only. `util/basic_v2` tokenizes/detokenizes ASCII,
 updates BASIC pointers, and preserves non-printable PETSCII in named/hex escapes.

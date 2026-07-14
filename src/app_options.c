@@ -24,6 +24,8 @@
 #define C64M_DEFAULT_VIDEO_STANDARD "NTSC"
 #define C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT "numpad"
 #define C64M_DEFAULT_SCROLL_WHEEL_LINES 3
+#define C64M_DEFAULT_CRT_SCANLINE_STRENGTH 35
+#define C64M_DEFAULT_CRT_CURVATURE_AMOUNT 30
 #define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
 #define C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM 0.58f
 #define C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC 0.55f
@@ -1080,6 +1082,28 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->video_standard, value);
     }
+    options->crt_aspect = config_get_bool(
+        cfg, "Video", "crt_aspect", options->crt_aspect);
+    options->crt_scanlines = config_get_bool(
+        cfg, "Video", "crt_scanlines", options->crt_scanlines);
+    options->crt_scanline_strength = config_get_int(
+        cfg, "Video", "crt_scanline_strength", options->crt_scanline_strength);
+    if (options->crt_scanline_strength < 0) {
+        options->crt_scanline_strength = 0;
+    }
+    if (options->crt_scanline_strength > 100) {
+        options->crt_scanline_strength = 100;
+    }
+    options->crt_curvature = config_get_bool(
+        cfg, "Video", "crt_curvature", options->crt_curvature);
+    options->crt_curvature_amount = config_get_int(
+        cfg, "Video", "crt_curvature_amount", options->crt_curvature_amount);
+    if (options->crt_curvature_amount < 0) {
+        options->crt_curvature_amount = 0;
+    }
+    if (options->crt_curvature_amount > 100) {
+        options->crt_curvature_amount = 100;
+    }
     value = config_get(cfg, "input", "keyboard_joystick_layout");
     if (value != NULL) {
         replace_string(&options->keyboard_joystick_layout, value);
@@ -1463,6 +1487,8 @@ void app_options_init(app_options *options)
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
+    options->crt_scanline_strength = C64M_DEFAULT_CRT_SCANLINE_STRENGTH;
+    options->crt_curvature_amount = C64M_DEFAULT_CRT_CURVATURE_AMOUNT;
     replace_string(&options->keyboard_joystick_layout,
                    C64M_DEFAULT_KEYBOARD_JOYSTICK_LAYOUT);
     options->keyboard_joystick_port = 0;
@@ -1515,6 +1541,11 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->emulate_1541 = src->emulate_1541;
     dest->media_1541 = src->media_1541;
     dest->show_disk_leds = src->show_disk_leds;
+    dest->crt_aspect = src->crt_aspect;
+    dest->crt_scanlines = src->crt_scanlines;
+    dest->crt_scanline_strength = src->crt_scanline_strength;
+    dest->crt_curvature = src->crt_curvature;
+    dest->crt_curvature_amount = src->crt_curvature_amount;
     dest->rom_single_system = src->rom_single_system;
     dest->audio_smoke = src->audio_smoke;
     dest->audio_record_start_seconds = src->audio_record_start_seconds;
@@ -1628,6 +1659,11 @@ bool app_options_save_shutdown(const app_options *options)
     if (options->video_standard != NULL) {
         config_set(cfg, "Video", "standard", options->video_standard);
     }
+    config_set_bool(cfg, "Video", "crt_aspect", options->crt_aspect);
+    config_set_bool(cfg, "Video", "crt_scanlines", options->crt_scanlines);
+    config_set_int(cfg, "Video", "crt_scanline_strength", options->crt_scanline_strength);
+    config_set_bool(cfg, "Video", "crt_curvature", options->crt_curvature);
+    config_set_int(cfg, "Video", "crt_curvature_amount", options->crt_curvature_amount);
     config_remove_prefix(cfg, "Video", "display_width");
     config_remove_prefix(cfg, "Video", "display_height");
     if (options->keyboard_joystick_layout != NULL) {

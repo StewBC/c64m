@@ -7,6 +7,7 @@
 
 #include "c64_layout.h"
 #include "c64_pro_mono_font_data.h"
+#include "crt_renderer.h"
 #include "disk_led_data.h"
 #include "disasm_6502.h"
 #include "platform_fs.h"
@@ -381,10 +382,15 @@ struct frontend {
     SDL_Renderer *renderer;
     struct nk_font *help_font;
     SDL_Texture *display_texture;
+    SDL_Texture *crt_texture;
+    uint32_t *crt_pixels;
+    bool crt_texture_valid;
     SDL_Texture *led_green_texture;
     SDL_Texture *led_red_texture;
     /* Disk LEDs: host-time hold armed when machine activity seq changes. */
     bool show_disk_leds;
+    bool crt_aspect;
+    frontend_crt_effects crt_effects;
     uint32_t disk_led_seen_read_seq[2];
     uint32_t disk_led_seen_write_seq[2];
     uint64_t disk_led_read_until_ms;
@@ -750,6 +756,95 @@ static int frontend_display_crop_y_for_frame(const c64_frame *frame)
         return FRONTEND_DISPLAY_NTSC_CROP_Y;
     }
     return FRONTEND_DISPLAY_PAL_CROP_Y;
+}
+
+static bool frontend_crt_effects_enabled(const frontend *ui)
+{
+    return ui != NULL && (ui->crt_effects.scanlines || ui->crt_effects.curvature);
+}
+
+static SDL_Texture *frontend_display_texture_for_render(const frontend *ui)
+{
+    if (frontend_crt_effects_enabled(ui) && ui->crt_texture != NULL &&
+        ui->crt_texture_valid) {
+        return ui->crt_texture;
+    }
+    return ui != NULL ? ui->display_texture : NULL;
+}
+
+static bool frontend_update_crt_texture(frontend *ui)
+{
+    int crop_y;
+
+    if (ui == NULL || !ui->has_frame || !frontend_crt_effects_enabled(ui)) {
+        return true;
+    }
+    ui->crt_texture_valid = false;
+    if (ui->crt_pixels == NULL) {
+        ui->crt_pixels = malloc(
+            (size_t)C64_FRAME_WIDTH * (size_t)C64_FRAME_PAL_HEIGHT * sizeof(*ui->crt_pixels));
+        if (ui->crt_pixels == NULL) {
+            return false;
+        }
+    }
+    if (ui->crt_texture == NULL) {
+        ui->crt_texture = SDL_CreateTexture(
+            ui->renderer,
+            SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING,
+            C64_FRAME_WIDTH,
+            C64_FRAME_PAL_HEIGHT);
+        if (ui->crt_texture == NULL) {
+            SDL_Log("SDL_CreateTexture for CRT output failed: %s", SDL_GetError());
+            return false;
+        }
+        SDL_SetTextureBlendMode(ui->crt_texture, SDL_BLENDMODE_NONE);
+    }
+
+    crop_y = frontend_display_crop_y_for_frame(&ui->current_frame);
+    frontend_crt_process(
+        ui->current_frame.pixels,
+        ui->crt_pixels,
+        C64_FRAME_WIDTH,
+        C64_FRAME_PAL_HEIGHT,
+        FRONTEND_DISPLAY_CROP_X,
+        crop_y,
+        FRONTEND_DISPLAY_CROP_W,
+        FRONTEND_DISPLAY_CROP_H,
+        &ui->crt_effects);
+    if (SDL_UpdateTexture(ui->crt_texture, NULL, ui->crt_pixels,
+            C64_FRAME_WIDTH * (int)sizeof(*ui->crt_pixels)) != 0) {
+        SDL_Log("SDL_UpdateTexture for CRT output failed: %s", SDL_GetError());
+        return false;
+    }
+    ui->crt_texture_valid = true;
+    return true;
+}
+
+static void frontend_preview_crt_options(frontend *ui, const app_options *options)
+{
+    bool effects_changed;
+
+    if (ui == NULL || options == NULL) {
+        return;
+    }
+
+    effects_changed =
+        ui->crt_effects.scanlines != options->crt_scanlines ||
+        ui->crt_effects.scanline_strength != options->crt_scanline_strength ||
+        ui->crt_effects.curvature != options->crt_curvature ||
+        ui->crt_effects.curvature_amount != options->crt_curvature_amount;
+    ui->crt_aspect = options->crt_aspect;
+    ui->crt_effects.scanlines = options->crt_scanlines;
+    ui->crt_effects.scanline_strength = options->crt_scanline_strength;
+    ui->crt_effects.curvature = options->crt_curvature;
+    ui->crt_effects.curvature_amount = options->crt_curvature_amount;
+    ui->layout.display_aspect = ui->crt_aspect ? 4.0f / 3.0f :
+        (float)FRONTEND_DISPLAY_CROP_W / (float)FRONTEND_DISPLAY_CROP_H;
+
+    if (effects_changed && !frontend_update_crt_texture(ui)) {
+        SDL_Log("frontend: could not refresh CRT output");
+    }
 }
 
 static bool frontend_point_in_rect(float x, float y, struct nk_rect rect)
@@ -1239,6 +1334,15 @@ static bool frontend_config_dialog_open(frontend *ui)
     return true;
 }
 
+static void frontend_config_dialog_cancel(frontend *ui)
+{
+    if (ui == NULL) {
+        return;
+    }
+    frontend_preview_crt_options(ui, &ui->config_dialog.original);
+    ui->config_dialog.open = false;
+}
+
 static bool frontend_push_config_intent(
     frontend *ui,
     frontend_debugger_intent_type type,
@@ -1695,6 +1799,16 @@ static bool frontend_config_validate(frontend_config_dialog_state *dialog)
         snprintf(dialog->error, sizeof(dialog->error), "Scroll wheel speed must be 1..100");
         return false;
     }
+    if (dialog->edited.crt_scanline_strength < 0 ||
+        dialog->edited.crt_scanline_strength > 100) {
+        snprintf(dialog->error, sizeof(dialog->error), "Scanline strength must be 0..100");
+        return false;
+    }
+    if (dialog->edited.crt_curvature_amount < 0 ||
+        dialog->edited.crt_curvature_amount > 100) {
+        snprintf(dialog->error, sizeof(dialog->error), "CRT curvature must be 0..100");
+        return false;
+    }
     if (dialog->edited.ini_path == NULL || dialog->edited.ini_path[0] == '\0') {
         snprintf(dialog->error, sizeof(dialog->error), "INI file path is required");
         return false;
@@ -1836,6 +1950,41 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
 
     nk_layout_row_dynamic(ctx, 22.0f, 1);
     frontend_edit_replace(ctx, NK_EDIT_FIELD, dialog->edited.symbol_files, 1024, nk_filter_default);
+
+    nk_layout_row_dynamic(ctx, 10.0f, 1);
+    nk_spacing(ctx, 1);
+    nk_layout_row_dynamic(ctx, 18.0f, 1);
+    nk_label(ctx, "CRT display", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 22.0f, 1);
+    frontend_checkbox_bool(ctx, "CRT Aspect", &dialog->edited.crt_aspect);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+    nk_layout_row_push(ctx, 0.42f);
+    frontend_checkbox_bool(ctx, "Scanlines", &dialog->edited.crt_scanlines);
+    if (!dialog->edited.crt_scanlines) nk_widget_disable_begin(ctx);
+    nk_layout_row_push(ctx, 0.43f);
+    dialog->edited.crt_scanline_strength = nk_slide_int(
+        ctx, 0, dialog->edited.crt_scanline_strength, 100, 1);
+    nk_layout_row_push(ctx, 0.15f);
+    nk_labelf(ctx, NK_TEXT_RIGHT, "%d%%", dialog->edited.crt_scanline_strength);
+    if (!dialog->edited.crt_scanlines) nk_widget_disable_end(ctx);
+    nk_layout_row_end(ctx);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+    nk_layout_row_push(ctx, 0.42f);
+    frontend_checkbox_bool(ctx, "CRT Curvature", &dialog->edited.crt_curvature);
+    if (!dialog->edited.crt_curvature) nk_widget_disable_begin(ctx);
+    nk_layout_row_push(ctx, 0.43f);
+    dialog->edited.crt_curvature_amount = nk_slide_int(
+        ctx, 0, dialog->edited.crt_curvature_amount, 100, 1);
+    nk_layout_row_push(ctx, 0.15f);
+    nk_labelf(ctx, NK_TEXT_RIGHT, "%d%%", dialog->edited.crt_curvature_amount);
+    if (!dialog->edited.crt_curvature) nk_widget_disable_end(ctx);
+    nk_layout_row_end(ctx);
+
+    /* CRT presentation is a transactional live preview: edited values drive the
+       frontend immediately, while Cancel restores dialog->original. */
+    frontend_preview_crt_options(ui, &dialog->edited);
 }
 
 /* One ROM path row: label, an edit box bound to the dialog's editable path
@@ -2111,14 +2260,14 @@ static void frontend_draw_config_dialog(frontend *ui, int width, int height)
                 }
             }
             if (nk_button_label(ctx, "Cancel")) {
-                dialog->open = false;
+                frontend_config_dialog_cancel(ui);
             }
             frontend_draw_config_existing_ini_prompt(ui, dialog, ctx);
         } else {
-            dialog->open = false;
+            frontend_config_dialog_cancel(ui);
         }
     } else if (nk_window_is_closed(ctx, "Configure")) {
-        dialog->open = false;
+        frontend_config_dialog_cancel(ui);
     }
     nk_end(ctx);
 }
@@ -2485,8 +2634,9 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
         nk_fill_rect(canvas, canvas_bounds, 0.0f, nk_rgb(17, 22, 28));
 
         if (ui->has_frame && ui->display_texture != NULL) {
+            SDL_Texture *render_texture = frontend_display_texture_for_render(ui);
             struct nk_image image = nk_subimage_handle(
-                nk_handle_ptr(ui->display_texture),
+                nk_handle_ptr(render_texture),
                 (nk_ushort)ui->current_frame.width,
                 C64_FRAME_PAL_HEIGHT,
                 nk_rect(
@@ -2496,8 +2646,8 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
                     (float)FRONTEND_DISPLAY_CROP_H));
             struct nk_rect image_bounds = frontend_fit_nk_rect(
                 canvas_bounds,
-                FRONTEND_DISPLAY_CROP_W,
-                FRONTEND_DISPLAY_CROP_H);
+                ui->crt_aspect ? 4u : FRONTEND_DISPLAY_CROP_W,
+                ui->crt_aspect ? 3u : FRONTEND_DISPLAY_CROP_H);
 
             nk_draw_image(canvas, image_bounds, &image, nk_rgba(255, 255, 255, 255));
             nk_stroke_rect(canvas, image_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
@@ -7346,6 +7496,7 @@ void frontend_set_config_state(frontend *ui, const app_options *options)
     keep_open = ui->config_dialog.open;
     keep_tab = ui->config_dialog.active_tab;
     ui->show_disk_leds = options->show_disk_leds;
+    frontend_preview_crt_options(ui, options);
 
     frontend_config_dialog_reset(&ui->config_dialog);
     if (!app_options_copy(&ui->config_dialog.original, options) ||
@@ -7598,6 +7749,9 @@ void frontend_destroy(frontend *ui)
     if (ui->display_texture != NULL) {
         SDL_DestroyTexture(ui->display_texture);
     }
+    if (ui->crt_texture != NULL) {
+        SDL_DestroyTexture(ui->crt_texture);
+    }
     if (ui->led_green_texture != NULL) {
         SDL_DestroyTexture(ui->led_green_texture);
     }
@@ -7609,6 +7763,7 @@ void frontend_destroy(frontend *ui)
     frontend_config_dialog_reset(&ui->config_dialog);
     app_disk_slot_clear(&ui->disk_queue[0]);
     app_disk_slot_clear(&ui->disk_queue[1]);
+    free(ui->crt_pixels);
     free(ui);
 }
 
@@ -7858,6 +8013,9 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
 
     ui->current_frame = *frame;
     ui->has_frame = true;
+    if (!frontend_update_crt_texture(ui)) {
+        SDL_Log("frontend: CRT output update failed; using unprocessed frame");
+    }
     return true;
 }
 
@@ -9374,13 +9532,17 @@ static void frontend_render_display_only(frontend *ui)
     int height = 0;
     SDL_Rect dest;
     SDL_Rect src;
+    SDL_Texture *render_texture;
 
     if (ui == NULL || ui->display_texture == NULL || !ui->has_frame) {
         return;
     }
 
     platform_window_get_size(ui->window, &width, &height);
-    dest = frontend_fit_rect(0, 0, width, height, FRONTEND_DISPLAY_CROP_W, FRONTEND_DISPLAY_CROP_H);
+    dest = frontend_fit_rect(
+        0, 0, width, height,
+        ui->crt_aspect ? 4 : FRONTEND_DISPLAY_CROP_W,
+        ui->crt_aspect ? 3 : FRONTEND_DISPLAY_CROP_H);
     if (dest.w <= 0 || dest.h <= 0) {
         return;
     }
@@ -9389,7 +9551,8 @@ static void frontend_render_display_only(frontend *ui)
     src.y = frontend_display_crop_y_for_frame(&ui->current_frame);
     src.w = FRONTEND_DISPLAY_CROP_W;
     src.h = FRONTEND_DISPLAY_CROP_H;
-    SDL_RenderCopy(ui->renderer, ui->display_texture, &src, &dest);
+    render_texture = frontend_display_texture_for_render(ui);
+    SDL_RenderCopy(ui->renderer, render_texture, &src, &dest);
 }
 
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state)

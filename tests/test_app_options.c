@@ -146,6 +146,11 @@ static void write_phase14_ini(const char *path) {
 
     fputs("[Video]\n", file);
     fputs("standard=PAL\n", file);
+    fputs("crt_aspect=yes\n", file);
+    fputs("crt_scanlines=yes\n", file);
+    fputs("crt_scanline_strength=47\n", file);
+    fputs("crt_curvature=yes\n", file);
+    fputs("crt_curvature_amount=23\n", file);
     fputs("\n[config]\n", file);
     fputs("Save=yes\n", file);
     fputs("scroll_wheel_lines=7\n", file);
@@ -434,6 +439,11 @@ static void test_phase14_config_from_ini(void) {
     }
 
     expect_string("video standard", "PAL", options.video_standard);
+    expect_bool("CRT aspect", 1, options.crt_aspect);
+    expect_bool("CRT scanlines", 1, options.crt_scanlines);
+    expect_int("CRT scanline strength", 47, options.crt_scanline_strength);
+    expect_bool("CRT curvature", 1, options.crt_curvature);
+    expect_int("CRT curvature amount", 23, options.crt_curvature_amount);
     expect_bool("remember", 1, options.remember);
     expect_int("scroll wheel lines", 7, options.scroll_wheel_lines);
     expect_string("turbo speeds", "3,6,12", options.turbo_multipliers);
@@ -533,6 +543,11 @@ static void test_phase14_config_saved_to_ini(void) {
     }
 
     app_options_set_string(&options.video_standard, "PAL");
+    options.crt_aspect = true;
+    options.crt_scanlines = true;
+    options.crt_scanline_strength = 62;
+    options.crt_curvature = true;
+    options.crt_curvature_amount = 41;
     options.remember = true;
     options.scroll_wheel_lines = 9;
     app_options_set_string(&options.turbo_multipliers, "5,10");
@@ -558,6 +573,11 @@ static void test_phase14_config_saved_to_ini(void) {
     }
 
     expect_string("saved video standard", "PAL", options.video_standard);
+    expect_bool("saved CRT aspect", 1, options.crt_aspect);
+    expect_bool("saved CRT scanlines", 1, options.crt_scanlines);
+    expect_int("saved CRT scanline strength", 62, options.crt_scanline_strength);
+    expect_bool("saved CRT curvature", 1, options.crt_curvature);
+    expect_int("saved CRT curvature amount", 41, options.crt_curvature_amount);
     expect_bool("saved remember", 1, options.remember);
     expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
     expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);

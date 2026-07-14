@@ -21,6 +21,8 @@ add_custom_target(frontend_help_content DEPENDS "${C64M_HELP_CONTENT}")
 add_library(frontend STATIC
     c64_layout.c
     c64_layout.h
+    crt_renderer.c
+    crt_renderer.h
     disk_led_data.c
     disk_led_data.h
     frontend.c
