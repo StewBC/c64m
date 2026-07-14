@@ -4,6 +4,7 @@
 #include "runtime_event.h"
 #include "runtime_client.h"
 #include "app_options.h"
+#include "window_title.h"
 
 #include "c64_frame.h"
 
@@ -12,13 +13,6 @@
 #include <stdint.h>
 
 typedef struct frontend frontend;
-
-typedef enum frontend_runtime_state {
-    FRONTEND_RUNTIME_STATE_UNKNOWN = 0,
-    FRONTEND_RUNTIME_STATE_RUNNING,
-    FRONTEND_RUNTIME_STATE_PAUSED,
-    FRONTEND_RUNTIME_STATE_ERROR
-} frontend_runtime_state;
 
 typedef struct frontend_debug_state {
     frontend_runtime_state runtime_state;

@@ -149,14 +149,15 @@ help. On macOS, **Cmd+Q** quits.
 
 ### Window Title
 
-The OS window title shows whether the machine is running or paused, even when Debug Mode
-is closed and no other indicator is visible:
+The OS window title shows the video standard, active turbo multiplier, and runtime state,
+even when Debug Mode is closed and no other indicator is visible:
 
-| Title                    | Meaning                                                  |
-|---------------------------|----------------------------------------------------------|
-| `c64m - Running`          | The C64 is executing normally.                           |
-| `c64m - Paused (reason)`  | Execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
-| `c64m - Error`            | The runtime hit an error and stopped.                    |
+| Title                                  | Meaning                                      |
+|----------------------------------------|----------------------------------------------|
+| `c64m - PAL - 1x - Running`            | PAL video, normal speed, executing normally. |
+| `c64m - NTSC - 4x - Paused (reason)`   | NTSC video at 4x; execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
+| `c64m - PAL - MAX - Running`           | The `256x` turbo setting is displayed as `MAX`. |
+| `c64m - NTSC - 1x - Error`             | The runtime hit an error and stopped.        |
 
 This lets you tell whether the emulator is paused or running without opening the debugger.
 
@@ -722,7 +723,7 @@ present.
 
 A `BRK` opcode ($00) always pauses the emulator, with no breakpoint needed. The CPU does
 not execute it; the instruction is intercepted before the stack is touched, and the
-window title (see **Window Title**) reads `c64m - Paused (BRK)`.
+window title (see **Window Title**) ends with `Paused (BRK)`.
 
 This usually indicates that execution has reached uninitialized memory, passed the end of
 a program, or followed a corrupted jump vector. Letting it execute can repeatedly push to

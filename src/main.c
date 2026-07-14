@@ -3850,26 +3850,14 @@ static void dispatch_control_requests(
 
 static void update_window_title(
     platform_window *window,
+    const char *video_standard,
+    uint32_t turbo_multiplier,
     frontend_runtime_state state,
     runtime_stop_reason stop_reason) {
-    char title[64];
+    char title[96];
 
-    switch (state) {
-        case FRONTEND_RUNTIME_STATE_RUNNING:
-            snprintf(title, sizeof(title), "c64m - Running");
-            break;
-        case FRONTEND_RUNTIME_STATE_PAUSED:
-            snprintf(title, sizeof(title), "c64m - Paused (%s)",
-                frontend_stop_reason_name(stop_reason));
-            break;
-        case FRONTEND_RUNTIME_STATE_ERROR:
-            snprintf(title, sizeof(title), "c64m - Error");
-            break;
-        case FRONTEND_RUNTIME_STATE_UNKNOWN:
-        default:
-            snprintf(title, sizeof(title), "c64m");
-            break;
-    }
+    frontend_format_window_title(
+        title, sizeof(title), video_standard, turbo_multiplier, state, stop_reason);
     platform_window_set_title(window, title);
 }
 
@@ -3889,6 +3877,8 @@ static bool run_main_loop(
     bool text_input_active = SDL_IsTextInputActive() == SDL_TRUE;
     frontend_runtime_state last_title_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
     runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
+    uint32_t last_title_turbo_multiplier = 0u;
+    char last_title_video_standard[8] = "";
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
     frontend_joystick_input kbd_joystick;
@@ -4117,10 +4107,21 @@ static bool run_main_loop(
 
         if (!title_set ||
             debug_state.runtime_state != last_title_state ||
-            debug_state.stop_reason != last_title_stop_reason) {
-            update_window_title(window, debug_state.runtime_state, debug_state.stop_reason);
+            debug_state.stop_reason != last_title_stop_reason ||
+            debug_state.active_turbo_multiplier != last_title_turbo_multiplier ||
+            strcmp(last_title_video_standard,
+                options->video_standard != NULL ? options->video_standard : "") != 0) {
+            update_window_title(
+                window,
+                options->video_standard,
+                debug_state.active_turbo_multiplier,
+                debug_state.runtime_state,
+                debug_state.stop_reason);
             last_title_state = debug_state.runtime_state;
             last_title_stop_reason = debug_state.stop_reason;
+            last_title_turbo_multiplier = debug_state.active_turbo_multiplier;
+            snprintf(last_title_video_standard, sizeof(last_title_video_standard), "%s",
+                options->video_standard != NULL ? options->video_standard : "");
             title_set = true;
         }
 

@@ -368,6 +368,21 @@ target_link_libraries(test_frontend_joystick PRIVATE
 
 add_test(NAME frontend_joystick COMMAND test_frontend_joystick)
 
+add_executable(test_window_title
+    src/frontend/window_title.c
+    tests/frontend/test_window_title.c
+)
+
+target_compile_features(test_window_title PRIVATE c_std_99)
+
+target_include_directories(test_window_title PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/machine
+)
+
+add_test(NAME window_title COMMAND test_window_title)
+
 add_executable(test_crt_renderer
     src/frontend/crt_renderer.c
     tests/frontend/test_crt_renderer.c
