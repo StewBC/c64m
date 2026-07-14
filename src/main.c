@@ -2409,6 +2409,7 @@ static void sdl_c64_controllers_close(sdl_c64_controller_state *state, runtime_c
 }
 
 static void dispatch_debugger_intents(
+    platform_window *window,
     runtime_client *client,
     frontend *ui,
     const frontend_debug_state *debug_state,
@@ -2657,6 +2658,22 @@ static void dispatch_debugger_intents(
                     }
                     frontend_config_export_rom_paths(ui, options);
                     if (save_now) {
+                        /* Configure's copied options still hold the load-time
+                           geometry; refresh from the live window/layout like quit. */
+                        if (window != NULL) {
+                            platform_window_get_size(
+                                window, &options->window_width, &options->window_height);
+                        }
+                        {
+                            frontend_layout_state layout_state;
+                            frontend_get_layout_state(ui, &layout_state);
+                            options->layout_split_display_right =
+                                layout_state.split_display_right;
+                            options->layout_split_top_bottom =
+                                layout_state.split_top_bottom;
+                            options->layout_split_memory_misc =
+                                layout_state.split_memory_misc;
+                        }
                         if (options->no_save_ini) {
                             SDL_Log("Save INI now: saving disabled (--nosaveini)");
                         } else if (!app_options_save_shutdown(options)) {
@@ -4125,6 +4142,7 @@ static bool run_main_loop(
             }
         }
         dispatch_debugger_intents(
+            window,
             client,
             ui,
             &debug_state,

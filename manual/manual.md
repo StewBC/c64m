@@ -1293,7 +1293,7 @@ settings to the named INI file.
 
 | Button            | Effect |
 |-------------------|--------|
-| **[Save INI now]**| Apply the dialog settings and write the INI file immediately; Configure stays open |
+| **[Save INI now]**| Apply the dialog settings and write the INI file immediately (including the current window size and layout splitters); Configure stays open |
 | **[OK]**          | Apply all changes without writing the INI (quit still saves when Auto-save is on) |
 | **[Cancel]**      | Discard dialog changes |
 
@@ -2195,7 +2195,7 @@ uses keypad key codes, so Num Lock must be on. The port and layout are saved in 
 ### Display and Scaling
 
 The C64 display is scaled to fit its panel with aspect-ratio correction. Letterbox or
-pillarbox fills the unused space.
+pillarbox fills the unused space (black).
 
 ### Vendored third-party code and assets
 - `C64_TrueType_v1.2.1-STYLE`
