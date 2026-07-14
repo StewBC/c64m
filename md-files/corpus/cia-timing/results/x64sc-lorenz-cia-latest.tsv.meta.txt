@@ -1,7 +1,0 @@
-suite=lorenz-cia
-x64sc=/Applications/vice-arm64-gtk3-3.10/bin/x64sc
-started_utc=20260711T230912Z
-finished_utc=20260711T231049Z
-host=Darwin stefans-mini.lan 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:27:52 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8112 arm64
-note=All 40 cases printed PASS; runner summary crashed due to mid-run script edit (fixed). Re-verified long timers separately PASS with official cycle limits.
-total=40 pass=40 fail=0 timeout=0 missing=0 other=0
