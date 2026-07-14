@@ -42,6 +42,9 @@ enum {
     VICII_BADLINE_LAST         = 0xF7,
     VICII_CACCESS_FIRST_CYCLE  = 15,
     VICII_CACCESS_LAST_CYCLE   = 54,
+    /* Bauer 3.7.2 rule 2: VCBASE→VC and RC-clear on badline are cycle 14
+       (0-based; matches VICE VICII_PAL_CYCLE(15) indexing used elsewhere). */
+    VICII_VC_RC_CYCLE          = 14,
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
@@ -1456,29 +1459,47 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         /* Vertical FF top/bottom compares also run at cycle 63 of the matching
            line (see end-of-line). Cycle 0 does not re-evaluate them. */
 
-        /* VC is reloaded from VCBASE at the start of every line (the hardware
-           cycle-14 load), not only on bad lines. Within a character row VCBASE is
-           unchanged, so all 8 rows re-address the same 40 video-matrix cells; the
-           +40 advance happens once per row at the RC==7 line end below. */
-        v->vc = v->vc_base;
-
-        /* Clear the per-line bad-line latch; the condition is (re)evaluated every
-           cycle below so a mid-line $D011 write can still commit it this line. */
+        /* Clear the per-line c-access latch. Bad Line Condition is re-checked
+           every cycle (Bauer 3.5); RC clear and bulk line-latch happen only at
+           cycle 14 (rule 2 below), so a mid-line $D011 write that removes the
+           condition before cycle 14 does not force a false bad line. Fort
+           Apocalypse soft-scroll relies on this: STA $D011 at ~cycle 9 of
+           raster 119 after the upper zone left YSCROLL=7. */
         v->bad_line = false;
     }
 
-    /* Bad Line Condition (Bauer 3.5): present whenever RASTER is in [$30,$f7],
-       (RASTER & 7) == YSCROLL and DEN is set. It can turn true at ANY cycle if a
-       $D011 write changes YSCROLL mid-line -- this is the core of FLI/expose. The
-       first cycle it holds on a line, commit the bad line once: enter display
-       state, reset RC, and latch the row. An ordinary bad line commits at cycle 0,
-       reproducing the previous behaviour exactly. */
-    if (!v->bad_line && vicii_is_bad_line(v)) {
-        v->bad_line      = true;
+    /* Bad Line Condition (Bauer 3.5): true whenever RASTER is in [$30,$f7],
+       (RASTER & 7) == YSCROLL and DEN is set. It can appear or disappear mid-line
+       when $D011 changes YSCROLL (FLI / dual-zone soft scroll). */
+    if (vicii_is_bad_line(v)) {
+        /* 3.7.1: idle → display as soon as the condition holds. */
         v->display_state = true;
-        v->rc            = 0;
-        if (bus) {
-            vicii_fill_line_latch(v, bus);
+
+        /* C-accesses (3.7.2 rule 3): if the condition holds in the BA/c-access
+           window, start them; once started they continue for the rest of the
+           line even if YSCROLL later changes. */
+        if (!v->bad_line &&
+            cycle >= 12u &&
+            cycle <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
+            v->bad_line = true;
+        }
+    }
+
+    /* Bauer 3.7.2 rules 2/3 at cycle 14:
+       - VC ← VCBASE every line (and VMLI clear; not modelled as a separate index)
+       - RC ← 0 only if Bad Line Condition still holds in this phase
+       - bulk line latch when RC is cleared (ordinary / early-FLI bad line)
+       Visible g-pixels begin at cycle 15, so RC is correct before the first
+       character column is painted. */
+    if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
+        v->vc = v->vc_base;
+        if (vicii_is_bad_line(v)) {
+            v->rc            = 0;
+            v->display_state = true;
+            v->bad_line      = true;
+            if (bus) {
+                vicii_fill_line_latch(v, bus);
+            }
         }
     }
 

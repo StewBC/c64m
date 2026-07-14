@@ -2495,6 +2495,392 @@ static void run_vic_frame_with_injections(
     fail("run_vic_frame_with_injections: frame did not complete");
 }
 
+/* Live-path YSCROLL soft-scroll. The geometric snapshot path still uses (y, YSCROLL)
+   math, so a completed live VIC frame (CPU idle — this injection harness) is required
+   to exercise VC/RC addressing. YSCROLL=3 vs 4 must shift glyph row 0 by one raster. */
+static void test_live_yscroll_shifts_content(void) {
+    c64_t machine;
+    c64_frame frame3, frame4;
+    uint32_t green = TEST_PALETTE_5;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame3);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1c); /* YSCROLL=4 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame4);
+
+    expect_u32("live yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("live yscroll3 no fg at y=52", green, frame3.pixels[52 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("live yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("live yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + 24]);
+}
+
+/* Fort Apocalypse: DEN=1, RSEL=0 (24 rows), $D011 = $10 | YSCROLL. Soft scroll
+   must still advance content by one raster when YSCROLL goes 3 -> 4. */
+static void test_live_yscroll_rsel0_fort_style(void) {
+    c64_t machine;
+    c64_frame frame3, frame4;
+    uint32_t green = TEST_PALETTE_5;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x13); /* DEN=1, RSEL=0, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame3);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x14); /* YSCROLL=4, RSEL=0 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    run_vic_frame_with_injections(&machine, NULL, 0, &frame4);
+
+    /* Synthetic char 1 has row 7 = 0x80. YSCROLL=3: RC=7 at y=58; YSCROLL=4: at y=59. */
+    expect_u32("rsel0 yscroll3 row7 at y=58", green, frame3.pixels[58 * C64_FRAME_WIDTH + 24]);
+    expect_u32("rsel0 yscroll4 row7 at y=59", green, frame4.pixels[59 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("rsel0 yscroll4 y=58 not row7", green, frame4.pixels[58 * C64_FRAME_WIDTH + 24]);
+}
+
+
+/* Fort Apocalypse dual-raster-IRQ pattern (matches VICE + c64m breakpoints):
+   - D011=$1F (YSCROLL=7,RSEL=1) from the $F9 IRQ through the top of the frame
+   - soft-scroll STA $D011 at $AE2D lands at raster 119 ~cycle 9 (before Bauer
+     cycle-14 RC clear). Soft Y 3->4 must shift lower-half content by one raster. */
+static void test_fort_dual_zone_yscroll(void) {
+    c64_t machine;
+    c64_frame f3, f4;
+    uint32_t green = TEST_PALETTE_5;
+    uint32_t y, found3 = 0xffffffffu, found4 = 0xffffffffu;
+    const expose_injection inj3[] = {
+        { 0u, 0u, 0xd011u, 0x1fu, false },
+        { 119u, 9u, 0xd011u, 0x13u, false }, /* Fort soft $10|3 before cycle 14 */
+    };
+    const expose_injection inj4[] = {
+        { 0u, 0u, 0xd011u, 0x1fu, false },
+        { 119u, 9u, 0xd011u, 0x14u, false }, /* Fort soft $10|4 before cycle 14 */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    /* Put unique marker char in several rows so we can see lower-half motion.
+       Fill all cells with char 1 so any visible RC0/RC7 is green. */
+    {
+        uint32_t i;
+        for (i = 0; i < 1000u; i++) {
+            machine.bus.ram[0x0400u + i] = 1;
+            machine.bus.color_ram[i] = 5;
+        }
+    }
+    run_vic_frame_with_injections(&machine, inj3, 2u, &f3);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    {
+        uint32_t i;
+        for (i = 0; i < 1000u; i++) {
+            machine.bus.ram[0x0400u + i] = 1;
+            machine.bus.color_ram[i] = 5;
+        }
+    }
+    run_vic_frame_with_injections(&machine, inj4, 2u, &f4);
+
+    /* Find first green in lower half (y>=130) column 24 for each frame */
+    for (y = 130u; y < 250u; y++) {
+        if (found3 == 0xffffffffu && f3.pixels[y * C64_FRAME_WIDTH + 24] == green) {
+            found3 = y;
+        }
+        if (found4 == 0xffffffffu && f4.pixels[y * C64_FRAME_WIDTH + 24] == green) {
+            found4 = y;
+        }
+    }
+
+    /* Soft scroll of lower half should shift first-green by +1 when yscroll 3->4 */
+    if (found3 == 0xffffffffu || found4 == 0xffffffffu) {
+        fail("fort dual-zone: no green found in lower half");
+    }
+    expect_u32("fort dual-zone soft-scroll lower half +1", found3 + 1u, found4);
+}
+
+
+
+/* Fort soft-scroll timing (YSCROLL=7 until rast 119 ~cycle 9, then soft Y):
+   bitmap mode with only one lit bitmap row per 8-line cell group so each lit
+   raster is unique. Soft Y 3 vs 4 must shift every lit line at y>=130 by +1. */
+static void test_fort_soft_scroll_unique_rows(void) {
+    c64_t machine;
+    c64_frame f3, f4;
+    uint32_t white = 0xffffffffu;
+    uint32_t y, i;
+    uint32_t lit3[40];
+    uint32_t lit4[40];
+    uint32_t n3 = 0, n4 = 0;
+    /* Cycle 9: Fort soft STA lands before Bauer cycle-14 RC clear, so the
+       upper-zone Y=7 badline condition does not commit RC on line 119. */
+    const expose_injection inj3[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false }, /* BMM|DEN|RSEL|Y=7 */
+        { 119u, 9u, 0xd011u, 0x33u, false }, /* soft Y=3 before cycle 14 */
+    };
+    const expose_injection inj4[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false },
+        { 119u, 9u, 0xd011u, 0x34u, false }, /* soft Y=4 before cycle 14 */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    /* Each 8x8 cell: only internal row (cell_index % 8) lit with 0x80.
+       Cell index = char_row * 40 + col; use col 0 only meaningful for x=24. */
+    for (i = 0; i < 1000u; i++) {
+        uint32_t row_in = i % 8u;
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == row_in) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u; /* white on black */
+    }
+    run_vic_frame_with_injections(&machine, inj3, 2u, &f3);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    for (i = 0; i < 1000u; i++) {
+        uint32_t row_in = i % 8u;
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == row_in) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u;
+    }
+    run_vic_frame_with_injections(&machine, inj4, 2u, &f4);
+
+    for (y = 51u; y < 250u; y++) {
+        if (f3.pixels[y * C64_FRAME_WIDTH + 24] == white && n3 < 40u) {
+            lit3[n3++] = y;
+        }
+        if (f4.pixels[y * C64_FRAME_WIDTH + 24] == white && n4 < 40u) {
+            lit4[n4++] = y;
+        }
+    }
+
+    fprintf(stderr, "bitmap fort soft3 lit(%u):", (unsigned)n3);
+    for (i = 0; i < n3 && i < 20u; i++) fprintf(stderr, " %u", (unsigned)lit3[i]);
+    fprintf(stderr, "\nbitmap fort soft4 lit(%u):", (unsigned)n4);
+    for (i = 0; i < n4 && i < 20u; i++) fprintf(stderr, " %u", (unsigned)lit4[i]);
+    fprintf(stderr, "\n");
+
+    {
+        uint32_t matched = 0, considered = 0;
+        for (i = 0; i < n3; i++) {
+            uint32_t j;
+            if (lit3[i] < 130u) {
+                continue;
+            }
+            considered++;
+            for (j = 0; j < n4; j++) {
+                if (lit4[j] == lit3[i] + 1u) {
+                    matched++;
+                    break;
+                }
+            }
+        }
+        fprintf(stderr, "bitmap post-130 match %u/%u\n", (unsigned)matched, (unsigned)considered);
+        expect_true("fort soft at 119: post-130 lit rows shift +1",
+                    considered >= 3u && matched == considered);
+    }
+}
+
+
+
+/* Fort soft Y=7 vs Y=6 at rast 119 cycle 9 (real soft-STA phase): both must
+   soft-scroll by about -1 on first post-130 lit row. A +7 FLD snap was the
+   pre-fix signature when RC was cleared at cycle 0 while YSCROLL was still 7. */
+static void test_fort_soft_y7_to_y6_transition(void) {
+    c64_t machine;
+    c64_frame f7, f6;
+    uint32_t white = 0xffffffffu;
+    uint32_t y, i, n7 = 0, n6 = 0;
+    uint32_t lit7[40], lit6[40];
+    const expose_injection inj7[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false }, /* BMM DEN RSEL Y=7 */
+        { 119u, 9u, 0xd011u, 0x37u, false }, /* soft Y=7 before cycle 14 */
+    };
+    const expose_injection inj6[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false },
+        { 119u, 9u, 0xd011u, 0x36u, false }, /* soft Y=6 before cycle 14 */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    for (i = 0; i < 1000u; i++) {
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == (i % 8u)) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u;
+    }
+    run_vic_frame_with_injections(&machine, inj7, 2u, &f7);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    for (i = 0; i < 1000u; i++) {
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == (i % 8u)) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u;
+    }
+    run_vic_frame_with_injections(&machine, inj6, 2u, &f6);
+
+    for (y = 130u; y < 250u; y++) {
+        if (f7.pixels[y * C64_FRAME_WIDTH + 24] == white && n7 < 40u) {
+            lit7[n7++] = y;
+        }
+        if (f6.pixels[y * C64_FRAME_WIDTH + 24] == white && n6 < 40u) {
+            lit6[n6++] = y;
+        }
+    }
+
+    fprintf(stderr, "Y7 lit post-130(%u):", (unsigned)n7);
+    for (i = 0; i < n7 && i < 12u; i++) fprintf(stderr, " %u", (unsigned)lit7[i]);
+    fprintf(stderr, "\nY6 lit post-130(%u):", (unsigned)n6);
+    for (i = 0; i < n6 && i < 12u; i++) fprintf(stderr, " %u", (unsigned)lit6[i]);
+    fprintf(stderr, "\n");
+
+    if (n7 > 0u && n6 > 0u) {
+        int32_t delta = (int32_t)lit6[0] - (int32_t)lit7[0];
+        fprintf(stderr, "first-lit delta Y7->Y6: %d (expect soft -1, FLD snap ~+7)\n", (int)delta);
+        /* With cycle-14 RC clear, Fort soft-STA phase yields smooth soft scroll. */
+        expect_true("fort Y7->Y6 first lit delta is soft-scroll-ish (not +7 FLD snap)",
+                    delta >= -3 && delta <= 1);
+    } else {
+        fail("fort Y7/Y6: no lit rows");
+    }
+}
+
+/* Soft Y 1->2 was the dual-zone FLD discontinuity when RC cleared at cycle 0
+   while YSCROLL was still 7 (first-lit jumped by ~-7). With Fort timing (soft
+   write at cycle 9) and cycle-14 RC clear, every soft step must be ~+1. */
+static void test_fort_soft_y1_to_y2_smooth(void) {
+    c64_t machine;
+    c64_frame f1, f2;
+    uint32_t white = 0xffffffffu;
+    uint32_t y, i, n1 = 0, n2 = 0;
+    uint32_t lit1[40], lit2[40];
+    const expose_injection inj1[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false },
+        { 119u, 9u, 0xd011u, 0x31u, false }, /* soft Y=1 */
+    };
+    const expose_injection inj2[] = {
+        { 0u, 0u, 0xd011u, 0x3fu, false },
+        { 119u, 9u, 0xd011u, 0x32u, false }, /* soft Y=2 */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    for (i = 0; i < 1000u; i++) {
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == (i % 8u)) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u;
+    }
+    run_vic_frame_with_injections(&machine, inj1, 2u, &f1);
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3f);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x00);
+    for (i = 0; i < 1000u; i++) {
+        uint32_t b;
+        for (b = 0; b < 8u; b++) {
+            machine.bus.ram[0x2000u + i * 8u + b] = (b == (i % 8u)) ? 0x80u : 0x00u;
+        }
+        machine.bus.ram[0x0400u + i] = 0x10u;
+    }
+    run_vic_frame_with_injections(&machine, inj2, 2u, &f2);
+
+    for (y = 130u; y < 250u; y++) {
+        if (f1.pixels[y * C64_FRAME_WIDTH + 24] == white && n1 < 40u) {
+            lit1[n1++] = y;
+        }
+        if (f2.pixels[y * C64_FRAME_WIDTH + 24] == white && n2 < 40u) {
+            lit2[n2++] = y;
+        }
+    }
+
+    fprintf(stderr, "Y1 lit post-130(%u):", (unsigned)n1);
+    for (i = 0; i < n1 && i < 12u; i++) fprintf(stderr, " %u", (unsigned)lit1[i]);
+    fprintf(stderr, "\nY2 lit post-130(%u):", (unsigned)n2);
+    for (i = 0; i < n2 && i < 12u; i++) fprintf(stderr, " %u", (unsigned)lit2[i]);
+    fprintf(stderr, "\n");
+
+    /* Match each Y1 lit row at y>=130 to y+1 in Y2. First-lit-only is wrong at
+       the 130 boundary (a new row can enter the window and fake a -7 delta). */
+    {
+        uint32_t matched = 0, considered = 0;
+        for (i = 0; i < n1; i++) {
+            uint32_t j;
+            if (lit1[i] < 130u) {
+                continue;
+            }
+            considered++;
+            for (j = 0; j < n2; j++) {
+                if (lit2[j] == lit1[i] + 1u) {
+                    matched++;
+                    break;
+                }
+            }
+        }
+        fprintf(stderr, "Y1->Y2 post-130 match %u/%u\n",
+                (unsigned)matched, (unsigned)considered);
+        expect_true("fort Y1->Y2 post-130 lit rows shift +1 (not FLD -7)",
+                    considered >= 3u && matched == considered);
+    }
+}
+
 /* Reveal-progression metric: number of raster rows containing at least one
    pixel that differs from bg within x in [x0, x1). This is the signal the
    VICII_EXPOSE_REVEAL doc uses to describe the reveal (it grows, plateaus for
@@ -2734,13 +3120,13 @@ static void test_expose_idle_state_shows_idle_graphics_in_window(void) {
         white, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
 }
 
-/* Phase 5 (C64MVICIIEXPHASES): the Bad Line Condition is evaluated every cycle,
-   so a $D011 write AFTER cycle 0 still forces a bad line on its own line -- the
-   FLI/expose core. Force a bad line at cycle 20 of raster 53 (not a bad line at
-   cycle 0 with YSCROLL=3), which resets RC there; YSCROLL is restored at raster
-   54 so line 54 is not itself a bad line. Line 54 therefore shows RC=1 only
-   because the mid-line force at 53 restarted the row -- impossible with cycle-0
-   only evaluation. */
+/* Phase 5 (C64MVICIIEXPHASES): Bad Line Condition is evaluated every cycle, so a
+   $D011 write after cycle 0 can still force a bad line on that line (FLI/expose).
+   Bauer 3.7.2 rule 2: RC is cleared only at cycle 14 if the condition still
+   holds then -- a write after cycle 14 does not restart the row. Force at
+   cycle 12 of raster 53 (after cycle 0, before cycle 14); restore YSCROLL at
+   raster 54. Line 54 shows RC=1 only because the mid-line force restarted the
+   row -- impossible with cycle-0-only evaluation. */
 static void setup_rc_probe_bitmap(c64_t *machine) {
     uint32_t i;
     reset_machine(machine);
@@ -2760,11 +3146,16 @@ static void test_expose_midline_d011_forces_badline(void) {
     c64_frame frame;
     uint32_t  white = 0xffffffffu;
     uint32_t  black = TEST_PALETTE_0;
-    /* Force a bad line mid-line at cycle 20 of raster 53 (YSCROLL=5, 53&7==5),
-       then restore YSCROLL=3 at raster 54. */
+    /* Force a bad line at cycle 12 of raster 53 (YSCROLL=5, 53&7==5) so the
+       condition is present at the cycle-14 RC clear; restore YSCROLL at 54. */
     const expose_injection injs[] = {
-        { 53u, 20u, 0xd011u, 0x3du, false }, /* mid-line: BMM|DEN|RSEL|YSCROLL=5 */
+        { 53u, 12u, 0xd011u, 0x3du, false }, /* mid-line before cycle 14: YSCROLL=5 */
         { 54u,  0u, 0xd011u, 0x3bu, false }, /* restore YSCROLL=3 */
+    };
+    /* Control: same force after cycle 14 must NOT restart the row (Bauer). */
+    const expose_injection late[] = {
+        { 53u, 20u, 0xd011u, 0x3du, false },
+        { 54u,  0u, 0xd011u, 0x3bu, false },
     };
 
     /* Baseline: no force. Raster 52 is RC=1 (lit); raster 54 is RC=3 (blank). */
@@ -2775,12 +3166,19 @@ static void test_expose_midline_d011_forces_badline(void) {
     expect_u32("baseline raster 54 is RC=3 (blank)",
         black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
 
-    /* Mid-line force at cycle 20 of raster 53 restarts the row, so raster 54 is
+    /* Mid-line force at cycle 12 of raster 53 restarts the row, so raster 54 is
        now RC=1 and lit. Only possible if the bad line is evaluated after cycle 0. */
     setup_rc_probe_bitmap(&machine);
     run_vic_frame_with_injections(&machine, injs, 2u, &frame);
     expect_u32("mid-line $D011 force makes raster 54 RC=1 (lit)",
         white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+
+    /* Write after cycle 14: condition can open display/c-accesses, but RC is not
+       cleared, so line 54 stays at RC=3 (blank) like the baseline. */
+    setup_rc_probe_bitmap(&machine);
+    run_vic_frame_with_injections(&machine, late, 2u, &frame);
+    expect_u32("post-cycle-14 $D011 force does not reset RC (raster 54 blank)",
+        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
 }
 
 int main(void) {
@@ -2855,6 +3253,12 @@ int main(void) {
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
     test_expose_forced_badline_resets_row_counter();
+    test_live_yscroll_shifts_content();
+    test_live_yscroll_rsel0_fort_style();
+    test_fort_dual_zone_yscroll();
+    test_fort_soft_scroll_unique_rows();
+    test_fort_soft_y7_to_y6_transition();
+    test_fort_soft_y1_to_y2_smooth();
     test_expose_video_matrix_latched_at_badline();
     test_expose_idle_state_shows_idle_graphics_in_window();
     test_expose_midline_d011_forces_badline();
