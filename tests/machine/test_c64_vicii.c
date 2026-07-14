@@ -2577,18 +2577,17 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
 
     run_vic_frame_with_injections(&machine, injs, 1u, &frame);
 
-    /* Line 10 is entirely top border. Pixels rendered before cycle 20 keep the
-       old (red) color; pixels from cycle 20 on take the new (green) color. Under
-       the dot-anchored paint mapping (C64MVICII_SIDEBORDER.md §2.2) column X is
-       painted at cycle 15 + (X-24)/8, so the write at cycle 20 splits the line
-       exactly at column 64 (cycle_of_X(64) == 20): x=63 is the last pre-write dot
-       (cycle 19, red) and x=64 is the first post-write dot (green). This boundary
-       is now dot-exact rather than the previous ~scaled approximation, and is
-       independent of cycles_per_line (same for PAL and NTSC). */
+    /* Line 10 is entirely top border. Under the dot-anchored paint mapping
+       (C64MVICII_SIDEBORDER.md §2.2) column X is painted at cycle 15+(X-24)/8,
+       so a write at cycle 20 lands on column 64. VICE 6569 color_latency delays
+       $D020 by one pixel: x=63 (cycle 19) and x=64 (first pixel of the write
+       cycle) stay red; x=65 is the first green. */
     expect_u32("border last dot before mid-line write is red",
         TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 63]);
-    expect_u32("border first dot after mid-line write is green",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
+    expect_u32("border write-cycle first pixel still red (6569 1px latency)",
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
+    expect_u32("border second pixel of write cycle is green",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 65]);
 
     /* The next line (11) is fully past the write -> entirely green. */
     expect_u32("subsequent line fully takes new border color",

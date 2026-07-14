@@ -1595,3 +1595,34 @@ BA on the path (c64m): R12–23 `exec=48 stall=15`; first six-write line jumps t
 `$64` sled values sampled at `$9BAB` in partial-open phase were 6–10 (plausible);
 need the same sample in **full-open** (`$61≈$0B`) matched to a VICE frame with
 the same `$63/$62`.
+
+### Session 22 (2026-07-13): 6569 color_latency + entry-lag remeasure
+
+#### Shipped: 1-pixel `$D020`/`$D021` pipeline (VICE 6569 `color_latency`)
+
+`color_pipe_d020` / `color_pipe_d021` advance once per live-rendered pixel after
+the sample. A mid-line colour write is therefore visible **one pixel late**,
+matching VICE `draw_colors_6569` and the author's "one pixel delay to line up
+with XSCROLL=1" note for the six-write `$D021` splits. Snapshot path primes the
+pipes from the live registers (no timed mid-line writes). Mid-line injection
+test updated: write-cycle first dot stays old colour, second is new.
+
+#### Entry lag remeasure (longer VICLOG, full-open frames)
+
+Earlier "never C13" was sample-window bias. Over ~850 frames with ≥190 writes:
+
+| R24 first `$D021` | count |
+| --- | --- |
+| C13–14 | 11 (rare early) |
+| C15–16 | 23 |
+| C17+ | ~200 |
+
+c64m **can** hit dist=126 / R24 C13 (gaps still **7,6,4,4,4** for `$3400`;
+VICE early often **7,7,4,4,4**). Mode is still skewed late. BA on R22–23 stays
+`stall=15` for both early and late; R24 jumps to 19 when free sprites join.
+Free Y end-of-frame is `$17` on both VICE and c64m in full-open — not the
+differentiator. Residual is still post-`$9B75` CPU path / `$64` BPL sled phase
+(and animation `$61/$62/$63`), not BA RELEASE (RELEASE=1 breaks D017@C14).
+
+Detect unit test: keep the real depacked `$9900` body + Timer B sled (rewrites
+that long-burn past the R52 bad line kill sprite-bg re-latch after clear).

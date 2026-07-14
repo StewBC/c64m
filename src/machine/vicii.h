@@ -133,6 +133,13 @@ struct vicii {
        the runtime under high turbo so free-run is not bound by display work.
        Sprite collision latches only update while pixel output is enabled. */
     bool     pixel_output_enabled;
+
+    /* 6569 color_latency: $D020/$D021 take effect one pixel late (VICE
+       draw_colors_6569 ring). lft-nine's six-write $D021 splits and the author's
+       "one pixel delay to line up with XSCROLL=1" depend on this. Advanced once
+       per live-rendered pixel after the sample. */
+    uint8_t  color_pipe_d020;
+    uint8_t  color_pipe_d021;
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);

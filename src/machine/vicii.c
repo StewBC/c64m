@@ -210,6 +210,8 @@ void vicii_reset(vicii *v) {
     v->main_border_ff         = true;
     /* Default on; runtime turbo policy re-applies after reset when needed. */
     v->pixel_output_enabled = true;
+    v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+    v->color_pipe_d021 = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
     vicii_begin_live_frame(v);
 }
 
@@ -696,7 +698,9 @@ static vicii_bg_pixel vicii_apply_den_blanking(bool den, uint32_t b0c, vicii_bg_
    is what made c64m paint the opened border with the background colour instead
    of the near-black idle output VICE/hardware produce. */
 static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uint32_t x) {
-    uint32_t b0c   = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    /* Use 1-pixel-delayed B0C (color_pipe_d021) so mid-line $D021 splits in the
+       opened border line up with XSCROLL the same way as VICE 6569. */
+    uint32_t b0c   = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
     uint32_t black = vicii_palette_argb[0];
     bool ecm = (v->registers[0x11] & 0x40u) != 0u;
     bool bmm = (v->registers[0x11] & 0x20u) != 0u;
@@ -742,7 +746,7 @@ static vicii_bg_pixel vicii_background_pixel(
     uint32_t x,
     uint32_t y)
 {
-    uint32_t b0c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
     uint32_t b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
     uint32_t b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
     uint32_t b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
@@ -1002,7 +1006,7 @@ static uint32_t vicii_compose_pixel(
 
     /* Vertical border and DEN=0 both force graphics to B0C; sprites still mux. */
     if (vertical_border || !den) {
-        bg.color = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+        bg.color = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
         bg.foreground = false;
     }
 
@@ -1035,8 +1039,8 @@ static uint32_t vicii_live_pixel(
     bool main_border,
     bool vertical_border)
 {
-    uint32_t border_color = vicii_palette_argb[v->registers[VICII_REG_BORDER_COLOR] & 0x0fu];
-    uint32_t b0c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu];
+    uint32_t border_color = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+    uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
     vicii_sprite_pixel sprites[8];
     bool any_sprite_enabled = false;
@@ -1168,6 +1172,10 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         v->working_frame.pixels[y * C64_FRAME_WIDTH + x] =
             vicii_live_pixel(v, bus, &g, &lc, x, y,
                              v->main_border_ff, v->vertical_border_active);
+        /* VICE 6569: advance color pipes after each pixel sample so a mid-line
+           $D020/$D021 write is visible one pixel later (color_latency). */
+        v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+        v->color_pipe_d021 = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
     }
 }
 
@@ -1967,6 +1975,12 @@ static bool vicii_make_frame_snapshot_internal(
     }
 
     g = vicii_get_border_geometry(v);
+
+    /* Snapshot is not cycle-timed: prime color pipes from the live registers so
+       geometric frames see current $D020/$D021 without the 6569 1-pixel lag
+       (that lag only matters for mid-line timed writes in the live renderer). */
+    v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+    v->color_pipe_d021 = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
 
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     border_color = vicii_palette_argb[border_index];
