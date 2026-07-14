@@ -51,7 +51,12 @@ void c1541_media_free_tracks(c1541_media *m) {
 }
 
 void c1541_media_invalidate(c1541_media *m) {
+    int was_valid = (m != NULL && m->tracks_valid) ? 1 : 0;
     c1541_media_free_tracks(m);
+    /* Host disk swap: next rebuild should blank GCR/WPS like VICE attach_clk. */
+    if (was_valid) {
+        m->attach_pending = 1;
+    }
 }
 
 void c1541_media_reset(c1541_media *m) {
@@ -145,7 +150,14 @@ static int build_one_track(
             return 0;
         }
         append_bytes(buf, &len, cap, data_gcr, enc);
-        append_fill(buf, &len, cap, 0x55u, 8u);
+        /* Inter-sector gap: match VICE disk_image_gap_size_d64[] by zone
+           (dens 3→8, 2→17, 1→12, 0→9). Fixed 8 left outer tracks short of
+           real/VICE framing and hurt custom GCR loaders on multi-disk titles. */
+        {
+            static const size_t gap_by_dens[4] = {9u, 12u, 17u, 8u};
+            size_t gap = (dens >= 0 && dens <= 3) ? gap_by_dens[dens] : 8u;
+            append_fill(buf, &len, cap, 0x55u, gap);
+        }
     }
 
     while (len < cap) {
@@ -204,6 +216,8 @@ int c1541_media_build_from_d64(
     m->byte_ready = 0;
     m->writing = 0;
     m->write_bits_left = 0;
+    /* attach_left set by ensure_tracks on disk swap, not first boot mount */
+    m->port_a_byte = 0;
     return 1;
 }
 
@@ -269,6 +283,7 @@ int c1541_media_build_from_g64(
     m->byte_ready = 0;
     m->writing = 0;
     m->write_bits_left = 0;
+    m->port_a_byte = 0;
     return 1;
 }
 
@@ -331,10 +346,19 @@ static void media_shift_bit_read(c1541 *drive, int bit) {
         m->bits_in_byte = 0;
         m->port_a_byte = m->shifting_byte;
         m->byte_ready = 1;
+        /* SOE (PCR bit 1) enables BYTE READY → CPU SO.
+           VICE rotation_1541_simple (D64) asserts BYTE READY immediately on the
+           byte boundary. The flux path (G64) uses so_delay in ref ticks. */
         if ((drive->via2.pcr & 0x02u) != 0u) {
-            m->so_delay = 16 - (int)((m->bit_event_ref - 1u) & 15u);
-            if (m->so_delay < 10) {
-                m->so_delay += 16;
+            if (drive->media.from_g64) {
+                m->so_delay = 16 - (int)((m->bit_event_ref - 1u) & 15u);
+                if (m->so_delay < 10) {
+                    m->so_delay += 16;
+                }
+            } else {
+                /* D64 simple path: post-Phi2 SO edge this cycle (no delay). */
+                m->so_delay = 0;
+                m->so_pulse = 1;
             }
         }
     }
@@ -819,17 +843,31 @@ static void sample_disk_via_outputs(c1541 *drive) {
 static void update_disk_via_inputs(c1541 *drive) {
     c1541_media *m = &drive->media;
     uint8_t pb_in = 0;
+    const c64_drive_slot *slot = c64_get_drive_slot(drive->c64, drive->device_number);
 
-    if (slot_is_writable(drive)) {
+    /*
+     * VIA2 PB4 = write-protect sense (1 = not protected). VICE:
+     *  - no disk → 1
+     *  - attach delay (disk being inserted) → 0
+     *  - settled → !read_only
+     */
+    if (m->attach_left > 0u) {
+        /* inserting: sensor closed */
+    } else if (slot == NULL || !slot->mounted) {
+        pb_in |= 0x10u;
+    } else if (slot_is_writable(drive)) {
         pb_in |= 0x10u;
     }
-    if (!m->in_sync) {
+    if (!m->in_sync || m->attach_left > 0u) {
+        /* During attach blanking, report out-of-sync (no stable GCR). */
         pb_in |= 0x80u;
     }
 
     via6522_set_port_b_inputs(&drive->via2, pb_in);
     if (!m->writing) {
-        via6522_set_port_a_inputs(&drive->via2, m->port_a_byte);
+        via6522_set_port_a_inputs(
+            &drive->via2,
+            (m->attach_left > 0u) ? 0u : m->port_a_byte);
     }
 }
 
@@ -862,6 +900,17 @@ static void ensure_tracks(c1541 *drive) {
     }
     if (ok) {
         m->built_from_seq = slot->image_content_seq;
+        if (m->attach_pending) {
+            m->attach_pending = 0;
+            m->attach_left = C1541_MEDIA_ATTACH_DELAY;
+            m->port_a_byte = 0;
+            m->byte_ready = 0;
+            m->so_pulse = 0;
+            m->so_delay = 0;
+            m->in_sync = 0;
+        } else {
+            m->attach_left = 0;
+        }
     }
 }
 
@@ -881,6 +930,21 @@ void c1541_media_step(c1541 *drive) {
     ensure_tracks(drive);
     sample_disk_via_outputs(drive);
 
+    if (m->attach_left > 0u) {
+        m->attach_left--;
+        if (m->attach_left == 0u) {
+            /* Fresh head state once the disk is fully seated. */
+            m->bits_in_byte = 0;
+            m->byte_ready = 0;
+            m->so_pulse = 0;
+            m->so_delay = 0;
+            m->shifting_byte = 0;
+            m->shift10 = 0;
+            m->in_sync = 0;
+            m->port_a_byte = 0;
+        }
+    }
+
     if (m->motor_on && !m->motor_ready) {
         if (m->motor_spin_left > 0u) {
             m->motor_spin_left--;
@@ -893,24 +957,18 @@ void c1541_media_step(c1541 *drive) {
     /*
      * Flux clock only while the spindle is up. Stepper/WPS/write-gate still
      * sample every cycle above. When motor is off, skip the bit loop entirely
-     * (common dual-drive idle case).
+     * (common dual-drive idle case). During attach blanking, suppress rotation
+     * so Port A stays 0 (VICE attach_clk / GCR_read=0).
      */
-    if (m->motor_ready && m->tracks_valid) {
+    if (m->motor_ready && m->tracks_valid && m->attach_left == 0u) {
+        /*
+         * VICE: G64/G71/P64 use the flux decoder; plain D64 uses
+         * rotation_1541_simple (NRZ GCR bitstream, immediate BYTE READY).
+         * Match that split so dual-BVC loaders see the same SO timing as x64sc.
+         */
         if (!m->writing && m->from_g64) {
             unsigned advance = m->req_ref_cycles & 15u;
             unsigned refs = 16u + advance;
-            /* The 1541's reference clock is divided from the emulated drive
-               Phi2 clock: one drive CPU cycle is exactly 16 reference ticks.
-               It is deliberately not an independent 16 MHz wall clock; using
-               PAL host frequency here made the disk run 1.5% too fast relative
-               to the drive code, which is fatal to V-MAX's cycle-counted read
-               loop.  This matches VICE's `cpu_cycles << 4` conversion. */
-            /* Port-A is a shared disk-controller bus.  A read advances the
-               analogue rotation circuit by 14 reference ticks, then the
-               following Phi2 cycles consume that lead before normal rotation
-               resumes.  Do this here, at the next rotation update, exactly as
-               VICE's rotation_1541_gcr_cycle does; advancing it directly in
-               the bus callback races the CPU and is observably wrong. */
             m->req_ref_cycles = 0u;
             if (refs > m->ref_advance) {
                 refs -= m->ref_advance;
@@ -946,6 +1004,10 @@ void c1541_media_step(c1541 *drive) {
             cpb = 26;
         }
 
+        /* Port-A bus lead (VICE 14 ref ticks) for G64 only; D64 simple path
+           clears any stale request without advancing the NRZ stream mid-LDA. */
+        m->req_ref_cycles = 0u;
+
         m->bit_acc += 16u;
         while (m->bit_acc >= (uint32_t)cpb * 2u) {
             uint32_t boundary = (uint32_t)cpb * 2u;
@@ -957,7 +1019,6 @@ void c1541_media_step(c1541 *drive) {
                 if (slot_is_writable(drive)) {
                     media_shift_bit_write(drive, tr);
                 } else {
-                    /* Write-protected: still advance time / BYTE READY, no mutate. */
                     if (m->write_bits_left > 0) {
                         m->write_shift = (uint8_t)(m->write_shift << 1);
                         m->write_bits_left--;

@@ -18,7 +18,10 @@ enum {
     /* Motor spin-up in drive cycles (~50 ms at 1 MHz). Short enough for tests. */
     C1541_MEDIA_SPINUP_CYCLES = 50000u,
     /* Nominal revolution at 300 rpm: 200 ms → 200000 cycles @ 1 MHz. */
-    C1541_MEDIA_CYCLES_PER_REV = 200000u
+    C1541_MEDIA_CYCLES_PER_REV = 200000u,
+    /* VICE DRIVE_ATTACH_DELAY = 3*600000: blank GCR + WPS closed while the
+       new disk is "inserted". Multi-disk loaders (Edge of Disgrace) expect this. */
+    C1541_MEDIA_ATTACH_DELAY = 1800000u
 };
 
 typedef struct c1541_track {
@@ -79,6 +82,10 @@ typedef struct c1541_media {
     /* Matches c64_drive_slot.image_content_seq at last build/poke so offline
        D64 writes (media off / KERNAL trap) force a rebuild when media returns. */
     uint32_t built_from_seq;
+    /* Drive cycles remaining in post-mount attach blanking (VICE attach_clk). */
+    uint32_t attach_left;
+    /* Set when a live disk is invalidated so the next rebuild blank-attaches. */
+    int attach_pending;
 } c1541_media;
 
 void c1541_media_init(c1541_media *m);

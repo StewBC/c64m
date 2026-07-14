@@ -448,15 +448,25 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             return 1;
 
         case C1541_JOB_CMD_EXECUTE: {
-            /* Hybrid D64 format: erase track sectors, rebuild GCR, then let the
-               ROM rewrite BAM/directory via WRITE jobs.
-               EXECUTE is also how custom drive code runs (job $E0 → buffer).
-               Never complete EXECUTE as write-protect on G64 — that aborts
-               multi-stage loaders. G64 has no format path; let the ROM jump
-               into the buffer. */
+            /* Job $E0: ROM jumps into the job buffer. That is how DOS FORMT and
+               custom fastloaders run uploaded drive code (e.g. Edge of Disgrace
+               dual-BVC GCR at $0300 after disk 1A).
+
+               With GCR media enabled, always let the ROM enter the buffer. The
+               former D64 path treated every EXECUTE as format_track() — on a
+               read-only mount that completed the job as write-protect without
+               running the buffer, so loaders spun forever after disk swap.
+
+               Sector-intercept mode (media off) still has no disk controller, so
+               map EXECUTE to the hybrid D64 track-erase used by DOS NEW. G64 has
+               no format synthesis path either way. */
             uint8_t fr;
-            uint8_t trk;
             const c64_drive_slot *slot;
+
+            if (c1541_media_physical_read_active(drive) ||
+                c1541_media_physical_write_active(drive)) {
+                return 0;
+            }
 
             slot = c64_get_drive_slot(drive->c64, drive->device_number);
             if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
@@ -464,22 +474,9 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             }
 
             fr = c1541_format_track(drive, n);
-            if (fr == C1541_JOB_OK && c1541_media_physical_write_active(drive)) {
-                trk = drive->ram[C1541_ZP_HDRS + (uint16_t)n * 2u];
-                if (!c1541_media_rebuild_track(drive, trk)) {
-                    c1541_media_invalidate(&drive->media);
-                } else {
-                    const c64_drive_slot *s = c64_get_drive_slot(drive->c64, drive->device_number);
-                    if (s != NULL) {
-                        drive->media.built_from = s->image_bytes;
-                        drive->media.built_size = s->image_size;
-                        drive->media.built_from_seq = s->image_content_seq;
-                    }
-                }
-            } else if (fr == C1541_JOB_OK) {
-                c1541_media_invalidate(&drive->media);
-            }
             if (fr == C1541_JOB_OK) {
+                /* Media is off here; drop any stale GCR cache for a later media-on. */
+                c1541_media_invalidate(&drive->media);
                 c1541_pulse_write_led(drive);
             }
             c1541_complete_queued_job(drive, n, fr);
@@ -720,6 +717,50 @@ static uint8_t c1541_peek_opcode(const c1541 *drive) {
     return 0xEAu; /* treat unmapped as NOP for can_begin */
 }
 
+/*
+ * Drive 6502 SO / BYTE READY — match VICE drivecpu + rotation notes:
+ *
+ *  - BYTE READY is a sticky edge (so_pulse).
+ *  - BVC / BVS / PHP sample the edge mid-instruction (VICE 6510core.c) so the
+ *    branch / status push sees V in the same instruction.
+ *  - CLV clears V and discards any pending edge (VICE LOCAL_SET_OVERFLOW(0)).
+ *    Without that, dual-BVC loaders re-read the same GCR byte ($2842 fill).
+ *  - Any edge not consumed mid-instruction is applied after Phi2 (SO pin).
+ */
+static void c1541_so_take_edge(c1541 *drive) {
+    if (!drive->media.enabled || !drive->media.so_pulse) {
+        return;
+    }
+    drive->media.so_pulse = 0;
+    c6510_set_overflow(&drive->cpu);
+}
+
+static void c1541_micro_step_with_so(c1541 *drive) {
+    uint8_t op;
+    uint8_t phase;
+    int finished;
+
+    if (!drive->cpu.micro_active) {
+        return;
+    }
+
+    op = drive->cpu.micro_opcode;
+    phase = drive->cpu.micro_phase;
+
+    /* Sample SO before BVC/BVS decide the branch, and before PHP pushes P. */
+    if (phase == 1u &&
+        (op == (uint8_t)BVC_rel || op == (uint8_t)BVS_rel || op == (uint8_t)PHP)) {
+        c1541_so_take_edge(drive);
+    }
+
+    finished = c6510_micro_step(&drive->cpu) ? 1 : 0;
+
+    /* micro_opcode remains valid after finish until the next micro_begin. */
+    if (finished && drive->cpu.micro_opcode == (uint8_t)CLV && drive->media.enabled) {
+        drive->media.so_pulse = 0;
+    }
+}
+
 static void c1541_run_cpu_one_cycle(c1541 *drive) {
     size_t cycles;
     c6510_interrupt_kind interrupt_kind;
@@ -730,7 +771,7 @@ static void c1541_run_cpu_one_cycle(c1541 *drive) {
        cycle (needed for IEC bitbang). Every documented NMOS opcode is covered;
        only JAM/unstable undocs fall back to bulk instruction step. */
     if (drive->cpu.micro_active) {
-        (void)c6510_micro_step(&drive->cpu);
+        c1541_micro_step_with_so(drive);
         c1541_update_iec_bus(drive);
         return;
     }
@@ -759,7 +800,7 @@ static void c1541_run_cpu_one_cycle(c1541 *drive) {
     interrupt_kind = c6510_micro_poll_interrupt(&drive->cpu);
     if (interrupt_kind != C6510_INTERRUPT_NONE) {
         c6510_micro_begin_interrupt(&drive->cpu, interrupt_kind);
-        (void)c6510_micro_step(&drive->cpu);
+        c1541_micro_step_with_so(drive);
         c1541_update_iec_bus(drive);
         return;
     }
@@ -767,7 +808,7 @@ static void c1541_run_cpu_one_cycle(c1541 *drive) {
     opcode = c1541_peek_opcode(drive);
     if (c6510_micro_can_begin(&drive->cpu, opcode)) {
         c6510_micro_begin(&drive->cpu);
-        (void)c6510_micro_step(&drive->cpu);
+        c1541_micro_step_with_so(drive);
         c1541_update_iec_bus(drive);
         return;
     }
@@ -806,8 +847,8 @@ void c1541_advance_one_cycle(c1541 *drive) {
     /* 5. Drive CPU: one Phi2 cycle (micro path preferred; may write $1800). */
     c1541_run_cpu_one_cycle(drive);
 
-    /* BYTE READY is presented to the 6502 SO input after the drive CPU's
-       Phi2 work, so a BVC cannot sample it one Phi2 early. */
+    /* 6. Remaining BYTE READY edge → SO after Phi2 (if not already taken by
+       BVC/BVS/PHP, and not discarded by CLV). */
     if (drive->media.enabled && drive->media.so_pulse) {
         drive->media.so_pulse = 0;
         c6510_set_overflow(&drive->cpu);
