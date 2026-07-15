@@ -74,6 +74,7 @@ typedef struct frontend_assembler_state {
     char file_path[1024];
     char address_buf[8];
     char run_address_buf[8];
+    bool use_address;
     bool run_address_user_edited;
     bool auto_run;
     bool reset_first;
@@ -230,6 +231,7 @@ typedef struct frontend_assembler_options {
     char file[1024];
     char address[8];
     char run_address[8];
+    bool use_address;
     bool auto_run;
     bool reset_first;
     bool rearm_oneshots;

@@ -423,11 +423,14 @@ static void decode_abs_rel_zp_opcode(ASSEMBLER *as) {
 static void dot_org(ASSEMBLER *as) {
     uint64_t value = (uint64_t)expr_full_evaluate(as);
     SEGMENT *segment = as->active_target->active_segment;
-    segment->segment_output_address = (uint16_t)value;
-    if(!segment->segment_init) {
-        segment->segment_start_address = (uint16_t)value;
+    uint16_t address = (uint16_t)value;
+    /* Re-anchor start while the segment is still empty (no bytes emitted). */
+    if(!segment->segment_init ||
+       segment->segment_output_address == segment->segment_start_address) {
+        segment->segment_start_address = address;
         segment->segment_init = 1;
     }
+    segment->segment_output_address = address;
 }
 
 static void dot_align(ASSEMBLER *as) {
@@ -1533,10 +1536,15 @@ void parse_address(ASSEMBLER *as) {
         address = current_output_address(as) + value;
     } else {
         address = (uint16_t)value;
-        if(segment && !segment->segment_init) {
-            // First origin for a fresh segment (e.g. a named .scope redirect target):
-            // anchor its start here, mirroring .org.
+        /* Host-supplied start (or a fresh segment) is only a default until bytes are
+           emitted. Allow * = $nnnn to re-anchor freely in that case, matching .org. */
+        if(segment &&
+           (!segment->segment_init ||
+            segment->segment_output_address == segment->segment_start_address)) {
             segment->segment_start_address = address;
+            segment->segment_output_address = address;
+            segment->segment_init = 1;
+            return;
         }
         if(segment) {
             segment->segment_init = 1;

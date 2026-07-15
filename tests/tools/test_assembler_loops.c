@@ -264,6 +264,60 @@ static int test_org_below_start(void)
     return failures;
 }
 
+/* Host default origin $8000 with source * = $0801 and no prior emit must re-anchor. */
+static int test_star_below_start(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    const char *source =
+        "* = $0801\n"
+        "    lda #$00\n"
+        "    rts\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file_at(path, &mem, &log, 0x8000) != ASM_OK) {
+        fprintf(stderr, "star-below-start failed with %zu errors\n", log.log_array.items);
+        for (size_t i = 0; i < log.log_array.items; i++) {
+            ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
+            fprintf(stderr, "  [%zu] %s\n", i, e->err_str ? e->err_str : "?");
+        }
+        failures++;
+    }
+    if (mem.memory[0x0801] != 0xA9 || mem.memory[0x0802] != 0x00 || mem.memory[0x0803] != 0x60) {
+        fprintf(stderr, "star-below-start: output at wrong address\n");
+        failures++;
+    }
+    /* Going backwards after emit must still fail. */
+    {
+        const char *after_emit =
+            "    nop\n"
+            "* = $0801\n"
+            "    rts\n";
+        errlog_shutdown(&log);
+        errlog_init(&log);
+        c64m_test_remove_file(path);
+        if (write_source(path, sizeof(path), after_emit) != 0) {
+            errlog_shutdown(&log);
+            return failures + 1;
+        }
+        if (assemble_file_at(path, &mem, &log, 0x8000) == ASM_OK) {
+            fprintf(stderr, "star-below-start: expected error after emit\n");
+            failures++;
+        }
+    }
+
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 /* Errors should reference files by name relative to the source directory. */
 static int test_relative_error_path(void)
 {
@@ -322,6 +376,7 @@ int main(void)
     failures += test_loop_errors();
     failures += test_anon_label_with_repeat();
     failures += test_org_below_start();
+    failures += test_star_below_start();
     failures += test_relative_error_path();
 
     return failures == 0 ? 0 : 1;

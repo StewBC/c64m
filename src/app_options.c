@@ -1208,6 +1208,8 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->assembler_run_address, value);
     }
+    options->assembler_use_address = config_get_bool(
+        cfg, "assembler", "use_address", options->assembler_use_address);
     options->assembler_auto_run = config_get_bool(
         cfg, "assembler", "auto_run", options->assembler_auto_run);
     options->assembler_reset_first = config_get_bool(
@@ -1501,6 +1503,7 @@ void app_options_init(app_options *options)
     options->layout_split_display_right = C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT;
     options->layout_split_top_bottom = C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM;
     options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
+    options->assembler_use_address = true;
     options->assembler_auto_run = false;
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
@@ -1562,6 +1565,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->layout_split_top_bottom = src->layout_split_top_bottom;
     dest->layout_split_memory_misc = src->layout_split_memory_misc;
 
+    dest->assembler_use_address = src->assembler_use_address;
     dest->assembler_auto_run = src->assembler_auto_run;
     dest->assembler_reset_first = src->assembler_reset_first;
     dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
@@ -1749,6 +1753,7 @@ bool app_options_save_shutdown(const app_options *options)
     if (options->assembler_run_address != NULL && options->assembler_run_address[0] != '\0') {
         config_set(cfg, "assembler", "run_address", options->assembler_run_address);
     }
+    config_set_bool(cfg, "assembler", "use_address", options->assembler_use_address);
     config_set_bool(cfg, "assembler", "auto_run", options->assembler_auto_run);
     config_set_bool(cfg, "assembler", "reset", options->assembler_reset_first);
     config_set_bool(cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);

@@ -1545,6 +1545,7 @@ static bool frontend_push_assemble_run_intent(
 bool frontend_trigger_assembler(frontend *ui)
 {
     frontend_assembler_state *asm_state;
+    uint16_t assemble_address;
 
     if (ui == NULL) {
         return false;
@@ -1554,6 +1555,7 @@ bool frontend_trigger_assembler(frontend *ui)
     if (!asm_state->initialized) {
         snprintf(asm_state->address_buf, sizeof(asm_state->address_buf), "8000");
         snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "8000");
+        asm_state->use_address = true;
         asm_state->reset_first = true;
         asm_state->initialized = true;
     }
@@ -1562,10 +1564,13 @@ bool frontend_trigger_assembler(frontend *ui)
         return false;
     }
 
+    assemble_address = asm_state->use_address
+        ? (uint16_t)strtoul(asm_state->address_buf, NULL, 16)
+        : 0u;
     return frontend_push_assemble_run_intent(
         ui,
         asm_state->file_path,
-        (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
+        assemble_address,
         (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
         asm_state->auto_run,
         asm_state->reset_first,
@@ -7292,6 +7297,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
     if (!asm_state->initialized) {
         snprintf(asm_state->address_buf, sizeof(asm_state->address_buf), "8000");
         snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "8000");
+        asm_state->use_address = true;
         asm_state->run_address_user_edited = false;
         asm_state->auto_run = false;
         asm_state->reset_first = true;
@@ -7311,74 +7317,84 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
     nk_layout_row_end(ctx);
 
-    /* Address row */
+    /* [x] Assemble at [address] */
     nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
-    nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Address", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.65f);
-    if (frontend_edit_replace(ctx, edit_flags, asm_state->address_buf, (int)sizeof(asm_state->address_buf), nk_filter_hex) & NK_EDIT_DEACTIVATED) {
-        /* Keep run_address in sync if user hasn't edited it independently */
-        if (!asm_state->run_address_user_edited) {
-            snprintf(asm_state->run_address_buf, sizeof(asm_state->run_address_buf), "%s", asm_state->address_buf);
+    nk_layout_row_push(ctx, 0.50f);
+    frontend_checkbox_bool(ctx, "Assemble at", &asm_state->use_address);
+    if (!asm_state->use_address) {
+        nk_widget_disable_begin(ctx);
+    }
+    nk_layout_row_push(ctx, 0.50f);
+    {
+        nk_flags addr_flags = asm_state->use_address
+            ? edit_flags
+            : (edit_flags | (nk_flags)NK_EDIT_READ_ONLY);
+        if (frontend_edit_replace(
+                ctx,
+                addr_flags,
+                asm_state->address_buf,
+                (int)sizeof(asm_state->address_buf),
+                nk_filter_hex) & NK_EDIT_DEACTIVATED) {
+            /* Keep run_address in sync if user hasn't edited it independently */
+            if (!asm_state->run_address_user_edited) {
+                snprintf(
+                    asm_state->run_address_buf,
+                    sizeof(asm_state->run_address_buf),
+                    "%s",
+                    asm_state->address_buf);
+            }
         }
     }
-    nk_layout_row_end(ctx);
-
-    /* Run Address row */
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
-    nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Run Address", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.65f);
-    if (frontend_edit_replace(ctx, edit_flags, asm_state->run_address_buf, (int)sizeof(asm_state->run_address_buf), nk_filter_hex) & NK_EDIT_ACTIVE) {
-        asm_state->run_address_user_edited = true;
+    if (!asm_state->use_address) {
+        nk_widget_disable_end(ctx);
     }
     nk_layout_row_end(ctx);
 
-    /* Auto Run row */
+    /* [x] Auto-run at [address] */
     nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
-    nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Auto Run", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.65f);
+    nk_layout_row_push(ctx, 0.50f);
+    frontend_checkbox_bool(ctx, "Auto-run at", &asm_state->auto_run);
+    if (!asm_state->auto_run) {
+        nk_widget_disable_begin(ctx);
+    }
+    nk_layout_row_push(ctx, 0.50f);
     {
-        nk_bool auto_run_nk = asm_state->auto_run ? nk_true : nk_false;
-        nk_checkbox_label(ctx, "", &auto_run_nk);
-        asm_state->auto_run = (auto_run_nk != nk_false);
+        nk_flags run_flags = asm_state->auto_run
+            ? edit_flags
+            : (edit_flags | (nk_flags)NK_EDIT_READ_ONLY);
+        if (frontend_edit_replace(
+                ctx,
+                run_flags,
+                asm_state->run_address_buf,
+                (int)sizeof(asm_state->run_address_buf),
+                nk_filter_hex) & NK_EDIT_ACTIVE) {
+            asm_state->run_address_user_edited = true;
+        }
+    }
+    if (!asm_state->auto_run) {
+        nk_widget_disable_end(ctx);
     }
     nk_layout_row_end(ctx);
 
-    /* Reset C64 checkbox */
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
-    nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Reset C64", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.65f);
-    {
-        nk_bool reset_nk = asm_state->reset_first ? nk_true : nk_false;
-        nk_checkbox_label(ctx, "", &reset_nk);
-        asm_state->reset_first = (reset_nk != nk_false);
-    }
-    nk_layout_row_end(ctx);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    frontend_checkbox_bool(ctx, "Reset C64", &asm_state->reset_first);
 
-    /* Rearm one-shots checkbox */
-    nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
-    nk_layout_row_push(ctx, 0.35f);
-    nk_label(ctx, "Rearm one-shots", NK_TEXT_LEFT);
-    nk_layout_row_push(ctx, 0.65f);
-    {
-        nk_bool rearm_nk = asm_state->rearm_oneshots ? nk_true : nk_false;
-        nk_checkbox_label(ctx, "", &rearm_nk);
-        asm_state->rearm_oneshots = (rearm_nk != nk_false);
-    }
-    nk_layout_row_end(ctx);
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    frontend_checkbox_bool(ctx, "Rearm one-shots", &asm_state->rearm_oneshots);
 
     /* Assemble button */
     nk_layout_row_dynamic(ctx, 28.0f, 1);
     if (nk_button_label(ctx, "Assemble")) {
         if (asm_state->file_path[0] != '\0') {
+            uint16_t assemble_address = asm_state->use_address
+                ? (uint16_t)strtoul(asm_state->address_buf, NULL, 16)
+                : 0u;
+            uint16_t run_address = (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16);
             frontend_push_assemble_run_intent(
                 ui,
                 asm_state->file_path,
-                (uint16_t)strtoul(asm_state->address_buf, NULL, 16),
-                (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
+                assemble_address,
+                run_address,
                 asm_state->auto_run,
                 asm_state->reset_first,
                 asm_state->rearm_oneshots);
@@ -7817,6 +7833,7 @@ void frontend_set_assembler_options(frontend *ui, const frontend_assembler_optio
              opts->address[0] != '\0' ? opts->address : "8000");
     snprintf(s->run_address_buf, sizeof(s->run_address_buf), "%s",
              opts->run_address[0] != '\0' ? opts->run_address : "8000");
+    s->use_address = opts->use_address;
     s->run_address_user_edited = (opts->run_address[0] != '\0');
     s->auto_run = opts->auto_run;
     s->reset_first = opts->reset_first;
@@ -7836,6 +7853,7 @@ void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *ou
     snprintf(out->file, sizeof(out->file), "%s", s->file_path);
     snprintf(out->address, sizeof(out->address), "%s", s->address_buf);
     snprintf(out->run_address, sizeof(out->run_address), "%s", s->run_address_buf);
+    out->use_address = s->use_address;
     out->auto_run = s->auto_run;
     out->reset_first = s->reset_first;
     out->rearm_oneshots = s->rearm_oneshots;

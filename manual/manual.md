@@ -905,9 +905,8 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 | Field        | Meaning                                                        |
 |--------------|----------------------------------------------------------------|
 | File Name    | Path to the root assembly source file, shown relative to the INI directory; use **Browse...** to pick |
-| Address      | Hex load and assembly origin address (default `$8000`)         |
-| Run Address  | Hex address to jump to after successful assembly               |
-| Auto Run        | If checked, sets PC to Run Address and resumes after assembly  |
+| Assemble at  | Optional host origin. When checked, assemble with this hex default (default `$8000`). When unchecked, the source must set its own origin (`* =` / `.org`); the host supplies `$0000` as a placeholder only |
+| Auto-run at  | When checked, after a successful assembly sets PC to this hex address and resumes |
 | Reset C64       | If checked, resets the machine and waits for BASIC (`$E38B`) before assembling |
 | Rearm one-shots | If checked, re-enables every auto-disabled one-shot breakpoint (`repeat = 0`) and resets its hit counter before assembling |
 | **[Assemble]**  | Assembles the source and loads bytes into C64 RAM            |
@@ -915,8 +914,13 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 When **Reset C64** is checked (the default), assembly waits for BASIC to initialize
 before writing code. This is the safe path for programs that expect a clean BASIC
 environment. When **Reset C64** is unchecked, the assembler writes directly into live
-RAM in whatever state the machine is in. If **Auto Run** is also set, the emulator
-immediately jumps to the Run Address and resumes execution.
+RAM in whatever state the machine is in. If **Auto-run at** is also set, the emulator
+immediately jumps to that address and resumes execution.
+
+If the host supplies a default origin (Assemble at checked, or the control-port
+`address=` default) and the source has not yet emitted any bytes, a later `* = $nnnn`
+or `.org $nnnn` re-anchors the segment to that address with no error. Going backwards
+after code has been emitted is still an error.
 
 **Rearm one-shots** is useful during iterative development: set a breakpoint with
 `repeat = 0` so it fires exactly once, then check this box so each re-assemble brings
@@ -937,7 +941,8 @@ file and restored on next launch. All keys are optional.
 [assembler]
 file           = path/to/source.asm   ; path to source file (relative to INI or absolute)
 address        = 8000                 ; hex load/assembly origin address
-run_address    = 8000                 ; hex run address
+use_address    = yes                  ; apply address as host origin (default: yes)
+run_address    = 8000                 ; hex auto-run address
 auto_run       = no                   ; jump to run address after assembly (default: no)
 reset          = yes                  ; Reset C64 before assembling (default: yes)
 rearm_oneshots = no                   ; Rearm one-shot breakpoints before assembling (default: no)
@@ -1452,7 +1457,8 @@ defaults on next launch.
 |------------------|-----------------------------------------------------|---------|
 | `file`           | Path to the root source file, normally stored relative to the INI directory | -       |
 | `address`        | Hex load/assembly origin, e.g. `8000`               | `8000`  |
-| `run_address`    | Hex run address, e.g. `8000`                        | `8000`  |
+| `use_address`    | `yes` / `no` - Apply `address` as host origin       | `yes`   |
+| `run_address`    | Hex auto-run address, e.g. `8000`                   | `8000`  |
 | `auto_run`       | `yes` / `no` - Jump to run address after assembling | `no`    |
 | `reset`          | `yes` / `no` - Reset C64 before assembling          | `yes`   |
 | `rearm_oneshots` | `yes` / `no` - Rearm one-shot breakpoints before assembling | `no` |
@@ -1910,7 +1916,7 @@ defaults are the same:
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `address` | `$8000` | Address the code is assembled to |
+| `address` | `$8000` | Host default origin; source may re-anchor with `* =` / `.org` before any bytes are emitted |
 | `run-address` | same as `address` | PC used when `auto-run` is on |
 | `auto-run` | `0` | Run the assembled code after a successful build |
 | `reset` | `1` | Reset the machine and return to BASIC before assembling |
@@ -1918,7 +1924,8 @@ defaults are the same:
 Before assembling, the control port pauses the machine so the result lands in a defined
 state. The assembler's own reset and auto-run handling then applies: a `reset=1` assemble
 resets, runs to BASIC, assembles, and resumes; `auto-run=1` sets the PC to `run-address`
-and resumes.
+and resumes. As in the Assembler tab, a host `address=` is only a default until the
+source emits bytes or sets its own origin.
 
 `assemble` is a deferred (asynchronous) command. On success the reply carries the
 assembly address:
