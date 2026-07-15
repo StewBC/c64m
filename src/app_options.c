@@ -1084,6 +1084,8 @@ static void apply_config(app_options *options, config *cfg)
     }
     options->true_aspect = config_get_bool(
         cfg, "Video", "true_aspect", options->true_aspect);
+    options->crt_smoothing = config_get_bool(
+        cfg, "Video", "crt_smoothing", options->crt_smoothing);
     options->crt_scanlines = config_get_bool(
         cfg, "Video", "crt_scanlines", options->crt_scanlines);
     options->crt_scanline_strength = config_get_int(
@@ -1544,6 +1546,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->media_1541 = src->media_1541;
     dest->show_disk_leds = src->show_disk_leds;
     dest->true_aspect = src->true_aspect;
+    dest->crt_smoothing = src->crt_smoothing;
     dest->crt_scanlines = src->crt_scanlines;
     dest->crt_scanline_strength = src->crt_scanline_strength;
     dest->crt_curvature = src->crt_curvature;
@@ -1662,6 +1665,7 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "Video", "standard", options->video_standard);
     }
     config_set_bool(cfg, "Video", "true_aspect", options->true_aspect);
+    config_set_bool(cfg, "Video", "crt_smoothing", options->crt_smoothing);
     config_set_bool(cfg, "Video", "crt_scanlines", options->crt_scanlines);
     config_set_int(cfg, "Video", "crt_scanline_strength", options->crt_scanline_strength);
     config_set_bool(cfg, "Video", "crt_curvature", options->crt_curvature);

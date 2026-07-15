@@ -30,8 +30,12 @@ typedef struct app_options {
     char *turbo_multipliers;
     char *symbol_files;
     char *video_standard;
-    /* Optional frontend-only CRT presentation. Strength/amount are 0..100. */
+    /* Optional frontend-only CRT presentation. Strength/amount are 1..100. */
     bool true_aspect;
+    /* Filter the display instead of showing hard pixel edges. Scanlines and
+       curvature both force this on: they are presented through a filtered
+       texture and cannot be drawn without it. */
+    bool crt_smoothing;
     bool crt_scanlines;
     int crt_scanline_strength;
     bool crt_curvature;

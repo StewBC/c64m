@@ -1243,6 +1243,7 @@ other Machine settings apply immediately when you press **[OK]** or **[Save INI 
 | Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
 | Symbol Files      | Add symbol files and display the comma-separated list of selected files |
 | True Aspect Ratio | Show the geometry a real TV showed, using the VIC-II pixel aspect ratio (PAL 0.9365, NTSC 0.7500); off stretches the picture to fill the view |
+| CRT Smoothing     | Filter the picture instead of showing hard pixel edges; forced on by CRT Scanlines and CRT Curvature |
 | CRT Scanlines     | Simulate the dark gap between raster lines; the slider sets strength from 1-100% |
 | CRT Curvature     | Bend the picture toward a curved CRT surface; the slider sets amount from 1-100% |
 
@@ -1335,6 +1336,7 @@ emulator removes comments.
 |------------------|----------------------------------------------------------|
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
 | `true_aspect`    | `true`/`false`; true shows the real TV geometry, false fills the view |
+| `crt_smoothing`  | `true`/`false`; filter the picture rather than show hard pixel edges |
 | `crt_scanlines`  | `true`/`false`; enable scanlines                         |
 | `crt_scanline_strength` | Integer 1-100; scanline darkness (default `35`) |
 | `crt_curvature`  | `true`/`false`; enable curved-screen distortion          |
@@ -2221,10 +2223,19 @@ The C64 display is scaled to fit its panel. The display settings are under
 **Misc -> Machine -> Configure -> Emulator**, and all of them preview live, with Cancel
 restoring their previous values.
 
-The `CRT` prefix marks the difference between them. **CRT Scanlines** and **CRT Curvature**
-are deliberate imitations of a CRT: they add artifacts that were never in the C64's signal,
-for looks. **True Aspect Ratio** carries no prefix because it is not an imitation of
-anything - it is the real geometry of the signal, which a CRT had no part in producing.
+The `CRT` prefix marks the difference between them. **CRT Smoothing**, **CRT Scanlines**
+and **CRT Curvature** are deliberate imitations of a CRT: they add artifacts that were never
+in the C64's signal, for looks. **True Aspect Ratio** carries no prefix because it is not an
+imitation of anything - it is the real geometry of the signal, which a CRT had no part in
+producing.
+
+**CRT Smoothing** filters the picture instead of drawing hard-edged pixels, which rounds
+and softens characters the way a real tube did. It is the cheapest of the three: it is only
+a texture filter, with no per-frame processing at all.
+
+CRT Scanlines and CRT Curvature both force CRT Smoothing on, and show it ticked and greyed
+out while they are enabled. They are drawn through a filtered texture and cannot be
+presented without it, so crisp pixels plus scanlines is not an available combination.
 
 **True Aspect Ratio** decides the shape of the picture:
 

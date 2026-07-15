@@ -20,6 +20,14 @@ static uint32_t crt_darken(uint32_t pixel, int strength)
     return (pixel & 0xff000000u) | (r << 16) | (g << 8) | b;
 }
 
+/* Clamp to the crop edge rather than returning black for out-of-range taps. The
+   bilinear taps for the outermost output pixels legitimately sit up to one source
+   pixel outside the crop (sx is -0.25 at x=0), so answering them with black bled
+   a dark fringe into all four edges of the picture - visible as an outline around
+   the C64 border the moment any CRT effect switched rendering onto this path.
+   This is standard CLAMP_TO_EDGE and lets the border colour run to the window
+   edge. It does not affect curvature's genuinely-outside region: frontend_crt_
+   process range-tests sxn/syn and paints black there without sampling at all. */
 static uint32_t crt_crop_pixel(
     const uint32_t *source,
     int frame_width,
@@ -30,9 +38,10 @@ static uint32_t crt_crop_pixel(
     int x,
     int y)
 {
-    if (x < 0 || y < 0 || x >= crop_width || y >= crop_height) {
-        return 0xff000000u;
-    }
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= crop_width) x = crop_width - 1;
+    if (y >= crop_height) y = crop_height - 1;
     return source[(size_t)(crop_y + y) * (size_t)frame_width +
         (size_t)(crop_x + x)];
 }

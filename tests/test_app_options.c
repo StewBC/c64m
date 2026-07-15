@@ -147,6 +147,7 @@ static void write_phase14_ini(const char *path) {
     fputs("[Video]\n", file);
     fputs("standard=PAL\n", file);
     fputs("true_aspect=yes\n", file);
+    fputs("crt_smoothing=yes\n", file);
     fputs("crt_scanlines=yes\n", file);
     fputs("crt_scanline_strength=47\n", file);
     fputs("crt_curvature=yes\n", file);
@@ -440,6 +441,7 @@ static void test_phase14_config_from_ini(void) {
 
     expect_string("video standard", "PAL", options.video_standard);
     expect_bool("true aspect", 1, options.true_aspect);
+    expect_bool("CRT smoothing", 1, options.crt_smoothing);
     expect_bool("CRT scanlines", 1, options.crt_scanlines);
     expect_int("CRT scanline strength", 47, options.crt_scanline_strength);
     expect_bool("CRT curvature", 1, options.crt_curvature);
@@ -544,6 +546,7 @@ static void test_phase14_config_saved_to_ini(void) {
 
     app_options_set_string(&options.video_standard, "PAL");
     options.true_aspect = true;
+    options.crt_smoothing = true;
     options.crt_scanlines = true;
     options.crt_scanline_strength = 62;
     options.crt_curvature = true;
@@ -574,6 +577,7 @@ static void test_phase14_config_saved_to_ini(void) {
 
     expect_string("saved video standard", "PAL", options.video_standard);
     expect_bool("saved true aspect", 1, options.true_aspect);
+    expect_bool("saved CRT smoothing", 1, options.crt_smoothing);
     expect_bool("saved CRT scanlines", 1, options.crt_scanlines);
     expect_int("saved CRT scanline strength", 62, options.crt_scanline_strength);
     expect_bool("saved CRT curvature", 1, options.crt_curvature);

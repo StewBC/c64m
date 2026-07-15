@@ -402,6 +402,7 @@ struct frontend {
     /* Disk LEDs: host-time hold armed when machine activity seq changes. */
     bool show_disk_leds;
     bool true_aspect;
+    bool crt_smoothing;
     frontend_crt_effects crt_effects;
     uint32_t disk_led_seen_read_seq[2];
     uint32_t disk_led_seen_write_seq[2];
@@ -837,6 +838,32 @@ static bool frontend_crt_effects_enabled(const frontend *ui)
     return ui != NULL && (ui->crt_effects.scanlines || ui->crt_effects.curvature);
 }
 
+/* Smoothing is pure presentation - a texture filter, not a pass. It needs no CPU
+   work at all, so it deliberately does NOT gate frontend_crt_effects_enabled().
+   Scanlines and curvature force it on because they are drawn through crt_texture,
+   which must be filtered: their output carries a 1-pixel pattern at the render
+   buffer's Nyquist limit, and point-sampling that to an arbitrary pane size beats
+   into moire. So "smooth" is implied by those two rather than combinable with
+   them - crisp scanlines are not reachable without generating them at output
+   resolution. */
+static bool frontend_display_smoothed(const frontend *ui)
+{
+    return ui != NULL && (ui->crt_smoothing || frontend_crt_effects_enabled(ui));
+}
+
+/* The unfiltered path draws display_texture, whose scale mode SDL defaults to
+   Nearest. Smoothing without scanlines or curvature is therefore just this one
+   flag - no crt_process, no second texture, no per-frame cost. */
+static void frontend_apply_display_filter(frontend *ui)
+{
+    if (ui == NULL || ui->display_texture == NULL) {
+        return;
+    }
+    SDL_SetTextureScaleMode(
+        ui->display_texture,
+        frontend_display_smoothed(ui) ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+}
+
 static SDL_Texture *frontend_display_texture_for_render(const frontend *ui)
 {
     if (frontend_crt_effects_enabled(ui) && ui->crt_texture != NULL &&
@@ -925,11 +952,13 @@ static void frontend_preview_crt_options(frontend *ui, const app_options *option
         ui->crt_effects.curvature != options->crt_curvature ||
         ui->crt_effects.curvature_amount != options->crt_curvature_amount;
     ui->true_aspect = options->true_aspect;
+    ui->crt_smoothing = options->crt_smoothing;
     ui->crt_effects.scanlines = options->crt_scanlines;
     ui->crt_effects.scanline_strength = options->crt_scanline_strength;
     ui->crt_effects.curvature = options->crt_curvature;
     ui->crt_effects.curvature_amount = options->crt_curvature_amount;
     ui->layout.display_aspect = frontend_display_aspect(ui);
+    frontend_apply_display_filter(ui);
 
     if (effects_changed && !frontend_update_crt_texture(ui)) {
         SDL_Log("frontend: could not refresh CRT output");
@@ -2046,6 +2075,25 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     nk_label(ctx, "CRT display", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 22.0f, 1);
     frontend_checkbox_bool(ctx, "True Aspect Ratio", &dialog->edited.true_aspect);
+
+    /* Scanlines and curvature are drawn through a filtered texture, so they force
+       smoothing on. Show that as ticked-and-disabled rather than leaving a box
+       unticked while the picture is plainly smoothed. The stored value is left
+       alone, so unticking them restores whatever the user last chose. */
+    {
+        bool forced = dialog->edited.crt_scanlines || dialog->edited.crt_curvature;
+        bool shown = dialog->edited.crt_smoothing || forced;
+
+        if (forced) {
+            nk_widget_disable_begin(ctx);
+        }
+        frontend_checkbox_bool(ctx, "CRT Smoothing", &shown);
+        if (forced) {
+            nk_widget_disable_end(ctx);
+        } else {
+            dialog->edited.crt_smoothing = shown;
+        }
+    }
 
     nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
     nk_layout_row_push(ctx, 0.42f);
@@ -8081,6 +8129,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
             return false;
         }
         SDL_SetTextureBlendMode(ui->display_texture, SDL_BLENDMODE_NONE);
+        frontend_apply_display_filter(ui);
     }
 
     {
