@@ -401,7 +401,7 @@ struct frontend {
     SDL_Texture *led_red_texture;
     /* Disk LEDs: host-time hold armed when machine activity seq changes. */
     bool show_disk_leds;
-    bool crt_aspect;
+    bool true_aspect;
     frontend_crt_effects crt_effects;
     uint32_t disk_led_seen_read_seq[2];
     uint32_t disk_led_seen_write_seq[2];
@@ -793,22 +793,34 @@ static float frontend_display_par_for_frame(const c64_frame *frame)
 }
 
 /* Source dimensions to fit the display into, in FRONTEND_DISPLAY_ASPECT_FIXED
-   units so frontend_fit_rect()'s integer math keeps the fractional PAR.
+   units so frontend_fit_rect()'s integer math keeps the fractional PAR. Applying
+   the PAR gives the real-world geometry: ~1.33 for PAL (which is why a hardcoded
+   4:3 looked right for years) and ~1.18 for NTSC. The aspect follows the frame,
+   since the two standards crop different heights.
 
-   CRT aspect applies the PAR, giving the real-world geometry: ~1.33 for PAL
-   (which is why a hardcoded 4:3 looked right for years) and ~1.18 for NTSC.
-   Without it the crop is mapped 1:1 as square pixels, which is useful for
-   pixel-exact work but is ~7% wide on PAL and ~33% wide on NTSC. Either way the
-   aspect follows the frame, since the two standards crop different heights. */
+   This stays PAR-derived even when True Aspect Ratio is off, because the layout's
+   click-to-snap gesture uses it to size the display pane to true geometry. Only
+   the draw paths honour frontend_display_fills_view(). */
 static void frontend_display_fit_source(const frontend *ui, int *out_w, int *out_h)
 {
     const c64_frame *frame = (ui != NULL && ui->has_frame) ? &ui->current_frame : NULL;
-    float par = (ui != NULL && ui->crt_aspect) ?
-        frontend_display_par_for_frame(frame) : 1.0f;
 
     *out_h = frontend_display_crop_h_for_frame(frame) * FRONTEND_DISPLAY_ASPECT_FIXED;
     *out_w = (int)lroundf((float)FRONTEND_DISPLAY_CROP_W *
-        (float)FRONTEND_DISPLAY_ASPECT_FIXED * par);
+        (float)FRONTEND_DISPLAY_ASPECT_FIXED *
+        frontend_display_par_for_frame(frame));
+}
+
+/* True Aspect Ratio off means "don't correct anything, just fill the view" - the
+   picture stretches to whatever the user made the pane. That is a deliberate
+   choice, not an approximation of hardware: the viewer decides how they want to
+   look at their C64, and the aspect snap is one click away if they want the true
+   geometry back. Do not substitute a square-pixel aspect here; the display never
+   maps 1:1 to screen pixels anyway, so that would just be a second wrong shape
+   with no one asking for it. */
+static bool frontend_display_fills_view(const frontend *ui)
+{
+    return ui != NULL && !ui->true_aspect;
 }
 
 static float frontend_display_aspect(const frontend *ui)
@@ -864,9 +876,18 @@ static bool frontend_update_crt_texture(frontend *ui)
         }
         SDL_SetTextureBlendMode(ui->crt_texture, SDL_BLENDMODE_NONE);
     }
-    SDL_SetTextureScaleMode(
-        ui->crt_texture,
-        ui->crt_effects.curvature ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    /* Always Linear, never Nearest. Scanlines are a 1-pixel alternating pattern
+       baked into this FRONTEND_CRT_RENDER_SCALE buffer - i.e. sitting right at
+       its Nyquist limit - and the buffer is then presented at whatever
+       non-integer scale the pane happens to be. Nearest-sampling that beats
+       against the output grid and shreds the scanlines into uneven moiré bands;
+       Linear averages the rows each output pixel straddles and reproduces them
+       evenly. Keying this off curvature (as it once did) meant curvature was
+       secretly the only thing enabling the filter, so scanlines alone looked
+       broken. Nothing here affects the crisp path: with no CRT effects the
+       renderer draws display_texture instead, which keeps SDL's default
+       Nearest. */
+    SDL_SetTextureScaleMode(ui->crt_texture, SDL_ScaleModeLinear);
 
     crop_y = frontend_display_crop_y_for_frame(&ui->current_frame);
     frontend_crt_process(
@@ -903,7 +924,7 @@ static void frontend_preview_crt_options(frontend *ui, const app_options *option
         ui->crt_effects.scanline_strength != options->crt_scanline_strength ||
         ui->crt_effects.curvature != options->crt_curvature ||
         ui->crt_effects.curvature_amount != options->crt_curvature_amount;
-    ui->crt_aspect = options->crt_aspect;
+    ui->true_aspect = options->true_aspect;
     ui->crt_effects.scanlines = options->crt_scanlines;
     ui->crt_effects.scanline_strength = options->crt_scanline_strength;
     ui->crt_effects.curvature = options->crt_curvature;
@@ -2024,15 +2045,17 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     nk_layout_row_dynamic(ctx, 18.0f, 1);
     nk_label(ctx, "CRT display", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, 22.0f, 1);
-    frontend_checkbox_bool(ctx, "CRT Aspect", &dialog->edited.crt_aspect);
+    frontend_checkbox_bool(ctx, "True Aspect Ratio", &dialog->edited.true_aspect);
 
     nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
     nk_layout_row_push(ctx, 0.42f);
-    frontend_checkbox_bool(ctx, "Scanlines", &dialog->edited.crt_scanlines);
+    frontend_checkbox_bool(ctx, "CRT Scanlines", &dialog->edited.crt_scanlines);
     if (!dialog->edited.crt_scanlines) nk_widget_disable_begin(ctx);
     nk_layout_row_push(ctx, 0.43f);
+    /* Minimum 1%: the checkbox is what turns the effect off, so a 0% setting
+       would just make an enabled effect look broken. */
     dialog->edited.crt_scanline_strength = nk_slide_int(
-        ctx, 0, dialog->edited.crt_scanline_strength, 100, 1);
+        ctx, 1, dialog->edited.crt_scanline_strength, 100, 1);
     nk_layout_row_push(ctx, 0.15f);
     nk_labelf(ctx, NK_TEXT_RIGHT, "%d%%", dialog->edited.crt_scanline_strength);
     if (!dialog->edited.crt_scanlines) nk_widget_disable_end(ctx);
@@ -2044,7 +2067,7 @@ static void frontend_draw_config_emulator_tab(frontend *ui, frontend_config_dial
     if (!dialog->edited.crt_curvature) nk_widget_disable_begin(ctx);
     nk_layout_row_push(ctx, 0.43f);
     dialog->edited.crt_curvature_amount = nk_slide_int(
-        ctx, 0, dialog->edited.crt_curvature_amount, 100, 1);
+        ctx, 1, dialog->edited.crt_curvature_amount, 100, 1);
     nk_layout_row_push(ctx, 0.15f);
     nk_labelf(ctx, NK_TEXT_RIGHT, "%d%%", dialog->edited.crt_curvature_amount);
     if (!dialog->edited.crt_curvature) nk_widget_disable_end(ctx);
@@ -2720,9 +2743,13 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
             int fit_h = 0;
             struct nk_rect image_bounds;
 
-            frontend_display_fit_source(ui, &fit_w, &fit_h);
-            image_bounds = frontend_fit_nk_rect(
-                canvas_bounds, (uint32_t)fit_w, (uint32_t)fit_h);
+            if (frontend_display_fills_view(ui)) {
+                image_bounds = canvas_bounds;
+            } else {
+                frontend_display_fit_source(ui, &fit_w, &fit_h);
+                image_bounds = frontend_fit_nk_rect(
+                    canvas_bounds, (uint32_t)fit_w, (uint32_t)fit_h);
+            }
 
             nk_draw_image(canvas, image_bounds, &image, nk_rgba(255, 255, 255, 255));
             nk_stroke_rect(canvas, image_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
@@ -9585,10 +9612,12 @@ static void frontend_draw_assembler_error_dialog(frontend *ui, int width, int he
     nk_end(ctx);
 }
 
-/* Display-only path (debugger UI hidden). Letterbox/pillar bars stay black:
-   the main loop already clears the backbuffer each frame, so only the fitted
-   C64 crop is drawn here. Border-colour / edge-smear fills are intentionally
-   not used — open borders and border sprites make those looks wrong. */
+/* Display-only path (debugger UI hidden). With True Aspect Ratio on, letterbox/pillar
+   bars stay black: the main loop already clears the backbuffer each frame, so
+   only the fitted C64 crop is drawn here. Border-colour / edge-smear fills are
+   intentionally not used — open borders and border sprites make those looks
+   wrong. With True Aspect Ratio off the crop stretches to fill the window and there are
+   no bars at all. */
 static void frontend_render_display_only(frontend *ui)
 {
     int width = 0;
@@ -9605,8 +9634,15 @@ static void frontend_render_display_only(frontend *ui)
     }
 
     platform_window_get_size(ui->window, &width, &height);
-    frontend_display_fit_source(ui, &fit_w, &fit_h);
-    dest = frontend_fit_rect(0, 0, width, height, fit_w, fit_h);
+    if (frontend_display_fills_view(ui)) {
+        dest.x = 0;
+        dest.y = 0;
+        dest.w = width;
+        dest.h = height;
+    } else {
+        frontend_display_fit_source(ui, &fit_w, &fit_h);
+        dest = frontend_fit_rect(0, 0, width, height, fit_w, fit_h);
+    }
     if (dest.w <= 0 || dest.h <= 0) {
         return;
     }

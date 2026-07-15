@@ -143,7 +143,13 @@ void frontend_crt_process(
                 float sy = (syn + 1.0f) * 0.5f * (float)crop_height - 0.5f;
                 pixel = crt_bilinear_sample(source, frame_width, crop_x, crop_y,
                     crop_width, crop_height, sx, sy);
-                if (effects->scanlines && ((y / output_scale) & 1) != 0) {
+                /* Darken alternate OUTPUT rows, so each C64 raster line gets a
+                   lit half and a dark half - that gap between lines is what a
+                   scanline actually is. Keying off (y / output_scale) instead
+                   darkens every other C64 line in full, which halves the
+                   picture's brightness rather than adding gaps, and turns ugly
+                   by ~5% strength. */
+                if (effects->scanlines && (y & 1) != 0) {
                     pixel = crt_darken(pixel, effects->scanline_strength);
                 }
             }

@@ -1082,14 +1082,16 @@ static void apply_config(app_options *options, config *cfg)
     if (value != NULL) {
         replace_string(&options->video_standard, value);
     }
-    options->crt_aspect = config_get_bool(
-        cfg, "Video", "crt_aspect", options->crt_aspect);
+    options->true_aspect = config_get_bool(
+        cfg, "Video", "true_aspect", options->true_aspect);
     options->crt_scanlines = config_get_bool(
         cfg, "Video", "crt_scanlines", options->crt_scanlines);
     options->crt_scanline_strength = config_get_int(
         cfg, "Video", "crt_scanline_strength", options->crt_scanline_strength);
-    if (options->crt_scanline_strength < 0) {
-        options->crt_scanline_strength = 0;
+    /* Floor of 1: crt_scanlines is what turns the effect off, so 0 would only
+       describe an enabled effect that draws nothing. */
+    if (options->crt_scanline_strength < 1) {
+        options->crt_scanline_strength = 1;
     }
     if (options->crt_scanline_strength > 100) {
         options->crt_scanline_strength = 100;
@@ -1098,8 +1100,8 @@ static void apply_config(app_options *options, config *cfg)
         cfg, "Video", "crt_curvature", options->crt_curvature);
     options->crt_curvature_amount = config_get_int(
         cfg, "Video", "crt_curvature_amount", options->crt_curvature_amount);
-    if (options->crt_curvature_amount < 0) {
-        options->crt_curvature_amount = 0;
+    if (options->crt_curvature_amount < 1) {
+        options->crt_curvature_amount = 1;
     }
     if (options->crt_curvature_amount > 100) {
         options->crt_curvature_amount = 100;
@@ -1541,7 +1543,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->emulate_1541 = src->emulate_1541;
     dest->media_1541 = src->media_1541;
     dest->show_disk_leds = src->show_disk_leds;
-    dest->crt_aspect = src->crt_aspect;
+    dest->true_aspect = src->true_aspect;
     dest->crt_scanlines = src->crt_scanlines;
     dest->crt_scanline_strength = src->crt_scanline_strength;
     dest->crt_curvature = src->crt_curvature;
@@ -1659,7 +1661,7 @@ bool app_options_save_shutdown(const app_options *options)
     if (options->video_standard != NULL) {
         config_set(cfg, "Video", "standard", options->video_standard);
     }
-    config_set_bool(cfg, "Video", "crt_aspect", options->crt_aspect);
+    config_set_bool(cfg, "Video", "true_aspect", options->true_aspect);
     config_set_bool(cfg, "Video", "crt_scanlines", options->crt_scanlines);
     config_set_int(cfg, "Video", "crt_scanline_strength", options->crt_scanline_strength);
     config_set_bool(cfg, "Video", "crt_curvature", options->crt_curvature);

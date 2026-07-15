@@ -22,13 +22,16 @@ Phi2 schedule; frontend frames are copies.
   lines below it; the 224-row crop takes 12 above and 12 below. Do not give NTSC
   a PAL-sized 248-row crop - it runs 13 rows past raster 262 and exposes the
   frame's fill colour as a band under the picture.
-- Display aspect follows the frame, since the crops differ in height. CRT-aspect
-  mode applies the pixel aspect ratio (PAL 0.9365, NTSC 0.7500 - see
-  codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the real-world
-  geometry: ~1.33 PAL, ~1.18 NTSC. Do not restore the old hardcoded 4:3: it is
-  right for PAL only by coincidence (352x248 at PAL's PAR *is* 4:3) and stretches
-  NTSC ~13% too wide. Without CRT aspect the crop maps 1:1 as square pixels
-  (~1.42 PAL, ~1.57 NTSC), which is pixel-exact but not TV-accurate.
+- Display aspect follows the frame, since the crops differ in height. The
+  `True Aspect Ratio` option applies the pixel aspect ratio (PAL 0.9365, NTSC
+  0.7500 - see codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the
+  real-world geometry: ~1.33 PAL, ~1.18 NTSC. Do not restore the old hardcoded
+  4:3: it is right for PAL only by coincidence (352x248 at PAL's PAR *is* 4:3)
+  and stretches NTSC ~13% too wide. With the option off the picture is not
+  corrected at all: it stretches to fill the view. Do not substitute a
+  square-pixel aspect there - the display free-scales to its pane (there is no
+  1:1 or integer-zoom mode), so square pixels would buy no pixel-exactness, just
+  a second wrong shape.
 - Unpainted pixels are filled with $D020. Everything outside the display window
   is border, and that includes the DEN=0 case: the vertical border flip-flop
   never opens, so the border covers the whole screen rather than showing B0C.
@@ -42,7 +45,11 @@ Phi2 schedule; frontend frames are copies.
 - Live rendering tracks main and vertical border flip-flops. The current source
   follows the Bauer 3.9 rule used by the `lft-nine` work: main border covers
   sprites with `$D020`; vertical border blanks graphics to B0C and does not blank
-  sprites. DEN=0 uses B0C for main-border pixels while sprites still mux.
+  sprites. DEN=0 blanks graphics to B0C the same way, sprites still muxing - but
+  it does NOT put B0C in the border. Main border can only clear while the
+  vertical border flip-flop is inactive, and DEN=0 keeps that flip-flop set, so a
+  DEN=0 frame is `$D020` throughout and its B0C never reaches the screen. The B0C
+  is visible only where DEN is cleared mid-frame, after the border has opened.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
   clear from DEN + range + YSCROLL; not sticky for the whole line). RC is
   cleared only at cycle 14 if the condition still holds (Bauer 3.7.2). End-of-line

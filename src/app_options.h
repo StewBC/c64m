@@ -31,7 +31,7 @@ typedef struct app_options {
     char *symbol_files;
     char *video_standard;
     /* Optional frontend-only CRT presentation. Strength/amount are 0..100. */
-    bool crt_aspect;
+    bool true_aspect;
     bool crt_scanlines;
     int crt_scanline_strength;
     bool crt_curvature;

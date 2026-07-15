@@ -142,7 +142,8 @@ state continues to advance normally.
 
 When launched, c64m shows the C64 display filling the window. Regular keys are forwarded
 to the emulated C64. The window can be resized; the display always scales to fit the
-available area with aspect-ratio correction.
+available area. Whether it keeps the true CRT shape while doing so, or simply stretches
+to fill, is the **True Aspect Ratio** setting. See **Display and Scaling**.
 
 Press **F9** to open or close Debug Mode. Press **Opt+H** to open or close the in-emulator
 help. On macOS, **Cmd+Q** quits.
@@ -186,8 +187,10 @@ Two splitters divide the debug layout:
 - A **vertical splitter** between the C64 display region and the CPU/Disassembly pane.
 - A **horizontal splitter** between the upper and lower halves.
 
-Drag the splitters to resize the panes. The window size and splitter positions are saved
-to the INI file on quit.
+Drag the splitters to resize the panes. A **corner handle** at the bottom-right of the C64
+display region moves both splitters together; clicking it without dragging snaps the
+display region to the C64's true aspect (see **Display and Scaling**). The window size and
+splitter positions are saved to the INI file on quit.
 
 ### Turbo Mode
 
@@ -1239,9 +1242,9 @@ other Machine settings apply immediately when you press **[OK]** or **[Save INI 
 |-------------------|--------|
 | Scroll Wheel Speed| Number of rows scrolled per wheel click (1-100) |
 | Symbol Files      | Add symbol files and display the comma-separated list of selected files |
-| CRT Aspect        | Correct the C64 crop to a 4:3 CRT display aspect using non-square pixels |
-| Scanlines         | Enable alternating dark raster lines; the slider sets strength from 0-100% |
-| CRT Curvature     | Bend the picture toward a curved CRT surface; the slider sets amount from 0-100% |
+| True Aspect Ratio | Show the geometry a real TV showed, using the VIC-II pixel aspect ratio (PAL 0.9365, NTSC 0.7500); off stretches the picture to fill the view |
+| CRT Scanlines     | Simulate the dark gap between raster lines; the slider sets strength from 1-100% |
+| CRT Curvature     | Bend the picture toward a curved CRT surface; the slider sets amount from 1-100% |
 
 The CRT controls are a live preview: checkboxes and sliders update the C64 display while
 Configure remains open. **[Cancel]** or the dialog close button restores the values that
@@ -1331,11 +1334,11 @@ emulator removes comments.
 | Key              | Value                                                    |
 |------------------|----------------------------------------------------------|
 | `standard`       | `PAL` or `NTSC` (default `NTSC`)                        |
-| `crt_aspect`     | `true`/`false`; correct the displayed crop to 4:3       |
+| `true_aspect`    | `true`/`false`; true shows the real TV geometry, false fills the view |
 | `crt_scanlines`  | `true`/`false`; enable scanlines                         |
-| `crt_scanline_strength` | Integer 0-100; scanline darkness (default `35`) |
+| `crt_scanline_strength` | Integer 1-100; scanline darkness (default `35`) |
 | `crt_curvature`  | `true`/`false`; enable curved-screen distortion          |
-| `crt_curvature_amount` | Integer 0-100; curvature amount (default `30`)   |
+| `crt_curvature_amount` | Integer 1-100; curvature amount (default `30`)   |
 
 ### [input]
 
@@ -2064,15 +2067,21 @@ feature.
 
 Pixels are emitted cycle-by-cycle as VIC-II time advances. Mid-frame register changes
 (color, scroll, mode bits) take effect at their exact event cycle rather than at frame
-start. The internal frame is 384x312 (PAL, full raster) or 384x263 (NTSC); the
-displayed crop is a 352x248 window (from frame row 28) that keeps the 200-line
-display area plus top and lower overscan on screen.
+start. The internal frame is 384x312 (PAL, full raster) or 384x263 (NTSC). The displayed
+crop is per-standard and never reaches past the frame the VIC-II actually painted: PAL
+shows 352x248 from frame row 28 (rows 28..275), NTSC shows 352x224 from row 39 (rows
+39..262). Both keep the 200-line display area plus overscan above and below. The display
+window is rows 51..250 on both standards, so NTSC has only 12 border lines below it
+against PAL's 25 - which is why its crop is shorter, and why a PAL-sized 248-row crop
+would run past NTSC's last raster and show unpainted fill.
 
 **Graphics modes:** standard text (40x25), multicolor text, standard bitmap, multicolor
 bitmap, ECM (extended color), and invalid modes 5/6/7 (black background and display
 layer). XSCROLL and YSCROLL are applied as delayed display-window edges. RSEL/CSEL
-control 25/24-row and 40/38-column window clamps. DEN=0 blanks display and border pixels
-to the background color ($D021).
+control 25/24-row and 40/38-column window clamps. DEN=0 blanks the graphics layer to the
+background color ($D021), but the vertical border flip-flop never opens, so the border
+covers the whole screen: what you actually see is $D020 everywhere, not $D021. This is
+visible during KERNAL boot, before CINT sets DEN.
 
 **Sprites:** all 8 hardware sprites with 9-bit X position (MSB register), per-sprite
 enable, hires (24x21) and multicolor (12x21 logical pixels) modes, X-expand and
@@ -2208,11 +2217,28 @@ uses keypad key codes, so Num Lock must be on. The port and layout are saved in 
 
 ### Display and Scaling
 
-The C64 display is scaled to fit its panel with aspect-ratio correction. Letterbox or
-pillarbox fills the unused space (black). Optional CRT presentation controls are under
-**Misc -> Machine -> Configure -> Emulator**. CRT Aspect corrects the displayed crop to
-4:3; Scanlines and CRT Curvature add adjustable post-processing. These controls preview
-live and Cancel restores their previous values.
+The C64 display is scaled to fit its panel. The display settings are under
+**Misc -> Machine -> Configure -> Emulator**, and all of them preview live, with Cancel
+restoring their previous values.
+
+The `CRT` prefix marks the difference between them. **CRT Scanlines** and **CRT Curvature**
+are deliberate imitations of a CRT: they add artifacts that were never in the C64's signal,
+for looks. **True Aspect Ratio** carries no prefix because it is not an imitation of
+anything - it is the real geometry of the signal, which a CRT had no part in producing.
+
+**True Aspect Ratio** decides the shape of the picture:
+
+- **On** - the picture keeps the geometry a real TV showed, using the VIC-II pixel
+  aspect ratio (PAL 0.9365, NTSC 0.7500). C64 pixels are taller than they are wide,
+  far more so on NTSC, so PAL lands near 4:3 (~1.33) while NTSC is visibly narrower
+  (~1.18). Letterbox or pillarbox fills the unused space (black).
+- **Off** - no correction at all: the picture stretches to fill the view, whatever
+  shape you have made it, and there are no bars. How you want to look at your C64 is
+  your call.
+
+In Debug Mode, clicking the corner handle at the bottom-right of the display region
+without dragging snaps the region to the true aspect (see **Layout**), so the correct
+geometry is one click away in either mode.
 
 ### Vendored third-party code and assets
 - `C64_TrueType_v1.2.1-STYLE`
