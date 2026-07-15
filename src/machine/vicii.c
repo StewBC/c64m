@@ -133,9 +133,12 @@ static void vicii_begin_live_frame(vicii *v) {
 
     assert(v);
 
-    fill_index = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u ?
-        (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu) :
-        (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+    /* Any pixel this frame does not paint lies outside the display window, which
+       is border. That holds with DEN=0 too: the vertical border flip-flop never
+       opens, so the border covers the whole screen - it does NOT become B0C.
+       Selecting B0C on DEN=0 was inverted, and showed up on NTSC as a
+       $D021-coloured band under a $D020-coloured boot screen. */
+    fill_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     fill_color = vicii_palette_argb[fill_index];
     vicii_prepare_frame(&v->working_frame, vicii_frame_height(v), v->timing.frame_number, 0, fill_color);
     /* Do NOT reset the vertical border flip-flop here. On real hardware it is

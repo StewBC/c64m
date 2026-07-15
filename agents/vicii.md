@@ -15,8 +15,23 @@ Phi2 schedule; frontend frames are copies.
 ## Current implementation
 
 - PAL 6569 and NTSC 6567R8 timing are selected per machine configuration.
-- Full PAL/NTSC frame heights are published: PAL 312 lines, NTSC 263. Frontend
-  normally displays a 352x248 crop beginning at Y=28.
+- Full PAL/NTSC frame heights are published: PAL 312 lines, NTSC 263. The
+  frontend crop is per-standard and always stays inside the published frame:
+  PAL 352x248 from Y=28 (rows 28..275), NTSC 352x224 from Y=39 (rows 39..262).
+  The display window is 51..250 on both standards, so NTSC has only 12 border
+  lines below it; the 224-row crop takes 12 above and 12 below. Do not give NTSC
+  a PAL-sized 248-row crop - it runs 13 rows past raster 262 and exposes the
+  frame's fill colour as a band under the picture.
+- Display aspect follows the frame, since the crops differ in height. CRT-aspect
+  mode applies the pixel aspect ratio (PAL 0.9365, NTSC 0.7500 - see
+  codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the real-world
+  geometry: ~1.33 PAL, ~1.18 NTSC. Do not restore the old hardcoded 4:3: it is
+  right for PAL only by coincidence (352x248 at PAL's PAR *is* 4:3) and stretches
+  NTSC ~13% too wide. Without CRT aspect the crop maps 1:1 as square pixels
+  (~1.42 PAL, ~1.57 NTSC), which is pixel-exact but not TV-accurate.
+- Unpainted pixels are filled with $D020. Everything outside the display window
+  is border, and that includes the DEN=0 case: the vertical border flip-flop
+  never opens, so the border covers the whole screen rather than showing B0C.
 - Text, bitmap, multicolor, ECM, invalid modes, border state, DEN-off blanking,
   sprites, priority, expansion, multicolor, pointers/data fetches, collisions,
   raster IRQ, and timed register writes are implemented.

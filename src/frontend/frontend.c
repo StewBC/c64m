@@ -16,6 +16,7 @@
 #include "stb_image.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,15 +34,25 @@ enum {
     /* Host-time LED hold after each activity event (ms). Independent of pause. */
     FRONTEND_DISK_LED_HOLD_MS = 300,
     FRONTEND_DISPLAY_CROP_X = 8,
-    /* Crop of the published frame. Origin and height cover both top-border
-       title/score sprites (Galencia content from ~raster 29) and bottom-border
-       HUD sprites (Y=254 -> last painted line 275). Visible rows: 28..275.
-       Texture is always PAL-height so NTSC can share the crop origin (padding
-       fills past line 262). */
+    /* Crop of the published frame. Each standard crops only rows its VIC-II
+       actually painted - never past frame->height. PAL (312 rasters) shows rows
+       28..275: the origin and height cover both top-border title/score sprites
+       (Galencia content from ~raster 29) and bottom-border HUD sprites (Y=254 ->
+       last painted line 275). */
     FRONTEND_DISPLAY_PAL_CROP_Y = 28,
-    FRONTEND_DISPLAY_NTSC_CROP_Y = 28,
+    FRONTEND_DISPLAY_PAL_CROP_H = 248,
+    /* NTSC has only 263 rasters (0..262). The display window is 51..250 on both
+       standards (see vicii_get_border_geometry), so NTSC has just 12 border
+       lines below it against PAL's 25. Rows 39..262 give 12 border lines above
+       and 12 below - symmetric, and every row is real. A PAL-sized 248-row crop
+       would run 13 rows past the frame and show uninitialised fill. */
+    FRONTEND_DISPLAY_NTSC_CROP_Y = 39,
+    FRONTEND_DISPLAY_NTSC_CROP_H = 224,
     FRONTEND_DISPLAY_CROP_W = 352,
-    FRONTEND_DISPLAY_CROP_H = 248,
+    /* Fixed-point scale for the fractional pixel aspect ratio. 256 keeps the
+       PAR exact to ~1e-5 while leaving frontend_fit_rect()'s int multiply far
+       from overflow at any plausible window size. */
+    FRONTEND_DISPLAY_ASPECT_FIXED = 256,
     FRONTEND_CRT_RENDER_SCALE = 2
 };
 
@@ -759,6 +770,56 @@ static int frontend_display_crop_y_for_frame(const c64_frame *frame)
     return FRONTEND_DISPLAY_PAL_CROP_Y;
 }
 
+static int frontend_display_crop_h_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return FRONTEND_DISPLAY_NTSC_CROP_H;
+    }
+    return FRONTEND_DISPLAY_PAL_CROP_H;
+}
+
+/* Pixel aspect ratio: the width/height of one VIC-II dot on a real TV. Derived
+   from the dot clock against the square-pixel reference - PAL 7.88200MHz vs
+   7.37500MHz, NTSC 8.18184MHz vs 6.13636MHz. Dots are narrower than tall on both
+   standards, far more so on NTSC, because the same 320x200 window is squeezed
+   into 263 rasters instead of 312.
+   https://codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio */
+static float frontend_display_par_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return 0.7500f;
+    }
+    return 0.9365f;
+}
+
+/* Source dimensions to fit the display into, in FRONTEND_DISPLAY_ASPECT_FIXED
+   units so frontend_fit_rect()'s integer math keeps the fractional PAR.
+
+   CRT aspect applies the PAR, giving the real-world geometry: ~1.33 for PAL
+   (which is why a hardcoded 4:3 looked right for years) and ~1.18 for NTSC.
+   Without it the crop is mapped 1:1 as square pixels, which is useful for
+   pixel-exact work but is ~7% wide on PAL and ~33% wide on NTSC. Either way the
+   aspect follows the frame, since the two standards crop different heights. */
+static void frontend_display_fit_source(const frontend *ui, int *out_w, int *out_h)
+{
+    const c64_frame *frame = (ui != NULL && ui->has_frame) ? &ui->current_frame : NULL;
+    float par = (ui != NULL && ui->crt_aspect) ?
+        frontend_display_par_for_frame(frame) : 1.0f;
+
+    *out_h = frontend_display_crop_h_for_frame(frame) * FRONTEND_DISPLAY_ASPECT_FIXED;
+    *out_w = (int)lroundf((float)FRONTEND_DISPLAY_CROP_W *
+        (float)FRONTEND_DISPLAY_ASPECT_FIXED * par);
+}
+
+static float frontend_display_aspect(const frontend *ui)
+{
+    int source_w = 0;
+    int source_h = 0;
+
+    frontend_display_fit_source(ui, &source_w, &source_h);
+    return (float)source_w / (float)source_h;
+}
+
 static bool frontend_crt_effects_enabled(const frontend *ui)
 {
     return ui != NULL && (ui->crt_effects.scanlines || ui->crt_effects.curvature);
@@ -812,11 +873,11 @@ static bool frontend_update_crt_texture(frontend *ui)
         ui->current_frame.pixels,
         ui->crt_pixels,
         C64_FRAME_WIDTH,
-        C64_FRAME_PAL_HEIGHT,
+        (int)ui->current_frame.height,
         FRONTEND_DISPLAY_CROP_X,
         crop_y,
         FRONTEND_DISPLAY_CROP_W,
-        FRONTEND_DISPLAY_CROP_H,
+        frontend_display_crop_h_for_frame(&ui->current_frame),
         FRONTEND_CRT_RENDER_SCALE,
         &ui->crt_effects);
     if (SDL_UpdateTexture(ui->crt_texture, NULL, ui->crt_pixels,
@@ -847,8 +908,7 @@ static void frontend_preview_crt_options(frontend *ui, const app_options *option
     ui->crt_effects.scanline_strength = options->crt_scanline_strength;
     ui->crt_effects.curvature = options->crt_curvature;
     ui->crt_effects.curvature_amount = options->crt_curvature_amount;
-    ui->layout.display_aspect = ui->crt_aspect ? 4.0f / 3.0f :
-        (float)FRONTEND_DISPLAY_CROP_W / (float)FRONTEND_DISPLAY_CROP_H;
+    ui->layout.display_aspect = frontend_display_aspect(ui);
 
     if (effects_changed && !frontend_update_crt_texture(ui)) {
         SDL_Log("frontend: could not refresh CRT output");
@@ -2654,11 +2714,15 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
                     (float)(frontend_display_crop_y_for_frame(&ui->current_frame) *
                         texture_scale),
                     (float)(FRONTEND_DISPLAY_CROP_W * texture_scale),
-                    (float)(FRONTEND_DISPLAY_CROP_H * texture_scale)));
-            struct nk_rect image_bounds = frontend_fit_nk_rect(
-                canvas_bounds,
-                ui->crt_aspect ? 4u : FRONTEND_DISPLAY_CROP_W,
-                ui->crt_aspect ? 3u : FRONTEND_DISPLAY_CROP_H);
+                    (float)(frontend_display_crop_h_for_frame(&ui->current_frame) *
+                        texture_scale)));
+            int fit_w = 0;
+            int fit_h = 0;
+            struct nk_rect image_bounds;
+
+            frontend_display_fit_source(ui, &fit_w, &fit_h);
+            image_bounds = frontend_fit_nk_rect(
+                canvas_bounds, (uint32_t)fit_w, (uint32_t)fit_h);
 
             nk_draw_image(canvas, image_bounds, &image, nk_rgba(255, 255, 255, 255));
             nk_stroke_rect(canvas, image_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
@@ -7995,35 +8059,23 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
     {
         SDL_Rect frame_rect = { 0, 0, (int)frame->width, (int)frame->height };
 
+        /* Only rows the VIC-II painted are uploaded. The texture is allocated at
+           PAL height as a ceiling so it survives a standard switch, but each
+           standard's crop stays inside its own frame->height, so rows past an
+           NTSC frame are never sampled and need no padding fill. */
         if (SDL_UpdateTexture(ui->display_texture, &frame_rect, frame->pixels,
                 (int)frame->stride_bytes) != 0) {
             SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
             return false;
         }
-
-        /* NTSC frames end at row 262, but the frame buffer is initialized to
-           the border colour through the PAL-sized storage. Upload those valid
-           padding rows so the common PAL crop can extend past the NTSC frame. */
-        if (frame->height < C64_FRAME_PAL_HEIGHT) {
-            SDL_Rect padding_rect = {
-                0,
-                (int)frame->height,
-                (int)frame->width,
-                C64_FRAME_PAL_HEIGHT - (int)frame->height,
-            };
-            const uint32_t *padding = frame->pixels +
-                (size_t)frame->height * (size_t)frame->width;
-
-            if (SDL_UpdateTexture(ui->display_texture, &padding_rect, padding,
-                    (int)frame->stride_bytes) != 0) {
-                SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
-                return false;
-            }
-        }
     }
 
     ui->current_frame = *frame;
     ui->has_frame = true;
+    /* The crop height, and so the display aspect, follows the video standard.
+       Refresh here as well as on option changes: switching PAL<->NTSC arrives as
+       a new frame height, not as an option change. */
+    ui->layout.display_aspect = frontend_display_aspect(ui);
     if (!frontend_update_crt_texture(ui)) {
         SDL_Log("frontend: CRT output update failed; using unprocessed frame");
     }
@@ -9541,6 +9593,8 @@ static void frontend_render_display_only(frontend *ui)
 {
     int width = 0;
     int height = 0;
+    int fit_w = 0;
+    int fit_h = 0;
     SDL_Rect dest;
     SDL_Rect src;
     SDL_Texture *render_texture;
@@ -9551,10 +9605,8 @@ static void frontend_render_display_only(frontend *ui)
     }
 
     platform_window_get_size(ui->window, &width, &height);
-    dest = frontend_fit_rect(
-        0, 0, width, height,
-        ui->crt_aspect ? 4 : FRONTEND_DISPLAY_CROP_W,
-        ui->crt_aspect ? 3 : FRONTEND_DISPLAY_CROP_H);
+    frontend_display_fit_source(ui, &fit_w, &fit_h);
+    dest = frontend_fit_rect(0, 0, width, height, fit_w, fit_h);
     if (dest.w <= 0 || dest.h <= 0) {
         return;
     }
@@ -9564,7 +9616,7 @@ static void frontend_render_display_only(frontend *ui)
     src.x = FRONTEND_DISPLAY_CROP_X * texture_scale;
     src.y = frontend_display_crop_y_for_frame(&ui->current_frame) * texture_scale;
     src.w = FRONTEND_DISPLAY_CROP_W * texture_scale;
-    src.h = FRONTEND_DISPLAY_CROP_H * texture_scale;
+    src.h = frontend_display_crop_h_for_frame(&ui->current_frame) * texture_scale;
     SDL_RenderCopy(ui->renderer, render_texture, &src, &dest);
 }
 
