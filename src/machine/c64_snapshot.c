@@ -449,6 +449,7 @@ static void write_cia(snapshot_writer *w, uint32_t tag, const cia *c) {
     w_u64(w, c->icr_writes);
     w_u64(w, c->interrupt_assertions);
     w_bool(w, c->tod_latched);
+    w_bool(w, c->tod_stopped);
     w_bool(w, c->cnt_pulse);
     end_chunk(w, chunk);
 }
@@ -770,6 +771,7 @@ static void read_cia(snapshot_reader *r, cia *c) {
     c->icr_writes = r_u64(r);
     c->interrupt_assertions = r_u64(r);
     c->tod_latched = r_bool(r);
+    c->tod_stopped = r_bool(r);
     c->cnt_pulse = r_bool(r);
     c->keyboard = keyboard;
     c->port_input = port_input;

@@ -29,7 +29,10 @@ timing, `cia_pulse_cnt()`/`cia_set_sp_line()` for serial edges,
 - CIA #1 reads keyboard/joystick inputs. CIA #2 selects the VIC bank and models
   open-collector IEC ATN/CLK/DATA lines.
 - TOD is BCD, 12-hour AM/PM, with coherent reads, alarm, and configured 50/60 Hz
-  source timing.
+  source timing. Writing the clock hours register stops TOD; writing tenths
+  restarts it (MOS 6526). Alarm-register writes do not halt the clock. Read
+  latching (hours read freezes a coherent snapshot until tenths is read) is
+  separate from the write stop/start behavior.
 
 ## Timer timing facts
 

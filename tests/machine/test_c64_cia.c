@@ -797,6 +797,39 @@ static void test_cia_tod_read_latch_and_debug_peek(void) {
     expect_u8("tod live minutes visible after release", 0x00, cia_read_register(&c, 0x0a));
 }
 
+static void test_cia_tod_hours_write_stops_until_tenths(void) {
+    cia c;
+    char error[256];
+
+    expect_true("cia init", cia_init(&c, error, sizeof(error)));
+    cia_set_tod_cycles(&c, 1, 1);
+
+    /* Airwolf-style key: tenths..minutes then hours last freezes the clock. */
+    cia_write_register(&c, 0x08, 0x00);
+    cia_write_register(&c, 0x09, 0x00);
+    cia_write_register(&c, 0x0a, 0x00);
+    cia_write_register(&c, 0x0b, 0x01);
+
+    step_cia_cycles(&c, 50);
+    expect_u8("tod frozen tenths after hours write", 0x00, cia_debug_read_register(&c, 0x08));
+    expect_u8("tod frozen hours after hours write", 0x01, cia_debug_read_register(&c, 0x0b));
+    expect_true("tod_stopped set", c.tod_stopped);
+
+    /* Writing tenths restarts; one Phi2 at 1-cycle cadence advances tenths. */
+    cia_write_register(&c, 0x08, 0x00);
+    expect_true("tod_stopped cleared", !c.tod_stopped);
+    cia_step_cycle(&c);
+    expect_u8("tod advances after tenths restart", 0x01, cia_debug_read_register(&c, 0x08));
+
+    /* Alarm hours write must not stop the running clock. */
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x80);
+    cia_write_register(&c, 0x0b, 0x03);
+    cia_write_register(&c, CIA_REG_CONTROL_B, 0x00);
+    expect_true("alarm hours write leaves clock running", !c.tod_stopped);
+    cia_step_cycle(&c);
+    expect_u8("tod still advances after alarm hours write", 0x02, cia_debug_read_register(&c, 0x08));
+}
+
 static void test_cia_tod_writes_alarm_and_sets_interrupt(void) {
     cia c;
     char error[256];
@@ -1400,6 +1433,7 @@ int main(void) {
     test_cia_tod_machine_cadence_policy();
     test_cia_tod_bcd_rollover_and_ampm();
     test_cia_tod_read_latch_and_debug_peek();
+    test_cia_tod_hours_write_stops_until_tenths();
     test_cia_tod_writes_alarm_and_sets_interrupt();
     test_cia2_tod_alarm_can_raise_nmi();
     test_cia_interrupt_line_delays_one_cycle_behind_pending();

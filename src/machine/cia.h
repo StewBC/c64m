@@ -79,6 +79,9 @@ struct cia {
     cia_port_input_fn port_input;
     void *port_input_user;
     bool tod_latched;
+    /* Clock stops on write to TOD hours and restarts on write to tenths
+     * (MOS 6526). Alarm-register writes do not affect this. */
+    bool tod_stopped;
     bool cnt_pulse;
     bool flag_line;
     uint8_t serial_shift;

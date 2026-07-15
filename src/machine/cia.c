@@ -173,7 +173,7 @@ static uint64_t cia_tod_tick_cycles(const cia *c) {
 static void cia_step_tod(cia *c) {
     uint64_t tick_cycles = cia_tod_tick_cycles(c);
 
-    if (tick_cycles == 0) {
+    if (c->tod_stopped || tick_cycles == 0) {
         return;
     }
 
@@ -229,14 +229,17 @@ static uint8_t cia_debug_read_tod_register(const cia *c, uint8_t reg) {
 }
 
 static void cia_write_tod_register(cia *c, uint8_t reg, uint8_t value) {
-    cia_tod *tod = (c->registers[CIA_REG_CONTROL_B] & 0x80u) != 0 ? &c->tod_alarm : &c->tod;
+    bool alarm = (c->registers[CIA_REG_CONTROL_B] & 0x80u) != 0;
+    cia_tod *tod = alarm ? &c->tod_alarm : &c->tod;
 
     switch (reg) {
         case CIA_REG_TOD_TENTHS:
             tod->tenth = value <= 9u ? value : 0;
-            if (tod == &c->tod) {
+            if (!alarm) {
+                /* Writing tenths restarts the clock after a hours-write halt. */
                 c->tod_cycle_accum = 0;
                 c->tod_latched = false;
+                c->tod_stopped = false;
             }
             break;
         case CIA_REG_TOD_SECONDS:
@@ -247,6 +250,10 @@ static void cia_write_tod_register(cia *c, uint8_t reg, uint8_t value) {
             break;
         case CIA_REG_TOD_HOURS:
             tod->hours = cia_sanitize_tod_hour(value);
+            if (!alarm) {
+                /* Writing hours freezes TOD until tenths is written again. */
+                c->tod_stopped = true;
+            }
             break;
         default:
             break;
