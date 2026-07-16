@@ -945,19 +945,23 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
                frame.pixels[101 * C64_FRAME_WIDTH + 100]);
     expect_u8("immc irq pending", 0xf5, vicii_read_register(&machine.vic, 0xd019));
 
-    /* Clearing $D019 while $D01E remains latched must allow a later collision IRQ. */
+    /* Bauer/VICE: IRQ only on 0→nonzero latch. Ack $D019 while $D01E stays set
+       must NOT re-assert on further overlap; read $D01E first, then collide. */
     vicii_write_register(&machine.vic, 0xd019, 0x04);
     expect_u8("immc irq cleared", 0x71, vicii_read_register(&machine.vic, 0xd019));
 
-    make_live_frame(&machine, &frame, "sprite-sprite collision retrigger frame");
-    expect_u8("immc irq retriggered", 0xf5, vicii_read_register(&machine.vic, 0xd019));
+    make_live_frame(&machine, &frame, "sprite-sprite collision no-retrigger frame");
+    expect_u8("immc stays clear while d01e latched", 0x71, vicii_read_register(&machine.vic, 0xd019));
     expect_u8("d01e participants", 0x03, vicii_read_register(&machine.vic, 0xd01e));
-    expect_u8("d01e back-to-back keeps mask", 0x03, vicii_read_register(&machine.vic, 0xd01e));
     {
         uint64_t abs = 0;
         vicii_step_cycle(&machine.vic, &machine.bus, abs);
     }
     expect_u8("d01e read clear after live collision", 0x00, vicii_read_register(&machine.vic, 0xd01e));
+
+    make_live_frame(&machine, &frame, "sprite-sprite collision after d01e clear");
+    expect_u8("immc irq after 0-to-nonzero edge", 0xf5, vicii_read_register(&machine.vic, 0xd019));
+    expect_u8("d01e after new collision", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
 static void test_sprite_background_priority_and_collision(void) {

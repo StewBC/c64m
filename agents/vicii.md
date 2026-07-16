@@ -60,6 +60,11 @@ Phi2 schedule; frontend frames are copies.
   mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert
   IRQ (Arkanoid dual-zone soft-scroll chain). Writing `$D012` to the *current*
   line still triggers immediately (Galencia bottom-border chain).
+- Sprite collision IRQs (IMMC/IMBC) edge-trigger only when `$D01E`/`$D01F` go from
+  zero to non-zero (Bauer / VICE). Acking `$D019` while the collision latch is
+  still set must not re-fire; a CPU read of `$D01E`/`$D01F` clears the latch so
+  a later overlap can IRQ again. Sticky re-assert broke Potty Pigeon (`$D01A=$05`
+  with an IRQ path that only acks raster `$01`).
 - Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
   not a fixed 512-dot wrap.
 - Turbo can disable host pixel output while retaining raster, BA, IRQ, sprite-DMA,

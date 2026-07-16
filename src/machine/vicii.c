@@ -967,16 +967,24 @@ static void vicii_note_sprite_collisions(vicii *v, vicii_bg_pixel bg, const vici
         }
     }
 
+    /* Bauer / VICE: collision IRQs edge-trigger only when the latch goes from
+       zero to non-zero. Acking $D019 while $D01E/$D01F stays latched must not
+       re-assert IRQ on later overlap pixels (Potty Pigeon title: $D01A=$05
+       enables IMMC, IRQ path acks only $01; sticky re-assert starved the main
+       loop so music and animation froze while the multi-raster colour bars
+       still ran). */
     if ((mask & (uint8_t)(mask - 1u)) != 0) {
+        uint8_t prev = v->sprite_sprite_collision;
         v->sprite_sprite_collision |= mask;
-        if ((v->irq_status & VICII_IRQ_IMMC) == 0) {
+        if (prev == 0u && v->sprite_sprite_collision != 0u) {
             vicii_set_irq_flag(v, VICII_IRQ_IMMC);
         }
     }
 
     if (bg.foreground && mask != 0) {
+        uint8_t prev = v->sprite_background_collision;
         v->sprite_background_collision |= mask;
-        if ((v->irq_status & VICII_IRQ_IMBC) == 0) {
+        if (prev == 0u && v->sprite_background_collision != 0u) {
             vicii_set_irq_flag(v, VICII_IRQ_IMBC);
         }
     }
