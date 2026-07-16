@@ -1,12 +1,17 @@
 # c64m - A Commodore 64 emulator written by Codex, Claude Code and Grok, produced by Stefan Wessels, 2026
 
-c64m is a Commodore 64 emulator with PAL (6569) and NTSC video support. It runs BASIC
-programs, PRG files, and D64 disk images, and includes a debugger and assembler for C64
-development.
+c64m is a Commodore 64 emulator with PAL and NTSC video support. It runs BASIC programs,
+`PRG` and `T64` files, `D64`/`G64` disk images, and `CRT` cartridges, and includes a
+debugger and assembler for C64 development.
 
-c64m requires C64 ROM files. Place `basic`, `kernal`, `character`, and optionally `system`
-ROM files beside the executable or in a `rom` or `roms` subdirectory. Files are matched
-by stem name and size; extensions are ignored.
+c64m requires C64 ROM files. Place `basic`, `kernal` (or a single `system` file which
+combines both `basic` and `kernal`) and `character`, ROM files beside the executable
+or in a `rom` or `roms` subdirectory. A `1541` ROM (16 KB) is optional and enables the
+emulated 1541 drive. Files are matched by stem name and size; extensions are ignored.
+JiffyDOS replacement ROMs can be used in place of the stock `kernal` and `1541` images -
+they are the same sizes - but because their filenames do not match the stems above, point
+at them explicitly with `[roms] kernal=` and `[roms] 1541=` (or the Configure > Paths
+ROM fields).
 
 ## Overview
 
@@ -2030,18 +2035,19 @@ raster-timed effects) land at the correct cycle. IRQ is level-sensitive; NMI use
 edge-triggered latch so a single NMI edge triggers exactly once even if the NMI line
 stays asserted. RESTORE routes through the NMI path.
 
-The machine has a resumable Phi2 execution path for a trace-gated subset of common
-instructions, including immediate and selected zero-page/absolute loads, stores, ALU,
-compare, branch, stack, interrupt, register-transfer, and read-modify-write operations.
-Those instructions issue one typed CPU bus access per completed Phi2 cycle. Other
-implemented opcode families continue to use the compatibility execute-and-replay path.
+The machine has a resumable Phi2 execution path covering the full documented 151-opcode
+NMOS set, the practical undocumented families (SLO, RLA, SRE, RRA, DCP, ISC/ISB, LAX,
+SAX), and the stable undocumented NOPs. Those instructions issue one typed CPU bus access
+per completed Phi2 cycle. The chip-dependent unstable forms (such as LAX #imm) fall back
+to the compatibility execute-and-replay path; all 256 opcode slots have explicit dispatch.
 
-BA stall: when VIC-II asserts BA, the CPU is held on read-like cycles while eligible
-write cycles continue according to the current arbiter policy. The emulator classifies
-opcode fetches, operand reads, data reads, dummy reads, RMW dummy writes, stack accesses,
-vector reads, and data writes separately. AEC is not modeled as separate emulator state.
-This is a progressively more accurate bus model, not yet a claim of complete cycle-
-perfect 6510 behavior.
+BA stall: when VIC-II asserts BA, the CPU is held on read-like cycles while a write may
+still complete, as on hardware. The emulator classifies opcode fetches, operand reads,
+data reads, dummy reads, RMW dummy writes, stack accesses, vector reads, and data writes
+separately. AEC and RDY are separate VIC-II pin state exposed at cycle granularity: RDY
+stalls reads, and AEC blocks CPU bus access during an actual VIC takeover. Analog and
+half-cycle AEC/RDY behavior is not modeled. This is a progressively more accurate bus
+model, not yet a claim of complete cycle-perfect 6510 behavior.
 
 ### Memory and Bus
 
@@ -2099,21 +2105,27 @@ sprite-sprite and sprite-background collision latches ($D01E/$D01F) with read-cl
 write-ignore, and IRQs (IMMC/IMBC) wired through the VIC IRQ path. Sprite pointer
 (p-access) and data (s-access) fetches are bank-aware.
 
-BA cycle stealing for sprite fetch windows is implemented with correct cross-line
-handling for sprites 3 and 4.
+The bus scheduler distinguishes Phi1 idle/graphics/sprite-pointer work from Phi2 bad-line
+character and sprite-data work, and BA is derived from those scheduled Phi2 accesses
+rather than from a separate BA-assert table. A single look-ahead over the schedule gives
+the sprite 3/4 cross-line windows for free. Sprite fetch cycles come from tested per-
+standard tables (PAL and NTSC), and sprite X wrapping follows the line length - 504 dots
+PAL, 520 NTSC - rather than a fixed 512.
 
 The VIC-II also exposes scheduled c-access and sprite-fetch markers for machine-level
-timing traces. Complete per-byte character, graphics, idle-g-access, and sprite-data
-fetch arbitration remains future work; BA windows are still maintained by the tested
-PAL/NTSC timing tables.
+timing traces. Idle g-access remains an approximation, light pen ($D013/$D014) is
+stubbed, and last-byte-on-bus behavior is not modeled.
 
 **Registers:** full mirroring at $D000-$D3FF; unused high-bit masking per hardware spec;
 open-bus high nibble on color register reads returns 1; unused block $D02F-$D03F reads
 as $FF.
 
 **VIC-II IRQ sources:** raster compare (programmable line), sprite-sprite collision, and
-sprite-background collision. IRQ status ($D019) and enable ($D01A) with aggregate
-enabled-pending bit 7.
+sprite-background collision; the light pen source is not implemented. IRQ status ($D019)
+and enable ($D01A) with aggregate enabled-pending bit 7. All three sources edge-trigger:
+raster compare fires on non-match to match, and the collision sources fire only when
+$D01E/$D01F go from zero to non-zero, so acknowledging $D019 while a collision latch is
+still set does not re-fire it.
 
 ### CIA
 
@@ -2139,18 +2151,20 @@ without creating or releasing the CPU-visible latch.
 
 The MOS 6581 register map covers $D400-$D41F. Three voices each have a 24-bit phase
 accumulator, four waveforms (triangle, sawtooth, pulse with 12-bit width, noise via a
-23-bit LFSR), TEST bit, ADSR envelope with a fractional double accumulator and
-clock-parameterized rate tables (PAL and NTSC constants selected at `sid_init`), and gate
-control. Voice 3 oscillator (phase bits 23-16) and envelope are
-readable at $D41B/$D41C. Paddle reads ($D419/$D41A) return $FF.
+23-bit LFSR), TEST bit, hard sync and ring modulation against the preceding voice, ADSR
+envelope with a fractional double accumulator and clock-parameterized rate tables (PAL and
+NTSC constants selected at `sid_init`), and gate control. Voice 3 oscillator (phase bits
+23-16) and envelope are readable at $D41B/$D41C. Paddle reads ($D419/$D41A) return $FF.
 
-The mixer scales each voice by its envelope, sums all three, divides by 3 for headroom,
-and applies the master volume ($D418 bits 0-3). Voice 3 can be disconnected from the mix
-via $D418 bit 7.
+The mixer scales each voice by its envelope, divides by 3 for headroom, and applies the
+master volume ($D418 bits 0-3). Voice 3 can be disconnected from the mix via $D418 bit 7.
+$D417 bits 0-2 route voices 1-3 through the filter; unrouted voices bypass it and are
+mixed back in after mode selection.
 
-The Chamberlin state-variable filter runs once per cycle. Filter mode is selected by
-$D418 bits 4-6 (LP/BP/HP); no mode bits bypass the filter. Filter states are clamped
-to [-2, +2].
+The Chamberlin state-variable filter runs once per cycle, with cutoff from $D415/$D416
+through a LUT and resonance from $D417 bits 4-7. Filter mode is selected by $D418 bits
+4-6 (LP/BP/HP); no mode bits bypass the filter entirely. Filter states are clamped to
+[-2, +2].
 
 Audio reaches the host via a lock-free SPSC ring buffer. A fractional cycle accumulator
 converts PAL (985248 Hz) or NTSC (1022727 Hz) machine cycles to the host sample rate
@@ -2158,9 +2172,9 @@ converts PAL (985248 Hz) or NTSC (1022727 Hz) machine cycles to the host sample 
 continues to advance. The SDL audio callback reads from the ring buffer on a separate
 thread; it never calls runtime or machine code.
 
-**SID deferred:** per-voice filter routing ($D417 bits 0-2), exact 6581/8580
-combined-waveform analog blending, ring modulation and oscillator sync, and paddle input
-beyond the not-connected policy.
+**SID deferred:** exact 6581 combined-waveform analog blending (a deterministic
+approximation is used), runtime 8580 switching, and paddle input beyond the
+not-connected policy. The model is not bit-perfect analog 6581.
 
 ### Disk
 
@@ -2283,5 +2297,5 @@ geometry is one click away in either mode.
 
 ## Versions
 
-9 July 2026
-:   The 87 hours into it version.  Not a release yet.
+15 July 2026
+:   Version 1.0 - Around 120 hours into the project.

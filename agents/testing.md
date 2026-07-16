@@ -8,7 +8,7 @@ When verification is explicitly authorized, run from the repository root:
 ctest --test-dir build --output-on-failure
 ```
 
-The repository owner reports the current agent baseline as 49/49 passing, including
+The repository owner reports the current agent baseline as 51/51 passing, including
 the longer real 1541 ROM/IEC, G64, Arkanoid, and Robocop paths. Do not rebuild or
 rerun the suite merely to validate these handoffs when another agent is actively
 working in the tree; use the owner-provided baseline unless explicitly asked to

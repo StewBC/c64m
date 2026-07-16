@@ -21,7 +21,7 @@ The integrated two-pass 6502 assembler lets you assemble, and run code without l
 
 Loading and saving host files is done from the Machine tab: you can load a PRG at any address, optionally reset the machine before loading, repair BASIC pointers after load, and save raw memory ranges or BASIC programs back to the host.
 
-SID audio is functional — three voices, ADSR envelopes, waveform generation, a state-variable filter, and voice 3 read-back — though some hardware-specific behaviors (filter routing per voice, ring modulation, oscillator sync, analog waveform blending) remain deferred.
+SID audio is functional — three voices, ADSR envelopes, waveform generation, hard sync and ring modulation, per-voice filter routing, a state-variable filter, and voice 3 read-back — though some hardware-specific behaviors (analog waveform blending, runtime 8580 switching, paddles) remain deferred.
 
 The manual is also online here: [c64m Manual](./manual/manual.md)  
 There's a details section with a lot more [technical details.](./manual/manual.md#Details)  

@@ -11,8 +11,14 @@ APIs under `src/util/` before broad use.
 logs live under `md-files/corpus/cia-timing/`.
 
 ## Contents
+- `VICE project's testprogs`
+  - Upstream: <https://sourceforge.net/p/vice-emu/code/HEAD/tree/testprogs/CIA/>
+  - License: Test programs sourced from the VICE project's testprogs repository,
+     used here for CIA timing reference/validation only, not redistributed as
+     part of c64m's build. VICE is licensed GPLv2; no separate license file
+     accompanies the testprogs subtree.
 - `C64_TrueType_v1.2.1-STYLE`
-  - Upstteam: <http://style64.org/c64-truetype>
+  - Upstream: <http://style64.org/c64-truetype>
   - License: http://style64.org/c64-truetype/license
 - `stb/stb_ds.h`
   - Upstream: <https://github.com/nothings/stb>
