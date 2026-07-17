@@ -193,11 +193,58 @@ nothing, so an idle-timeout read returns immediately with `g` still running, and
 your next command then breaks in at a random PC. Wait for output; then drain the
 trailing bytes on a short idle.
 
+**A single monitor playback file is often the safest deterministic driver.**
+`-moncommands <file>` can own the complete run: set the initial breakpoint,
+`g`, attach or swap media after the stop, replace breakpoints, collect state,
+take the screenshot, and finish with `quit`. This avoids a connection race and
+keeps one monitor session alive for the whole process. A representative shape is:
+
+```text
+break <first-marker>
+g
+attach "<disk-path>" 8
+delete <checkpoint-id>
+break <scene-marker>
+g
+io d000
+screenshot "/private/tmp/vice-frame.png" 2
+quit
+```
+
+**Monitor numbers default to hexadecimal.** This includes checkpoint crossing
+counts: `ignore 1 78` ignores 0x78 = 120 hits, while `ignore 1 120` ignores
+0x120 = 288 hits. Convert intended decimal counts explicitly instead of assuming
+the monitor parses them as decimal.
+
+**Checkpoint IDs can be reused after deletion.** After `delete 1`, the next
+`break` may also be checkpoint 1; it is not necessarily checkpoint 2. Read the
+creation/stop output or checkpoint list before issuing `ignore`, `enable`, or
+`delete` against a presumed ID.
+
+**Monitor output needs the monitor log, not the general emulator log.** Use
+`-monlog -monlogname /private/tmp/vice-monitor.log` with `-moncommands` when the
+playback contains `io`, memory dumps, or register queries. `-logfile` captures
+the general VICE log but not those monitor command results. Keep both logs and
+all generated captures outside the repository.
+
+**`io d000` is richer than a `$D000-$D02E` memory dump.** The VIC-II monitor dump
+includes raster cycle/line, video mode, scroll values, RC, idle state,
+VC/VCBASE/VMLI, video/charset or bitmap bases, and sprite DMA/display state.
+Capture it at the first divergent raster point; plain register bytes cannot
+answer whether the graphics sequencer or a sprite is producing a pixel.
+
 **`screenshot "<file>" 2` writes PNG (format 2); the default is BMP.** A bare
 `screenshot "<file>"` looked like a silent no-op (BMP bytes in a `.png` name / not
 where expected). Also: screenshotting immediately at a raster-0 / IRQ-entry
 breakpoint captures the *previous* frame's buffer — advance a few frames (re-`g`
 with the breakpoint armed) before grabbing the scene.
+
+**Raw screenshots still need alignment before comparison.** VICE's screenshot
+viewport can have a different vertical crop from c64m's full raw PAL/NTSC frame,
+and their configured palettes need not use identical RGB values. Align using
+visible raster boundaries and compare geometry or scene-color classes. Do not
+declare equality or divergence from a whole-image hash, exact RGB values, or a
+scaled host screenshot with CRT scanlines.
 
 **The cycle-exact VIC-II core is `src/viciisc/`.** x64sc uses it, not the older
 `src/vicii/`. Border/timing ground truth lives in
@@ -205,4 +252,4 @@ with the breakpoint armed) before grabbing the scene.
 flag table in `src/viciisc/vicii-chip-model.c` (`cycle_tab_pal`/`cycle_tab_ntsc`).
 Main-border flip-flop: right set at cycle 57 (CSEL=1) / 56 (CSEL=0), left clear at
 17 (CSEL=1) / 18 (CSEL=0), same cycles PAL and NTSC, sampled *before* the CPU
-store. See `eod-handoff.md` for how this drove the EoD side-border fix.
+store.
