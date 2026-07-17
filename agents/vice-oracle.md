@@ -126,3 +126,50 @@ Run it from the VICE source directory with:
 Use this locally built version of VICE when additional instrumentation,
 logging, tracing, or internal state inspection is required. Source changes can
 be made directly in the VICE tree and tested by rebuilding src/x64sc.
+
+The locally built binary does not find its ROMs on its own. Pass the installed
+data directory:
+
+```sh
+./src/x64sc -directory /Applications/vice-arm64-gtk3-3.10/VICE.app/Contents/Resources/share/vice ...
+```
+
+## Comparing c64m against VICE: traps that produce false findings
+
+Each of these produced a confident, wrong conclusion during the Edge of Disgrace
+investigation. None is an emulator bug.
+
+**VICE's default device set is not c64m's.** VICE enables **only unit 8** unless
+`-drive9type` is given (`iecbus_cpu_write_conf1`, "only the first disk unit is
+enabled"). c64m loads a 1541 ROM into both drive objects. Before concluding that
+a bus difference is a c64m bug, confirm both sides have the same devices on the
+bus — an idle second drive still answers ATN by pulling DATA. See
+`disk-iec1541.md`.
+
+**The monitor STOPWATCH is not `maincpu_clk`.** STOPWATCH counts from emulator
+start and straight through the reset that `-autostart` performs; `maincpu_clk`
+restarts at 0 on that reset. Comparing STOPWATCH against a c64m cycle count
+invents a ~3x discrepancy out of nothing. Instrument `maincpu_clk` if you need a
+comparable clock.
+
+**`-warp` runs ahead of your breakpoint.** Emulation starts at launch, so by the
+time a script connects and arms a breakpoint, VICE may already be tens of
+millions of cycles in. A gap between two events measured this way is an artifact
+of when you armed the breakpoint, not demo behaviour.
+
+**Attach is silent, and the log is buffered.** `attach "<file>" <dev>` prints
+nothing on the monitor socket; the `Unit 8 drive 0: D64 disk image attached:`
+line only appears with `-verbose`, and VICE's stdout is block-buffered, so
+`SIGTERM` discards it — a working attach looks like a no-op. Use `stdbuf -o0 -e0`
+and shut down with the monitor's `quit`. Attach is also ignored while autostart
+is still running: check the PC first.
+
+**Never reconnect the remote monitor.** Connecting breaks into the monitor and
+freezes emulation; disconnecting and reconnecting wedges VICE into an endless
+`vice_network_send: Broken pipe`. Hold one connection for the session and re-enter
+via breakpoints. Never probe the port with `nc -z`.
+
+**A breakpoint on a poll loop is not a progress detector.** A loop the target
+executes continuously re-hits within cycles whether or not the event happened.
+Pick a marker that is only on the post-event path (for EoD: `$020C` is only ever
+executed at the swap prompt, and `$028A` only at depack completion).
