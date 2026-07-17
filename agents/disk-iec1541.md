@@ -35,6 +35,21 @@ intercepted at the DOS job layer; writes honor read-only mounts and mark slots d
 The DOS command/error channel supports scratch, rename, validate, initialize,
 format, and status through the ROM plus the FORMT intercept.
 
+### Which drives sit on the IEC bus
+
+A 1541 ROM is loaded into both drive objects, but **device 9 only drives the IEC
+bus once a disk is mounted on it** (`c64_drive9_bus_pull()` in `c64.c` gates both
+`c64_refresh_iec_external_pull()` and `c64_get_iec_pull_excluding_drive()`).
+Device 8 is always present. This mirrors VICE, whose default `drive9type` is none,
+so it resolves to `iecbus_cpu_write_conf1` — "only unit 8 enabled".
+
+This is not cosmetic. An idle 1541 still answers ATN by pulling DATA through the
+ATN acknowledge gate (`DATA = PB1 | (ATN XOR ATNA)`, see `c1541_iec_pull_from_orb`).
+A drive the user never asked for therefore clamps DATA low on every ATN assert,
+which destroys loaders that use ATN as a transfer clock — it corrupted Edge of
+Disgrace's post-swap streaming depacker while leaving CLK and the delivered byte
+stream perfect, so only the depacked output was wrong.
+
 ## Optional media path
 
 `[disk] media_1541=1` requires `emulate_1541=1`. It provides D64-to-GCR track

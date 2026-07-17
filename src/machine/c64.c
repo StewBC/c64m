@@ -50,11 +50,26 @@ static void c64_disk_activity_clear_all(c64_t *machine) {
     }
 }
 
+/* Device 9 only sits on the IEC bus once the user has actually attached a disk
+   to it. A 1541 ROM is loaded into both drive objects regardless, but a drive
+   the user never asked for must not drive the bus: an idle 1541 still answers
+   ATN by pulling DATA through the ATN acknowledge gate, which corrupts loaders
+   that use ATN as a transfer clock (Edge of Disgrace). VICE models the same
+   thing through the drive *type* — its default drive9type is none, so it
+   resolves to iecbus_cpu_write_conf1, "only unit 8 enabled". Drive 8 is always
+   present, matching VICE's default drive8type of 1541. */
+static uint8_t c64_drive9_bus_pull(const c64_t *machine) {
+    if (!machine->drives[1].mounted) {
+        return 0;
+    }
+    return machine->iec_external_pull_drive9;
+}
+
 static void c64_refresh_iec_external_pull(c64_t *machine) {
     machine->iec_external_pull = c64_iec_line_mask(
         machine->iec_external_pull_other |
         machine->iec_external_pull_drive8 |
-        machine->iec_external_pull_drive9);
+        c64_drive9_bus_pull(machine));
     c64_bus_refresh_vic_bank_base(&machine->bus);
 }
 
@@ -1830,7 +1845,7 @@ uint8_t c64_get_iec_pull_excluding_drive(c64_t *machine, int device_number) {
         pull = (uint8_t)(pull | machine->iec_external_pull_drive8);
     }
     if (device_number != 9) {
-        pull = (uint8_t)(pull | machine->iec_external_pull_drive9);
+        pull = (uint8_t)(pull | c64_drive9_bus_pull(machine));
     }
     return c64_iec_line_mask(pull);
 }
