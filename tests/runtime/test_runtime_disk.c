@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "runtime_client.h"
+#include "runtime_internal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,6 +32,13 @@ static void expect_true(const char *name, bool value) {
 static void expect_u8(const char *name, uint8_t expected, uint8_t actual) {
     if (expected != actual) {
         fprintf(stderr, "%s: expected %u, got %u\n", name, expected, actual);
+        exit(1);
+    }
+}
+
+static void expect_int(const char *name, int expected, int actual) {
+    if (expected != actual) {
+        fprintf(stderr, "%s: expected %d, got %d\n", name, expected, actual);
         exit(1);
     }
 }
@@ -99,10 +107,11 @@ static void drain_runtime_events(runtime_client *client) {
     }
 }
 
-static runtime *start_runtime(runtime_client **out_client) {
+static runtime *start_runtime_ex(runtime_client **out_client, bool autorun) {
     runtime_config config = {
         .system_rom_path = "runtime_disk_64c.bin",
         .char_rom_path = "runtime_disk_character.bin",
+        .autorun = autorun,
     };
     runtime *rt;
     runtime_client *client;
@@ -126,6 +135,10 @@ static runtime *start_runtime(runtime_client **out_client) {
 
     *out_client = client;
     return rt;
+}
+
+static runtime *start_runtime(runtime_client **out_client) {
+    return start_runtime_ex(out_client, false);
 }
 
 static void stop_runtime(runtime *rt, runtime_client *client) {
@@ -238,8 +251,35 @@ static void test_mount_replace_unmount_and_failure(void) {
     stop_runtime(rt, client);
 }
 
+static void test_autorun_does_not_rearm_on_disk_replacement(void) {
+    runtime *rt;
+    runtime_client *client;
+    char blank_path[512];
+    char odell_path[512];
+
+    snprintf(blank_path, sizeof(blank_path), "%s/assets/disks/blank.d64", C64M_SOURCE_DIR);
+    snprintf(odell_path, sizeof(odell_path), "%s/assets/disks/ODELLLAK.D64", C64M_SOURCE_DIR);
+
+    rt = start_runtime_ex(&client, true);
+
+    expect_true("autorun initial mount", runtime_client_mount_d64(client, 8, blank_path));
+    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_int("empty drive mount arms autorun", 1, rt->autorun_d64_phase);
+
+    /* The test runtime is paused, so clear the pending bootstrap without a
+       concurrent execution loop consuming it. A replacement must leave it
+       cleared instead of scheduling a host keyboard-buffer injection. */
+    rt->autorun_d64_phase = 0;
+    expect_true("autorun replacement mount", runtime_client_mount_d64(client, 8, odell_path));
+    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
+    expect_int("replacement does not rearm autorun", 0, rt->autorun_d64_phase);
+
+    stop_runtime(rt, client);
+}
+
 int main(void) {
     write_runtime_roms();
     test_mount_replace_unmount_and_failure();
+    test_autorun_does_not_rearm_on_disk_replacement();
     return 0;
 }

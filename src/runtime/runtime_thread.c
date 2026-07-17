@@ -806,6 +806,19 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
     char disk_id[3];
     char dos_type[3];
     uint16_t free_blocks = 0;
+    bool arm_autorun = false;
+
+    /* Autorun is a bootstrap for inserting media into an empty device 8, not
+       a property of every later disk replacement. Multi-disk software replaces
+       the mounted image while its own code is live; re-injecting LOAD"*",8 into
+       the KERNAL keyboard buffer can overwrite that code ($0277-$0280 in Edge
+       of Disgrace). Preserve autorun for a fresh/explicitly empty drive, while
+       treating an in-place mount as the disk swap it is. */
+    if (rt->autorun &&
+        command->data.mount_d64.device == C64_DRIVE_MIN_DEVICE &&
+        !rt->machine.drives[0].mounted) {
+        arm_autorun = true;
+    }
 
     if (!runtime_flush_disk_slot(rt, command->data.mount_d64.device, true)) {
         return;
@@ -845,7 +858,7 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         }
         free(bytes);
         runtime_publish_drive_status(rt, command->data.mount_d64.device);
-        if (rt->autorun && command->data.mount_d64.device == C64_DRIVE_MIN_DEVICE) {
+        if (status_result == C64_DRIVE_STATUS_OK && arm_autorun) {
             rt->autorun_d64_phase = 1;
         }
         return;
@@ -942,7 +955,7 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
     free(bytes);
     runtime_publish_drive_status(rt, command->data.mount_d64.device);
 
-    if (rt->autorun && command->data.mount_d64.device == C64_DRIVE_MIN_DEVICE) {
+    if (status_result == C64_DRIVE_STATUS_OK && arm_autorun) {
         rt->autorun_d64_phase = 1;
     }
 }

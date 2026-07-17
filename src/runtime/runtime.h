@@ -34,7 +34,8 @@ typedef struct runtime_config {
        silence, proving the audio path without needing SID. */
     int audio_smoke;
     /* When true, automatically inject RUN after a PRG/BASIC load, or
-       LOAD"*",8 + RUN after a D64 mount on device 8. */
+       LOAD"*",8 + RUN after mounting D64/G64 media into an empty device 8.
+       Replacing already-mounted media is a disk swap and does not autorun. */
     bool autorun;
 } runtime_config;
 

@@ -97,6 +97,11 @@ Disk swap (invalidate then rebuild) starts a VICE-style attach blanking window
 elapses. Inter-sector gaps on synthetic D64 tracks match VICE zone sizes
 (8/17/12/9 by density).
 
+Runtime autorun (`-a`) bootstraps media mounted into an empty device 8 with
+`LOAD"*",8` / `RUN`. Replacing an image already mounted on device 8 is a disk
+swap and must not re-arm autorun: injecting the command through the KERNAL
+keyboard buffer can overwrite live multi-disk loader code at `$0277-$0280`.
+
 Read path matches VICE’s split: G64 uses the flux-transition + UE7/UF4 decoder
 (`rotation_1541_gcr`); synthetic D64 uses NRZ GCR bitstream + immediate BYTE
 READY (`rotation_1541_simple`). BYTE READY is a sticky SO edge applied after
