@@ -1478,7 +1478,8 @@ static void test_live_side_border_reveals_sprite(void) {
 }
 
 /* Main-border strips always use $D020 (even when DEN=0). Leave the vertical
-   FF clear via open-bottom, then DEN=0: interior blanks to B0C, sides $D020. */
+   FF clear via open-bottom, then begin a DEN=0 frame: the inactive sequencer's
+   idle output is B0C here, while the closed side strips remain $D020. */
 static void test_den_clear_main_border_keeps_d020_full_height(void) {
     c64_t     machine;
     c64_frame frame;
@@ -1739,6 +1740,46 @@ static void test_den_clear_blanks_text_display(void) {
                frame.pixels[0]);
 }
 
+/* DEN is not a live graphics blanking input. Once the top border and display
+   sequencer have opened with DEN=1, clearing DEN mid-display must leave the
+   running graphics pipeline visible. Edge of Disgrace does this on every line
+   while changing $D018 to form its background checker. */
+static void test_den_clear_mid_display_keeps_graphics_pipeline(void) {
+    c64_t machine;
+    c64_frame frame;
+    uint64_t abs;
+    uint32_t i;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* arm bad lines and open top */
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, charset $2000 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    for (i = 0; i < 1000u; i++) {
+        machine.bus.ram[0x0400u + i] = 1u;
+        machine.bus.color_ram[i] = 5u;
+    }
+    for (i = 0; i < 8u; i++) {
+        machine.bus.ram[0x2008u + i] = 0xffu;
+    }
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, keep live VC/RC */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("den clear mid-display frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("den clear mid-display preserves foreground graphics",
+               TEST_PALETTE_5,
+               frame.pixels[100 * C64_FRAME_WIDTH + 24]);
+}
+
 static void test_den_clear_keeps_sprite_visible(void) {
     c64_t machine;
     c64_frame frame;
@@ -1749,7 +1790,8 @@ static void test_den_clear_keeps_sprite_visible(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08);
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    /* Open vertical so main can clear; then DEN=0 blanks interior to B0C. */
+    /* Open vertical so main can clear; the following DEN=0 frame has no active
+       display sequence, so its idle-zero interior is B0C. */
     abs = 0;
     while (!(machine.vic.timing.raster_line == 248u &&
              machine.vic.timing.cycle_in_line == 0u)) {
@@ -1776,7 +1818,7 @@ static void test_den_clear_keeps_sprite_visible(void) {
                frame.pixels[51 * C64_FRAME_WIDTH + 24]);
 }
 
-static void test_den_clear_keeps_sprite_collisions(void) {
+static void test_den_clear_idle_has_no_sprite_background_collision(void) {
     c64_t machine;
     c64_frame frame;
 
@@ -1790,7 +1832,11 @@ static void test_den_clear_keeps_sprite_collisions(void) {
     setup_solid_sprite(&machine, 1, 0x0380, 24, 50, 10);
 
     make_live_frame(&machine, &frame, "den clear collision frame");
-    expect_u8("den clear sprite-background collision", 0x03, vicii_read_register(&machine.vic, 0xd01f));
+    /* With DEN low from the start there is no live display sequence. The idle
+       pixel is background, so the overlapping sprites collide with each other
+       but not with raster-derived foreground graphics. */
+    expect_u8("den clear idle has no sprite-background collision", 0x00,
+              vicii_read_register(&machine.vic, 0xd01f));
     expect_u8("den clear sprite-sprite collision", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
@@ -3391,8 +3437,9 @@ int main(void) {
     test_allow_bad_lines_latched_at_line_30();
     test_set_vborder_latch_sticky_until_top();
     test_den_clear_blanks_text_display();
+    test_den_clear_mid_display_keeps_graphics_pipeline();
     test_den_clear_keeps_sprite_visible();
-    test_den_clear_keeps_sprite_collisions();
+    test_den_clear_idle_has_no_sprite_background_collision();
     test_d016_unused_high_bits_read_as_1();
     test_color_register_high_nibble_reads_as_1();
     test_unused_register_block_reads_ff();

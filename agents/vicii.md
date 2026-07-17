@@ -35,7 +35,7 @@ Phi2 schedule; frontend frames are copies.
 - Unpainted pixels are filled with $D020. Everything outside the display window
   is border, and that includes the DEN=0 case: the vertical border flip-flop
   never opens, so the border covers the whole screen rather than showing B0C.
-- Text, bitmap, multicolor, ECM, invalid modes, border state, DEN-off blanking,
+- Text, bitmap, multicolor, ECM, invalid modes, border state, DEN/bad-line state,
   sprites, priority, expansion, multicolor, pointers/data fetches, collisions,
   raster IRQ, and timed register writes are implemented.
 - The bus scheduler distinguishes Phi1 idle/graphics/sprite-pointer work from
@@ -45,11 +45,12 @@ Phi2 schedule; frontend frames are copies.
 - Live rendering tracks main and vertical border flip-flops. The current source
   follows the Bauer 3.9 rule used by the `lft-nine` work: main border covers
   sprites with `$D020`; vertical border blanks graphics to B0C and does not blank
-  sprites. DEN=0 blanks graphics to B0C the same way, sprites still muxing - but
-  it does NOT put B0C in the border. Main border can only clear while the
-  vertical border flip-flop is inactive, and DEN=0 keeps that flip-flop set, so a
-  DEN=0 frame is `$D020` throughout and its B0C never reaches the screen. The B0C
-  is visible only where DEN is cleared mid-frame, after the border has opened.
+  sprites. DEN gates bad-line arming and the top vertical-border compare; it is
+  not a live graphics blanking signal. Clearing DEN after the border/display
+  sequencer has opened leaves the running VC/RC graphics pipeline visible. With
+  DEN clear from the start, the vertical border never opens and `$D020` covers
+  the frame; if software has already opened the border, idle/display output and
+  sprites can remain visible underneath it.
 - Horizontal-border checks use the VICE `check_hborder` cycles and a delayed
   output pipeline. c64m retains two CSEL samples at the right compare because
   its CPU/VIC projection currently places the same VICE cycle-56 store at c64m
@@ -101,7 +102,8 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   sets) and `vertical_border_active` (applied at cycle 0 and left compare).
   Top+DEN clears both. This is required for the classic RSEL lower-border open.
 - Bad lines: DEN is sampled on raster `$30` into `allow_bad_lines` for the rest
-  of `$30–$F7` (Bauer/VICE). Live DEN still blanks graphics and gates top open.
+  of `$30–$F7` (Bauer/VICE). Live DEN gates top open but does not blank an
+  already-running graphics pipeline.
 - g-access still discards the fetched byte; the paint path re-reads RAM live, so
   latch fidelity for same-cycle CPU writes is not modeled. Snapshot rendering is
   still approximate.
@@ -110,9 +112,9 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   not drop it without another IEC fix — it is covered by `c64_vicii` and
   `c64_robocop_g64`.
 - General cycle-perfect demo-scene compatibility is not claimed. `lft-nine` is a
-  selected milestone target. Edge of Disgrace: open-border register windows
-  (`DEN=1 RSEL=0 CSEL=0`) now full-bleed; residual chequer animation and some
-  DEN=0 solid phases still differ from VICE.
+  selected milestone target. Edge of Disgrace's checker requires both the
+  full-bleed side-border windows and live VC/RC graphics to continue while DEN
+  is low; phase `$01/$79` has been compared directly with a VICE raw screenshot.
 
 ## Verification
 

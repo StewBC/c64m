@@ -379,16 +379,9 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y);
 static vicii_line_ctx vicii_live_line_ctx(const vicii *v) {
     vicii_line_ctx c;
 
-    /* DEN=0 produces no bad lines, so the sequencer never enters display state.
-       The emulator still evaluates background graphics in that case to preserve
-       the documented DEN=0 collision/foreground behaviour (VICII.md); the visible
-       output is blanked to B0C downstream by the DEN handling. Fall back to the
-       geometric mapping there, matching the pre-counter renderer exactly. FLI
-       needs DEN=1, so this fallback never affects the bad-line-driven path. */
-    if ((v->registers[0x11] & 0x10u) == 0u) {
-        return vicii_snapshot_line_ctx(v, v->timing.raster_line);
-    }
-
+    /* The live renderer always follows the sequencer. DEN is sampled to arm bad
+       lines and gate the top border, but clearing it later does not replace the
+       running VC/RC state with a raster-derived screen address. */
     c.display_active     = v->display_state;
     c.cell_base          = v->vc_base;
     c.row_in_cell        = v->rc;
@@ -703,13 +696,6 @@ static void vicii_latch_sprite_line_state(vicii *v) {
     }
 }
 
-static vicii_bg_pixel vicii_apply_den_blanking(bool den, uint32_t b0c, vicii_bg_pixel pixel) {
-    if (!den) {
-        pixel.color = b0c;
-    }
-    return pixel;
-}
-
 /* Idle-state background pixel. Vertically outside the display window the VIC is
    in idle state: g-accesses read a fixed byte from $3FFF (or $39FF when ECM=1)
    and are displayed with the c-access data forced to 0. This is what shows
@@ -782,7 +768,6 @@ static vicii_bg_pixel vicii_background_pixel(
     uint32_t b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
     uint8_t mode;
     uint8_t xscroll;
-    bool den;
     uint32_t sx_raw;
     uint32_t sx;
     uint32_t row_in_cell;
@@ -837,11 +822,10 @@ static vicii_bg_pixel vicii_background_pixel(
                      ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
     xscroll = v->registers[0x16] & 0x07u;
-    den = (v->registers[0x11] & 0x10u) != 0u;
     sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
 
     if (mode >= 5u) {
-        return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[0], false));
+        return vicii_bg_pixel_make(vicii_palette_argb[0], false);
     }
 
     /* Outside the active character-row sequence this line is blank (B0C). This
@@ -887,7 +871,7 @@ static vicii_bg_pixel vicii_background_pixel(
             uint8_t fg = color_reg;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (glyph & bit) {
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true);
             }
             return vicii_bg_pixel_make(b0c, false);
         }
@@ -901,7 +885,7 @@ static vicii_bg_pixel vicii_background_pixel(
             if ((color_nib & 0x08u) == 0u) {
                 uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
                 if (glyph & bit) {
-                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true));
+                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
                 }
                 return vicii_bg_pixel_make(b0c, false);
             } else {
@@ -910,11 +894,11 @@ static vicii_bg_pixel vicii_background_pixel(
                 case 0u:
                     return vicii_bg_pixel_make(b0c, false);
                 case 1u:
-                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(b1c, true));
+                    return vicii_bg_pixel_make(b1c, true);
                 case 2u:
-                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(b2c, true));
+                    return vicii_bg_pixel_make(b2c, true);
                 default:
-                    return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x07u], true));
+                    return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x07u], true);
                 }
             }
         }
@@ -925,9 +909,9 @@ static vicii_bg_pixel vicii_background_pixel(
             uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (bdata & bit) {
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
             }
-            return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], false));
+            return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], false);
         }
 
     case 3u:
@@ -940,11 +924,11 @@ static vicii_bg_pixel vicii_background_pixel(
             case 0u:
                 return vicii_bg_pixel_make(b0c, false);
             case 1u:
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
             case 2u:
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[vm_byte & 0x0fu], true);
             default:
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
             }
         }
 
@@ -958,7 +942,7 @@ static vicii_bg_pixel vicii_background_pixel(
             uint32_t ecm_bg;
 
             if (glyph & bit) {
-                return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(vicii_palette_argb[fg_nib & 0x0fu], true));
+                return vicii_bg_pixel_make(vicii_palette_argb[fg_nib & 0x0fu], true);
             }
 
             switch (ecm_sel) {
@@ -967,7 +951,7 @@ static vicii_bg_pixel vicii_background_pixel(
             case 2u:  ecm_bg = b2c; break;
             default:  ecm_bg = b3c; break;
             }
-            return vicii_apply_den_blanking(den, b0c, vicii_bg_pixel_make(ecm_bg, false));
+            return vicii_bg_pixel_make(ecm_bg, false);
         }
 
     default:
@@ -1021,10 +1005,8 @@ static void vicii_note_sprite_collisions(vicii *v, vicii_bg_pixel bg, const vici
    *not* blank sprites. Open upper/lower border therefore shows sprites over
    the (graphics) background.
 
-   DEN=0 blanks *graphics* (and vertical-border output) to $D021, but the main
-   border flip-flop still outputs $D020. VICE draws left/right border strips
-   with border_color regardless of DEN; blanking DEN only to B0C on main-border
-   pixels made lft-nine's side frame go blue wherever spr 5/7 were absent. */
+   DEN controls bad-line eligibility and the top vertical-border compare; it
+   does not directly blank an already-open graphics pipeline. */
 static uint32_t vicii_compose_pixel(
     vicii *v,
     bool main_border,
@@ -1034,16 +1016,14 @@ static uint32_t vicii_compose_pixel(
     const vicii_sprite_pixel sprites[8])
 {
     int n;
-    bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
-
     vicii_note_sprite_collisions(v, bg, sprites);
 
     if (main_border) {
         return border_color;
     }
 
-    /* Vertical border and DEN=0 both force graphics to B0C; sprites still mux. */
-    if (vertical_border || !den) {
+    /* Vertical border forces graphics to B0C; sprites still mux. */
+    if (vertical_border) {
         bg.color = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
         bg.foreground = false;
     }
@@ -1082,7 +1062,6 @@ static uint32_t vicii_live_pixel(
     vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
     vicii_sprite_pixel sprites[8];
     bool any_sprite_enabled = false;
-    bool den = (v->registers[VICII_REG_CONTROL_1] & 0x10u) != 0u;
     int n;
 
     /* Paint from the line-latched row (sprite_visible), not from $D015.
@@ -1099,7 +1078,7 @@ static uint32_t vicii_live_pixel(
         if (main_border) {
             return border_color;
         }
-        if (vertical_border || !den) {
+        if (vertical_border) {
             return b0c;
         }
         return bg.color;
