@@ -90,3 +90,39 @@ Any agent task that:
 
 should follow this file. If VICE "doesn't start the game," check
 `-autostartprgmode 1` and `-autoload` first.
+
+## Building VICE from Source
+
+The VICE source tree is located at:
+
+    /Users/swessels/Develop/svm/vice-emu-code/vice
+
+It is already configured and can be built with:
+
+    cd /Users/swessels/Develop/svm/vice-emu-code/vice
+    make -j"$(sysctl -n hw.ncpu)"
+
+The build currently ends with the following documentation-generation error:
+
+    generating html documentation...
+    Bash version 4 or higher is required
+    On macOS, install bash via macports or homebrew and try again.
+    make[2]: *** [vice_foot.html] Error 1
+    make[1]: *** [all-recursive] Error 1
+    make: *** [all-recursive] Error 1
+
+This error occurs after the emulator binaries have been built successfully. It
+is caused by the HTML documentation step and does not indicate that the x64sc
+build failed.
+
+After the build, the executable is located at:
+
+    src/x64sc
+
+Run it from the VICE source directory with:
+
+    ./src/x64sc [optional command line switches]
+
+Use this locally built version of VICE when additional instrumentation,
+logging, tracing, or internal state inspection is required. Source changes can
+be made directly in the VICE tree and tested by rebuilding src/x64sc.
