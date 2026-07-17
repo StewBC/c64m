@@ -88,9 +88,20 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 
 - Light pen `$D013/$D014` is stubbed.
 - Last-byte-on-bus behavior and analog/half-cycle AEC/RDY are not modeled.
-- Idle g-access and some snapshot rendering are approximations.
+- Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
+  0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
+  stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
+- g-access still discards the fetched byte; the paint path re-reads RAM live, so
+  latch fidelity for same-cycle CPU writes is not modeled. Snapshot rendering is
+  still approximate.
+- Badline BA uses RELEASE=3 (sprite windows keep RELEASE=2) for dual-bit IEC
+  resume (Robocop). That is a deliberate divergence from classic RELEASE=2; do
+  not drop it without another IEC fix — it is covered by `c64_vicii` and
+  `c64_robocop_g64`.
 - General cycle-perfect demo-scene compatibility is not claimed. `lft-nine` is a
-  selected milestone target and remains a focused regression/diagnostic area.
+  selected milestone target. Edge of Disgrace remains a visual stress case:
+  residual right-edge garbage, bottom outline stipple, and mid-effect shred are
+  still open (disk/depack path matches VICE at `$028A`).
 
 ## Verification
 

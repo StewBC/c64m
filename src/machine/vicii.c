@@ -723,20 +723,29 @@ static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uin
     uint32_t sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
     uint32_t phase = (sx_raw - (uint32_t)xscroll);
 
-    if (mcm) {
+    /* Idle forces c-access data to 0 (VICE vbuf/cbuf = 0). Multicolor *text*
+       only uses 2-bit pixels when colour-RAM bit 3 is set; with cbuf=0 that
+       never holds, so MCM text idle is hires with fg colour 0 — same as VICE
+       draw_graphics when cbuf_reg==0 && !BMM. Treating MCM idle as always
+       multicolor made the ghost byte render as 2-dot pairs (stippled open-
+       border lines in Edge of Disgrace). Multicolor *bitmap* idle stays
+       paired: vbuf=0 makes pairs 01/10/11 all colour 0 (black). */
+    if (mcm && bmm) {
         uint8_t pair = (uint8_t)((g >> (6u - (phase & 6u))) & 3u);
         if (pair == 0u) {
             return vicii_bg_pixel_make(b0c, false);
         }
-        /* 01/10/11 all resolve through the zero c-data / colour-RAM to black. */
+        /* 01/10/11 → black via zero vbuf/cbuf; pairs 10/11 are "fg" for coll. */
         return vicii_bg_pixel_make(black, pair >= 2u);
-    } else {
+    }
+
+    {
         uint8_t bit = (uint8_t)(0x80u >> (phase & 7u));
         if (bmm) {
             /* Standard bitmap idle: both nibbles of the zero c-data are black. */
             return vicii_bg_pixel_make(black, (g & bit) != 0u);
         }
-        /* Standard/ECM text idle: set bits take foreground colour 0 (black). */
+        /* Standard/ECM text idle (including MCM=1): set bits → colour 0. */
         if (g & bit) {
             return vicii_bg_pixel_make(black, true);
         }

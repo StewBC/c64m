@@ -1599,6 +1599,44 @@ static void test_live_ghost_byte_respects_xscroll(void) {
                frame3.pixels[100 * C64_FRAME_WIDTH + 350]);
 }
 
+/* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
+   Idle forces cbuf=0, so MCM=1 + BMM=0 idle is still hires (ghost $F0 → four
+   solid fg dots, four bg). Decoding idle as multicolor pairs broke open-border
+   outlines (Edge of Disgrace bottom frame stipple). */
+static void test_live_mcm_idle_ghost_is_hires(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x3fffu] = 0xf0u; /* 11110000 hires */
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 54u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd016, 0x10); /* CSEL=0 open right, keep MCM */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("mcm idle ghost frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    /* Hires $F0: x=344..347 black, x=348..351 blue — not multicolor pairs. */
+    expect_u32("mcm idle hires fg at x=344", TEST_PALETTE_0,
+               frame.pixels[100 * C64_FRAME_WIDTH + 344]);
+    expect_u32("mcm idle hires fg at x=347", TEST_PALETTE_0,
+               frame.pixels[100 * C64_FRAME_WIDTH + 347]);
+    expect_u32("mcm idle hires bg at x=348", TEST_PALETTE_6,
+               frame.pixels[100 * C64_FRAME_WIDTH + 348]);
+    expect_u32("mcm idle hires bg at x=351", TEST_PALETTE_6,
+               frame.pixels[100 * C64_FRAME_WIDTH + 351]);
+}
+
 static void test_den_clear_blanks_text_display(void) {
     c64_t machine;
     c64_frame frame;
@@ -3272,6 +3310,7 @@ int main(void) {
     test_den_clear_main_border_keeps_d020_full_height();
     test_live_side_border_shows_ghost_byte();
     test_live_ghost_byte_respects_xscroll();
+    test_live_mcm_idle_ghost_is_hires();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();
