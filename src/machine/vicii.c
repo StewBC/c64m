@@ -148,6 +148,13 @@ static void vicii_begin_live_frame(vicii *v) {
        upper/lower border draw image data outside the normal display window.
        Forcing it closed every frame re-hid those border sprites. Power-on/reset
        still establishes the closed default via vicii_reset(). */
+
+    /* The horizontal-border pixel pipeline holds at most the last two render
+       cycles. Every visible line is fully flushed within two cycles (long before
+       the last raster line), so nothing carries across the frame boundary; clear
+       it anyway so a freshly begun frame starts empty. */
+    v->hborder_pipe[0].n = 0;
+    v->hborder_pipe[1].n = 0;
 }
 
 bool vicii_init(vicii *v, char *error, size_t error_size) {
@@ -1144,6 +1151,19 @@ static void vicii_apply_vborder_latch(vicii *v) {
     v->vertical_border_active = v->set_vborder;
 }
 
+/* Flush the oldest buffered render span (painted two cycles ago) into the frame,
+   choosing border colour vs. content per pixel from the main border flip-flop as
+   it stands *now* — this is the 2-cycle border-decision delay that lets a timed
+   $D016 CSEL write dodge the right-border compare while keeping normal edges. */
+static void vicii_hborder_flush(vicii *v, bool main_border) {
+    uint8_t i;
+    for (i = 0; i < v->hborder_pipe[0].n; i++) {
+        v->working_frame.pixels[v->hborder_pipe[0].idx[i]] =
+            main_border ? v->hborder_pipe[0].border[i]
+                        : v->hborder_pipe[0].content[i];
+    }
+}
+
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_border_geometry g;
     vicii_line_ctx lc;
@@ -1151,6 +1171,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     uint32_t x0;
     uint32_t x1;
     uint32_t x;
+    uint32_t cyc;
+    bool     check_csel;
+    bool     check_prev_csel;
 
     if (!bus) {
         return;
@@ -1163,19 +1186,53 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     g = vicii_get_border_geometry(v);
     lc = vicii_live_line_ctx(v);
+    cyc = v->timing.cycle_in_line;
+
+    /* CSEL used for this cycle's border check is the value latched at the end of
+       the previous cycle. c64m applies the CPU store before the VIC step, so this
+       reproduces VICE's check_hborder, which samples CSEL *before* the store. */
+    check_csel = v->hborder_prev_csel;
+    check_prev_csel = v->hborder_prev2_csel;
+
+    /* VICE viciisc check_hborder (PAL/NTSC identical cycles). Right compare sets
+       the main flip-flop at cycle 57 (csel=1) or 56 (csel=0); left compare at
+       cycle 17 (csel=1) or 18 (csel=0) applies the vertical-border latch and
+       clears main when the vertical border is inactive. */
+    /* c64m's CPU/VIC projection places the VICE cycle-56 CSEL fall at cycle 56
+       in EoD but at cycle 55 in lft-nine's CIA-synchronised stable raster.  In
+       the latter case CSEL has been low for one render cycle when the CSEL=0
+       compare is reached, while it was still high at the preceding sample.
+       Preserve that in-flight transition rather than mistaking it for a stable
+       38-column compare.  A CSEL=0 value stable for two samples still closes at
+       cycle 56, and the normal CSEL=1 compare remains cycle 57. */
+    if (cyc == (check_csel ? 57u : 56u) &&
+        !(!check_csel && check_prev_csel)) {
+        v->main_border_ff = true;
+    }
+    if (cyc == (check_csel ? 17u : 18u)) {
+        vicii_check_vborder_bottom(v);
+        vicii_check_vborder_top(v);
+        vicii_apply_vborder_latch(v);
+        if (!v->vertical_border_active) {
+            v->main_border_ff = false;
+        }
+    }
+
+    /* Apply the (now-updated) flip-flop to the span painted two cycles ago, then
+       shift the one-cycle-old span into the flush slot. */
+    vicii_hborder_flush(v, v->main_border_ff);
+    v->hborder_pipe[0] = v->hborder_pipe[1];
 
     /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle paints its
        true 8 VIC dots, so buffer_x == VIC X-coordinate and the paint cycle for
        every column matches hardware. Display column 0 (X=24) is drawn at the
-       first c-access cycle (15); each cycle advances X by 8. This replaces the
-       scaled cycle*width/cycles_per_line mapping, which was not dot-anchored and
-       smeared a mid-line $D016 CSEL write across the border-compare columns.
-       Cycles whose dots fall outside the 384-px crop (line start/end H-blank)
-       produce an empty span and paint nothing; every column 0..383 is still
-       painted exactly once per line (PAL cycles 12..59, NTSC 12..59). */
+       first c-access cycle (15); each cycle advances X by 8. Cycles whose dots
+       fall outside the 384-px crop (line start/end H-blank) produce an empty span
+       and paint nothing; every column 0..383 is still painted exactly once per
+       line (PAL cycles 12..59, NTSC 12..59). */
     {
         int32_t xs = (int32_t)VICII_HBORDER_LEFT_40 +
-            ((int32_t)v->timing.cycle_in_line - (int32_t)VICII_CACCESS_FIRST_CYCLE) *
+            ((int32_t)cyc - (int32_t)VICII_CACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
         int32_t xe = xs + (int32_t)VICII_CHARACTER_WIDTH;
         if (xs < 0) xs = 0;
@@ -1185,31 +1242,53 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         x1 = (uint32_t)xe;
     }
 
+    /* Compute this cycle's content pixels (border decision applied later, at
+       flush) and buffer them. Content is the composed graphics/sprites/vertical-
+       border pixel with main_border=false; the border colour is captured at paint
+       time so its own colour_latency is unchanged. */
+    v->hborder_pipe[1].n = 0;
     for (x = x0; x < x1; x++) {
-        /* Main border flip-flop (Bauer 3.9 / VICE check_hborder).
-           Right compare: set main. Left compare: re-check bottom latch, apply
-           set_vborder → vertical, then clear main only if vertical is inactive.
-           A timed $D016 CSEL change moves g.left/g.right and can leave main
-           clear (side border open) for the rest of the line. */
-        if (x == g.right) {
-            v->main_border_ff = true;
-        }
-        if (x == g.left) {
-            vicii_check_vborder_bottom(v);
-            vicii_check_vborder_top(v);
-            vicii_apply_vborder_latch(v);
-            if (!v->vertical_border_active) {
-                v->main_border_ff = false;
-            }
-        }
-        v->working_frame.pixels[y * C64_FRAME_WIDTH + x] =
-            vicii_live_pixel(v, bus, &g, &lc, x, y,
-                             v->main_border_ff, v->vertical_border_active);
+        uint8_t k = v->hborder_pipe[1].n;
+        v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
+        v->hborder_pipe[1].content[k] =
+            vicii_live_pixel(v, bus, &g, &lc, x, y, false, v->vertical_border_active);
+        v->hborder_pipe[1].border[k]  = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+        v->hborder_pipe[1].n = (uint8_t)(k + 1u);
         /* VICE 6569: advance color pipes after each pixel sample so a mid-line
            $D020/$D021 write is visible one pixel later (color_latency). */
         v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
         v->color_pipe_d021 = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
     }
+
+    /* Latch CSEL for the next cycle's pre-store border check. */
+    v->hborder_prev2_csel = v->hborder_prev_csel;
+    v->hborder_prev_csel = (v->registers[0x16] & 0x08u) != 0;
+
+#ifdef C64M_VIC_TRACE
+    {
+        static FILE *brdlog = NULL; static int brd_init = 0;
+        static unsigned long bf0 = 0, bf1 = 0; static unsigned r0 = 0, r1 = 0;
+        if (!brd_init) {
+            const char *p = getenv("C64M_BRDLOG");
+            const char *a = getenv("C64M_BRDLOG_F0"); const char *b = getenv("C64M_BRDLOG_F1");
+            const char *ra = getenv("C64M_BRDLOG_R0"); const char *rb = getenv("C64M_BRDLOG_R1");
+            if (p) brdlog = fopen(p, "wb");
+            if (a) bf0 = strtoul(a, NULL, 10); if (b) bf1 = strtoul(b, NULL, 10);
+            if (ra) r0 = (unsigned)strtoul(ra, NULL, 10); if (rb) r1 = (unsigned)strtoul(rb, NULL, 10);
+            brd_init = 1;
+        }
+        if (brdlog) {
+            unsigned long fr = (unsigned long)v->timing.frame_number;
+            if (fr >= bf0 && fr <= bf1 && y >= r0 && y <= r1) {
+                fprintf(brdlog, "F%lu R%u C%u x0=%u csel=%d chk=%d chk2=%d mbff=%d d16=%02x\n",
+                        fr, y, cyc, x0, (v->registers[0x16] & 8) ? 1 : 0,
+                        check_csel ? 1 : 0, check_prev_csel ? 1 : 0,
+                        v->main_border_ff ? 1 : 0,
+                        (unsigned)v->registers[0x16]);
+            }
+        }
+    }
+#endif
 }
 
 

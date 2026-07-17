@@ -152,6 +152,28 @@ struct vicii {
        per live-rendered pixel after the sample. */
     uint8_t  color_pipe_d020;
     uint8_t  color_pipe_d021;
+
+    /* Horizontal-border pipeline (VICE viciisc check_hborder model). The main
+       border flip-flop is decided by cycle-based checks (PAL/NTSC left cycles
+       17/18, right cycles 56/57, csel-dependent) using the CSEL value latched at
+       the end of the previous cycle (pre-store, matching VICE which checks the
+       border before the CPU store). c64m folds the VIC's ~2-cycle pixel pipeline
+       into its paint anchor, so the border decision must be applied to pixels two
+       cycles earlier than the check: content pixels are buffered and flushed two
+       render cycles late with the then-current flip-flop. This lets a mid-line
+       $D016 CSEL write dodge the right-border compare (open side borders) while
+       keeping normal-screen edges at x=24/344. Two CSEL samples are retained
+       because c64m currently projects VICE's cycle-56 store at cycle 56 in EoD
+       and cycle 55 in lft-nine's CIA-synchronised loop; both are still in flight
+       at the compare, while a stable 38-column value closes normally. */
+    bool     hborder_prev_csel;
+    bool     hborder_prev2_csel;
+    struct {
+        uint8_t  n;
+        uint32_t idx[8];
+        uint32_t content[8];
+        uint32_t border[8];
+    } hborder_pipe[2];
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);

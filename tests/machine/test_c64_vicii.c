@@ -1324,10 +1324,15 @@ static void test_d015_clear_keeps_active_sprite_display(void) {
                frame.pixels[260 * C64_FRAME_WIDTH + 10]);
 }
 
-/* Step B/C main-border flip-flop: a timed $D016 CSEL 1->0 write in the open
-   window (c64m cycle 54, between the RIGHT_38 compare at X=335/cycle 53 and the
-   RIGHT_40 compare at X=344/cycle 55, see C64MVICII_SIDEBORDER.md §2.4) leaves
-   the flip-flop clear, opening the right side border for the rest of the line. */
+/* Step B/C main-border flip-flop: a timed $D016 CSEL 1->0 write at cycle 56 (the
+   VICE viciisc check_hborder open window) leaves the flip-flop clear, opening the
+   right side border for the rest of the line. The right-border check sets the flip-
+   flop at cycle 57 for CSEL=1 and cycle 56 for CSEL=0, sampling the CSEL latched at
+   the end of the previous cycle; a write landing at cycle 56 is 1 through cycle 55
+   (so cycle 56's check, seeing CSEL=1, expects the compare at 57) and 0 by cycle 56
+   (so cycle 57's check, seeing CSEL=0, expects the compare at 56) -- neither fires,
+   and the border stays open. c64m applies this decision through a two-cycle border
+   pipeline so normal edges stay at x=24/344. */
 static void test_live_right_side_border_opens(void) {
     c64_t     machine;
     c64_frame frame;
@@ -1344,9 +1349,10 @@ static void test_live_right_side_border_opens(void) {
     expect_u32("closed right side border is border colour", TEST_PALETTE_2,
                frame.pixels[100 * C64_FRAME_WIDTH + 350]);
 
-    /* Opened: flip CSEL 1->0 at cycle 54 of raster 100. RIGHT_40 (344) is never
-       matched (CSEL is 0 => right compare is 335, already passed), so the flip-flop
-       stays clear and x >= 344 shows background instead of border. */
+    /* Opened: flip CSEL 1->0 at cycle 56 of raster 100. Neither the CSEL=1 right
+       compare (cycle 57) nor the CSEL=0 right compare (cycle 56) fires for this
+       write phase, so the flip-flop stays clear and x >= 344 shows background
+       instead of border. */
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
     c64_bus_write(&machine.bus, 0xd016, 0x08);
@@ -1354,7 +1360,7 @@ static void test_live_right_side_border_opens(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     c64_bus_write(&machine.bus, 0xd016, 0x00); /* CSEL=0 in the open window */
@@ -1370,9 +1376,9 @@ static void test_live_right_side_border_opens(void) {
                frame.pixels[99 * C64_FRAME_WIDTH + 350]);
 }
 
-/* Writing CSEL too early (before the RIGHT_38 compare at cycle 53) makes the VIC
-   match the 38-column right compare (X=335) with CSEL=0, setting the flip-flop
-   and closing the border at 335 -- the side border does NOT open. */
+/* Writing CSEL too early (well before the cycle-56 open window) makes the VIC
+   match the CSEL=0 right compare (cycle 56) with CSEL already 0, setting the flip-
+   flop and closing the border -- the side border does NOT open. */
 static void test_live_side_border_wrong_cycle_stays_closed(void) {
     c64_t     machine;
     c64_frame frame;
@@ -1413,10 +1419,14 @@ static void test_live_side_border_flip_flop_persists_left(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 55u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    c64_bus_write(&machine.bus, 0xd016, 0x00); /* open right border on raster 100 */
+    /* lft-nine's CIA-synchronised loop projects VICE's cycle-56 store one c64m
+       cycle earlier than EoD.  It must still dodge the right compare and keep
+       main_border_ff clear through line wrap, revealing the next line's left
+       edge before the normal left compare. */
+    c64_bus_write(&machine.bus, 0xd016, 0x00);
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
@@ -1454,7 +1464,7 @@ static void test_live_side_border_reveals_sprite(void) {
     setup_solid_sprite(&machine, 0, 0x0340, 350, 100, 7);
     abs = 0;
     while (!(machine.vic.timing.raster_line == 101u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     c64_bus_write(&machine.bus, 0xd016, 0x00);
@@ -1524,7 +1534,7 @@ static void test_live_side_border_shows_ghost_byte(void) {
 
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     c64_bus_write(&machine.bus, 0xd016, 0x00); /* open right border */
@@ -1557,7 +1567,7 @@ static void test_live_ghost_byte_respects_xscroll(void) {
 
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     /* CSEL=0 opens right; XSCROLL=0 keeps the 0xF0 phase at x=344..351. */
@@ -1574,17 +1584,23 @@ static void test_live_ghost_byte_respects_xscroll(void) {
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
-    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    /* XSCROLL=3 must be stable *before* the revealed column (x=344, painted at
+       cycle 55) so it phases the ghost there. Like VICE, an XSCROLL change is
+       pipelined and would not reach x=344 if written in the cycle-56 open write,
+       so set it up front (CSEL still 1, border closed) and only flip CSEL at
+       cycle 56. */
+    c64_bus_write(&machine.bus, 0xd016, 0x0b); /* CSEL=1, XSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x3fffu] = 0xf0u;
 
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    /* CSEL=0, XSCROLL=3: phase shifts 3 dots — fg starts at x=347. */
+    /* Open the border (CSEL=0), keeping XSCROLL=3: phase shifts 3 dots — fg
+       starts at x=347. */
     c64_bus_write(&machine.bus, 0xd016, 0x03);
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
@@ -1675,7 +1691,7 @@ static void test_live_mcm_idle_ghost_is_hires(void) {
 
     abs = 0;
     while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 54u)) {
+             machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     c64_bus_write(&machine.bus, 0xd016, 0x10); /* CSEL=0 open right, keep MCM */

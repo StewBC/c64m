@@ -173,3 +173,36 @@ via breakpoints. Never probe the port with `nc -z`.
 executes continuously re-hits within cycles whether or not the event happened.
 Pick a marker that is only on the post-event path (for EoD: `$020C` is only ever
 executed at the swap prompt, and `$028A` only at depack completion).
+
+**Disconnecting the monitor RESUMES emulation — it does not freeze VICE.** If you
+connect, inspect, and disconnect, VICE keeps running and a demo races past the
+scene you wanted. There is no "stay frozen on disconnect". Combined with the
+reconnect-wedge trap above, this means you must hold **one** connection for the
+entire life of the VICE process. The robust pattern is a small **daemon** that
+opens the single monitor connection once and forwards commands to short-lived
+clients over a second local port. Kill/restart the daemon only while VICE is
+parked on a marker that spins forever with no side effects (e.g. EoD's `$020C`
+swap loop with no disk attached), where a reconnect is safe; never restart it
+mid-scene.
+
+**Async-break needs a first-byte wait, not an idle wait.** Sending a bare newline
+over the text monitor breaks a *running* VICE back into the monitor. But your read
+must block for the first byte up to a hard cap (the breakpoint/stop banner), NOT
+return as soon as the socket goes quiet: while VICE runs the monitor emits
+nothing, so an idle-timeout read returns immediately with `g` still running, and
+your next command then breaks in at a random PC. Wait for output; then drain the
+trailing bytes on a short idle.
+
+**`screenshot "<file>" 2` writes PNG (format 2); the default is BMP.** A bare
+`screenshot "<file>"` looked like a silent no-op (BMP bytes in a `.png` name / not
+where expected). Also: screenshotting immediately at a raster-0 / IRQ-entry
+breakpoint captures the *previous* frame's buffer — advance a few frames (re-`g`
+with the breakpoint armed) before grabbing the scene.
+
+**The cycle-exact VIC-II core is `src/viciisc/`.** x64sc uses it, not the older
+`src/vicii/`. Border/timing ground truth lives in
+`src/viciisc/vicii-cycle.c` (`check_hborder`, `check_vborder_*`) and the per-cycle
+flag table in `src/viciisc/vicii-chip-model.c` (`cycle_tab_pal`/`cycle_tab_ntsc`).
+Main-border flip-flop: right set at cycle 57 (CSEL=1) / 56 (CSEL=0), left clear at
+17 (CSEL=1) / 18 (CSEL=0), same cycles PAL and NTSC, sampled *before* the CPU
+store. See `eod-handoff.md` for how this drove the EoD side-border fix.

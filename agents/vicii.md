@@ -50,6 +50,12 @@ Phi2 schedule; frontend frames are copies.
   vertical border flip-flop is inactive, and DEN=0 keeps that flip-flop set, so a
   DEN=0 frame is `$D020` throughout and its B0C never reaches the screen. The B0C
   is visible only where DEN is cleared mid-frame, after the border has opened.
+- Horizontal-border checks use the VICE `check_hborder` cycles and a delayed
+  output pipeline. c64m retains two CSEL samples at the right compare because
+  its CPU/VIC projection currently places the same VICE cycle-56 store at c64m
+  cycle 56 in Edge of Disgrace and at cycle 55 in lft-nine's CIA-synchronised
+  loop. Both in-flight 1-to-0 transitions dodge the compare; a CSEL=0 value that
+  is stable for two samples still closes the 38-column border normally.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
   clear from DEN + range + YSCROLL; not sticky for the whole line). RC is
   cleared only at cycle 14 if the condition still holds (Bauer 3.7.2). End-of-line
