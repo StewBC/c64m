@@ -189,7 +189,20 @@ static void expect_cpu_snapshots_equal(
 static void arm_pal_badline_fixture(c64_t *machine) {
     vicii_write_register(&machine->vic, 0xd011, 0x13u);
     machine->vic.timing.raster_line = 0x33u;
-    machine->vic.timing.cycle_in_line = 12u;
+    /* Teleport past raster $30: arm the frame latch as if DEN was set there. */
+    machine->vic.allow_bad_lines = true;
+    /* Establish BA lead from cycle 9 so BA is already low at the documented
+       cycle-12 opcode-fetch boundary (3-cycle BA lead). */
+    machine->vic.timing.cycle_in_line = 9u;
+    {
+        uint64_t abs = machine->clock.cycle;
+        int i;
+        for (i = 0; i < 3; i++) {
+            vicii_step_cycle(&machine->vic, &machine->bus, abs++);
+            machine->clock.cycle = abs;
+        }
+    }
+    /* Now at cycle 12 with BA asserted for the c-access window. */
 }
 
 static void expect_contended_trace_matches_normal(
@@ -248,8 +261,9 @@ static void validate_migrated_family_on_pal_badline(
     uint8_t expected_memory_value)
 {
     c64_rom_set roms;
-    c64_t normal;
-    c64_t contended;
+    /* Two full machines are ~4MB; keep them off the thread stack. */
+    static c64_t normal;
+    static c64_t contended;
     c64_cpu_snapshot normal_cpu;
     c64_cpu_snapshot contended_cpu;
     c64_cpu_instruction_trace normal_trace;
@@ -270,6 +284,7 @@ static void validate_migrated_family_on_pal_badline(
     vicii_write_register(&normal.vic, 0xd011, 0x03u);
     normal.vic.timing.raster_line = 0x33u;
     normal.vic.timing.cycle_in_line = 12u;
+    normal.vic.allow_bad_lines = true;
     arm_pal_badline_fixture(&contended);
 
     step_machine(&normal, 1);
@@ -1475,6 +1490,7 @@ static void test_aec_blocks_pending_write_during_vic_phi2(void) {
     vicii_write_register(&machine.vic, 0xd011, 0x13u);
     machine.vic.timing.raster_line = 0x33u;
     machine.vic.timing.cycle_in_line = 15u;
+    machine.vic.allow_bad_lines = true;
     before_cpu_cycles = machine.clock.cpu_cycles;
 
     expect_true("AEC low at c-access", !vicii_aec_active(&machine.vic));
@@ -1552,6 +1568,7 @@ static void run_cpu_vic_interaction_trace(
 
     if (bad_line) {
         vicii_write_register(&machine.vic, 0xd011, 0x13u);
+        machine.vic.allow_bad_lines = true;
     } else {
         vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite only. */
         vicii_write_register(&machine.vic, 0xd015, (uint8_t)(1u << sprite));
@@ -1709,6 +1726,7 @@ static void test_timing_fixture_records_real_badline_stall(void) {
     vicii_write_register(&machine.vic, 0xd011, 0x13u);
     machine.vic.timing.raster_line = 0x33u;
     machine.vic.timing.cycle_in_line = 12u;
+    machine.vic.allow_bad_lines = true;
 
     capture_timing_step(&machine, &sample);
     expect_u64("badline fixture starts at cycle 12", 12, sample.cycle_in_line_before);

@@ -351,6 +351,8 @@ static void test_bad_line_ba_asserts_at_cycle_12(void) {
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_write_register(&v, 0xd011, 0x13); /* DEN=1, YSCROLL=3 */
     v.timing.raster_line = 0x33;
+    /* Tests teleport past raster $30; arm the frame latch as if DEN was set there. */
+    v.allow_bad_lines = true;
 
     abs_cycle = 0;
     for (i = 0; i < 12; i++) {
@@ -1603,6 +1605,62 @@ static void test_live_ghost_byte_respects_xscroll(void) {
    Idle forces cbuf=0, so MCM=1 + BMM=0 idle is still hires (ghost $F0 → four
    solid fg dots, four bg). Decoding idle as multicolor pairs broke open-border
    outlines (Edge of Disgrace bottom frame stipple). */
+/* Bauer/VICE: DEN is sampled on raster $30 to arm allow_bad_lines for the
+   rest of $30–$F7. Clearing DEN afterward must not kill bad lines. */
+static void test_allow_bad_lines_latched_at_line_30(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs = 0;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    /* DEN=1, YSCROLL=0 so line $30 itself is a bad line once armed. */
+    vicii_write_register(&v, 0xd011, 0x10u);
+
+    while (!(v.timing.raster_line == 0x30u && v.timing.cycle_in_line == 20u)) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    expect_true("allow_bad_lines armed on $30 with DEN", v.allow_bad_lines);
+    expect_true("bad line on $30 with YSCROLL=0", v.bad_line);
+
+    /* Clear DEN mid-window; bad lines must continue. */
+    vicii_write_register(&v, 0xd011, 0x00u); /* DEN=0, YSCROLL=0 */
+    while (v.timing.raster_line != 0x38u) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    /* Step into line $38 (YSCROLL=0 still matches). */
+    while (v.timing.cycle_in_line != 20u) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    expect_true("allow_bad_lines still armed after DEN clear", v.allow_bad_lines);
+    expect_true("bad line still fires with DEN=0 after arming", v.bad_line);
+}
+
+/* VICE set_vborder: bottom only sets the latch; RSEL open after missing the
+   24-row bottom leaves vertical open (already covered by sprite border tests).
+   Also: once latched closed, only top+DEN clears it. */
+static void test_set_vborder_latch_sticky_until_top(void) {
+    vicii v;
+    char error[256];
+    uint64_t abs = 0;
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    vicii_write_register(&v, 0xd011, 0x1bu); /* DEN=1 RSEL=1 Y=3 */
+
+    /* Run through a bottom compare so set_vborder latches. */
+    while (!(v.timing.raster_line == 251u && v.timing.cycle_in_line == 20u)) {
+        vicii_step_cycle(&v, NULL, abs++);
+    }
+    expect_true("set_vborder latched at bottom", v.set_vborder);
+    expect_true("vertical border active at bottom", v.vertical_border_active);
+
+    /* Mid-frame DEN clear must not alone reopen the vertical border. */
+    vicii_write_register(&v, 0xd011, 0x0bu); /* DEN=0 RSEL=1 */
+    vicii_step_cycle(&v, NULL, abs++);
+    expect_true("vertical stays closed with DEN=0 mid-frame", v.vertical_border_active);
+}
+
 static void test_live_mcm_idle_ghost_is_hires(void) {
     c64_t     machine;
     c64_frame frame;
@@ -1943,6 +2001,7 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x13u);
     v.timing.raster_line = 0x33u;
+    v.allow_bad_lines = true;
     abs = advance_vicii(&v, 0, 16u); /* process cycles 0 through 15 */
     expect_u8("badline c-access schedule", VICII_BUS_ACCESS_C,
         (uint8_t)vicii_bus_access(&v));
@@ -1970,6 +2029,7 @@ static void test_vicii_bus_schedule_reports_c_and_sprite_accesses(void) {
     vicii_set_video_standard(&ntsc, VICII_VIDEO_STANDARD_NTSC);
     vicii_write_register(&ntsc, 0xd011, 0x13u);
     ntsc.timing.raster_line = 0x33u;
+    ntsc.allow_bad_lines = true;
     abs = advance_vicii(&ntsc, 0, 16u); /* process cycles 0 through 15 */
     expect_u8("ntsc badline c-access schedule", VICII_BUS_ACCESS_C,
         (uint8_t)vicii_bus_access(&ntsc));
@@ -2334,6 +2394,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x13u); /* DEN=1, YSCROLL=3 */
     v.timing.raster_line = 0x33u;
+    v.allow_bad_lines = true;
 
     /* BA/RDY goes low three cycles before the first c-access, while AEC
        remains high until the actual cycle-15 Phi2 bus takeover. */
@@ -3311,6 +3372,8 @@ int main(void) {
     test_live_side_border_shows_ghost_byte();
     test_live_ghost_byte_respects_xscroll();
     test_live_mcm_idle_ghost_is_hires();
+    test_allow_bad_lines_latched_at_line_30();
+    test_set_vborder_latch_sticky_until_top();
     test_den_clear_blanks_text_display();
     test_den_clear_keeps_sprite_visible();
     test_den_clear_keeps_sprite_collisions();

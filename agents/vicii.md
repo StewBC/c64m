@@ -91,6 +91,11 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
   0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
+- Vertical border uses VICE's two-stage unit: `set_vborder` latch (bottom only
+  sets) and `vertical_border_active` (applied at cycle 0 and left compare).
+  Top+DEN clears both. This is required for the classic RSEL lower-border open.
+- Bad lines: DEN is sampled on raster `$30` into `allow_bad_lines` for the rest
+  of `$30–$F7` (Bauer/VICE). Live DEN still blanks graphics and gates top open.
 - g-access still discards the fetched byte; the paint path re-reads RAM live, so
   latch fidelity for same-cycle CPU writes is not modeled. Snapshot rendering is
   still approximate.
@@ -99,9 +104,9 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   not drop it without another IEC fix — it is covered by `c64_vicii` and
   `c64_robocop_g64`.
 - General cycle-perfect demo-scene compatibility is not claimed. `lft-nine` is a
-  selected milestone target. Edge of Disgrace remains a visual stress case:
-  residual right-edge garbage, bottom outline stipple, and mid-effect shred are
-  still open (disk/depack path matches VICE at `$028A`).
+  selected milestone target. Edge of Disgrace: open-border register windows
+  (`DEN=1 RSEL=0 CSEL=0`) now full-bleed; residual chequer animation and some
+  DEN=0 solid phases still differ from VICE.
 
 ## Verification
 

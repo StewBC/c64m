@@ -410,6 +410,8 @@ static void write_vic(snapshot_writer *w, const c64_t *m) {
     w_u8(w, v->sprite_sprite_collision);
     w_u8(w, v->sprite_background_collision);
     w_bool(w, v->vertical_border_active);
+    w_bool(w, v->set_vborder);
+    w_bool(w, v->allow_bad_lines);
     w_frame(w, &v->working_frame);
     w_frame(w, &v->completed_frame);
     end_chunk(w, chunk);
@@ -732,6 +734,8 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     v->sprite_sprite_collision = r_u8(r);
     v->sprite_background_collision = r_u8(r);
     v->vertical_border_active = r_bool(r);
+    v->set_vborder = r_bool(r);
+    v->allow_bad_lines = r_bool(r);
     r_frame(r, &v->working_frame);
     r_frame(r, &v->completed_frame);
 }

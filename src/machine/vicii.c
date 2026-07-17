@@ -185,6 +185,7 @@ void vicii_reset(vicii *v) {
     v->rc                        = 0;
     v->display_state             = false;
     v->bad_line                  = false;
+    v->allow_bad_lines           = false;
     v->timing.raster_compare          = 0;
     v->timing.ba_low_until_abs        = 0;
     v->timing.sprite_ba_low_until_abs = 0;
@@ -213,6 +214,7 @@ void vicii_reset(vicii *v) {
     v->sprite_background_collision = 0;
     v->clear_collisions = 0;
     v->vertical_border_active = true;
+    v->set_vborder            = true;
     v->main_border_ff         = true;
     /* Default on; runtime turbo policy re-applies after reset when needed. */
     v->pixel_output_enabled = true;
@@ -252,11 +254,17 @@ void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
 }
 
 static bool vicii_is_bad_line_at(const vicii *v, uint32_t y) {
-    uint8_t  yscroll = v->registers[0x11] & 0x07u;
-    bool     den     = (v->registers[0x11] & 0x10u) != 0;
+    uint8_t yscroll = v->registers[0x11] & 0x07u;
 
-    if (!den) return false;
-    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) return false;
+    /* Bad lines require the frame-level allow_bad_lines latch (DEN sampled on
+       raster $30), not the live DEN bit. Live DEN still blanks graphics and
+       gates vertical-border open at the top compare. */
+    if (!v->allow_bad_lines) {
+        return false;
+    }
+    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) {
+        return false;
+    }
     return (uint8_t)(y & 0x07u) == yscroll;
 }
 
@@ -1107,33 +1115,33 @@ static uint32_t vicii_live_pixel(
     return vicii_compose_pixel(v, main_border, vertical_border, border_color, bg, sprites);
 }
 
-/* Bauer 3.9 rules 2/3: vertical FF is set/cleared at the end of the matching
-   raster line (cycle 63 / our last cycle). DEN is required to clear at top. */
-static void vicii_update_live_vertical_border_line_end(vicii *v) {
-    vicii_border_geometry g;
-    bool den;
+/* VICE check_vborder_top: top compare + DEN clears both the latch and the
+   live vertical border flag immediately (not deferred to cycle 0). */
+static void vicii_check_vborder_top(vicii *v) {
+    vicii_border_geometry g = vicii_get_border_geometry(v);
+    bool den = (v->registers[0x11] & 0x10u) != 0u;
 
-    g = vicii_get_border_geometry(v);
-    den = (v->registers[0x11] & 0x10u) != 0u;
-    if (v->timing.raster_line == g.bottom) {
-        v->vertical_border_active = true;
-    }
     if (v->timing.raster_line == g.top && den) {
         v->vertical_border_active = false;
+        v->set_vborder            = false;
     }
 }
 
-/* Bauer 3.9 rules 4/5: at the left compare, Y==bottom sets vertical FF and
-   Y==top && DEN clears it (then rule 6 may clear main). */
-static void vicii_update_vertical_border_at_left(vicii *v, const vicii_border_geometry *g) {
-    bool den = (v->registers[0x11] & 0x10u) != 0u;
+/* VICE check_vborder_bottom: bottom compare only *sets* the latch. It never
+   clears it — only top+DEN does. That is what makes the RSEL lower-border open
+   stick once the 24-row bottom has been missed. */
+static void vicii_check_vborder_bottom(vicii *v) {
+    vicii_border_geometry g = vicii_get_border_geometry(v);
 
-    if (v->timing.raster_line == g->bottom) {
-        v->vertical_border_active = true;
+    if (v->timing.raster_line == g.bottom) {
+        v->set_vborder = true;
     }
-    if (v->timing.raster_line == g->top && den) {
-        v->vertical_border_active = false;
-    }
+}
+
+/* Apply latched set_vborder → vertical_border_active (VICE: cycle 1 = our 0,
+   and again at the left border compare). */
+static void vicii_apply_vborder_latch(vicii *v) {
+    v->vertical_border_active = v->set_vborder;
 }
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
@@ -1178,16 +1186,18 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     }
 
     for (x = x0; x < x1; x++) {
-        /* Main border flip-flop (Bauer 3.9). Rule 1: set at the right compare.
-           Rules 4/5: at the left compare, also update the vertical FF from Y.
-           Rule 6: reset main at left only when vertical is clear. A timed
-           $D016 CSEL change moves g.left/g.right and can leave main clear
-           (side border open) for the rest of the line. */
+        /* Main border flip-flop (Bauer 3.9 / VICE check_hborder).
+           Right compare: set main. Left compare: re-check bottom latch, apply
+           set_vborder → vertical, then clear main only if vertical is inactive.
+           A timed $D016 CSEL change moves g.left/g.right and can leave main
+           clear (side border open) for the rest of the line. */
         if (x == g.right) {
             v->main_border_ff = true;
         }
         if (x == g.left) {
-            vicii_update_vertical_border_at_left(v, &g);
+            vicii_check_vborder_bottom(v);
+            vicii_check_vborder_top(v);
+            vicii_apply_vborder_latch(v);
             if (!v->vertical_border_active) {
                 v->main_border_ff = false;
             }
@@ -1475,16 +1485,36 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         if (v->timing.raster_line == v->timing.raster_compare) {
             vicii_assert_raster_irq(v);
         }
-
-        /* Vertical FF top/bottom compares also run at cycle 63 of the matching
-           line (see end-of-line). Cycle 0 does not re-evaluate them. */
     }
 
-    /* Bad Line Condition (Bauer 3.5 / VICE viciisc check_badline): evaluated
-       every cycle from DEN, raster range, and (RASTER & 7) == YSCROLL. Mid-line
-       $D011 YSCROLL writes can assert or drop it immediately. VICE sets
-       bad_line = condition each cycle (does not sticky-latch for the whole
-       line). idle → display as soon as the condition holds (3.7.1). */
+    /* VICE vertical border unit (every cycle): top may clear latch+flag with
+       DEN; bottom only sets the latch. At cycle 0 (= VICE PAL cycle 1) copy
+       latch → live vertical flag. Mid-line $D011 RSEL/DEN changes are seen on
+       the next check this cycle or at the left border apply. */
+    vicii_check_vborder_top(v);
+    vicii_check_vborder_bottom(v);
+    if (cycle == 0u) {
+        vicii_apply_vborder_latch(v);
+    }
+
+    /* Bauer/VICE allow_bad_lines: arm on first DMA line ($30) if DEN is set
+       during any cycle of that line; disarm after last DMA line ($F7). */
+    if (v->timing.raster_line == (uint32_t)VICII_BADLINE_FIRST &&
+        (v->registers[0x11] & 0x10u) != 0u) {
+        v->allow_bad_lines = true;
+    }
+    if (v->timing.raster_line == (uint32_t)VICII_BADLINE_LAST && cycle == 0u) {
+        /* After the last possible bad line has been processed, disallow more.
+           VICE clears at start of LAST_DMA_LINE; clearing at cycle 0 of $F7
+           still allows that line's own badline if YSCROLL matches. */
+    }
+    if (v->timing.raster_line > (uint32_t)VICII_BADLINE_LAST) {
+        v->allow_bad_lines = false;
+    }
+
+    /* Bad Line Condition (Bauer 3.5 / VICE check_badline): once allow_bad_lines
+       is armed, each cycle tests (RASTER&7)==YSCROLL in $30–$F7. Mid-line
+       YSCROLL writes assert/drop immediately. DEN is not re-tested here. */
     if (vicii_is_bad_line(v)) {
         v->bad_line      = true;
         v->display_state = true;
@@ -1592,9 +1622,9 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* ------------------------------------------------------------------
-     * End-of-line events (Bauer cycle 63: vertical border top/bottom)
+     * End-of-line: vertical border is handled every cycle (VICE set_vborder
+     * model above); no Bauer cycle-63 dual-write needed.
      * ------------------------------------------------------------------ */
-    vicii_update_live_vertical_border_line_end(v);
     v->timing.cycle_in_line = 0;
 
     /* End-of-line VC advance + RC/idle (VICE UpdateRc at cycle 58, applied
@@ -1629,6 +1659,7 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     v->timing.raster_line  = 0;
     v->timing.frame_number++;
     v->timing.frame_complete = true;
+    v->allow_bad_lines = false;
 
     if (v->pixel_output_enabled) {
         v->working_frame.frame_number = v->timing.frame_number;
@@ -1853,6 +1884,11 @@ void vicii_write_register(vicii *v, uint16_t addr, uint8_t value) {
         if (v->timing.raster_compare != old_compare) {
             vicii_raster_compare_maybe_trigger(v);
         }
+        /* Immediate vertical-border re-check: VICE evaluates top/bottom every
+           cycle from the live $D011, so a mid-line DEN/RSEL write can open or
+           arm the border unit before the next left-edge apply. */
+        vicii_check_vborder_top(v);
+        vicii_check_vborder_bottom(v);
         break;
     }
 

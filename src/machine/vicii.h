@@ -86,6 +86,10 @@ struct vicii {
     uint8_t  rc;               /* Row Counter, 3-bit, 0-7 */
     bool     display_state;    /* true while a character row is in progress */
     bool     bad_line;         /* true if the current raster line is a Bad Line */
+    /* Bauer/VICE: DEN is sampled on raster $30 to arm bad lines for the rest of
+       the $30–$F7 window (allow_bad_lines). Clearing DEN later does not disarm
+       them until after $F7. c64m previously required DEN every cycle. */
+    bool     allow_bad_lines;
     uint8_t  video_matrix[40]; /* character codes fetched on Bad Lines */
     uint8_t  color_line[40];   /* color nibbles fetched on Bad Lines */
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
@@ -117,9 +121,17 @@ struct vicii {
        0x1E / 0x1F = clear that register after this cycle's pixels. */
     uint8_t  clear_collisions;
 
-    /* Live vertical border-unit state. Snapshot rendering keeps using conventional
-       geometry; completed live frames preserve mid-frame RSEL timing effects. */
+    /* Live vertical border-unit state (VICE vborder). Snapshot rendering keeps
+       using conventional geometry; completed live frames preserve mid-frame RSEL
+       timing effects. */
     bool     vertical_border_active;
+
+    /* Latched vertical-border set request (VICE set_vborder). Bottom compare only
+       sets this; top+DEN clears both latch and vertical_border_active. The latch
+       is copied into vertical_border_active at cycle 0 and at the left border
+       compare — matching VICE so the classic RSEL lower-border open works when
+       the 24-row bottom is missed and the 25-row bottom is never armed. */
+    bool     set_vborder;
 
     /* Live main (horizontal) border flip-flop. Set at the right compare column
        and reset at the left compare column (Bauer 3.9 rules 1 & 6), evaluated per
