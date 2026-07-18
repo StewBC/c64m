@@ -537,6 +537,19 @@ bool runtime_client_cycle_turbo_speed(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_CYCLE_TURBO_SPEED);
 }
 
+bool runtime_client_set_turbo_multiplier(runtime_client *client, uint32_t multiplier) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_TURBO_MULTIPLIER,
+    };
+
+    if (!client || multiplier < 1u || multiplier > 256u) {
+        return false;
+    }
+
+    command.data.set_turbo_multiplier.multiplier = multiplier;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_apply_machine_config(
     runtime_client *client,
     const c64_config *config,

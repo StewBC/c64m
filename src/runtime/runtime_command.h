@@ -44,6 +44,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_ASSEMBLE_FILE,
     RUNTIME_COMMAND_APPLY_MACHINE_CONFIG,
     RUNTIME_COMMAND_CYCLE_TURBO_SPEED,
+    RUNTIME_COMMAND_SET_TURBO_MULTIPLIER,
     RUNTIME_COMMAND_PASTE_TEXT,
     RUNTIME_COMMAND_SET_JOYSTICK,
     RUNTIME_COMMAND_STEP_OUT,
@@ -197,6 +198,10 @@ typedef struct runtime_command {
             char kernal_rom_path[RUNTIME_COMMAND_PATH_MAX];
             char rom1541_path[RUNTIME_COMMAND_PATH_MAX];
         } apply_machine_config;
+
+        struct {
+            uint32_t multiplier;
+        } set_turbo_multiplier;
 
         struct {
             char text[RUNTIME_PASTE_TEXT_MAX];

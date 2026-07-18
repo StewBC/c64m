@@ -358,6 +358,9 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 6 && strncmp(name, "run-to", length) == 0) {
         return CONTROL_COMMAND_RUN_TO;
     }
+    if (length == 9 && strncmp(name, "set-turbo", length) == 0) {
+        return CONTROL_COMMAND_SET_TURBO;
+    }
     if (length == 9 && strncmp(name, "get-state", length) == 0) {
         return CONTROL_COMMAND_GET_STATE;
     }
@@ -656,6 +659,15 @@ bool control_protocol_parse_request(
                 cursor++;
             }
         }
+    } else if (type == CONTROL_COMMAND_SET_TURBO) {
+        uint64_t multiplier = 0;
+        if (!parse_u64_token(cursor, &cursor, &multiplier) ||
+            multiplier < 1u || multiplier > 256u) {
+            set_parse_error(out_error, id, "bad-args", "expected turbo multiplier 1..256");
+            return false;
+        }
+        args.turbo_multiplier = (uint16_t)multiplier;
+        skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_GET_DEBUG_MEMORY) {
         if (strncmp(cursor, "write-history=0", 15) == 0) {
             args.include_write_history = false;

@@ -3018,7 +3018,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu",
                 false);
             break;
 
@@ -3086,6 +3086,12 @@ static void dispatch_control_request(
 
         case CONTROL_COMMAND_RUN_TO:
             accepted = runtime_client_run_to_cursor(client, request->args.address);
+            break;
+
+        case CONTROL_COMMAND_SET_TURBO:
+            accepted = runtime_client_set_turbo_multiplier(
+                client,
+                request->args.turbo_multiplier);
             break;
 
         case CONTROL_COMMAND_GET_STATE: {
@@ -3809,6 +3815,33 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_UNMOUNT_DISK:
             if (accepted) {
                 control_protocol_format_ok(&response, request->id, "accepted=1", false);
+                request_debug_state(client);
+            } else if (response.text[0] == '\0') {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+        case CONTROL_COMMAND_SET_TURBO:
+            if (accepted) {
+                char text[CONTROL_RESPONSE_TEXT_MAX];
+                if (request->args.turbo_multiplier >= 8u) {
+                    snprintf(
+                        text,
+                        sizeof(text),
+                        "accepted=1 turbo=%u warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered",
+                        (unsigned int)request->args.turbo_multiplier);
+                } else {
+                    snprintf(
+                        text,
+                        sizeof(text),
+                        "accepted=1 turbo=%u",
+                        (unsigned int)request->args.turbo_multiplier);
+                }
+                control_protocol_format_ok(&response, request->id, text, false);
                 request_debug_state(client);
             } else if (response.text[0] == '\0') {
                 control_protocol_format_error(

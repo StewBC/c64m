@@ -26,6 +26,7 @@ typedef enum control_command_type {
     CONTROL_COMMAND_RUN_CYCLES,
     CONTROL_COMMAND_RUN_INSTRUCTIONS,
     CONTROL_COMMAND_RUN_TO,
+    CONTROL_COMMAND_SET_TURBO,
     CONTROL_COMMAND_GET_STATE,
     CONTROL_COMMAND_GET_CPU,
     CONTROL_COMMAND_GET_FRAME,
@@ -72,6 +73,7 @@ typedef struct control_args {
     uint16_t start_address;
     uint16_t end_address;
     uint16_t run_address;
+    uint16_t turbo_multiplier;
     uint8_t memory_mode;
     uint8_t device;
     uint8_t port;

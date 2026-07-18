@@ -170,6 +170,7 @@ N step-out
 N run-cycles <positive-count>
 N run-instructions <positive-count>
 N run-to <address>
+N set-turbo <multiplier 1..256>
 ```
 
 Current fixed responses:
@@ -177,7 +178,7 @@ Current fixed responses:
 ```text
 hello        -> ok name=c64m protocol=C64M/1
 version      -> ok protocol=C64M/1 app=0.1.0
-capabilities -> ok connection introspection execution state step frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu
 ping         -> ok
 ```
 
@@ -190,6 +191,24 @@ N ok state=paused has_cpu=1 frame=123 cycle=456 stop=breakpoint turbo=1
 Run/step/load/input commands return `ok accepted=1` when the runtime command was
 queued, not when the operation has completed. Follow with `wait-event`,
 `get-state`, or a specific query.
+
+`set-turbo` changes the active multiplier without modifying the configured turbo
+list used by Opt+T. Values 1 through 256 are accepted; 256 is the `MAX` setting.
+At multipliers below 8 the response is:
+
+```text
+N ok accepted=1 turbo=7
+```
+
+At 8 and above it includes a warning:
+
+```text
+N ok accepted=1 turbo=8 warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered
+```
+
+At those high speeds VIC-II timing still advances, but the live per-cycle ARGB
+renderer is disabled and `get-frame` returns a geometric debug snapshot. Lowering
+turbo below 8 restores live rendering for subsequent frames.
 
 ## State, memory, and frames
 
@@ -222,6 +241,8 @@ width=384 height=312 stride=1536 format=argb8888 frame=... cycle=...
 
 The payload is row-major 32-bit ARGB8888 bytes, `height * stride` bytes. PAL is
 normally 384x312; NTSC is 384x263. The frontend crop is not applied to this payload.
+At turbo 8 and above this is a geometric debug snapshot rather than the live ARGB
+framebuffer; use `set-turbo 7` or lower before inspecting live pixels.
 
 `get-debug-memory` concatenates three 65536-byte arrays in this order: CPU map,
 raw RAM, raw ROM. With `write-history=1`, it appends 65536 little-endian `uint64`

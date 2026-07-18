@@ -590,6 +590,28 @@ static void test_runtime_cycle_turbo_speed(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_set_turbo_multiplier(void) {
+    runtime *rt;
+    runtime_client *client;
+
+    rt = start_runtime_with_turbo(&client, "2,4,8");
+
+    expect_true("set turbo outside configured list", runtime_client_set_turbo_multiplier(client, 7));
+    expect_turbo_multiplier(client, 7);
+    expect_true("set maximum turbo", runtime_client_set_turbo_multiplier(client, 256));
+    expect_turbo_multiplier(client, 256);
+    expect_true("restore normal turbo", runtime_client_set_turbo_multiplier(client, 1));
+    expect_turbo_multiplier(client, 1);
+    if (runtime_client_set_turbo_multiplier(client, 0)) {
+        fail("zero turbo multiplier accepted");
+    }
+    if (runtime_client_set_turbo_multiplier(client, 257)) {
+        fail("turbo multiplier over maximum accepted");
+    }
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_keyboard_event_reaches_machine(void) {
     runtime *rt;
     runtime_client *client;
@@ -1446,6 +1468,7 @@ static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
     char contents[2048];
     size_t length;
 
+    memset(&definition, 0, sizeof(definition));
     write_runtime_roms();
     file = fopen("scheduler_save_debug.ini", "w");
     if (!file) {
@@ -1613,6 +1636,7 @@ int main(void) {
     test_runtime_audio_sample_count_matches_cycles();
     test_runtime_audio_sid_samples_are_not_batch_held();
     test_runtime_cycle_turbo_speed();
+    test_runtime_set_turbo_multiplier();
     test_runtime_keyboard_event_reaches_machine();
     test_runtime_restore_event_reaches_machine();
     test_runtime_joystick_event_reaches_machine();

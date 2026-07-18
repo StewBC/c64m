@@ -112,6 +112,7 @@ bool runtime_client_paste_text(runtime_client *client, const char *text, size_t 
 bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length);
 bool runtime_client_paste_events(runtime_client *client, const paste_event_t *events, size_t count);
 bool runtime_client_cycle_turbo_speed(runtime_client *client);
+bool runtime_client_set_turbo_multiplier(runtime_client *client, uint32_t multiplier);
 /* rom_paths, when non-NULL, carries the effective ROM file paths (any member may
    be NULL/empty for "unset"); pass reload_roms=true to have the runtime re-read
    them as part of this apply (requires reset to take visible effect). */

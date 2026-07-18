@@ -87,6 +87,9 @@ static void test_parse_known_commands(void)
     expect_true("parse step-out", control_protocol_parse_request("12 step-out", &request, &error));
     expect_int("step-out type", CONTROL_COMMAND_STEP_OUT, request.type);
 
+    expect_true("parse set-turbo", control_protocol_parse_request("12 set-turbo 1", &request, &error));
+    expect_int("set-turbo type", CONTROL_COMMAND_SET_TURBO, request.type);
+
     expect_true("parse get-state", control_protocol_parse_request("13 get-state", &request, &error));
     expect_int("get-state type", CONTROL_COMMAND_GET_STATE, request.type);
 
@@ -156,6 +159,12 @@ static void test_parse_command_arguments(void)
 
     expect_true("parse run-to dollar hex", control_protocol_parse_request("23 run-to $0801", &request, &error));
     expect_u32("run-to dollar address", 0x0801u, request.args.address);
+
+    expect_true("parse set-turbo minimum", control_protocol_parse_request("23 set-turbo 1", &request, &error));
+    expect_u32("set-turbo minimum", 1u, request.args.turbo_multiplier);
+
+    expect_true("parse set-turbo maximum", control_protocol_parse_request("23 set-turbo 256", &request, &error));
+    expect_u32("set-turbo maximum", 256u, request.args.turbo_multiplier);
 
     expect_true("parse get-memory", control_protocol_parse_request("24 get-memory $0400 64 map", &request, &error));
     expect_int("get-memory type", CONTROL_COMMAND_GET_MEMORY, request.type);
@@ -367,6 +376,15 @@ static void test_parse_rejects_invalid_input(void)
 
     expect_false("reject bad address", control_protocol_parse_request("11 run-to 100000\n", &request, &error));
     expect_u32("bad address response id", 11, error.id);
+
+    expect_false("reject zero turbo", control_protocol_parse_request("11 set-turbo 0\n", &request, &error));
+    expect_u32("zero turbo response id", 11, error.id);
+
+    expect_false("reject turbo over maximum", control_protocol_parse_request("11 set-turbo 257\n", &request, &error));
+    expect_u32("high turbo response id", 11, error.id);
+
+    expect_false("reject missing turbo", control_protocol_parse_request("11 set-turbo\n", &request, &error));
+    expect_u32("missing turbo response id", 11, error.id);
 
     expect_false("reject memory length", control_protocol_parse_request("12 get-memory $0400 0 map\n", &request, &error));
     expect_u32("memory length response id", 12, error.id);

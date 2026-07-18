@@ -6,7 +6,8 @@
 arrive through `runtime_client`/message queues; runtime publishes copied events,
 CPU/machine/debug-memory/frame/symbol snapshots. Runtime supports run, pause, reset,
 cycle/instruction stepping, step-over/out, run-to-cursor, finite run counts,
-breakpoints, input, paste, disk/file operations, assembler, and save/load state.
+breakpoints, input, paste, disk/file operations, assembler, save/load state, and
+direct selection of the active 1..256 turbo multiplier.
 
 The frontend must use `runtime_client`. The control socket thread must not poll
 runtime-client single-consumer surfaces or touch the machine directly.
@@ -28,8 +29,11 @@ and host audio setup while retaining runtime frames for control clients.
 
 Implemented protocol areas include introspection, execution, state/CPU/frame/memory/
 debug-memory/call-stack, keyboard/joystick/RESTORE, paste, PRG/BIN/D64 operations,
-breakpoints, waits, assemble, and find-symbol. Binary responses carry a typed header
-and raw byte count. Deferred responses are serviced by the main-loop-owned cache.
+breakpoints, waits, assemble, find-symbol, and `set-turbo`. Binary responses carry a
+typed header and raw byte count. Deferred responses are serviced by the
+main-loop-owned cache. `set-turbo` changes the active multiplier without altering
+the configured Opt+T list; its 8+ response warns that the live ARGB framebuffer is
+disabled until turbo is lowered.
 
 For the actual wire format, command grammar, response payload layouts, and a working
 Python client, read `control-port.md`.

@@ -202,6 +202,10 @@ splitter positions are saved to the INI file on quit.
 **Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
 Configure shows the list, which is stored in the INI file.
 
+At `8x` and above, c64m disables live per-cycle ARGB framebuffer rendering to keep
+high turbo useful. VIC-II timing continues, but frame captures are geometric debug
+snapshots. Select a turbo below `8x` to restore live rendering for subsequent frames.
+
 ### Help
 
 Press **Opt+H** or **ESC** to open or close the in-emulator help overlay. The C64 pauses
@@ -1735,11 +1739,25 @@ machine reaches a new state. Use `wait-*` commands when a script needs to synchr
 | `run-cycles <count>` | Run for a positive cycle count |
 | `run-instructions <count>` | Run for a positive instruction count |
 | `run-to <addr>` | Run until the PC reaches a 16-bit address |
+| `set-turbo <1..256>` | Set the active turbo multiplier; 256 is `MAX` |
 
 Accepted execution commands respond:
 
 ```text
 <id> ok accepted=1
+```
+
+`set-turbo` changes only the active multiplier; it does not modify the configured
+Opt+T turbo list. Its accepted response includes the requested multiplier:
+
+```text
+<id> ok accepted=1 turbo=7
+```
+
+For settings 8 through 256, the response warns that live pixels are unavailable:
+
+```text
+<id> ok accepted=1 turbo=8 warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered
 ```
 
 ### State and Snapshots
@@ -1777,6 +1795,10 @@ The frame metadata is:
 ```
 
 `<bytes>` is `height * stride`. `stride` is bytes per row.
+
+At turbo 8 and above, `get-frame` returns a geometric debug snapshot instead of the
+live ARGB framebuffer. Use `set-turbo 7` or lower and wait for a subsequent frame
+before inspecting live pixels.
 
 `get-debug-memory` returns concatenated 64 K buffers:
 

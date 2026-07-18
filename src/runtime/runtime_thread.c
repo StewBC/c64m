@@ -1331,6 +1331,17 @@ static void runtime_cycle_turbo_speed(runtime *rt) {
     runtime_publish_machine_state(rt);
 }
 
+static void runtime_set_turbo_multiplier(runtime *rt, uint32_t multiplier) {
+    if (rt == NULL || multiplier < 1u || multiplier > 256u) {
+        return;
+    }
+
+    rt->active_turbo_multiplier = multiplier;
+    rt->pace_initialized = false;
+    runtime_update_video_output(rt);
+    runtime_publish_machine_state(rt);
+}
+
 static int runtime_find_breakpoint_by_id(const runtime *rt, uint32_t id) {
     size_t i;
 
@@ -3515,6 +3526,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_CYCLE_TURBO_SPEED:
             runtime_cycle_turbo_speed(rt);
+            break;
+
+        case RUNTIME_COMMAND_SET_TURBO_MULTIPLIER:
+            runtime_set_turbo_multiplier(rt, command->data.set_turbo_multiplier.multiplier);
             break;
 
         case RUNTIME_COMMAND_PASTE_TEXT: {
