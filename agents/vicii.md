@@ -59,13 +59,12 @@ Phi2 schedule; frontend frames are copies.
   is stable for two samples still closes the 38-column border normally.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
   clear from DEN + range + **live** YSCROLL; not sticky for the whole line). RC is
-  cleared only at UpdateVc (cycle 13 / VICE `VICII_PAL_CYCLE(14)`) if the
-  condition holds with **prior-cycle** YSCROLL (`reg11_delay`) — c64m runs the
-  CPU before VIC in a cycle, so live `$D011` can already show a same-cycle Phi2
-  store; VICE samples Phi1 before that store. Without the delayed RC sample,
-  eod-3's mid-line `$5F` (YSCROLL=7) on lines where `(raster&7)==7` restarted RC
-  and froze VCBASE for the FLI band. End-of-line advances VC in display state,
-  then applies VICE UpdateRc:
+  cleared at UpdateVc (cycle **14** in c64m's 0-based index) when live badline
+  holds. VICE places UpdateVc at `VICII_PAL_CYCLE(14)` (0-based 13) and samples
+  YSCROLL at Phi1; moving c64m to cycle 13 while CPU still runs before VIC
+  **destroys** the EoD face/3D band (lower face becomes garbage; band is not a
+  coherent rotating shape). Keep cycle 14 + live RC until a full Phi1-before-CPU
+  reorder. End-of-line advances VC in display state, then VICE UpdateRc:
   `if (RC==7) idle+VCBASE; if (!idle || bad_line) RC=(RC+1)&7`.
 - Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
   only re-checks the compare when the 9-bit line actually changes (RST8). A
@@ -118,28 +117,25 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
   Snapshot rendering still re-reads RAM (no sequencer history).
 - `reg11_delay` is updated from `$D011` at the end of each cycle after fetches.
-- Video-matrix/colour latches are bulk-filled at **cycle 14**, one cycle after
-  UpdateVc RC-clear (cycle 13). `line_latch_due` is set when delayed-YSCROLL RC
-  clear runs; cycle 14 also latches when live `bad_line && rc==0` (covers RC wrap
-  on lines where delayed clear did not fire). Per-cycle c-access does not rewrite
-  the latch (BA is still scheduled). That avoids late mid-line badlines (e.g. EoD
-  plasma `$D011` at ~cycle 52) from overwriting only the last columns with a
-  mismatched `$D018` bank. Latching on the same cycle as RC-clear starved
-  cycle-13 Phi2 screen/colour writes and turned the EoD face/3D band into
-  full-width stripe garbage — deferring the bulk fill restores the shape while
-  keeping UpdateVc at cycle 13 for eod-3.
+- Video-matrix/colour latches are bulk-filled at the cycle-14 VC/RC phase when
+  badline is already true. Per-cycle c-access does not rewrite the latch (BA is
+  still scheduled). That avoids late mid-line badlines (e.g. EoD plasma `$D011`
+  at ~cycle 52) from overwriting only the last columns with a mismatched `$D018`
+  bank.
 - On non-badline display lines, if `$D018` screen bits change **and** BMM is set,
   the matrix latch is reloaded once (`matrix_d018_scr` tracks the last fill).
   Intended for eod-3 FLI→bitmap (`$9x`→`$30`) so FLI char codes are not reused as
   bitmap colour nybbles. Colour is never refreshed off badline (that re-broke
   eod-2). Broader reloads (every line, or every BMM line) also re-broke eod-2.
-- eod-3 FLI vertical address (VCBASE): delayed YSCROLL on UpdateVc RC clear (see
-  Bad Line bullet). VICE oracle R103 `$D011=$5B` @ UpdateVc, RC 4…7, VCBASE
-  `$0F0→$118→…`; pre-fix c64m had `$5F`/RC restart and VCBASE stuck. Face/3D
-  band regression from latch-at-13 is fixed by cycle-14 bulk fill. Sister effect
-  after eod-3 and full containment may still be open — see `eod-handoff.md`.
-  The BA/display vs RC-clear YSCROLL **split** remains a phase-order compromise
-  (CPU-before-VIC), not a full Phi1 model.
+- eod-3 FLI vertical address (VCBASE): with UpdateVc@14 + live RC + `g_line` +
+  matrix D018 reload, linelog R99–R170 shows VCBASE `$0F0→$118→…→$230` (matches
+  VICE step count). An earlier experiment moved UpdateVc to cycle 13 with
+  delayed YSCROLL for RC-clear; that fixed a `$5F`/stuck-VCBASE theory but
+  **regressed the face/3D band** (see `samples/eod-3a-reg-c64m.png`). Face must
+  match pre-`5ad36bf` structure (eyes + mouth + coherent band shape; VICE
+  `samples/eod-3b-reg-vice.png`). Sister effect / containment still open —
+  see `eod-handoff.md`. Prefer VIC-before-CPU (true Phi1) over permanent
+  cycle-13 delayed-RC if both scenes need it later.
 - Badline BA uses RELEASE=3 (sprite windows keep RELEASE=2) for dual-bit IEC
   resume (Robocop). That is a deliberate divergence from classic RELEASE=2; do
   not drop it without another IEC fix — it is covered by `c64_vicii` and

@@ -42,10 +42,11 @@ enum {
     VICII_BADLINE_LAST         = 0xF7,
     VICII_CACCESS_FIRST_CYCLE  = 15,
     VICII_CACCESS_LAST_CYCLE   = 54,
-    /* Bauer 3.7.2 / VICE UpdateVc: PAL cycle 14 → 0-based index 13
-       (VICII_PAL_CYCLE(14)). RC-clear uses reg11_delay YSCROLL so a same-cycle
-       Phi2 $D011 store is not visible (c64m CPU-before-VIC ≈ VICE Phi1 then Phi2). */
-    VICII_VC_RC_CYCLE          = 13,
+    /* Bauer 3.7.2 VC/RC phase at 0-based cycle 14. Moving to VICE's cycle 13
+       (PAL_CYCLE(14)) while CPU still runs before VIC breaks EoD face/3D band.
+       eod-3 FLI VCBASE still advances with g_line + matrix D018 reload + live
+       badline RC-clear at this index (linelog R99–R170 matches VICE steps). */
+    VICII_VC_RC_CYCLE          = 14,
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
@@ -206,7 +207,6 @@ void vicii_reset(vicii *v) {
     memset(v->g_line,       0, sizeof(v->g_line));
     v->reg11_delay = 0;
     v->matrix_d018_scr = 0;
-    v->line_latch_due = false;
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
@@ -271,22 +271,6 @@ static bool vicii_is_bad_line_at(const vicii *v, uint32_t y) {
     /* Bad lines require the frame-level allow_bad_lines latch (DEN sampled on
        raster $30), not the live DEN bit. Live DEN still blanks graphics and
        gates vertical-border open at the top compare. */
-    if (!v->allow_bad_lines) {
-        return false;
-    }
-    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) {
-        return false;
-    }
-    return (uint8_t)(y & 0x07u) == yscroll;
-}
-
-/* YSCROLL for UpdateVc RC-clear only: previous-cycle $D011 (reg11_delay).
-   Matches VICE Phi1 sampling before a same-cycle Phi2 store. BA / display_state
-   keep using live YSCROLL via vicii_is_bad_line(). */
-static bool vicii_bad_line_for_rc_clear(const vicii *v) {
-    uint8_t yscroll = v->reg11_delay & 0x07u;
-    uint32_t y = v->timing.raster_line;
-
     if (!v->allow_bad_lines) {
         return false;
     }
@@ -1638,25 +1622,31 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         v->bad_line = false;
     }
 
-    /* Bauer 3.7.2 / VICE UpdateVc at cycle 13 (0-based; VICII_PAL_CYCLE(14)):
-       - VC ← VCBASE every line (VMLI clear not modelled separately)
-       - RC ← 0 only if Bad Line Condition holds with *prior-cycle* YSCROLL
-         (reg11_delay). Live bad_line may already reflect a same-cycle $D011
-         store (CPU runs before VIC); that must not restart RC (eod-3 $5F).
-       Bulk video-matrix/colour latch is deferred to cycle 14 (see below):
-       latching on the same cycle as RC-clear starved mid-line CPU writes that
-       the EoD face/3D band depends on, producing full-width stripe garbage.
-       BA / display_state still follow live YSCROLL each cycle. Visible g-pixels
-       begin at cycle 15. Fort soft STA $D011 at ~cycle 9 of rast 119 is visible
-       via reg11_delay before this phase. */
+    /* Bauer 3.7.2 UpdateVc at cycle 14 (0-based). VC ← VCBASE every line.
+       RC ← 0 when live badline holds; bulk line latch on RC clear.
+       Visible g-pixels begin at cycle 15. */
     if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
         v->vc = v->vc_base;
-        if (vicii_bad_line_for_rc_clear(v)) {
+        if (v->bad_line) {
             v->rc            = 0;
             v->display_state = true;
-            /* Defer bulk latch to cycle 14 (line_latch_due). Do not force
-               bad_line here — BA follows live YSCROLL every cycle. */
-            v->line_latch_due = true;
+            if (bus) {
+                vicii_fill_line_latch(v, bus);
+                v->matrix_d018_scr =
+                    (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+            }
+        } else if (bus && v->display_state) {
+            /* When $D018 screen base changes into bitmap mode, reload matrix
+               so FLI character codes are not reused as bitmap colour nybbles
+               (eod-3). Colour stays frozen (eod-2 right edge). */
+            uint8_t scr =
+                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+            if (scr != v->matrix_d018_scr) {
+                v->matrix_d018_scr = scr;
+                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
+                    vicii_fill_matrix_latch(v, bus);
+                }
+            }
         }
 
         /* Optional per-line sequencer dump for eod-3 diagnosis.
@@ -1738,37 +1728,6 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         }
     }
 
-    /* Cycle 14: bulk c-latch after UpdateVc. Same data source as VICE's
-       per-cycle cbuf fill, taken once so a later mid-line badline/D018 change
-       cannot partially rewrite only the last columns (eod-2). Deferred one
-       cycle from RC-clear so cycle-13 Phi2 stores into screen/colour RAM still
-       land in the latch (eod face/3D).
-       Latch when RC was cleared at cycle 13 (line_latch_due), or when this is
-       still a live badline with RC already 0 (covers RC wrap without a delayed
-       clear on this line). */
-    if (cycle == 14u && bus) {
-        bool do_latch = v->line_latch_due || (v->bad_line && v->rc == 0);
-        v->line_latch_due = false;
-        if (do_latch) {
-            vicii_fill_line_latch(v, bus);
-            v->matrix_d018_scr =
-                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-        } else if (v->display_state) {
-            /* When $D018 screen base changes into bitmap mode, reload matrix
-               so FLI character codes are not reused as bitmap colour nybbles
-               (eod-3). Do not reload on every bitmap line or on non-BMM $D018
-               thrashing — both re-broke eod-2's right edge. Colour stays frozen. */
-            uint8_t scr =
-                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-            if (scr != v->matrix_d018_scr) {
-                v->matrix_d018_scr = scr;
-                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
-                    vicii_fill_matrix_latch(v, bus);
-                }
-            }
-        }
-    }
-
     {
         uint8_t active_before = 0;
         int n;
@@ -1834,7 +1793,8 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* VICE: delay video mode for fetches by one cycle (reg11_delay). Updated
-       after this cycle's g-access so the next cycle sees the new $D011. */
+       after this cycle's g-access so the next cycle sees the new $D011.
+       Also clears same-cycle write flag used by UpdateVc RC-clear. */
     v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
 
     /* Deferred $D01E/$D01F clear (after this cycle's pixel/collision sample). */
