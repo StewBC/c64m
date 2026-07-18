@@ -102,6 +102,10 @@ struct vicii {
     /* $D018 bits 7-4 at last video-matrix fill. Non-badline lines re-fill the
        matrix only when the screen base changes (eod-3 FLI→bitmap $9x→$30). */
     uint8_t  matrix_d018_scr;
+    /* Set when UpdateVc clears RC (cycle 13); bulk video-matrix/colour latch
+       runs on cycle 14 so software still has one Phi2 write window after RC
+       clear (Edge of Disgrace face/3D band). */
+    bool     line_latch_due;
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 

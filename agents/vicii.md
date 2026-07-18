@@ -118,23 +118,28 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
   Snapshot rendering still re-reads RAM (no sequencer history).
 - `reg11_delay` is updated from `$D011` at the end of each cycle after fetches.
-- Video-matrix/colour latches are bulk-filled at the cycle-14 VC/RC phase when
-  badline is already true. Per-cycle c-access does not rewrite the latch (BA is
-  still scheduled). That avoids late mid-line badlines (e.g. EoD plasma `$D011`
-  at ~cycle 52) from overwriting only the last columns with a mismatched `$D018`
-  bank.
+- Video-matrix/colour latches are bulk-filled at **cycle 14**, one cycle after
+  UpdateVc RC-clear (cycle 13). `line_latch_due` is set when delayed-YSCROLL RC
+  clear runs; cycle 14 also latches when live `bad_line && rc==0` (covers RC wrap
+  on lines where delayed clear did not fire). Per-cycle c-access does not rewrite
+  the latch (BA is still scheduled). That avoids late mid-line badlines (e.g. EoD
+  plasma `$D011` at ~cycle 52) from overwriting only the last columns with a
+  mismatched `$D018` bank. Latching on the same cycle as RC-clear starved
+  cycle-13 Phi2 screen/colour writes and turned the EoD face/3D band into
+  full-width stripe garbage — deferring the bulk fill restores the shape while
+  keeping UpdateVc at cycle 13 for eod-3.
 - On non-badline display lines, if `$D018` screen bits change **and** BMM is set,
   the matrix latch is reloaded once (`matrix_d018_scr` tracks the last fill).
   Intended for eod-3 FLI→bitmap (`$9x`→`$30`) so FLI char codes are not reused as
   bitmap colour nybbles. Colour is never refreshed off badline (that re-broke
   eod-2). Broader reloads (every line, or every BMM line) also re-broke eod-2.
-- eod-3 FLI vertical address (VCBASE): WIP uses delayed YSCROLL on UpdateVc RC
-  clear (see Bad Line bullet). VICE oracle R103 `$D011=$5B` @ UpdateVc, RC 4…7,
-  VCBASE `$0F0→$118→…`; pre-fix c64m had `$5F`/RC restart and VCBASE stuck.
-  **Uncommitted as of 2026-07-18:** user reports earlier-demo visual regressions;
-  sister effect after eod-3 still broken. See `eod-handoff.md`. Do not treat this
-  as closed or commit until those are resolved. The BA/display vs RC-clear YSCROLL
-  **split** is a phase-order compromise (CPU-before-VIC), not a full Phi1 model.
+- eod-3 FLI vertical address (VCBASE): delayed YSCROLL on UpdateVc RC clear (see
+  Bad Line bullet). VICE oracle R103 `$D011=$5B` @ UpdateVc, RC 4…7, VCBASE
+  `$0F0→$118→…`; pre-fix c64m had `$5F`/RC restart and VCBASE stuck. Face/3D
+  band regression from latch-at-13 is fixed by cycle-14 bulk fill. Sister effect
+  after eod-3 and full containment may still be open — see `eod-handoff.md`.
+  The BA/display vs RC-clear YSCROLL **split** remains a phase-order compromise
+  (CPU-before-VIC), not a full Phi1 model.
 - Badline BA uses RELEASE=3 (sprite windows keep RELEASE=2) for dual-bit IEC
   resume (Robocop). That is a deliberate divergence from classic RELEASE=2; do
   not drop it without another IEC fix — it is covered by `c64_vicii` and

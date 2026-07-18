@@ -206,6 +206,7 @@ void vicii_reset(vicii *v) {
     memset(v->g_line,       0, sizeof(v->g_line));
     v->reg11_delay = 0;
     v->matrix_d018_scr = 0;
+    v->line_latch_due = false;
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
@@ -1642,33 +1643,20 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
        - RC ← 0 only if Bad Line Condition holds with *prior-cycle* YSCROLL
          (reg11_delay). Live bad_line may already reflect a same-cycle $D011
          store (CPU runs before VIC); that must not restart RC (eod-3 $5F).
-       - bulk line latch when RC is cleared (ordinary / early-FLI bad line)
-       Visible g-pixels begin at cycle 15. Fort soft STA $D011 at ~cycle 9 of
-       rast 119 is visible via reg11_delay before this phase. */
+       Bulk video-matrix/colour latch is deferred to cycle 14 (see below):
+       latching on the same cycle as RC-clear starved mid-line CPU writes that
+       the EoD face/3D band depends on, producing full-width stripe garbage.
+       BA / display_state still follow live YSCROLL each cycle. Visible g-pixels
+       begin at cycle 15. Fort soft STA $D011 at ~cycle 9 of rast 119 is visible
+       via reg11_delay before this phase. */
     if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
         v->vc = v->vc_base;
         if (vicii_bad_line_for_rc_clear(v)) {
             v->rc            = 0;
             v->display_state = true;
-            v->bad_line      = true;
-            if (bus) {
-                vicii_fill_line_latch(v, bus);
-                v->matrix_d018_scr =
-                    (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-            }
-        } else if (bus && v->display_state) {
-            /* When $D018 screen base changes into bitmap mode, reload matrix
-               so FLI character codes are not reused as bitmap colour nybbles
-               (eod-3). Do not reload on every bitmap line or on non-BMM $D018
-               thrashing — both re-broke eod-2's right edge. Colour stays frozen. */
-            uint8_t scr =
-                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-            if (scr != v->matrix_d018_scr) {
-                v->matrix_d018_scr = scr;
-                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
-                    vicii_fill_matrix_latch(v, bus);
-                }
-            }
+            /* Defer bulk latch to cycle 14 (line_latch_due). Do not force
+               bad_line here — BA follows live YSCROLL every cycle. */
+            v->line_latch_due = true;
         }
 
         /* Optional per-line sequencer dump for eod-3 diagnosis.
@@ -1745,6 +1733,37 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
                             (unsigned)v->color_line[2],
                             (unsigned)gaddr,
                             (unsigned)scr, (unsigned)bmp, (unsigned)ch);
+                }
+            }
+        }
+    }
+
+    /* Cycle 14: bulk c-latch after UpdateVc. Same data source as VICE's
+       per-cycle cbuf fill, taken once so a later mid-line badline/D018 change
+       cannot partially rewrite only the last columns (eod-2). Deferred one
+       cycle from RC-clear so cycle-13 Phi2 stores into screen/colour RAM still
+       land in the latch (eod face/3D).
+       Latch when RC was cleared at cycle 13 (line_latch_due), or when this is
+       still a live badline with RC already 0 (covers RC wrap without a delayed
+       clear on this line). */
+    if (cycle == 14u && bus) {
+        bool do_latch = v->line_latch_due || (v->bad_line && v->rc == 0);
+        v->line_latch_due = false;
+        if (do_latch) {
+            vicii_fill_line_latch(v, bus);
+            v->matrix_d018_scr =
+                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+        } else if (v->display_state) {
+            /* When $D018 screen base changes into bitmap mode, reload matrix
+               so FLI character codes are not reused as bitmap colour nybbles
+               (eod-3). Do not reload on every bitmap line or on non-BMM $D018
+               thrashing — both re-broke eod-2's right edge. Colour stays frozen. */
+            uint8_t scr =
+                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+            if (scr != v->matrix_d018_scr) {
+                v->matrix_d018_scr = scr;
+                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
+                    vicii_fill_matrix_latch(v, bus);
                 }
             }
         }
