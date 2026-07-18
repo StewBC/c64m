@@ -107,6 +107,12 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - g-access still discards the fetched byte; the paint path re-reads RAM live, so
   latch fidelity for same-cycle CPU writes is not modeled. Snapshot rendering is
   still approximate.
+- Video-matrix/colour latches are bulk-filled at the cycle-14 VC/RC phase when
+  badline is already true. Per-cycle c-access does not rewrite the latch (BA is
+  still scheduled). That avoids late mid-line badlines (e.g. EoD plasma `$D011`
+  at ~cycle 52) from overwriting only the last columns with a mismatched `$D018`
+  bank. A future VC/VMLI-accurate per-cycle path can restore VICE-style partial
+  fills without that corruption.
 - Badline BA uses RELEASE=3 (sprite windows keep RELEASE=2) for dual-bit IEC
   resume (Robocop). That is a deliberate divergence from classic RELEASE=2; do
   not drop it without another IEC fix — it is covered by `c64_vicii` and

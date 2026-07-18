@@ -1424,19 +1424,6 @@ static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs
     }
 }
 
-static void vicii_fetch_c_access(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
-    uint32_t col = cycle - VICII_CACCESS_FIRST_CYCLE;
-    uint16_t screen_base;
-    uint16_t vc_col;
-
-    if (!bus || col >= VICII_TEXT_COLUMNS) return;
-    screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
-        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    vc_col = (uint16_t)((v->vc + col) & VICII_VC_MAX);
-    v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
-    v->color_line[col] = c64_bus_vic_read_color(bus, vc_col);
-}
-
 static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
     uint16_t vic_bank;
     uint16_t address;
@@ -1504,19 +1491,22 @@ static void vicii_execute_scheduled_fetches(vicii *v, const c64_bus_t *bus, uint
         return;
     }
     vicii_fetch_g_or_idle_access(v, bus, cycle);
-    if (v->timing.bus_access == VICII_BUS_ACCESS_C) {
-        vicii_fetch_c_access(v, bus, cycle);
-    }
+    /* c-access bus cycles still assert BA (via schedule above), but the line
+       latch is filled once at the cycle-14 VC/RC phase (vicii_fill_line_latch).
+       Per-cycle video_matrix/color_line writes are intentionally not done here:
+       a mid-line YSCROLL/D018 change that arms badline late would overwrite only
+       the last columns with the post-write bank, destroying EoD plasma's col39
+       black frame while col0 (never rewritten late) stayed correct. VICE updates
+       cbuf per cycle with a VC/VMLI that tracks g-accesses; until that sequencer
+       is matched, the bulk latch is the sole c-data source for the renderer. */
 }
 
 /* Fill the video-matrix and colour-line latches for the whole line (all 40
-   columns) from screen/colour RAM at VC. On hardware the c-accesses are spread
-   across cycles 15-54, but nothing observes the partially-filled buffers -- only
-   the renderer reads them, and the cycle->pixel mapping draws the leftmost
-   columns before cycle 15. Filling the complete line latch at the bad line's
-   start guarantees every column is drawn from a consistent, correct latch, and
-   yields identical values to the per-cycle fill (same RAM, same VC). BA stalling
-   is modelled separately (cycle 12), so it is unaffected. */
+   columns) from screen/colour RAM at VC. Called at the cycle-14 VC/RC phase when
+   badline is already true. BA for c-accesses is still modelled per cycle; only
+   the latch data is bulk-loaded so a later mid-line badline/D018 change cannot
+   partially overwrite the last columns with a mismatched bank (EoD plasma right
+   edge). */
 static void vicii_fill_line_latch(vicii *v, const c64_bus_t *bus) {
     uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
         (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
