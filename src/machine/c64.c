@@ -155,7 +155,7 @@ static uint64_t c64_current_cycle(const c64_t *machine) {
 }
 
 static void c64_step_vic(c64_t *machine) {
-    vicii_step_cycle(&machine->vic, &machine->bus, machine->clock.cycle);
+    vicii_begin_cycle(&machine->vic, &machine->bus, machine->clock.cycle);
     machine->clock.vic_cycles++;
 }
 
@@ -279,18 +279,30 @@ static void c64_update_vic_irq_delay(c64_t *machine) {
     }
 }
 
-/* Devices for the current clock.cycle (VIC sees pre-CPU-write regs when called
-   before apply_pending_cpu_events). Does not increment clock.cycle. */
-static void c64_step_devices_for_current_cycle(c64_t *machine) {
+/* Begin the VIC's current cycle first so BA/AEC describe this cycle before the
+   6510 makes its bus decision. */
+static void c64_begin_vic_for_current_cycle(c64_t *machine) {
     c64_balog_maybe_emit(machine);
     c64_step_vic(machine);
+}
+
+/* The 6510 polls interrupt pins at an instruction boundary before these chips
+   advance into the new cycle. Their bus-visible work still precedes the CPU's
+   Phi2 bus event below. */
+static void c64_step_nonvic_devices_for_current_cycle(c64_t *machine) {
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
     c64_update_vic_irq_delay(machine);
 }
 
+static void c64_step_devices_for_current_cycle(c64_t *machine) {
+    c64_begin_vic_for_current_cycle(machine);
+    c64_step_nonvic_devices_for_current_cycle(machine);
+}
+
 static void c64_finish_cycle(c64_t *machine) {
+    vicii_finish_cycle(&machine->vic);
     machine->clock.cycle++;
     /* Per-cycle backstop: keep the drive current when no IEC access catches it
        up. IEC accesses advance it precisely ahead of this point. */
@@ -1238,13 +1250,7 @@ static void c64_step_micro_cycle(c64_t *machine) {
     assert(machine);
     assert(machine->cpu.micro_active);
 
-    /*
-     * Phi1 then Phi2: VIC for this cycle first (UpdateVc/badline see $D011
-     * before a same-cycle STA), then CPU micro-step, then clock++.
-     */
     c64_balog_mark(0);
-    c64_step_devices_for_current_cycle(machine);
-
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_ARBITER;
     completed = c6510_micro_step(&machine->cpu);
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
@@ -1272,29 +1278,40 @@ static void c64_step_micro_cycle(c64_t *machine) {
 static void c64_step_host_ba_stall(c64_t *machine) {
     /* 6510 held; 1541 continues (media + drive CPU + VIAs). */
     c64_balog_mark(1);
-    c64_advance_one_cycle(machine);
+    c64_finish_cycle(machine);
 }
 
 static bool c64_step_cycle_internal(c64_t *machine) {
+    bool between_instructions_stalled = false;
+
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
         (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine))) {
         machine->instruction_complete = true;
         machine->clock.cpu_cycles++;
-        machine->clock.cycle++;
-        c64_drive_sync_to(machine, machine->clock.cycle);
+        c64_advance_one_cycle(machine);
         return true;
     }
+
+    /* Establish this cycle's VIC Phi1 state and current BA/AEC pins before the
+       6510 decides whether its Phi2 phase can run. VIC raster advancement is
+       deferred to c64_finish_cycle, after any CPU bus event. */
+    c64_begin_vic_for_current_cycle(machine);
 
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active) {
         if (!vicii_aec_active(&machine->vic) ||
             !vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
             /* Between instructions BA/AEC holds the 6510 only. */
-            c64_step_host_ba_stall(machine);
-            return true;
-        }
-        if (!c64_prepare_micro_instruction(machine)) {
+            between_instructions_stalled = true;
+        } else if (!c64_prepare_micro_instruction(machine)) {
             c64_prepare_deferred_cpu_trace(machine);
         }
+    }
+
+    c64_step_nonvic_devices_for_current_cycle(machine);
+
+    if (between_instructions_stalled) {
+        c64_step_host_ba_stall(machine);
+        return true;
     }
 
     if (machine->cpu.micro_active) {
@@ -1311,12 +1328,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
             c64_step_host_ba_stall(machine);
             return true;
         }
-        /*
-         * Phi1 then Phi2: VIC for this clock.cycle first, then CPU bus events
-         * at the same absolute cycle, then clock++.
-         */
         c64_balog_mark(0);
-        c64_step_devices_for_current_cycle(machine);
         c64_apply_pending_cpu_events_at_elapsed(machine);
         machine->pending_cpu_elapsed++;
         machine->clock.cpu_cycles++;
@@ -1335,7 +1347,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
         return true;
     }
 
-    c64_advance_one_cycle(machine);
+    c64_finish_cycle(machine);
     return true;
 }
 

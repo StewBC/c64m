@@ -179,11 +179,14 @@ static void prepare_interesting_state(c64_t *machine) {
     machine->vic.completed_frame_ready = true;
     machine->vic.vc = 0x0123;
     machine->vic.vc_base = 0x0234;
+    machine->vic.vmli = 17;
     machine->vic.rc = 5;
     machine->vic.display_state = true;
     machine->vic.bad_line = true;
     fill_pattern(machine->vic.video_matrix, sizeof(machine->vic.video_matrix), 0x40);
     fill_pattern(machine->vic.color_line, sizeof(machine->vic.color_line), 0x05);
+    fill_pattern(machine->vic.g_line, sizeof(machine->vic.g_line), 0x80);
+    machine->vic.reg11_delay = 0x5b;
     machine->vic.irq_status = 0x81;
     machine->vic.irq_enable = 0x0f;
     machine->vic.sprite_mc[3] = 9;
@@ -337,6 +340,9 @@ static void assert_restored_state(const c64_t *machine) {
     expect_u8("restored color ram", (uint8_t)(0x02u + (uint8_t)(17u * 7u)), machine->bus.color_ram[7]);
     expect_u16("restored pc", 0xc123, machine->cpu.cpu.pc);
     expect_u8("restored vic reg", 0x9b, machine->vic.registers[0x11]);
+    expect_u8("restored vic vmli", 17, machine->vic.vmli);
+    expect_u8("restored vic graphics latch", 0x80, machine->vic.g_line[0]);
+    expect_u8("restored vic reg11 delay", 0x5b, machine->vic.reg11_delay);
     expect_true("restored vic frame ready", machine->vic.completed_frame_ready);
     expect_true("restored vic active sprite", machine->vic.sprite_active[3]);
     expect_u16("restored cia timer", 0x1002, machine->cia1.timer_a.counter);

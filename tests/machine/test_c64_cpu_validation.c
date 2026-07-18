@@ -1607,22 +1607,23 @@ static void run_cpu_vic_interaction_trace(
 }
 
 static void test_cpu_vic_pal_ntsc_interaction_traces(void) {
-    /* Bad-line C accesses: opcode at 12, then the first operand read at 57
-       after the schedule-derived C run [15,54] and three-cycle release margin. */
-    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 0x33u, 12u, true, 0,
-        12u, 57u, 0x33u);
+    /* Execute the opcode one cycle before BA falls at cycle 11. Operand reads
+       resume at cycle 54, immediately after c-accesses 14..53. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 0x33u, 10u, true, 0,
+        10u, 54u, 0x33u);
 
-    /* PAL sprite 0 data is scheduled at cycles 57/58; BA is derived at 54. */
-    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 54u, false, 0,
-        54u, 60u, 101u);
+    /* PAL sprite 0 data is scheduled at cycles 57/58; execute the opcode just
+       before BA is derived at 54. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 53u, false, 0,
+        53u, 60u, 101u);
 
     /* NTSC sprite 0 uses the 6567R8 slot at cycles 59/60; BA derives at 56. */
-    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_NTSC, 100u, 56u, false, 0,
-        56u, 62u, 101u);
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_NTSC, 100u, 55u, false, 0,
+        55u, 62u, 101u);
 
     /* PAL sprite 3 is the cross-line case: data is at line N+1/cycle 0/1. */
-    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 60u, false, 3,
-        60u, 66u, 101u);
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 59u, false, 3,
+        59u, 66u, 101u);
 }
 
 static void test_instruction_and_cycle_step_share_ba_arbiter(void) {
@@ -1723,9 +1724,8 @@ static void test_timing_fixture_records_real_badline_stall(void) {
     reset_machine_standard(&machine, &roms, C64_VIDEO_STANDARD_PAL);
     machine.bus.ram[0x1234] = 0x5a;
 
-    /* Begin an instruction on the documented PAL badline BA-assert cycle.
-       The first CPU cycle runs, then vicii_step_cycle() asserts BA through
-       the three-cycle release margin before the pending read resumes. */
+    /* Teleport into the PAL badline BA window. Current-cycle VIC Phi1 runs
+       before the CPU decision, so the first CPU read is held immediately. */
     vicii_write_register(&machine.vic, 0xd011, 0x13u);
     machine.vic.timing.raster_line = 0x33u;
     machine.vic.timing.cycle_in_line = 12u;
@@ -1737,16 +1737,22 @@ static void test_timing_fixture_records_real_badline_stall(void) {
     expect_true("badline fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
 
     held_cpu_cycles = machine.clock.cpu_cycles;
-    for (i = 0; i < 44u; i++) {
+    for (i = 0; i < 40u; i++) {
         capture_timing_step(&machine, &sample);
         expect_true("badline fixture BA stays low", sample.ba_before);
         expect_u64("badline fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
     }
 
+    /* BA rises for cycle 53, while AEC still blocks its final c-access. */
     capture_timing_step(&machine, &sample);
     expect_true("badline fixture BA releases", !sample.ba_before);
+    expect_u64("badline fixture final AEC cycle holds CPU",
+        held_cpu_cycles, sample.cpu_cycles_after);
+
+    capture_timing_step(&machine, &sample);
+    expect_true("badline fixture remains released", !sample.ba_before);
     expect_u64("badline fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
-    step_machine_cycles(&machine, 2);
+    step_machine_cycles(&machine, 3);
     expect_u8("badline fixture instruction completes", 0x5a, snapshot(&machine).a);
 }
 

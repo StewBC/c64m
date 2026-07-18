@@ -40,21 +40,21 @@ enum {
     /* Phase A additions */
     VICII_BADLINE_FIRST        = 0x30,
     VICII_BADLINE_LAST         = 0xF7,
-    VICII_CACCESS_FIRST_CYCLE  = 15,
-    VICII_CACCESS_LAST_CYCLE   = 54,
-    /* Bauer 3.7.2 VC/RC phase at 0-based cycle 14. Moving to VICE's cycle 13
-       (PAL_CYCLE(14)) while CPU still runs before VIC breaks EoD face/3D band.
-       eod-3 FLI VCBASE still advances with g_line + matrix D018 reload + live
-       badline RC-clear at this index (linelog R99–R170 matches VICE steps). */
-    VICII_VC_RC_CYCLE          = 14,
+    /* VICE PAL_CYCLE(n) is n-1: Phi2 c-accesses are cycles 14..53 and Phi1
+       g-accesses are cycles 15..54 in c64m's zero-based raster coordinates. */
+    VICII_CACCESS_FIRST_CYCLE  = 14,
+    VICII_CACCESS_LAST_CYCLE   = 53,
+    VICII_GACCESS_FIRST_CYCLE  = 15,
+    VICII_GACCESS_LAST_CYCLE   = 54,
+    VICII_VC_RC_CYCLE          = 13,
+    VICII_UPDATE_RC_CYCLE      = 57,
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
     VICII_IRQ_IMBC             = 0x02,
     VICII_IRQ_IMMC             = 0x04,
 
-    /* BA timing is derived from the Phi2 schedule: three-cycle lead and a
-       two-cycle release margin after a contiguous VIC-owned run. */
+    /* BA is asserted three cycles before a Phi2 VIC access. */
     VICII_BA_LEAD_CYCLES       = 3,
     VICII_BA_RELEASE_CYCLES    = 2,
 
@@ -191,6 +191,7 @@ void vicii_reset(vicii *v) {
 
     v->vc                        = 0;
     v->vc_base                   = 0;
+    v->vmli                      = 0;
     v->rc                        = 0;
     v->display_state             = false;
     v->bad_line                  = false;
@@ -206,7 +207,6 @@ void vicii_reset(vicii *v) {
     memset(v->color_line,   0, sizeof(v->color_line));
     memset(v->g_line,       0, sizeof(v->g_line));
     v->reg11_delay = 0;
-    v->matrix_d018_scr = 0;
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
@@ -873,11 +873,9 @@ static vicii_bg_pixel vicii_background_pixel(
     char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
     bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
 
-    /* Character code and colour come from the line latch on the live path
-       (bulk-filled at cycle 14 when badline) or live RAM on the snapshot path.
-       g-access bytes come from g_line (latched at Phi1 with reg11_delay
-       addressing). Keep colour latched too: live colour re-broke eod-2's right
-       black frame (same late mid-line rewrite class as video-matrix). */
+    /* Character code and colour come from the per-cycle c-access latches on the
+       live path or live RAM on the snapshot path. g-access bytes come from
+       g_line (latched at Phi1 with reg11_delay addressing). */
     {
     uint8_t vm_byte   = lc->vm_latch    ? lc->vm_latch[col]
                                         : c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
@@ -1233,13 +1231,13 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle paints its
        true 8 VIC dots, so buffer_x == VIC X-coordinate and the paint cycle for
        every column matches hardware. Display column 0 (X=24) is drawn at the
-       first c-access cycle (15); each cycle advances X by 8. Cycles whose dots
+       first g-access cycle (15); each cycle advances X by 8. Cycles whose dots
        fall outside the 384-px crop (line start/end H-blank) produce an empty span
        and paint nothing; every column 0..383 is still painted exactly once per
        line (PAL cycles 12..59, NTSC 12..59). */
     {
         int32_t xs = (int32_t)VICII_HBORDER_LEFT_40 +
-            ((int32_t)cyc - (int32_t)VICII_CACCESS_FIRST_CYCLE) *
+            ((int32_t)cyc - (int32_t)VICII_GACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
         int32_t xe = xs + (int32_t)VICII_CHARACTER_WIDTH;
         if (xs < 0) xs = 0;
@@ -1431,9 +1429,9 @@ static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs
         last_offset++;
     }
 
-    /* Badline character fetches need a slightly longer post-steal BA hold so
-       dual-bit IEC samples that resume after RDY do not land on a released bus.
-       Sprite BA windows keep the classic RELEASE=2 length (unit matrix). */
+    /* A badline needs no artificial post-fetch BA hold: AEC itself blocks the
+       final c-access at cycle 53 and the CPU may resume at cycle 54. Sprite BA
+       windows retain their separately validated release tail. */
     end_cycle = cycle + last_offset;
     end_line = v->timing.raster_line;
     if (end_cycle >= v->timing.cycles_per_line) {
@@ -1445,7 +1443,7 @@ static void vicii_derive_ba_from_schedule(vicii *v, uint32_t cycle, uint64_t abs
         end_cycle >= VICII_CACCESS_FIRST_CYCLE &&
         end_cycle <= VICII_CACCESS_LAST_CYCLE &&
         !vicii_sprite_slot(v, end_cycle, &sprite, &second_cycle);
-    release = badline_window ? 3u : (uint32_t)VICII_BA_RELEASE_CYCLES;
+    release = badline_window ? 0u : (uint32_t)VICII_BA_RELEASE_CYCLES;
 
     if (abs_cycle + last_offset + release > v->timing.ba_low_until_abs) {
         v->timing.ba_low_until_abs = abs_cycle + last_offset + release;
@@ -1461,33 +1459,64 @@ static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_
     bool bmm = (reg11 & 0x20u) != 0u;
     bool ecm = (reg11 & 0x40u) != 0u;
 
-    if (!bus) return;
-    vic_bank = c64_bus_vic_bank_base(bus);
-    if (!v->display_state || cycle < VICII_CACCESS_FIRST_CYCLE ||
-        cycle > VICII_CACCESS_LAST_CYCLE) {
-        address = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
-        (void)c64_bus_vic_read_ram(bus, address);
+    if (!v->display_state || cycle < VICII_GACCESS_FIRST_CYCLE ||
+        cycle > VICII_GACCESS_LAST_CYCLE) {
+        if (bus) {
+            vic_bank = c64_bus_vic_bank_base(bus);
+            address = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
+            (void)c64_bus_vic_read_ram(bus, address);
+        }
         return;
     }
 
-    col = cycle - VICII_CACCESS_FIRST_CYCLE;
+    col = cycle - VICII_GACCESS_FIRST_CYCLE;
     if (col >= (uint32_t)VICII_TEXT_COLUMNS) {
         return;
     }
-    if (bmm) {
-        uint16_t bitmap_base = (uint16_t)(vic_bank +
-            ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
-        address = (uint16_t)(bitmap_base + (((uint16_t)(v->vc_base + col) & 0x03ffu) << 3) + v->rc);
-        v->g_line[col] = c64_bus_vic_read_ram(bus, address);
-    } else {
-        uint16_t char_base = (uint16_t)(vic_bank +
-            ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-        uint8_t code = v->video_matrix[col];
-        if (ecm) {
-            code &= 0x3fu;
+    if (bus) {
+        vic_bank = c64_bus_vic_bank_base(bus);
+        if (bmm) {
+            uint16_t bitmap_base = (uint16_t)(vic_bank +
+                ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+            address = (uint16_t)(bitmap_base + ((v->vc & 0x03ffu) << 3) + v->rc);
+            v->g_line[col] = c64_bus_vic_read_ram(bus, address);
+        } else {
+            uint16_t char_base = (uint16_t)(vic_bank +
+                ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+            uint8_t code = v->video_matrix[v->vmli];
+            if (ecm) {
+                code &= 0x3fu;
+            }
+            v->g_line[col] = c64_bus_vic_read_char_glyph_at(bus, char_base, code, v->rc);
         }
-        v->g_line[col] = c64_bus_vic_read_char_glyph_at(bus, char_base, code, v->rc);
     }
+
+    /* VICE/Bauer: every display-state g-access advances the 10-bit video
+       counter and matrix-line index. The following Phi2 c-access therefore
+       fills the next vbuf/cbuf slot, except at cycle 14 where slot zero is
+       fetched before the first g-access. */
+    v->vc = (uint16_t)((v->vc + 1u) & (uint16_t)VICII_VC_MAX);
+    if (v->vmli < (uint8_t)VICII_TEXT_COLUMNS) {
+        v->vmli++;
+    }
+}
+
+static void vicii_fetch_c_access(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
+    uint16_t vic_bank;
+    uint16_t screen_base;
+
+    if (!bus || !v->bad_line || cycle < VICII_CACCESS_FIRST_CYCLE ||
+        cycle > VICII_CACCESS_LAST_CYCLE ||
+        v->vmli >= (uint8_t)VICII_TEXT_COLUMNS) {
+        return;
+    }
+
+    vic_bank = c64_bus_vic_bank_base(bus);
+    screen_base = (uint16_t)(vic_bank +
+        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    v->video_matrix[v->vmli] = c64_bus_vic_read_ram(
+        bus, (uint16_t)(screen_base + v->vc));
+    v->color_line[v->vmli] = c64_bus_vic_read_color(bus, v->vc);
 }
 
 static void vicii_fetch_sprite_slot(vicii *v, const c64_bus_t *bus, uint32_t cycle) {
@@ -1527,51 +1556,10 @@ static void vicii_execute_scheduled_fetches(vicii *v, const c64_bus_t *bus, uint
         return;
     }
     vicii_fetch_g_or_idle_access(v, bus, cycle);
-    /* c-access bus cycles still assert BA (via schedule above), but the line
-       latch is filled once at the cycle-14 VC/RC phase (vicii_fill_line_latch).
-       Per-cycle video_matrix/color_line writes are intentionally not done here:
-       a mid-line YSCROLL/D018 change that arms badline late would overwrite only
-       the last columns with the post-write bank, destroying EoD plasma's col39
-       black frame (eod-2). VICE updates cbuf per cycle with a VC/VMLI that tracks
-       g-accesses; until that sequencer is matched, bulk latch remains the sole
-       c-data source. eod-3 may need the VMLI path — do not re-enable naive
-       cycle-index c-writes without it. */
+    vicii_fetch_c_access(v, bus, cycle);
 }
 
-/* Fill video-matrix only from current D018 screen base at VC. Used on
-   non-badline display lines so a mid-frame $D018 switch (eod-3 FLI $9x →
-   bitmap $30) reloads bitmap colour nybbles without waiting for a badline.
-   Colour RAM is intentionally not refreshed here — eod-2 needs the badline
-   colour latch frozen for the rest of the character row. */
-static void vicii_fill_matrix_latch(vicii *v, const c64_bus_t *bus) {
-    uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
-        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    uint32_t col;
-
-    for (col = 0; col < (uint32_t)VICII_TEXT_COLUMNS; col++) {
-        uint16_t vc_col = (uint16_t)((v->vc + col) & (uint16_t)VICII_VC_MAX);
-        v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
-    }
-}
-
-/* Fill the video-matrix and colour-line latches for the whole line (all 40
-   columns) from screen/colour RAM at VC. Called at the cycle-14 VC/RC phase when
-   badline is already true. BA for c-accesses is still modelled per cycle; only
-   the latch data is bulk-loaded so a later mid-line badline/D018 change cannot
-   partially overwrite the last columns with a mismatched bank (eod-2). */
-static void vicii_fill_line_latch(vicii *v, const c64_bus_t *bus) {
-    uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
-        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    uint32_t col;
-
-    for (col = 0; col < (uint32_t)VICII_TEXT_COLUMNS; col++) {
-        uint16_t vc_col = (uint16_t)(v->vc + col);
-        v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
-        v->color_line[col]   = c64_bus_vic_read_color(bus, vc_col);
-    }
-}
-
-void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
+void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     uint32_t cycle;
 
     assert(v);
@@ -1622,31 +1610,14 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         v->bad_line = false;
     }
 
-    /* Bauer 3.7.2 UpdateVc at cycle 14 (0-based). VC ← VCBASE every line.
-       RC ← 0 when live badline holds; bulk line latch on RC clear.
-       Visible g-pixels begin at cycle 15. */
+    /* Bauer 3.7.2 UpdateVc at VICE Phi2(14), zero-based cycle 13.
+       VC ← VCBASE and VMLI ← 0 every line; a live badline clears RC. */
     if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
         v->vc = v->vc_base;
+        v->vmli = 0;
         if (v->bad_line) {
             v->rc            = 0;
             v->display_state = true;
-            if (bus) {
-                vicii_fill_line_latch(v, bus);
-                v->matrix_d018_scr =
-                    (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-            }
-        } else if (bus && v->display_state) {
-            /* When $D018 screen base changes into bitmap mode, reload matrix
-               so FLI character codes are not reused as bitmap colour nybbles
-               (eod-3). Colour stays frozen (eod-2 right edge). */
-            uint8_t scr =
-                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
-            if (scr != v->matrix_d018_scr) {
-                v->matrix_d018_scr = scr;
-                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
-                    vicii_fill_matrix_latch(v, bus);
-                }
-            }
         }
 
         /* Optional per-line sequencer dump for eod-3 diagnosis.
@@ -1728,6 +1699,19 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         }
     }
 
+    /* VICE Phi2(58), zero-based cycle 57. This runs well before line wrap;
+       VC has already been advanced by the forty cycle-15..54 g-accesses. */
+    if (cycle == (uint32_t)VICII_UPDATE_RC_CYCLE) {
+        if (v->rc == (uint8_t)VICII_RC_MAX) {
+            v->display_state = false;
+            v->vc_base = v->vc;
+        }
+        if (v->display_state || v->bad_line) {
+            v->rc = (uint8_t)((v->rc + 1u) & (uint8_t)VICII_RC_MAX);
+            v->display_state = true;
+        }
+    }
+
     {
         uint8_t active_before = 0;
         int n;
@@ -1792,11 +1776,6 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         vicii_render_live_cycle(v, bus);
     }
 
-    /* VICE: delay video mode for fetches by one cycle (reg11_delay). Updated
-       after this cycle's g-access so the next cycle sees the new $D011.
-       Also clears same-cycle write flag used by UpdateVc RC-clear. */
-    v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
-
     /* Deferred $D01E/$D01F clear (after this cycle's pixel/collision sample). */
     if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {
         v->sprite_sprite_collision = 0;
@@ -1806,9 +1785,15 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         v->clear_collisions = 0;
     }
 
-    /* ------------------------------------------------------------------
-     * Advance cycle counter
-     * ------------------------------------------------------------------ */
+}
+
+void vicii_finish_cycle(vicii *v) {
+    assert(v);
+
+    /* Phi2 CPU writes have now occurred. The next cycle's g-access samples the
+       resulting mode through VICE's one-cycle reg11_delay latch. */
+    v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
+
     v->timing.cycle_in_line++;
     if (v->timing.cycle_in_line < v->timing.cycles_per_line) {
         return;
@@ -1819,27 +1804,6 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
      * model above); no Bauer cycle-63 dual-write needed.
      * ------------------------------------------------------------------ */
     v->timing.cycle_in_line = 0;
-
-    /* End-of-line VC advance + RC/idle (VICE UpdateRc at cycle 58, applied
-       here after the line's g-access equivalent VC+=40). With per-cycle
-       bad_line matching VICE check_badline:
-         if (display) VC += 40
-         if (RC == 7) { idle; VCBASE = VC }
-         if (!idle || bad_line) { RC = (RC + 1) & 7; leave idle }
-       bad_line here is the condition on the last cycle of the line, not a
-       sticky mid-line latch. */
-    if (v->display_state) {
-        v->vc = (uint16_t)((v->vc + VICII_TEXT_COLUMNS) & (uint16_t)VICII_VC_MAX);
-    }
-
-    if (v->rc == VICII_RC_MAX) {
-        v->display_state = false;
-        v->vc_base       = v->vc;
-    }
-    if (v->display_state || v->bad_line) {
-        v->rc            = (uint8_t)((v->rc + 1u) & (uint8_t)VICII_RC_MAX);
-        v->display_state = true;
-    }
 
     v->timing.raster_line++;
     if (v->timing.raster_line < v->timing.lines_per_frame) {
@@ -1866,9 +1830,15 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     v->vc            = 0;
     v->vc_base       = 0;
+    v->vmli          = 0;
     v->rc            = 0;
     v->display_state = false;
     v->bad_line      = false;
+}
+
+void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
+    vicii_begin_cycle(v, bus, abs_cycle);
+    vicii_finish_cycle(v);
 }
 
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle) {

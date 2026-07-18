@@ -342,7 +342,7 @@ static void test_sprite_collision_registers_read_clear(void) {
     expect_u8("d01f write ignored", 0x00, vicii_read_register(&v, 0xd01f));
 }
 
-static void test_bad_line_ba_asserts_at_cycle_12(void) {
+static void test_bad_line_ba_asserts_at_cycle_11(void) {
     vicii v;
     char error[256];
     uint64_t abs_cycle;
@@ -358,27 +358,26 @@ static void test_bad_line_ba_asserts_at_cycle_12(void) {
     v.allow_bad_lines = true;
 
     abs_cycle = 0;
-    for (i = 0; i < 12; i++) {
-        expect_true("ba high before cycle 12", !vicii_ba_active(&v, abs_cycle));
+    for (i = 0; i < 11; i++) {
+        expect_true("ba high before cycle 11", !vicii_ba_active(&v, abs_cycle));
         vicii_step_cycle(&v, NULL, abs_cycle);
         abs_cycle++;
     }
 
-    /* Step through cycle 12; BA is asserted inside that step. */
+    /* Cycle 11 is three cycles ahead of the first c-access at cycle 14. */
     vicii_step_cycle(&v, NULL, abs_cycle);
     abs_cycle++;
-    expect_true("ba asserts at cycle 12", vicii_ba_active(&v, abs_cycle));
+    expect_true("ba asserts at cycle 11", vicii_ba_active(&v, abs_cycle));
 
-    while (v.timing.cycle_in_line <= 55) {
-        expect_true("ba remains low through c-access window", vicii_ba_active(&v, abs_cycle));
+    while (v.timing.cycle_in_line <= 52) {
+        expect_true("ba remains low before final c-access", vicii_ba_active(&v, abs_cycle));
         vicii_step_cycle(&v, NULL, abs_cycle);
         abs_cycle++;
     }
 
-    /* Badline windows use RELEASE=3 (one cycle longer than sprite BA). */
-    vicii_step_cycle(&v, NULL, abs_cycle);
-    abs_cycle++;
-    expect_true("ba released after badline post-steal extension", !vicii_ba_active(&v, abs_cycle));
+    /* On cycle 53 BA may release because AEC itself owns the final c-access. */
+    expect_true("ba releases on final c-access", !vicii_ba_active(&v, abs_cycle));
+    expect_true("aec blocks final c-access", !vicii_aec_active(&v));
 }
 
 static void test_frame_snapshot_geometry_and_regions(void) {
@@ -2014,7 +2013,7 @@ static void setup_sprite_ba_test(
 
 /* Phase H test 1 (Bad Line baseline): no active sprites; existing bad-line
    read-cycle stall count remains unchanged.
-   (Covered by test_bad_line_ba_asserts_at_cycle_12 — no new assertions needed.) */
+   (Covered by test_bad_line_ba_asserts_at_cycle_11 — no new assertions needed.) */
 
 /* Phase H test 2: single active sprite (sprite 5) on a non-bad-line raster.
    BA window [1, 7) must fire and expire exactly. */
@@ -2463,31 +2462,30 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     v.allow_bad_lines = true;
 
     /* BA/RDY goes low three cycles before the first c-access, while AEC
-       remains high until the actual cycle-15 Phi2 bus takeover. */
-    v.timing.cycle_in_line = 12u;
-    vicii_step_cycle(&v, NULL, 12u);
-    expect_true("badline RDY low during BA lead", !vicii_rdy_active(&v, 12u));
+       remains high until the actual cycle-14 Phi2 bus takeover. */
+    v.timing.cycle_in_line = 11u;
+    vicii_begin_cycle(&v, NULL, 11u);
+    expect_true("badline RDY low during BA lead", !vicii_rdy_active(&v, 11u));
     expect_true("badline AEC high during BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
 
-    v.timing.cycle_in_line = 15u;
-    vicii_step_cycle(&v, NULL, 15u);
-    expect_true("badline RDY low during c-access", !vicii_rdy_active(&v, 15u));
+    v.timing.cycle_in_line = 14u;
+    vicii_begin_cycle(&v, NULL, 14u);
+    expect_true("badline RDY low during c-access", !vicii_rdy_active(&v, 14u));
     expect_true("badline AEC low during c-access", !vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
 
-    v.timing.cycle_in_line = 55u;
-    vicii_step_cycle(&v, NULL, 55u);
-    expect_true("badline RDY remains low for release margin", !vicii_rdy_active(&v, 55u));
+    v.timing.cycle_in_line = 53u;
+    vicii_begin_cycle(&v, NULL, 53u);
+    expect_true("badline RDY releases on final c-access", vicii_rdy_active(&v, 53u));
+    expect_true("badline AEC remains low for final c-access", !vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+
+    v.timing.cycle_in_line = 54u;
+    vicii_begin_cycle(&v, NULL, 54u);
+    expect_true("badline RDY remains released", vicii_rdy_active(&v, 54u));
     expect_true("badline AEC releases after c-access", vicii_aec_active(&v));
-
-    v.timing.cycle_in_line = 56u;
-    vicii_step_cycle(&v, NULL, 56u);
-    expect_true("badline RDY still low for RELEASE=3", !vicii_rdy_active(&v, 56u));
-    expect_true("badline AEC remains high", vicii_aec_active(&v));
-
-    v.timing.cycle_in_line = 57u;
-    vicii_step_cycle(&v, NULL, 57u);
-    expect_true("badline RDY releases", vicii_rdy_active(&v, 57u));
-    expect_true("badline AEC remains high after release", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
 
     vicii_reset(&v);
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
@@ -2499,19 +2497,108 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     v.sprite_visible[0] = true;
 
     v.timing.cycle_in_line = 54u;
-    vicii_step_cycle(&v, NULL, 54u);
+    vicii_begin_cycle(&v, NULL, 54u);
     expect_true("sprite RDY low during BA lead", !vicii_rdy_active(&v, 54u));
     expect_true("sprite AEC high during BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
 
     v.timing.cycle_in_line = 57u;
-    vicii_step_cycle(&v, NULL, 57u);
+    vicii_begin_cycle(&v, NULL, 57u);
     expect_true("sprite RDY low during data", !vicii_rdy_active(&v, 57u));
     expect_true("sprite AEC low during data", !vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
 
     v.timing.cycle_in_line = 60u;
-    vicii_step_cycle(&v, NULL, 60u);
+    vicii_begin_cycle(&v, NULL, 60u);
     expect_true("sprite RDY releases", vicii_rdy_active(&v, 60u));
     expect_true("sprite AEC releases", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+}
+
+static void test_updatevc_observes_phi1_before_same_cycle_cpu_write(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    v.timing.raster_line = 0x33u;
+    v.timing.cycle_in_line = 13u;
+    v.allow_bad_lines = true;
+    v.display_state = true;
+    v.vc_base = 0x120u;
+    v.vc = 0x155u;
+    v.rc = 4u;
+    vicii_write_register(&v, 0xd011, 0x12u); /* YSCROLL=2: not a badline. */
+
+    vicii_begin_cycle(&v, NULL, 13u);
+    expect_u8("same-cycle pre-write UpdateVc keeps RC", 4u, v.rc);
+    expect_u32("UpdateVc restores VCBASE", 0x120u, v.vc);
+    expect_u8("UpdateVc resets VMLI", 0u, v.vmli);
+
+    /* This is the CPU's Phi2 store in the same raster cycle. It is too late
+       for UpdateVc above, but is visible to subsequent VIC cycles. */
+    vicii_write_register(&v, 0xd011, 0x13u);
+    vicii_finish_cycle(&v);
+    expect_u8("same-cycle write remains too late for RC clear", 4u, v.rc);
+
+    vicii_reset(&v);
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    v.timing.raster_line = 0x33u;
+    v.timing.cycle_in_line = 13u;
+    v.allow_bad_lines = true;
+    v.display_state = true;
+    v.vc_base = 0x120u;
+    v.vc = 0x155u;
+    v.rc = 4u;
+    vicii_write_register(&v, 0xd011, 0x13u);
+    vicii_begin_cycle(&v, NULL, 13u);
+    expect_u8("earlier write clears RC at UpdateVc", 0u, v.rc);
+    vicii_finish_cycle(&v);
+}
+
+static void test_vc_vmli_advance_between_c_accesses(void) {
+    c64_t machine;
+    vicii *v;
+    uint16_t bank;
+    uint16_t screen_base;
+
+    reset_machine(&machine);
+    v = &machine.vic;
+    vicii_write_register(v, 0xd011, 0x13u);
+    vicii_write_register(v, 0xd018, 0x14u); /* screen $0400, charset $1000 */
+    v->timing.raster_line = 0x33u;
+    v->timing.cycle_in_line = 13u;
+    v->allow_bad_lines = true;
+    v->display_state = true;
+    v->vc_base = 0x020u;
+    v->vc = 0x099u;
+    v->rc = 4u;
+
+    bank = c64_bus_vic_bank_base(&machine.bus);
+    screen_base = (uint16_t)(bank + 0x0400u);
+    machine.bus.ram[(uint16_t)(screen_base + 0x020u)] = 0x11u;
+    machine.bus.ram[(uint16_t)(screen_base + 0x021u)] = 0x22u;
+    machine.bus.color_ram[0x020u] = 0x05u;
+    machine.bus.color_ram[0x021u] = 0x06u;
+
+    vicii_begin_cycle(v, &machine.bus, 13u);
+    expect_u32("UpdateVc starts c/g row at VCBASE", 0x020u, v->vc);
+    expect_u8("UpdateVc starts c/g row at VMLI zero", 0u, v->vmli);
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 14u);
+    expect_u8("cycle14 c-access fills vbuf zero", 0x11u, v->video_matrix[0]);
+    expect_u8("cycle14 c-access fills cbuf zero", 0x05u, v->color_line[0]);
+    expect_u32("cycle14 does not advance VC", 0x020u, v->vc);
+    expect_u8("cycle14 does not advance VMLI", 0u, v->vmli);
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 15u);
+    expect_u32("cycle15 g-access advances VC", 0x021u, v->vc);
+    expect_u8("cycle15 g-access advances VMLI", 1u, v->vmli);
+    expect_u8("cycle15 c-access fills next vbuf", 0x22u, v->video_matrix[1]);
+    expect_u8("cycle15 c-access fills next cbuf", 0x06u, v->color_line[1]);
+    vicii_finish_cycle(v);
 }
 
 static void test_vicii_debug_read_raster(void) {
@@ -3403,7 +3490,7 @@ int main(void) {
     test_raster_compare_write_triggers_same_line_irq();
     test_d011_yscroll_write_does_not_retrigger_same_line_irq();
     test_sprite_collision_registers_read_clear();
-    test_bad_line_ba_asserts_at_cycle_12();
+    test_bad_line_ba_asserts_at_cycle_11();
     test_frame_snapshot_geometry_and_regions();
     test_reset_screen_starts_clear();
     test_character_rendering_uses_screen_char_rom_and_color_ram();
@@ -3464,6 +3551,8 @@ int main(void) {
     test_sprite3_cross_line_ba();
     test_sprite4_cross_line_ba();
     test_aec_rdy_pin_transitions_follow_schedule();
+    test_updatevc_observes_phi1_before_same_cycle_cpu_write();
+    test_vc_vmli_advance_between_c_accesses();
     test_vicii_debug_read_raster();
     test_vicii_debug_read_d011_raster_bit8();
     test_vicii_debug_read_collision_no_clear();

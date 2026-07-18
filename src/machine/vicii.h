@@ -83,6 +83,7 @@ struct vicii {
     /* Phase A additions */
     uint16_t vc;               /* Video Counter, 10-bit, 0-1023 */
     uint16_t vc_base;          /* VCBASE: latched copy of vc at Bad Line row start */
+    uint8_t  vmli;             /* video-matrix line index, 0-40 */
     uint8_t  rc;               /* Row Counter, 3-bit, 0-7 */
     bool     display_state;    /* true while a character row is in progress */
     bool     bad_line;         /* true if the current raster line is a Bad Line */
@@ -99,9 +100,6 @@ struct vicii {
     /* Previous-cycle $D011 (VICE reg11_delay). g-fetch address uses this so a
        mid-line ECM/BMM write takes effect one cycle late. */
     uint8_t  reg11_delay;
-    /* $D018 bits 7-4 at last video-matrix fill. Non-badline lines re-fill the
-       matrix only when the screen base changes (eod-3 FLI→bitmap $9x→$30). */
-    uint8_t  matrix_d018_scr;
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 
@@ -192,6 +190,11 @@ void vicii_set_video_standard(vicii *v, vicii_video_standard standard);
 void vicii_set_pixel_output_enabled(vicii *v, bool enabled);
 bool vicii_pixel_output_enabled(const vicii *v);
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
+/* Split-cycle interface used by the machine arbiter. begin_cycle performs the
+   VIC's Phi1/internal work and establishes BA/AEC for the current Phi2. The CPU
+   may then run its Phi2 bus phase before finish_cycle advances the raster. */
+void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle);
+void vicii_finish_cycle(vicii *v);
 bool vicii_ba_active(const vicii *v, uint64_t abs_cycle);
 bool vicii_aec_active(const vicii *v);
 bool vicii_rdy_active(const vicii *v, uint64_t abs_cycle);
