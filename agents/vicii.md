@@ -98,6 +98,9 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
   0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
+  Invalid modes (ECM with BMM and/or MCM) are solid black in idle as well as
+  display — otherwise the ghost-byte MCM-bitmap path stipples EoD plasma's
+  post-FLI bottom frame (`$D011=$71`).
 - Vertical border uses VICE's two-stage unit: `set_vborder` latch (bottom only
   sets) and `vertical_border_active` (applied at cycle 0 and left compare).
   Top+DEN clears both. This is required for the classic RSEL lower-border open.

@@ -724,6 +724,16 @@ static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uin
     uint32_t sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
     uint32_t phase = (sx_raw - (uint32_t)xscroll);
 
+    /* Invalid modes (ECM combined with BMM and/or MCM) always output black,
+       including in idle — same as VICE COL_NONE. Without this, EoD plasma's
+       post-FLI $D011=$71 (ECM+BMM) + MCM idle path decodes $39FF as MCM
+       bitmap pairs and draws a stippled bottom frame instead of a solid line. */
+    if (ecm && (bmm || mcm)) {
+        (void)g;
+        (void)phase;
+        return vicii_bg_pixel_make(black, false);
+    }
+
     /* Idle forces c-access data to 0 (VICE vbuf/cbuf = 0). Multicolor *text*
        only uses 2-bit pixels when colour-RAM bit 3 is set; with cbuf=0 that
        never holds, so MCM text idle is hires with fg colour 0 — same as VICE
