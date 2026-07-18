@@ -92,6 +92,16 @@ struct vicii {
     bool     allow_bad_lines;
     uint8_t  video_matrix[40]; /* character codes fetched on Bad Lines */
     uint8_t  color_line[40];   /* color nibbles fetched on Bad Lines */
+    /* g-access graphics bytes for the current line (column 0..39). Filled by
+       Phi1 g-fetch so paint uses the byte latched with that cycle's address
+       (D018 / mode), matching VICE gbuf rather than re-reading RAM live. */
+    uint8_t  g_line[40];
+    /* Previous-cycle $D011 (VICE reg11_delay). g-fetch address uses this so a
+       mid-line ECM/BMM write takes effect one cycle late. */
+    uint8_t  reg11_delay;
+    /* $D018 bits 7-4 at last video-matrix fill. Non-badline lines re-fill the
+       matrix only when the screen base changes (eod-3 FLI→bitmap $9x→$30). */
+    uint8_t  matrix_d018_scr;
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 

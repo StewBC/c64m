@@ -42,9 +42,10 @@ enum {
     VICII_BADLINE_LAST         = 0xF7,
     VICII_CACCESS_FIRST_CYCLE  = 15,
     VICII_CACCESS_LAST_CYCLE   = 54,
-    /* Bauer 3.7.2 rule 2: VCBASE→VC and RC-clear on badline are cycle 14
-       (0-based; matches VICE VICII_PAL_CYCLE(15) indexing used elsewhere). */
-    VICII_VC_RC_CYCLE          = 14,
+    /* Bauer 3.7.2 / VICE UpdateVc: PAL cycle 14 → 0-based index 13
+       (VICII_PAL_CYCLE(14)). RC-clear uses reg11_delay YSCROLL so a same-cycle
+       Phi2 $D011 store is not visible (c64m CPU-before-VIC ≈ VICE Phi1 then Phi2). */
+    VICII_VC_RC_CYCLE          = 13,
     VICII_VC_MAX               = 1023,
     VICII_RC_MAX               = 7,
     VICII_IRQ_RASTER           = 0x01,
@@ -202,6 +203,9 @@ void vicii_reset(vicii *v) {
     v->irq_enable                = 0;
     memset(v->video_matrix, 0, sizeof(v->video_matrix));
     memset(v->color_line,   0, sizeof(v->color_line));
+    memset(v->g_line,       0, sizeof(v->g_line));
+    v->reg11_delay = 0;
+    v->matrix_d018_scr = 0;
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
@@ -275,6 +279,22 @@ static bool vicii_is_bad_line_at(const vicii *v, uint32_t y) {
     return (uint8_t)(y & 0x07u) == yscroll;
 }
 
+/* YSCROLL for UpdateVc RC-clear only: previous-cycle $D011 (reg11_delay).
+   Matches VICE Phi1 sampling before a same-cycle Phi2 store. BA / display_state
+   keep using live YSCROLL via vicii_is_bad_line(). */
+static bool vicii_bad_line_for_rc_clear(const vicii *v) {
+    uint8_t yscroll = v->reg11_delay & 0x07u;
+    uint32_t y = v->timing.raster_line;
+
+    if (!v->allow_bad_lines) {
+        return false;
+    }
+    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) {
+        return false;
+    }
+    return (uint8_t)(y & 0x07u) == yscroll;
+}
+
 static bool vicii_is_bad_line(const vicii *v) {
     return vicii_is_bad_line_at(v, v->timing.raster_line);
 }
@@ -317,6 +337,8 @@ typedef struct vicii_line_ctx {
        snapshot/debug path, which reads RAM live (it has no sequencer history). */
     const uint8_t *vm_latch;
     const uint8_t *color_latch;
+    /* Latched g-access bytes (live path). NULL → re-read RAM (snapshot path). */
+    const uint8_t *g_latch;
     /* Phase 4: idle-vs-display selection. When true (live path) the idle state is
        driven by the sequencer: any line not in display state shows idle-state
        graphics, wherever it falls vertically. When false (snapshot/debug path)
@@ -387,6 +409,7 @@ static vicii_line_ctx vicii_live_line_ctx(const vicii *v) {
     c.row_in_cell        = v->rc;
     c.vm_latch           = v->video_matrix;
     c.color_latch        = v->color_line;
+    c.g_latch            = v->g_line;
     c.idle_when_inactive = true;
     return c;
 }
@@ -405,6 +428,7 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
        and use the legacy fixed-window idle geometry. */
     c.vm_latch           = NULL;
     c.color_latch        = NULL;
+    c.g_latch            = NULL;
     c.idle_when_inactive = false;
 
     if (y < (uint32_t)VICII_VBORDER_TOP_25 ||
@@ -864,20 +888,32 @@ static vicii_bg_pixel vicii_background_pixel(
     char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
     bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
 
-    /* Character code and colour come from the line latch on the live path (filled
-       at the last bad line) or live RAM on the snapshot path. The g-access (glyph
-       / bitmap byte) is a per-line fetch and is always read live below. */
+    /* Character code and colour come from the line latch on the live path
+       (bulk-filled at cycle 14 when badline) or live RAM on the snapshot path.
+       g-access bytes come from g_line (latched at Phi1 with reg11_delay
+       addressing). Keep colour latched too: live colour re-broke eod-2's right
+       black frame (same late mid-line rewrite class as video-matrix). */
     {
     uint8_t vm_byte   = lc->vm_latch    ? lc->vm_latch[col]
                                         : c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
     uint8_t color_reg = lc->color_latch ? lc->color_latch[col]
                                         : c64_bus_vic_read_color(bus, cell);
+    uint8_t gdata;
+
+    if (lc->g_latch) {
+        gdata = lc->g_latch[col];
+    } else if (mode == 2u || mode == 3u) {
+        uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+        gdata = c64_bus_vic_read_ram(bus, baddr);
+    } else {
+        uint8_t code = (mode == 4u) ? (uint8_t)(vm_byte & 0x3fu) : vm_byte;
+        gdata = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+    }
 
     switch (mode) {
     case 0u:
         {
-            uint8_t code = vm_byte;
-            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+            uint8_t glyph = gdata;
             uint8_t fg = color_reg;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (glyph & bit) {
@@ -888,9 +924,8 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 1u:
         {
-            uint8_t code = vm_byte;
             uint8_t color_nib = color_reg;
-            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+            uint8_t glyph = gdata;
 
             if ((color_nib & 0x08u) == 0u) {
                 uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
@@ -915,8 +950,7 @@ static vicii_bg_pixel vicii_background_pixel(
 
     case 2u:
         {
-            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t bdata = gdata;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             if (bdata & bit) {
                 return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
@@ -927,8 +961,7 @@ static vicii_bg_pixel vicii_background_pixel(
     case 3u:
         {
             uint8_t color_nib = color_reg;
-            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-            uint8_t bdata = c64_bus_vic_read_ram(bus, baddr);
+            uint8_t bdata = gdata;
             uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
             switch (pair) {
             case 0u:
@@ -946,7 +979,7 @@ static vicii_bg_pixel vicii_background_pixel(
         {
             uint8_t code = vm_byte;
             uint8_t ecm_sel = (code >> 6) & 3u;
-            uint8_t glyph = c64_bus_vic_read_char_glyph_at(bus, char_base, code & 0x3fu, (uint8_t)row_in_cell);
+            uint8_t glyph = gdata;
             uint8_t fg_nib = color_reg;
             uint8_t bit = (uint8_t)(0x80u >> (sx & 7u));
             uint32_t ecm_bg;
@@ -1438,29 +1471,37 @@ static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_
     uint16_t vic_bank;
     uint16_t address;
     uint32_t col;
+    /* VICE color_latency: g-fetch address uses prior-cycle $D011 for BMM/ECM. */
+    uint8_t reg11 = v->reg11_delay;
+    bool bmm = (reg11 & 0x20u) != 0u;
+    bool ecm = (reg11 & 0x40u) != 0u;
 
     if (!bus) return;
     vic_bank = c64_bus_vic_bank_base(bus);
     if (!v->display_state || cycle < VICII_CACCESS_FIRST_CYCLE ||
         cycle > VICII_CACCESS_LAST_CYCLE) {
-        address = (uint16_t)(vic_bank +
-            ((v->registers[VICII_REG_CONTROL_1] & 0x40u) ? 0x39ffu : 0x3fffu));
+        address = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
         (void)c64_bus_vic_read_ram(bus, address);
         return;
     }
 
     col = cycle - VICII_CACCESS_FIRST_CYCLE;
-    if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
+    if (col >= (uint32_t)VICII_TEXT_COLUMNS) {
+        return;
+    }
+    if (bmm) {
         uint16_t bitmap_base = (uint16_t)(vic_bank +
             ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
         address = (uint16_t)(bitmap_base + (((uint16_t)(v->vc_base + col) & 0x03ffu) << 3) + v->rc);
-        (void)c64_bus_vic_read_ram(bus, address);
+        v->g_line[col] = c64_bus_vic_read_ram(bus, address);
     } else {
         uint16_t char_base = (uint16_t)(vic_bank +
             ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
         uint8_t code = v->video_matrix[col];
-        if ((v->registers[VICII_REG_CONTROL_1] & 0x40u) != 0u) code &= 0x3fu;
-        (void)c64_bus_vic_read_char_glyph_at(bus, char_base, code, v->rc);
+        if (ecm) {
+            code &= 0x3fu;
+        }
+        v->g_line[col] = c64_bus_vic_read_char_glyph_at(bus, char_base, code, v->rc);
     }
 }
 
@@ -1506,17 +1547,33 @@ static void vicii_execute_scheduled_fetches(vicii *v, const c64_bus_t *bus, uint
        Per-cycle video_matrix/color_line writes are intentionally not done here:
        a mid-line YSCROLL/D018 change that arms badline late would overwrite only
        the last columns with the post-write bank, destroying EoD plasma's col39
-       black frame while col0 (never rewritten late) stayed correct. VICE updates
-       cbuf per cycle with a VC/VMLI that tracks g-accesses; until that sequencer
-       is matched, the bulk latch is the sole c-data source for the renderer. */
+       black frame (eod-2). VICE updates cbuf per cycle with a VC/VMLI that tracks
+       g-accesses; until that sequencer is matched, bulk latch remains the sole
+       c-data source. eod-3 may need the VMLI path — do not re-enable naive
+       cycle-index c-writes without it. */
+}
+
+/* Fill video-matrix only from current D018 screen base at VC. Used on
+   non-badline display lines so a mid-frame $D018 switch (eod-3 FLI $9x →
+   bitmap $30) reloads bitmap colour nybbles without waiting for a badline.
+   Colour RAM is intentionally not refreshed here — eod-2 needs the badline
+   colour latch frozen for the rest of the character row. */
+static void vicii_fill_matrix_latch(vicii *v, const c64_bus_t *bus) {
+    uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
+        (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+    uint32_t col;
+
+    for (col = 0; col < (uint32_t)VICII_TEXT_COLUMNS; col++) {
+        uint16_t vc_col = (uint16_t)((v->vc + col) & (uint16_t)VICII_VC_MAX);
+        v->video_matrix[col] = c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + vc_col));
+    }
 }
 
 /* Fill the video-matrix and colour-line latches for the whole line (all 40
    columns) from screen/colour RAM at VC. Called at the cycle-14 VC/RC phase when
    badline is already true. BA for c-accesses is still modelled per cycle; only
    the latch data is bulk-loaded so a later mid-line badline/D018 change cannot
-   partially overwrite the last columns with a mismatched bank (EoD plasma right
-   edge). */
+   partially overwrite the last columns with a mismatched bank (eod-2). */
 static void vicii_fill_line_latch(vicii *v, const c64_bus_t *bus) {
     uint16_t screen_base = (uint16_t)(c64_bus_vic_bank_base(bus) +
         (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
@@ -1580,20 +1637,115 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
         v->bad_line = false;
     }
 
-    /* Bauer 3.7.2 / VICE UpdateVc at cycle 14 (0-based; VICII_PAL_CYCLE(15)):
+    /* Bauer 3.7.2 / VICE UpdateVc at cycle 13 (0-based; VICII_PAL_CYCLE(14)):
        - VC ← VCBASE every line (VMLI clear not modelled separately)
-       - RC ← 0 only if Bad Line Condition holds in this phase
+       - RC ← 0 only if Bad Line Condition holds with *prior-cycle* YSCROLL
+         (reg11_delay). Live bad_line may already reflect a same-cycle $D011
+         store (CPU runs before VIC); that must not restart RC (eod-3 $5F).
        - bulk line latch when RC is cleared (ordinary / early-FLI bad line)
-       Visible g-pixels begin at cycle 15, so RC is correct before the first
-       character column is painted. Fort Apocalypse soft STA $D011 at ~cycle 9
-       of rast 119 drops the condition before this phase so RC is not cleared. */
+       Visible g-pixels begin at cycle 15. Fort soft STA $D011 at ~cycle 9 of
+       rast 119 is visible via reg11_delay before this phase. */
     if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
         v->vc = v->vc_base;
-        if (v->bad_line) {
+        if (vicii_bad_line_for_rc_clear(v)) {
             v->rc            = 0;
             v->display_state = true;
+            v->bad_line      = true;
             if (bus) {
                 vicii_fill_line_latch(v, bus);
+                v->matrix_d018_scr =
+                    (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+            }
+        } else if (bus && v->display_state) {
+            /* When $D018 screen base changes into bitmap mode, reload matrix
+               so FLI character codes are not reused as bitmap colour nybbles
+               (eod-3). Do not reload on every bitmap line or on non-BMM $D018
+               thrashing — both re-broke eod-2's right edge. Colour stays frozen. */
+            uint8_t scr =
+                (uint8_t)(v->registers[VICII_REG_MEMORY_POINTER] & 0xf0u);
+            if (scr != v->matrix_d018_scr) {
+                v->matrix_d018_scr = scr;
+                if ((v->registers[VICII_REG_CONTROL_1] & 0x20u) != 0u) {
+                    vicii_fill_matrix_latch(v, bus);
+                }
+            }
+        }
+
+        /* Optional per-line sequencer dump for eod-3 diagnosis.
+           C64M_LINELOG=<path> C64M_LINELOG_R0=190 C64M_LINELOG_R1=220
+           Optional C64M_LINELOG_F0/F1 frame window. */
+        {
+            static FILE *linelog;
+            static int line_init;
+            static unsigned long lf0, lf1;
+            static unsigned lr0, lr1;
+            if (!line_init) {
+                const char *p = getenv("C64M_LINELOG");
+                const char *a = getenv("C64M_LINELOG_F0");
+                const char *b = getenv("C64M_LINELOG_F1");
+                const char *r0 = getenv("C64M_LINELOG_R0");
+                const char *r1 = getenv("C64M_LINELOG_R1");
+                lf0 = 0;
+                lf1 = 0xffffffffUL;
+                lr0 = 0;
+                lr1 = 0xffffffffU;
+                if (p) {
+                    linelog = fopen(p, "wb");
+                }
+                if (a) {
+                    lf0 = strtoul(a, NULL, 10);
+                }
+                if (b) {
+                    lf1 = strtoul(b, NULL, 10);
+                }
+                if (r0) {
+                    lr0 = (unsigned)strtoul(r0, NULL, 10);
+                }
+                if (r1) {
+                    lr1 = (unsigned)strtoul(r1, NULL, 10);
+                }
+                line_init = 1;
+            }
+            if (linelog) {
+                unsigned long fr = (unsigned long)v->timing.frame_number;
+                unsigned rl = (unsigned)v->timing.raster_line;
+                if (fr >= lf0 && fr <= lf1 && rl >= lr0 && rl <= lr1) {
+                    uint8_t d011 = v->registers[VICII_REG_CONTROL_1];
+                    uint8_t d018 = v->registers[VICII_REG_MEMORY_POINTER];
+                    uint8_t d016 = v->registers[0x16];
+                    uint16_t bank = bus ? c64_bus_vic_bank_base(bus) : 0;
+                    uint16_t scr =
+                        (uint16_t)(bank + ((d018 >> 4) * 0x0400u));
+                    uint16_t bmp =
+                        (uint16_t)(bank + ((d018 >> 3) & 1u) * 0x2000u);
+                    uint16_t ch =
+                        (uint16_t)(bank + ((d018 >> 1) & 7u) * 0x0800u);
+                    uint16_t gaddr = 0;
+                    if ((d011 & 0x20u) != 0u) {
+                        gaddr = (uint16_t)(bmp +
+                            (((v->vc_base + 2u) & 0x03ffu) << 3) + v->rc);
+                    } else {
+                        uint8_t code = v->video_matrix[2];
+                        if ((d011 & 0x40u) != 0u) {
+                            code &= 0x3fu;
+                        }
+                        gaddr = (uint16_t)(ch + (uint16_t)code * 8u + v->rc);
+                    }
+                    fprintf(linelog,
+                            "F%lu R%u d011=%02X d016=%02X d018=%02X "
+                            "disp=%d bad=%d idle=%d vc=%03X vcb=%03X rc=%u "
+                            "vm2=%02X cl2=%02X g2=%04X scr=%04X bmp=%04X ch=%04X\n",
+                            fr, rl, d011, d016, d018,
+                            v->display_state ? 1 : 0,
+                            v->bad_line ? 1 : 0,
+                            v->display_state ? 0 : 1,
+                            (unsigned)v->vc, (unsigned)v->vc_base,
+                            (unsigned)v->rc,
+                            (unsigned)v->video_matrix[2],
+                            (unsigned)v->color_line[2],
+                            (unsigned)gaddr,
+                            (unsigned)scr, (unsigned)bmp, (unsigned)ch);
+                }
             }
         }
     }
@@ -1661,6 +1813,10 @@ void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     if (v->pixel_output_enabled) {
         vicii_render_live_cycle(v, bus);
     }
+
+    /* VICE: delay video mode for fetches by one cycle (reg11_delay). Updated
+       after this cycle's g-access so the next cycle sees the new $D011. */
+    v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
 
     /* Deferred $D01E/$D01F clear (after this cycle's pixel/collision sample). */
     if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {

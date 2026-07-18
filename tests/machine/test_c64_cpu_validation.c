@@ -188,6 +188,8 @@ static void expect_cpu_snapshots_equal(
    BA flag. */
 static void arm_pal_badline_fixture(c64_t *machine) {
     vicii_write_register(&machine->vic, 0xd011, 0x13u);
+    /* Badline samples YSCROLL from reg11_delay (prior-cycle $D011). */
+    machine->vic.reg11_delay = machine->vic.registers[0x11];
     machine->vic.timing.raster_line = 0x33u;
     /* Teleport past raster $30: arm the frame latch as if DEN was set there. */
     machine->vic.allow_bad_lines = true;
@@ -1488,6 +1490,7 @@ static void test_aec_blocks_pending_write_during_vic_phi2(void) {
     /* Put the pending write on a real bad-line c-access. RDY is not forced
        here: AEC alone must keep the CPU off the Phi2 bus. */
     vicii_write_register(&machine.vic, 0xd011, 0x13u);
+    machine.vic.reg11_delay = machine.vic.registers[0x11];
     machine.vic.timing.raster_line = 0x33u;
     machine.vic.timing.cycle_in_line = 15u;
     machine.vic.allow_bad_lines = true;

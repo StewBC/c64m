@@ -350,6 +350,9 @@ static void test_bad_line_ba_asserts_at_cycle_12(void) {
 
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_write_register(&v, 0xd011, 0x13); /* DEN=1, YSCROLL=3 */
+    /* Badline samples YSCROLL from reg11_delay (prior-cycle $D011). Sync after
+       a setup write that did not go through a stepped cycle. */
+    v.reg11_delay = v.registers[0x11];
     v.timing.raster_line = 0x33;
     /* Tests teleport past raster $30; arm the frame latch as if DEN was set there. */
     v.allow_bad_lines = true;
@@ -2455,6 +2458,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x13u); /* DEN=1, YSCROLL=3 */
+    v.reg11_delay = v.registers[0x11];
     v.timing.raster_line = 0x33u;
     v.allow_bad_lines = true;
 
@@ -2488,6 +2492,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     vicii_reset(&v);
     vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
     vicii_write_register(&v, 0xd011, 0x03u); /* DEN=0: sprite DMA only. */
+    v.reg11_delay = v.registers[0x11];
     vicii_write_register(&v, 0xd015, 0x01u);
     v.timing.raster_line = 100u;
     v.sprite_active[0] = true;

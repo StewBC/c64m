@@ -58,9 +58,14 @@ Phi2 schedule; frontend frames are copies.
   loop. Both in-flight 1-to-0 transitions dodge the compare; a CSEL=0 value that
   is stable for two samples still closes the 38-column border normally.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
-  clear from DEN + range + YSCROLL; not sticky for the whole line). RC is
-  cleared only at cycle 14 if the condition still holds (Bauer 3.7.2). End-of-line
-  advances VC in display state, then applies VICE UpdateRc:
+  clear from DEN + range + **live** YSCROLL; not sticky for the whole line). RC is
+  cleared only at UpdateVc (cycle 13 / VICE `VICII_PAL_CYCLE(14)`) if the
+  condition holds with **prior-cycle** YSCROLL (`reg11_delay`) — c64m runs the
+  CPU before VIC in a cycle, so live `$D011` can already show a same-cycle Phi2
+  store; VICE samples Phi1 before that store. Without the delayed RC sample,
+  eod-3's mid-line `$5F` (YSCROLL=7) on lines where `(raster&7)==7` restarted RC
+  and froze VCBASE for the FLI band. End-of-line advances VC in display state,
+  then applies VICE UpdateRc:
   `if (RC==7) idle+VCBASE; if (!idle || bad_line) RC=(RC+1)&7`.
 - Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
   only re-checks the compare when the 9-bit line actually changes (RST8). A
@@ -107,15 +112,29 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - Bad lines: DEN is sampled on raster `$30` into `allow_bad_lines` for the rest
   of `$30–$F7` (Bauer/VICE). Live DEN gates top open but does not blank an
   already-running graphics pipeline.
-- g-access still discards the fetched byte; the paint path re-reads RAM live, so
-  latch fidelity for same-cycle CPU writes is not modeled. Snapshot rendering is
-  still approximate.
+- g-access stores the fetched glyph/bitmap byte into `g_line[col]` using
+  `reg11_delay` (prior-cycle `$D011`) for BMM/ECM address bits — VICE's one-cycle
+  mode delay for fetches. The live paint path uses `g_line` rather than re-reading
+  RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
+  Snapshot rendering still re-reads RAM (no sequencer history).
+- `reg11_delay` is updated from `$D011` at the end of each cycle after fetches.
 - Video-matrix/colour latches are bulk-filled at the cycle-14 VC/RC phase when
   badline is already true. Per-cycle c-access does not rewrite the latch (BA is
   still scheduled). That avoids late mid-line badlines (e.g. EoD plasma `$D011`
   at ~cycle 52) from overwriting only the last columns with a mismatched `$D018`
-  bank. A future VC/VMLI-accurate per-cycle path can restore VICE-style partial
-  fills without that corruption.
+  bank.
+- On non-badline display lines, if `$D018` screen bits change **and** BMM is set,
+  the matrix latch is reloaded once (`matrix_d018_scr` tracks the last fill).
+  Intended for eod-3 FLI→bitmap (`$9x`→`$30`) so FLI char codes are not reused as
+  bitmap colour nybbles. Colour is never refreshed off badline (that re-broke
+  eod-2). Broader reloads (every line, or every BMM line) also re-broke eod-2.
+- eod-3 FLI vertical address (VCBASE): WIP uses delayed YSCROLL on UpdateVc RC
+  clear (see Bad Line bullet). VICE oracle R103 `$D011=$5B` @ UpdateVc, RC 4…7,
+  VCBASE `$0F0→$118→…`; pre-fix c64m had `$5F`/RC restart and VCBASE stuck.
+  **Uncommitted as of 2026-07-18:** user reports earlier-demo visual regressions;
+  sister effect after eod-3 still broken. See `eod-handoff.md`. Do not treat this
+  as closed or commit until those are resolved. The BA/display vs RC-clear YSCROLL
+  **split** is a phase-order compromise (CPU-before-VIC), not a full Phi1 model.
 - Badline BA uses RELEASE=3 (sprite windows keep RELEASE=2) for dual-bit IEC
   resume (Robocop). That is a deliberate divergence from classic RELEASE=2; do
   not drop it without another IEC fix — it is covered by `c64_vicii` and
