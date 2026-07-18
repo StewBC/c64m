@@ -58,14 +58,15 @@ Phi2 schedule; frontend frames are copies.
   loop. Both in-flight 1-to-0 transitions dodge the compare; a CSEL=0 value that
   is stable for two samples still closes the 38-column border normally.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
-  clear from DEN + range + **live** YSCROLL; not sticky for the whole line). RC is
-  cleared at UpdateVc (cycle **14** in c64m's 0-based index) when live badline
-  holds. VICE places UpdateVc at `VICII_PAL_CYCLE(14)` (0-based 13) and samples
-  YSCROLL at Phi1; moving c64m to cycle 13 while CPU still runs before VIC
-  **destroys** the EoD face/3D band (lower face becomes garbage; band is not a
-  coherent rotating shape). Keep cycle 14 + live RC until a full Phi1-before-CPU
-  reorder. End-of-line advances VC in display state, then VICE UpdateRc:
-  `if (RC==7) idle+VCBASE; if (!idle || bad_line) RC=(RC+1)&7`.
+  clear from DEN + range + live YSCROLL). RC is cleared at UpdateVc when
+  badline holds. **Machine order:** deferred/micro paths run VIC devices for
+  `clock.cycle` **before** that cycle's CPU bus events, then `clock.cycle++`
+  (Phi1-ish VIC then Phi2 CPU). That hides same-cycle STA `$D011` from this
+  cycle's UpdateVc/badline. VICE places UpdateVc at `VICII_PAL_CYCLE(14)`
+  (0-based **13**); c64m still uses 0-based **14** because moving UpdateVc to 13
+  alone still destroys the EoD face/3D band even with VIC-before-CPU (not only
+  a `$D011` phase issue — VC/RC phase relative to the rest of the line). End of
+  line: VICE UpdateRc `if (RC==7) idle+VCBASE; if (!idle || bad_line) RC=(RC+1)&7`.
 - Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
   only re-checks the compare when the 9-bit line actually changes (RST8). A
   mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert

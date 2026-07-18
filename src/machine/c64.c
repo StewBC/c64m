@@ -279,17 +279,27 @@ static void c64_update_vic_irq_delay(c64_t *machine) {
     }
 }
 
-static void c64_advance_one_cycle(c64_t *machine) {
+/* Devices for the current clock.cycle (VIC sees pre-CPU-write regs when called
+   before apply_pending_cpu_events). Does not increment clock.cycle. */
+static void c64_step_devices_for_current_cycle(c64_t *machine) {
     c64_balog_maybe_emit(machine);
     c64_step_vic(machine);
     c64_step_cia1(machine);
     c64_step_cia2(machine);
     c64_step_sid(machine);
     c64_update_vic_irq_delay(machine);
+}
+
+static void c64_finish_cycle(c64_t *machine) {
     machine->clock.cycle++;
     /* Per-cycle backstop: keep the drive current when no IEC access catches it
        up. IEC accesses advance it precisely ahead of this point. */
     c64_drive_sync_to(machine, machine->clock.cycle);
+}
+
+static void c64_advance_one_cycle(c64_t *machine) {
+    c64_step_devices_for_current_cycle(machine);
+    c64_finish_cycle(machine);
 }
 
 static void c64_advance_devices_to(c64_t *machine, uint64_t target_cycle) {
@@ -1228,12 +1238,18 @@ static void c64_step_micro_cycle(c64_t *machine) {
     assert(machine);
     assert(machine->cpu.micro_active);
 
+    /*
+     * Phi1 then Phi2: VIC for this cycle first (UpdateVc/badline see $D011
+     * before a same-cycle STA), then CPU micro-step, then clock++.
+     */
+    c64_balog_mark(0);
+    c64_step_devices_for_current_cycle(machine);
+
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_ARBITER;
     completed = c6510_micro_step(&machine->cpu);
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_IMMEDIATE;
-    c64_balog_mark(0);
-    c64_advance_one_cycle(machine);
     machine->clock.cpu_cycles++;
+    c64_finish_cycle(machine);
 
     if (completed) {
         if (machine->cpu_trace_enabled) {
@@ -1295,11 +1311,16 @@ static bool c64_step_cycle_internal(c64_t *machine) {
             c64_step_host_ba_stall(machine);
             return true;
         }
-        c64_apply_pending_cpu_events_at_elapsed(machine);
+        /*
+         * Phi1 then Phi2: VIC for this clock.cycle first, then CPU bus events
+         * at the same absolute cycle, then clock++.
+         */
         c64_balog_mark(0);
-        c64_advance_one_cycle(machine);
+        c64_step_devices_for_current_cycle(machine);
+        c64_apply_pending_cpu_events_at_elapsed(machine);
         machine->pending_cpu_elapsed++;
         machine->clock.cpu_cycles++;
+        c64_finish_cycle(machine);
 
         if (machine->pending_cpu_elapsed >= machine->pending_cpu_trace.total_cycles) {
             c64_apply_pending_cpu_events_at_elapsed(machine);
