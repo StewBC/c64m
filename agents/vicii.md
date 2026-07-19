@@ -86,6 +86,14 @@ Phi2 schedule; frontend frames are copies.
   host pixel output while retaining raster, BA, IRQ, sprite-DMA, CIA, and SID
   timing; its published frame is geometric debug reconstruction, not visual
   evidence for timing-sensitive effects.
+- Live paint is the dominant host cost when pixel output is on. The 8-dot span
+  in `vicii_render_live_cycle` precomputes cycle-constant mode, XSCROLL, B1–B3
+  palette, idle ghost byte, and sprite-visibility once per cycle; background
+  decode uses the latched `video_matrix` / `color_line` / `g_line` without
+  re-deriving bank bases every pixel. Vertical-border spans with no visible
+  sprites skip background decode (content is forced to B0C). Hot bus peeks
+  (`c64_bus_vic_*`) are header `static inline`. Do not “optimize” by lowering
+  the turbo-8 pixel-off threshold or by skipping BA/IRQ/sequencer work.
 
 ## Timing/debugging rules
 

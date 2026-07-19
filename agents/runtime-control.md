@@ -35,6 +35,22 @@ main-loop-owned cache. `set-turbo` changes the active multiplier without alterin
 the configured Opt+T list; its 8+ response warns that the live ARGB framebuffer is
 disabled until turbo is lowered.
 
+### Turbo semantics and host throughput
+
+Turbo multiplies wall-clock progress of the whole machine (not a CPU-only clock
+change): the pacer divides the real video-frame period by the active multiplier
+(`frame_counter_step ∝ 1/multiplier`). `turbo=1` tracks PAL ~0.985 MHz / NTSC
+~1.023 MHz Φ2; `turbo=2` is exact 2× when the host keeps up. Multipliers that
+exceed host capacity free-run at the pacer slip path.
+
+**Turbo 7 is the performance bar for full correctness** (live ARGB, collisions,
+full VIC paint). On an Apple M2 Mac Mini (headless PAL, measured 2026-07 after
+live-paint algorithmic opts), turbo 7 free-runs at about **~5.2 MHz** machine Φ2
+(~5.3× real-time). Pure `c64_step_cycle` with video on is higher (~10.5 MHz)
+because the full product still pays runtime/thread overhead and dual-1541 ROM
+stepping; 1541 cost is correctness-required and not an optimization target here.
+Do not raise free-run speed by disabling pixel output below turbo 8.
+
 For the actual wire format, command grammar, response payload layouts, and a working
 Python client, read `control-port.md`.
 

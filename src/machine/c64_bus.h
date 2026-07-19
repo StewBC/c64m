@@ -1,5 +1,6 @@
 #pragma once
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -82,15 +83,55 @@ void c64_bus_refresh_vic_bank_base(c64_bus_t *bus);
 
 uint8_t c64_bus_read(c64_bus_t *bus, uint16_t address);
 void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value);
-uint8_t c64_bus_vic_read_ram(const c64_bus_t *bus, uint16_t address);
-uint8_t c64_bus_vic_read_screen(const c64_bus_t *bus, uint16_t offset);
-uint8_t c64_bus_vic_read_color(const c64_bus_t *bus, uint16_t offset);
-uint8_t c64_bus_vic_read_char_glyph(const c64_bus_t *bus, uint8_t character_code, uint8_t glyph_row);
-uint8_t c64_bus_vic_read_char_glyph_at(
+
+/* Hot VIC-II accessors: keep these static inline so the pixel path can fold
+   bank/ram/color/glyph peeks without a call across the translation unit. */
+static inline uint8_t c64_bus_vic_read_ram(const c64_bus_t *bus, uint16_t address) {
+    assert(bus);
+    return bus->ram[address];
+}
+
+static inline uint8_t c64_bus_vic_read_screen(const c64_bus_t *bus, uint16_t offset) {
+    assert(bus);
+    return bus->ram[(uint16_t)(0x0400u + (offset % 1000u))];
+}
+
+static inline uint8_t c64_bus_vic_read_color(const c64_bus_t *bus, uint16_t offset) {
+    assert(bus);
+    return (uint8_t)(bus->color_ram[offset % C64_COLOR_RAM_SIZE] & 0x0f);
+}
+
+static inline uint8_t c64_bus_vic_read_char_glyph(
+    const c64_bus_t *bus,
+    uint8_t character_code,
+    uint8_t glyph_row)
+{
+    assert(bus);
+    return bus->char_rom[((uint16_t)character_code * 8u) + (glyph_row & 0x07u)];
+}
+
+static inline uint8_t c64_bus_vic_read_char_glyph_at(
     const c64_bus_t *bus,
     uint16_t character_base,
     uint8_t character_code,
-    uint8_t glyph_row);
+    uint8_t glyph_row)
+{
+    uint16_t full_addr;
+
+    assert(bus);
+    /* character_base is already a full absolute VIC address (vic_bank + offset). */
+    full_addr = (uint16_t)(character_base + (uint16_t)character_code * 8u + (glyph_row & 0x07u));
+    /* Char ROM appears at $1000-$1FFF (bank 0) and $9000-$9FFF (bank 2). */
+    if ((full_addr & 0xF000u) == 0x1000u || (full_addr & 0xF000u) == 0x9000u) {
+        return bus->char_rom[full_addr & 0x0FFFu];
+    }
+    return bus->ram[full_addr];
+}
+
+static inline uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus) {
+    assert(bus);
+    return bus->vic_bank_base;
+}
 
 bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
 bool c64_bus_set_char_rom(c64_bus_t *bus, const uint8_t *data, size_t size);
@@ -106,5 +147,3 @@ bool c64_bus_attach_generic_cartridge(
     uint8_t game);
 void c64_bus_detach_cartridge(c64_bus_t *bus);
 bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value);
-
-uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus);

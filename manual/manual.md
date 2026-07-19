@@ -202,6 +202,17 @@ splitter positions are saved to the INI file on quit.
 **Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
 Configure shows the list, which is stored in the INI file.
 
+Turbo multiplies wall-clock progress of the whole emulated machine (CPU, VIC-II,
+CIAs, SID timing, and drive sync stay in lock-step). `1x` matches real C64 time
+(PAL about 0.985 MHz Φ2, NTSC about 1.023 MHz). `2x` is twice real-time when the
+host can keep up. The multiplier is a *target*; if the host is slower than the
+target, the emulator free-runs as fast as it can.
+
+On an Apple M2 Mac Mini, `7x` (the fastest setting that still paints the live
+framebuffer every cycle) free-runs at about **5.2 MHz** emulated Φ2 — roughly
+5× real C64 speed. Higher multipliers do not go proportionally faster once the
+host is already free-running.
+
 At `8x` and above, c64m disables live per-cycle ARGB framebuffer rendering to keep
 high turbo useful. VIC-II timing continues, but frame captures are geometric debug
 snapshots. Select a turbo below `8x` to restore live rendering for subsequent frames.

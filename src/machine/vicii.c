@@ -354,7 +354,7 @@ typedef struct vicii_line_ctx {
     bool idle_when_inactive;
 } vicii_line_ctx;
 
-static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
+static inline vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     vicii_border_geometry g;
     bool rsel = (v->registers[0x11] & 0x08u) != 0;
     bool csel = (v->registers[0x16] & 0x08u) != 0;
@@ -371,6 +371,19 @@ static vicii_border_geometry vicii_get_border_geometry(const vicii *v) {
     g.left   = csel ? (uint32_t)VICII_HBORDER_LEFT_40       : (uint32_t)VICII_HBORDER_LEFT_38;
     g.right  = csel ? (uint32_t)VICII_HBORDER_RIGHT_40      : (uint32_t)VICII_HBORDER_RIGHT_38;
     return g;
+}
+
+/* RSEL-only top/bottom compares — avoid full geometry on every cycle. */
+static inline uint32_t vicii_vborder_top_line(const vicii *v) {
+    return (v->registers[0x11] & 0x08u) != 0u
+        ? (uint32_t)VICII_VBORDER_TOP_25
+        : (uint32_t)VICII_VBORDER_TOP_24;
+}
+
+static inline uint32_t vicii_vborder_bottom_line(const vicii *v) {
+    return (v->registers[0x11] & 0x08u) != 0u
+        ? (uint32_t)VICII_VBORDER_BOTTOM_25
+        : (uint32_t)VICII_VBORDER_BOTTOM_24;
 }
 
 /* Sprite X vs buffer X distance, with wrap across the end of the line.
@@ -618,7 +631,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     }
 }
 
-static vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
+static inline vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
     vicii_bg_pixel pixel;
 
     pixel.color = color;
@@ -626,7 +639,7 @@ static vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground) {
     return pixel;
 }
 
-static vicii_sprite_pixel vicii_sprite_pixel_make(uint32_t color, bool opaque) {
+static inline vicii_sprite_pixel vicii_sprite_pixel_make(uint32_t color, bool opaque) {
     vicii_sprite_pixel pixel;
 
     pixel.color = color;
@@ -737,6 +750,24 @@ static void vicii_latch_sprite_line_state(vicii *v) {
     }
 }
 
+/* Per-cycle paint constants for the live 8-dot span. Registers and bus bank are
+   fixed for the duration of begin_cycle's paint (CPU Phi2 stores land after), so
+   mode / ghost-byte / palette extras are computed once instead of per pixel. */
+typedef struct vicii_paint_prep {
+    vicii_line_ctx lc;
+    uint8_t mode;
+    uint8_t xscroll;
+    uint32_t b1c;
+    uint32_t b2c;
+    uint32_t b3c;
+    uint8_t idle_g;
+    bool idle_ecm;
+    bool idle_bmm;
+    bool idle_mcm;
+    bool idle_invalid;
+    bool any_sprite;
+} vicii_paint_prep;
+
 /* Idle-state background pixel. Vertically outside the display window the VIC is
    in idle state: g-accesses read a fixed byte from $3FFF (or $39FF when ECM=1)
    and are displayed with the c-access data forced to 0. This is what shows
@@ -744,34 +775,39 @@ static void vicii_latch_sprite_line_state(vicii *v) {
    border title-screen technique), so the un-sprited gaps are idle graphics --
    usually black -- not the live background colour. Returning the live b0c here
    is what made c64m paint the opened border with the background colour instead
-   of the near-black idle output VICE/hardware produce. */
-static vicii_bg_pixel vicii_idle_pixel(
-    const vicii *v, const c64_bus_t *bus, uint32_t x, uint8_t xscroll)
+   of the near-black idle output VICE/hardware produce.
+
+   ghost_g / mode flags are cycle-constant; callers that paint many pixels pass
+   the pre-fetched ghost so each pixel only does the XSCROLL phase shift. */
+static inline vicii_bg_pixel vicii_idle_pixel_decoded(
+    const vicii *v,
+    uint32_t x,
+    uint8_t xscroll,
+    uint8_t g,
+    bool ecm,
+    bool bmm,
+    bool mcm,
+    bool invalid_mode)
 {
     /* Use 1-pixel-delayed B0C (color_pipe_d021) so mid-line $D021 splits in the
        opened border line up with XSCROLL the same way as VICE 6569. */
     uint32_t b0c   = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
     uint32_t black = vicii_palette_argb[0];
-    bool ecm = (v->registers[0x11] & 0x40u) != 0u;
-    bool bmm = (v->registers[0x11] & 0x20u) != 0u;
-    bool mcm = (v->registers[0x16] & 0x10u) != 0u;
-    uint16_t vic_bank = c64_bus_vic_bank_base(bus);
-    xscroll &= 0x07u;
-    uint16_t addr = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
-    uint8_t g = c64_bus_vic_read_ram(bus, addr);
     /* Idle g-accesses emit the ghost byte every cycle; XSCROLL phase-shifts
        that repeating 8-dot pattern the same way it delays display-window
        graphics. lft-nine sets XSCROLL (often 1..7) specifically to line the
        ghostbyte up with the digit sprites — ignoring it left the device frame
        misaligned with the top-border digits. Unsigned wrap keeps x<24 valid. */
     uint32_t sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
-    uint32_t phase = (sx_raw - (uint32_t)xscroll);
+    uint32_t phase = (sx_raw - (uint32_t)(xscroll & 0x07u));
+
+    (void)ecm;
 
     /* Invalid modes (ECM combined with BMM and/or MCM) always output black,
        including in idle — same as VICE COL_NONE. Without this, EoD plasma's
        post-FLI $D011=$71 (ECM+BMM) + MCM idle path decodes $39FF as MCM
        bitmap pairs and draws a stippled bottom frame instead of a solid line. */
-    if (ecm && (bmm || mcm)) {
+    if (invalid_mode) {
         (void)g;
         (void)phase;
         return vicii_bg_pixel_make(black, false);
@@ -807,18 +843,36 @@ static vicii_bg_pixel vicii_idle_pixel(
     }
 }
 
-static vicii_bg_pixel vicii_background_pixel(
+static vicii_bg_pixel vicii_idle_pixel(
+    const vicii *v, const c64_bus_t *bus, uint32_t x, uint8_t xscroll)
+{
+    bool ecm = (v->registers[0x11] & 0x40u) != 0u;
+    bool bmm = (v->registers[0x11] & 0x20u) != 0u;
+    bool mcm = (v->registers[0x16] & 0x10u) != 0u;
+    uint16_t vic_bank = c64_bus_vic_bank_base(bus);
+    uint16_t addr = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
+    uint8_t g = c64_bus_vic_read_ram(bus, addr);
+
+    return vicii_idle_pixel_decoded(
+        v, x, xscroll, g, ecm, bmm, mcm, ecm && (bmm || mcm));
+}
+
+/* Decode one background pixel. prep may be NULL (snapshot path): mode/colors and
+   idle ghost are derived from registers/bus. When prep is non-NULL (live path)
+   those cycle-constant values are reused and the idle ghost is not re-fetched. */
+static vicii_bg_pixel vicii_background_pixel_ex(
     const vicii *v,
     const c64_bus_t *bus,
     const vicii_border_geometry *g,
     const vicii_line_ctx *lc,
+    const vicii_paint_prep *prep,
     uint32_t x,
     uint32_t y)
 {
     uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
-    uint32_t b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
-    uint32_t b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
-    uint32_t b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
+    uint32_t b1c;
+    uint32_t b2c;
+    uint32_t b3c;
     uint8_t mode;
     uint8_t xscroll;
     uint32_t sx_raw;
@@ -826,21 +880,34 @@ static vicii_bg_pixel vicii_background_pixel(
     uint32_t row_in_cell;
     uint32_t col;
     uint16_t cell;
-    uint16_t vic_bank;
-    uint16_t screen_base;
-    uint16_t char_base;
-    uint16_t bitmap_base;
+    uint8_t vm_byte;
+    uint8_t color_reg;
+    uint8_t gdata;
 
     /* Border geometry is no longer needed here: the display span is the fixed
        40-column window and the CSEL-narrowed border is applied by the main
        flip-flop in the renderer, not by clamping the background value. */
     (void)g;
 
-    /* Live path: VICE xscroll_pipe (sampled at end of g-access paint cycles).
-       Snapshot path has no pipe history — use live $D016. */
-    xscroll = (lc->g_latch != NULL)
-        ? (uint8_t)(v->xscroll_pipe & 0x07u)
-        : (uint8_t)(v->registers[0x16] & 0x07u);
+    if (prep != NULL) {
+        mode = prep->mode;
+        xscroll = prep->xscroll;
+        b1c = prep->b1c;
+        b2c = prep->b2c;
+        b3c = prep->b3c;
+    } else {
+        /* Live path: VICE xscroll_pipe (sampled at end of g-access paint cycles).
+           Snapshot path has no pipe history — use live $D016. */
+        xscroll = (lc->g_latch != NULL)
+            ? (uint8_t)(v->xscroll_pipe & 0x07u)
+            : (uint8_t)(v->registers[0x16] & 0x07u);
+        mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                         ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                         ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+        b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
+        b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
+        b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
+    }
 
     if (x < (uint32_t)VICII_HBORDER_LEFT_40 || x >= (uint32_t)VICII_HBORDER_RIGHT_40) {
         /* Horizontal over-border region: outside the fixed 40-column display span
@@ -852,9 +919,13 @@ static vicii_bg_pixel vicii_background_pixel(
            instead of b0c is what makes an opened side border reveal that content.
            When the border is closed this value is overridden in
            vicii_compose_pixel, so ordinary screens are unaffected.
-           vicii_idle_pixel applies XSCROLL to the ghost phase and uses the low
-           bits of x-24 (unsigned underflow for x<24 still indexes the 8-dot
-           group correctly). */
+           Idle applies XSCROLL to the ghost phase and uses the low bits of x-24
+           (unsigned underflow for x<24 still indexes the 8-dot group correctly). */
+        if (prep != NULL) {
+            return vicii_idle_pixel_decoded(
+                v, x, xscroll, prep->idle_g,
+                prep->idle_ecm, prep->idle_bmm, prep->idle_mcm, prep->idle_invalid);
+        }
         return vicii_idle_pixel(v, bus, x, xscroll);
     }
 
@@ -868,6 +939,11 @@ static vicii_bg_pixel vicii_background_pixel(
            badline/display range is driven by YSCROLL, not RSEL, so RSEL still
            does not split the picture. */
         if (!lc->display_active) {
+            if (prep != NULL) {
+                return vicii_idle_pixel_decoded(
+                    v, x, xscroll, prep->idle_g,
+                    prep->idle_ecm, prep->idle_bmm, prep->idle_mcm, prep->idle_invalid);
+            }
             return vicii_idle_pixel(v, bus, x, xscroll);
         }
     } else if (y < (uint32_t)VICII_VBORDER_TOP_25 || y >= (uint32_t)VICII_VBORDER_BOTTOM_25) {
@@ -877,9 +953,6 @@ static vicii_bg_pixel vicii_background_pixel(
         return vicii_idle_pixel(v, bus, x, xscroll);
     }
 
-    mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
-                     ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
-                     ((v->registers[0x16] & 0x10u) ? 1u : 0u));
     sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
 
     if (mode >= 5u) {
@@ -907,29 +980,39 @@ static vicii_bg_pixel vicii_background_pixel(
        cell is RC, and the cell index is VCBASE + column. */
     row_in_cell = lc->row_in_cell;
     cell = (uint16_t)(lc->cell_base + col);
-    vic_bank = c64_bus_vic_bank_base(bus);
-    screen_base = (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
-    char_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-    bitmap_base = (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
 
     /* Character code and colour come from the per-cycle c-access latches on the
        live path or live RAM on the snapshot path. g-access bytes come from
-       g_line (latched at Phi1 with reg11_delay addressing). */
-    {
-    uint8_t vm_byte   = lc->vm_latch    ? lc->vm_latch[col]
-                                        : c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
-    uint8_t color_reg = lc->color_latch ? lc->color_latch[col]
-                                        : c64_bus_vic_read_color(bus, cell);
-    uint8_t gdata;
-
-    if (lc->g_latch) {
+       g_line (latched at Phi1 with reg11_delay addressing). Live path always
+       has all three latches, so skip bank/base address math entirely. */
+    if (lc->vm_latch != NULL && lc->color_latch != NULL && lc->g_latch != NULL) {
+        vm_byte = lc->vm_latch[col];
+        color_reg = lc->color_latch[col];
         gdata = lc->g_latch[col];
-    } else if (mode == 2u || mode == 3u) {
-        uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
-        gdata = c64_bus_vic_read_ram(bus, baddr);
     } else {
-        uint8_t code = (mode == 4u) ? (uint8_t)(vm_byte & 0x3fu) : vm_byte;
-        gdata = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+        uint16_t vic_bank = c64_bus_vic_bank_base(bus);
+        uint16_t screen_base =
+            (uint16_t)(vic_bank + (v->registers[VICII_REG_MEMORY_POINTER] >> 4) * 0x0400u);
+        uint16_t char_base =
+            (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
+        uint16_t bitmap_base =
+            (uint16_t)(vic_bank + ((v->registers[VICII_REG_MEMORY_POINTER] >> 3) & 1u) * 0x2000u);
+
+        vm_byte = lc->vm_latch
+            ? lc->vm_latch[col]
+            : c64_bus_vic_read_ram(bus, (uint16_t)(screen_base + cell));
+        color_reg = lc->color_latch
+            ? lc->color_latch[col]
+            : c64_bus_vic_read_color(bus, cell);
+        if (lc->g_latch) {
+            gdata = lc->g_latch[col];
+        } else if (mode == 2u || mode == 3u) {
+            uint16_t baddr = (uint16_t)(bitmap_base + (uint32_t)cell * 8u + row_in_cell);
+            gdata = c64_bus_vic_read_ram(bus, baddr);
+        } else {
+            uint8_t code = (mode == 4u) ? (uint8_t)(vm_byte & 0x3fu) : vm_byte;
+            gdata = c64_bus_vic_read_char_glyph_at(bus, char_base, code, (uint8_t)row_in_cell);
+        }
     }
 
     switch (mode) {
@@ -1022,7 +1105,17 @@ static vicii_bg_pixel vicii_background_pixel(
     default:
         return vicii_bg_pixel_make(vicii_palette_argb[0], false);
     }
-    }
+}
+
+static vicii_bg_pixel vicii_background_pixel(
+    const vicii *v,
+    const c64_bus_t *bus,
+    const vicii_border_geometry *g,
+    const vicii_line_ctx *lc,
+    uint32_t x,
+    uint32_t y)
+{
+    return vicii_background_pixel_ex(v, bus, g, lc, NULL, x, y);
 }
 
 static void vicii_set_irq_flag(vicii *v, uint8_t flag) {
@@ -1116,7 +1209,7 @@ static uint32_t vicii_live_pixel(
     vicii *v,
     const c64_bus_t *bus,
     const vicii_border_geometry *g,
-    const vicii_line_ctx *lc,
+    const vicii_paint_prep *prep,
     uint32_t x,
     uint32_t y,
     bool main_border,
@@ -1124,9 +1217,8 @@ static uint32_t vicii_live_pixel(
 {
     uint32_t border_color = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
     uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
-    vicii_bg_pixel bg = vicii_background_pixel(v, bus, g, lc, x, y);
+    vicii_bg_pixel bg;
     vicii_sprite_pixel sprites[8];
-    bool any_sprite_enabled = false;
     int n;
 
     /* Paint from the line-latched row (sprite_visible), not from $D015.
@@ -1134,20 +1226,22 @@ static uint32_t vicii_live_pixel(
        check while DMA is on; clearing $D015 only prevents a new DMA start,
        it does not blank an already-active sprite for the rest of its life.
        Re-gating paint on latched enable each line was clipping lft-nine's
-       bottom digits after $D015←0 @ R251 while DMA still had rows left. */
-    for (n = 0; n < 8; n++) {
-        any_sprite_enabled = any_sprite_enabled || v->sprite_visible[n];
-    }
+       bottom digits after $D015←0 @ R251 while DMA still had rows left.
 
-    if (!any_sprite_enabled) {
+       any_sprite is cycle-constant (set once in the paint prep). When no
+       sprites are visible, skip background decode for vertical-border spans
+       (content is forced to B0C) and avoid the compose path entirely. */
+    if (!prep->any_sprite) {
         if (main_border) {
             return border_color;
         }
         if (vertical_border) {
             return b0c;
         }
-        return bg.color;
+        return vicii_background_pixel_ex(v, bus, g, &prep->lc, prep, x, y).color;
     }
+
+    bg = vicii_background_pixel_ex(v, bus, g, &prep->lc, prep, x, y);
 
     for (n = 0; n < 8; n++) {
         sprites[n] = vicii_sprite_pixel_make(0, false);
@@ -1169,10 +1263,9 @@ static uint32_t vicii_live_pixel(
 /* VICE check_vborder_top: top compare + DEN clears both the latch and the
    live vertical border flag immediately (not deferred to cycle 0). */
 static void vicii_check_vborder_top(vicii *v) {
-    vicii_border_geometry g = vicii_get_border_geometry(v);
     bool den = (v->registers[0x11] & 0x10u) != 0u;
 
-    if (v->timing.raster_line == g.top && den) {
+    if (v->timing.raster_line == vicii_vborder_top_line(v) && den) {
         v->vertical_border_active = false;
         v->set_vborder            = false;
     }
@@ -1182,9 +1275,7 @@ static void vicii_check_vborder_top(vicii *v) {
    clears it — only top+DEN does. That is what makes the RSEL lower-border open
    stick once the 24-row bottom has been missed. */
 static void vicii_check_vborder_bottom(vicii *v) {
-    vicii_border_geometry g = vicii_get_border_geometry(v);
-
-    if (v->timing.raster_line == g.bottom) {
+    if (v->timing.raster_line == vicii_vborder_bottom_line(v)) {
         v->set_vborder = true;
     }
 }
@@ -1210,7 +1301,7 @@ static void vicii_hborder_flush(vicii *v, bool main_border) {
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_border_geometry g;
-    vicii_line_ctx lc;
+    vicii_paint_prep prep;
     uint32_t y;
     uint32_t x0;
     uint32_t x1;
@@ -1218,6 +1309,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     uint32_t cyc;
     bool     check_csel;
     bool     check_prev_csel;
+    int      n;
+    uint16_t idle_bank;
+    uint16_t idle_addr;
 
     if (!bus) {
         return;
@@ -1228,8 +1322,32 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         return;
     }
 
+    /* Geometry is unused by background decode (border is the main flip-flop);
+       only kept for the shared API with the snapshot path. */
     g = vicii_get_border_geometry(v);
-    lc = vicii_live_line_ctx(v);
+    prep.lc = vicii_live_line_ctx(v);
+    prep.xscroll = (uint8_t)(v->xscroll_pipe & 0x07u);
+    prep.mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                          ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                          ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+    prep.b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
+    prep.b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
+    prep.b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
+    prep.idle_ecm = (v->registers[0x11] & 0x40u) != 0u;
+    prep.idle_bmm = (v->registers[0x11] & 0x20u) != 0u;
+    prep.idle_mcm = (v->registers[0x16] & 0x10u) != 0u;
+    prep.idle_invalid = prep.idle_ecm && (prep.idle_bmm || prep.idle_mcm);
+    idle_bank = c64_bus_vic_bank_base(bus);
+    idle_addr = (uint16_t)(idle_bank + (prep.idle_ecm ? 0x39ffu : 0x3fffu));
+    prep.idle_g = c64_bus_vic_read_ram(bus, idle_addr);
+    prep.any_sprite = false;
+    for (n = 0; n < 8; n++) {
+        if (v->sprite_visible[n]) {
+            prep.any_sprite = true;
+            break;
+        }
+    }
+
     cyc = v->timing.cycle_in_line;
 
     /* CSEL used for this cycle's border check is the value latched at the end of
@@ -1295,7 +1413,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         uint8_t k = v->hborder_pipe[1].n;
         v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
         v->hborder_pipe[1].content[k] =
-            vicii_live_pixel(v, bus, &g, &lc, x, y, false,
+            vicii_live_pixel(v, bus, &g, &prep, x, y, false,
                 v->vertical_border_active);
 #ifdef C64M_VIC_TRACE
         if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&

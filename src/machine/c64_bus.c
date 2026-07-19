@@ -270,50 +270,6 @@ void c64_bus_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
     }
 }
 
-uint8_t c64_bus_vic_read_ram(const c64_bus_t *bus, uint16_t address) {
-    assert(bus);
-
-    return bus->ram[address];
-}
-
-uint8_t c64_bus_vic_read_screen(const c64_bus_t *bus, uint16_t offset) {
-    assert(bus);
-
-    return bus->ram[(uint16_t)(C64_DEFAULT_SCREEN_BASE + (offset % 1000u))];
-}
-
-uint8_t c64_bus_vic_read_color(const c64_bus_t *bus, uint16_t offset) {
-    assert(bus);
-
-    return (uint8_t)(bus->color_ram[offset % C64_COLOR_RAM_SIZE] & 0x0f);
-}
-
-uint8_t c64_bus_vic_read_char_glyph(const c64_bus_t *bus, uint8_t character_code, uint8_t glyph_row) {
-    assert(bus);
-
-    return bus->char_rom[((uint16_t)character_code * 8u) + (glyph_row & 0x07u)];
-}
-
-uint8_t c64_bus_vic_read_char_glyph_at(
-    const c64_bus_t *bus,
-    uint16_t character_base,
-    uint8_t character_code,
-    uint8_t glyph_row) {
-    uint16_t full_addr;
-
-    assert(bus);
-
-    /* character_base is already a full absolute VIC address (vic_bank + within-bank offset). */
-    full_addr = (uint16_t)(character_base + (uint16_t)character_code * 8u + (glyph_row & 0x07u));
-
-    /* Char ROM appears at $1000-$1FFF (VIC bank 0) and $9000-$9FFF (VIC bank 2). */
-    if ((full_addr & 0xF000u) == 0x1000u || (full_addr & 0xF000u) == 0x9000u) {
-        return bus->char_rom[full_addr & 0x0FFFu];
-    }
-
-    return bus->ram[full_addr];
-}
-
 bool c64_bus_set_basic_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
     assert(bus);
     if (!data || size != sizeof(bus->basic_rom)) {
@@ -342,12 +298,6 @@ bool c64_bus_set_kernal_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
 
     memcpy(bus->kernal_rom, data, sizeof(bus->kernal_rom));
     return true;
-}
-
-uint16_t c64_bus_vic_bank_base(const c64_bus_t *bus) {
-    assert(bus);
-
-    return bus->vic_bank_base;
 }
 
 bool c64_bus_set_system_rom(c64_bus_t *bus, const uint8_t *data, size_t size) {
