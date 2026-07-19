@@ -104,6 +104,12 @@ struct vicii {
        mid-line ECM/BMM write takes effect one cycle late. */
     uint8_t  reg11_delay;
 
+    /* xscroll_pipe: after CPU store on g-access cycles 15..54 only, latch
+       $D016 XSCROLL for the next cycle. Excludes 0..14 (stale previous-line
+       $62 before first matrix cell) and 55+ (border-dodge $62). Either of
+       those reintroduced the solid x=24 EoD checker line. Snapshot: live $D016. */
+    uint8_t  xscroll_pipe;
+
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 

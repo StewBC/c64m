@@ -228,6 +228,7 @@ void vicii_reset(vicii *v) {
     memset(v->color_line,   0, sizeof(v->color_line));
     memset(v->g_line,       0, sizeof(v->g_line));
     v->reg11_delay = 0;
+    v->xscroll_pipe = 0;
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
@@ -744,7 +745,9 @@ static void vicii_latch_sprite_line_state(vicii *v) {
    usually black -- not the live background colour. Returning the live b0c here
    is what made c64m paint the opened border with the background colour instead
    of the near-black idle output VICE/hardware produce. */
-static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uint32_t x) {
+static vicii_bg_pixel vicii_idle_pixel(
+    const vicii *v, const c64_bus_t *bus, uint32_t x, uint8_t xscroll)
+{
     /* Use 1-pixel-delayed B0C (color_pipe_d021) so mid-line $D021 splits in the
        opened border line up with XSCROLL the same way as VICE 6569. */
     uint32_t b0c   = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
@@ -752,8 +755,8 @@ static vicii_bg_pixel vicii_idle_pixel(const vicii *v, const c64_bus_t *bus, uin
     bool ecm = (v->registers[0x11] & 0x40u) != 0u;
     bool bmm = (v->registers[0x11] & 0x20u) != 0u;
     bool mcm = (v->registers[0x16] & 0x10u) != 0u;
-    uint8_t xscroll = (uint8_t)(v->registers[0x16] & 0x07u);
     uint16_t vic_bank = c64_bus_vic_bank_base(bus);
+    xscroll &= 0x07u;
     uint16_t addr = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
     uint8_t g = c64_bus_vic_read_ram(bus, addr);
     /* Idle g-accesses emit the ghost byte every cycle; XSCROLL phase-shifts
@@ -833,6 +836,12 @@ static vicii_bg_pixel vicii_background_pixel(
        flip-flop in the renderer, not by clamping the background value. */
     (void)g;
 
+    /* Live path: VICE xscroll_pipe (sampled at end of g-access paint cycles).
+       Snapshot path has no pipe history — use live $D016. */
+    xscroll = (lc->g_latch != NULL)
+        ? (uint8_t)(v->xscroll_pipe & 0x07u)
+        : (uint8_t)(v->registers[0x16] & 0x07u);
+
     if (x < (uint32_t)VICII_HBORDER_LEFT_40 || x >= (uint32_t)VICII_HBORDER_RIGHT_40) {
         /* Horizontal over-border region: outside the fixed 40-column display span
            [24,344), independent of CSEL. The VIC emits idle-state graphics here
@@ -846,7 +855,7 @@ static vicii_bg_pixel vicii_background_pixel(
            vicii_idle_pixel applies XSCROLL to the ghost phase and uses the low
            bits of x-24 (unsigned underflow for x<24 still indexes the 8-dot
            group correctly). */
-        return vicii_idle_pixel(v, bus, x);
+        return vicii_idle_pixel(v, bus, x, xscroll);
     }
 
     if (lc->idle_when_inactive) {
@@ -859,19 +868,18 @@ static vicii_bg_pixel vicii_background_pixel(
            badline/display range is driven by YSCROLL, not RSEL, so RSEL still
            does not split the picture. */
         if (!lc->display_active) {
-            return vicii_idle_pixel(v, bus, x);
+            return vicii_idle_pixel(v, bus, x, xscroll);
         }
     } else if (y < (uint32_t)VICII_VBORDER_TOP_25 || y >= (uint32_t)VICII_VBORDER_BOTTOM_25) {
         /* Snapshot/debug path: idle-state graphics outside the fixed 25-row
            window. Inactive rows inside the window fall through to the B0C blank
            below, preserving the legacy geometric reconstruction. */
-        return vicii_idle_pixel(v, bus, x);
+        return vicii_idle_pixel(v, bus, x, xscroll);
     }
 
     mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
                      ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
-    xscroll = v->registers[0x16] & 0x07u;
     sx_raw = x - (uint32_t)VICII_HBORDER_LEFT_40;
 
     if (mode >= 5u) {
@@ -1908,7 +1916,22 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 }
 
 void vicii_finish_cycle(vicii *v) {
+    uint32_t cyc;
+
     assert(v);
+
+    /* XSCROLL pipe sample runs *after* this cycle's CPU Phi2 store (begin_cycle
+       paints first, then the CPU, then finish_cycle).
+       Only g-access cycles 15..54: never 0..14 (would pick up a still-live
+       previous-line $62 before the first matrix cell) and never 55+ (EoD's
+       right-border dodge STA $D016,$62). Either mistake pads x=24 with B0C
+       and draws the solid vertical checker line. */
+    cyc = v->timing.cycle_in_line;
+    if (!v->vertical_border_active &&
+        cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+        cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
+        v->xscroll_pipe = (uint8_t)(v->registers[0x16] & 0x07u);
+    }
 
     v->timing.cycle_in_line++;
     if (v->timing.cycle_in_line < v->timing.cycles_per_line) {

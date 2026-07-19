@@ -562,6 +562,10 @@ add_executable(eod_regression_capture
 
 target_compile_features(eod_regression_capture PRIVATE c_std_99)
 
+target_include_directories(eod_regression_capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+)
+
 target_link_libraries(eod_regression_capture PRIVATE
     runtime
 )

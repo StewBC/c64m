@@ -1,5 +1,7 @@
 #include "runtime.h"
 #include "runtime_client.h"
+#include "runtime_internal.h"
+#include "c64_bus.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -269,6 +271,97 @@ int main(int argc, char **argv) {
         fprintf(stderr, "captured frame %llu: %s\n",
             (unsigned long long)frame.frame_number, path);
         write_ppm(path, &frame);
+
+        /* One-shot VIC diagnosis dump after first live sample (EoD left seam). */
+        if (sample == 0u && getenv("EOD_DUMP") != NULL) {
+            c64_t *m = &rt->machine;
+            const uint8_t *vic = m->vic.registers;
+            uint8_t dd = c64_bus_read(&m->bus, 0xDD00);
+            uint16_t bank = c64_bus_vic_bank_base(&m->bus);
+            uint16_t scr = (uint16_t)(bank + ((vic[0x18] >> 4) & 0x0fu) * 0x0400u);
+            uint16_t ch = (uint16_t)(bank + ((vic[0x18] >> 1) & 0x07u) * 0x0800u);
+            int n, x, y, r;
+            FILE *df = fopen(getenv("EOD_DUMP"), "w");
+            if (!df) df = stderr;
+            fprintf(df, "frame=%llu D011=%02X D016=%02X D015=%02X D018=%02X "
+                    "D020=%02X D021=%02X SXMSB=%02X xscroll_pipe=%u "
+                    "mbff=%d vb=%d disp=%d rc=%u vc=%03X\n",
+                    (unsigned long long)frame.frame_number,
+                    vic[0x11], vic[0x16], vic[0x15], vic[0x18],
+                    vic[0x20], vic[0x21], vic[0x10],
+                    (unsigned)m->vic.xscroll_pipe,
+                    m->vic.main_border_ff ? 1 : 0,
+                    m->vic.vertical_border_active ? 1 : 0,
+                    m->vic.display_state ? 1 : 0,
+                    (unsigned)m->vic.rc, (unsigned)m->vic.vc);
+            fprintf(df, "DD00=%02X bank=%04X scr=%04X char=%04X\n",
+                    dd, bank, scr, ch);
+            for (n = 0; n < 8; n++) {
+                if ((vic[0x15] & (1u << n)) == 0) continue;
+                x = vic[n * 2] | (((vic[0x10] >> n) & 1) << 8);
+                fprintf(df, "spr%d X=%d Y=%d col=%u mc=%u xe=%u ye=%u "
+                        "vis=%d act=%d data=%02X%02X%02X\n",
+                        n, x, vic[n * 2 + 1], vic[0x27 + n],
+                        (vic[0x1c] >> n) & 1u, (vic[0x1d] >> n) & 1u,
+                        (vic[0x17] >> n) & 1u,
+                        m->vic.sprite_visible[n] ? 1 : 0,
+                        m->vic.sprite_active[n] ? 1 : 0,
+                        m->vic.sprite_data[n][0], m->vic.sprite_data[n][1],
+                        m->vic.sprite_data[n][2]);
+            }
+            fprintf(df, "g_line:");
+            for (n = 0; n < 8; n++) fprintf(df, " %02X", m->vic.g_line[n]);
+            fprintf(df, "\nvm:");
+            for (n = 0; n < 8; n++) fprintf(df, " %02X", m->vic.video_matrix[n]);
+            fprintf(df, "\ncl:");
+            for (n = 0; n < 8; n++) fprintf(df, " %02X", m->vic.color_line[n]);
+            fprintf(df, "\n");
+            fprintf(df, "screen0:");
+            for (n = 0; n < 40; n++)
+                fprintf(df, "%02X", m->bus.ram[(scr + (uint16_t)n) & 0xffffu]);
+            fprintf(df, "\ncolor0:");
+            for (n = 0; n < 40; n++)
+                fprintf(df, "%X", m->bus.color_ram[n] & 0x0fu);
+            fprintf(df, "\n");
+            for (n = 0; n < 4; n++) {
+                uint8_t code = m->bus.ram[(scr + (uint16_t)n) & 0xffffu];
+                fprintf(df, "char %02X:", code);
+                for (r = 0; r < 8; r++) {
+                    uint8_t b = m->bus.ram[(ch + (uint16_t)code * 8u + (uint16_t)r) & 0xffffu];
+                    fprintf(df, " %02X(%08b)", b, b);
+                }
+                fprintf(df, "\n");
+            }
+            for (n = 0; n < 8; n++) {
+                uint8_t p;
+                uint16_t base;
+                if ((vic[0x15] & (1u << n)) == 0) continue;
+                p = m->bus.ram[(scr + 0x3f8u + (uint16_t)n) & 0xffffu];
+                base = (uint16_t)(bank + (uint16_t)p * 64u);
+                fprintf(df, "spr%d ptr=%02X @%04X\n", n, p, base);
+                for (r = 0; r < 21; r++) {
+                    uint8_t b0 = m->bus.ram[(base + (uint16_t)r * 3u) & 0xffffu];
+                    uint8_t b1 = m->bus.ram[(base + (uint16_t)r * 3u + 1u) & 0xffffu];
+                    uint8_t b2 = m->bus.ram[(base + (uint16_t)r * 3u + 2u) & 0xffffu];
+                    fprintf(df, " r%02d %08b%08b%08b\n", r, b0, b1, b2);
+                }
+            }
+            /* Mono-column scan on this frame */
+            for (x = 0; x < 64; x++) {
+                uint32_t first = frame.pixels[60 * (int)frame.width + x];
+                int mono = 1;
+                for (y = 52; y < 245; y++) {
+                    if (frame.pixels[y * (int)frame.width + x] != first) {
+                        mono = 0;
+                        break;
+                    }
+                }
+                if (mono)
+                    fprintf(df, "MONO x=%d argb=%08X\n", x, first);
+            }
+            if (df != stderr) fclose(df);
+            fprintf(stderr, "EOD_DUMP written to %s\n", getenv("EOD_DUMP"));
+        }
     }
 
     runtime_client_quit(client);

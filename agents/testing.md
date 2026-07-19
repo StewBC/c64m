@@ -43,8 +43,11 @@ verify it.
   `assets/disks/EdgeOfDisgrace_1a.d64`. It swaps at `$020C`, reaches the checker
   marker at `$A3BD`, then captures live turbo-7 frames. Optional scene values are
   `checker`, `plasma`, or `+RACE_FRAMES`; optional sample count and interval write
-  separated frames. Treat turbo 8+ captures as debug geometry only. See
-  `eod-handoff.md` for scene landmarks and current reference captures.
+  separated frames. Treat turbo 8+ captures as debug geometry only. Optional
+  `EOD_DUMP=<path>` writes a VIC/sprite/matrix dump after the first sample.
+  Fine-checker bar: no mono column at x=24 (solid B0C pad), `ones@24 ≈ 50%`,
+  seam 23/24 = 0; moving double-pixel lattice is intentional. See
+  `eod-handoff.md` for scene landmarks and the left-edge XSCROLL pipe fix.
 - **VICE vs c64m on `assets/prg/` games:** follow `vice-oracle.md`. Collection
   PRGs need VICE `-autostartprgmode 1` and `-autoload "<path.prg>"` (IRQ after
   inject starts the game). Do not use a plain small-PRG autostart for those.

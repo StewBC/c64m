@@ -3489,6 +3489,118 @@ static void test_expose_midline_d011_forces_badline(void) {
         black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
 }
 
+
+/* EoD open-border checker join: AA sprite in the open left border must phase-
+   match AA matrix at x=24. Covers plain CSEL=0 and the EoD dodge $D016=$62
+   (CSEL=0, XSCROLL=2) restored to $E8 at cycle 14. */
+static void test_open_border_sprite_matrix_checker_joins(void) {
+    c64_t     machine;
+    c64_frame frame;
+    c64_rom_set roms;
+    uint64_t  abs;
+    int       i, y, pass;
+    uint32_t  yellow = TEST_PALETTE_7;
+    uint32_t  blue = TEST_PALETTE_6;
+
+    build_roms(&roms);
+    for (i = 0; i < 8; i++) {
+        roms.character[1 * 8 + i] = 0xAAu;
+    }
+    reset_machine_with_roms(&machine, &roms);
+
+    for (i = 0; i < 1000; i++) {
+        machine.bus.ram[0x0400 + i] = 1;
+        machine.bus.color_ram[i] = 7;
+    }
+    for (i = 0; i < 63; i++) {
+        machine.bus.ram[0x0340 + i] = 0xAAu;
+    }
+    machine.bus.ram[0x07f8] = 13;
+    c64_bus_write(&machine.bus, 0xd000, 0);
+    c64_bus_write(&machine.bus, 0xd001, 55);
+    c64_bus_write(&machine.bus, 0xd027, 7);
+    c64_bus_write(&machine.bus, 0xd015, 1);
+    c64_bus_write(&machine.bus, 0xd020, 0x00);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+
+    for (pass = 0; pass < 2; pass++) {
+        unsigned seams = 0, rows = 0, doubles = 0, yellow_px = 0;
+        const char *label;
+        uint8_t dodge, restore;
+
+        if (pass == 0) {
+            label = "CSEL0 XSCROLL0";
+            dodge = 0x00; restore = 0x08;
+        } else {
+            label = "CSEL0 XSCROLL2 (EoD $62)";
+            dodge = 0x62; restore = 0xe8;
+        }
+
+        c64_bus_write(&machine.bus, 0xd011, 0x1b);
+        c64_bus_write(&machine.bus, 0xd016, restore);
+
+        abs = 0;
+        while (!vicii_consume_frame_complete(&machine.vic)) {
+            uint32_t line = machine.vic.timing.raster_line;
+            uint32_t cyc = machine.vic.timing.cycle_in_line;
+            if (line >= 50u && line <= 250u && cyc == 56u) {
+                c64_bus_write(&machine.bus, 0xd016, dodge);
+            }
+            if (line >= 50u && line <= 250u && cyc == 14u) {
+                c64_bus_write(&machine.bus, 0xd016, restore);
+            }
+            vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+        }
+        expect_true(label, vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+        for (y = 60; y <= 70; y++) {
+            int x;
+            for (x = 0; x < 24; x++) {
+                if (frame.pixels[y * C64_FRAME_WIDTH + x] == yellow) {
+                    yellow_px++;
+                }
+            }
+            {
+                uint32_t a = frame.pixels[y * C64_FRAME_WIDTH + 23];
+                uint32_t b = frame.pixels[y * C64_FRAME_WIDTH + 24];
+                if ((a == yellow || a == blue) && (b == yellow || b == blue)) {
+                    rows++;
+                    if (a == b) seams++;
+                }
+                if (frame.pixels[y * C64_FRAME_WIDTH + 16] ==
+                    frame.pixels[y * C64_FRAME_WIDTH + 17]) {
+                    doubles++;
+                }
+            }
+        }
+        fprintf(stderr, "%s: rows=%u seams=%u doubles=%u yellow_border=%u\n",
+                label, rows, seams, doubles, yellow_px);
+        {
+            int x;
+            fprintf(stderr, "  y=65:");
+            for (x = 0; x < 32; x++) {
+                uint32_t p = frame.pixels[65 * C64_FRAME_WIDTH + x];
+                fprintf(stderr, "%c", p == yellow ? 'Y' : (p == blue ? '.' : '?'));
+            }
+            fprintf(stderr, "\n");
+        }
+        if (yellow_px < 20u) {
+            fail("sprite not visible in left border");
+        }
+        if (rows < 8u) {
+            fail("not enough sample rows");
+        }
+        if (seams * 5u > rows) {
+            fprintf(stderr, "FAIL %s seam %u/%u\n", label, seams, rows);
+            fail("sprite/matrix seam");
+        }
+        if (doubles * 5u > rows) {
+            fprintf(stderr, "FAIL %s doubles %u/%u\n", label, doubles, rows);
+            fail("x=16/17 doubles");
+        }
+    }
+}
+
 int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
@@ -3529,6 +3641,7 @@ int main(void) {
     test_live_side_border_wrong_cycle_stays_closed();
     test_live_side_border_flip_flop_persists_left();
     test_live_side_border_reveals_sprite();
+    test_open_border_sprite_matrix_checker_joins();
     test_den_clear_main_border_keeps_d020_full_height();
     test_live_side_border_shows_ghost_byte();
     test_live_ghost_byte_respects_xscroll();

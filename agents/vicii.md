@@ -124,6 +124,13 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   mode delay for fetches. The live paint path uses `g_line` rather than re-reading
   RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
   Snapshot rendering still re-reads RAM (no sequencer history).
+- Live paint uses `xscroll_pipe`: after each cycle's CPU Phi2 store, on g-access
+  cycles **15..54** only, latch `$D016` XSCROLL for the next cycle's paint.
+  Cycles **0..14** are excluded (would re-latch a still-live previous-line
+  `$62` before the first matrix cell). Cycles **55+** are excluded (EoD's
+  open-border dodge `$D016=$62` / XSCROLL=2 at the right compare). Either
+  mistake pads x=24 with B0C — the solid vertical fine-checker line. Snapshot
+  path uses live `$D016`.
 - `reg11_delay` samples `$D011` at the end of `vicii_begin_cycle`, after this
   cycle's VIC fetches but before the CPU's same-cycle Phi2 write. A same-cycle
   CPU store therefore cannot affect the following cycle's g-fetch; it reaches
@@ -148,7 +155,9 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - General cycle-perfect demo-scene compatibility is not claimed. `lft-nine` is a
   selected milestone target. Edge of Disgrace's checker requires both the
   full-bleed side-border windows and live VC/RC graphics to continue while DEN
-  is low; phase `$01/$79` has been compared directly with a VICE raw screenshot.
+  is low; the left-edge solid column was an XSCROLL=2 B0C pad from sampling the
+  open-border `$D016=$62` dodge into `xscroll_pipe` (fixed: sample only on
+  g-access cycles 15..54 after the CPU store).
 
 ## Verification
 
