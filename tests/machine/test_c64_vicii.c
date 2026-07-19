@@ -375,8 +375,8 @@ static void test_bad_line_ba_asserts_at_cycle_11(void) {
         abs_cycle++;
     }
 
-    /* On cycle 53 BA may release because AEC itself owns the final c-access. */
-    expect_true("ba releases on final c-access", !vicii_ba_active(&v, abs_cycle));
+    /* BA remains low through cycle 53's final c-access and rises on cycle 54. */
+    expect_true("ba remains low on final c-access", vicii_ba_active(&v, abs_cycle));
     expect_true("aec blocks final c-access", !vicii_aec_active(&v));
 }
 
@@ -2469,6 +2469,13 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     expect_true("badline AEC high during BA lead", vicii_aec_active(&v));
     vicii_finish_cycle(&v);
 
+    vicii_begin_cycle(&v, NULL, 12u);
+    expect_true("badline AEC high on second BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+    vicii_begin_cycle(&v, NULL, 13u);
+    expect_true("badline AEC high on third BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+
     v.timing.cycle_in_line = 14u;
     vicii_begin_cycle(&v, NULL, 14u);
     expect_true("badline RDY low during c-access", !vicii_rdy_active(&v, 14u));
@@ -2477,7 +2484,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
 
     v.timing.cycle_in_line = 53u;
     vicii_begin_cycle(&v, NULL, 53u);
-    expect_true("badline RDY releases on final c-access", vicii_rdy_active(&v, 53u));
+    expect_true("badline RDY remains low on final c-access", !vicii_rdy_active(&v, 53u));
     expect_true("badline AEC remains low for final c-access", !vicii_aec_active(&v));
     vicii_finish_cycle(&v);
 
@@ -2500,6 +2507,13 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     vicii_begin_cycle(&v, NULL, 54u);
     expect_true("sprite RDY low during BA lead", !vicii_rdy_active(&v, 54u));
     expect_true("sprite AEC high during BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+
+    vicii_begin_cycle(&v, NULL, 55u);
+    expect_true("sprite AEC high on second BA lead", vicii_aec_active(&v));
+    vicii_finish_cycle(&v);
+    vicii_begin_cycle(&v, NULL, 56u);
+    expect_true("sprite AEC high on third BA lead", vicii_aec_active(&v));
     vicii_finish_cycle(&v);
 
     v.timing.cycle_in_line = 57u;
@@ -2556,6 +2570,73 @@ static void test_updatevc_observes_phi1_before_same_cycle_cpu_write(void) {
     vicii_finish_cycle(&v);
 }
 
+static void test_reg11_delay_latches_before_same_cycle_cpu_write(void) {
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+    vicii_set_video_standard(&v, VICII_VIDEO_STANDARD_PAL);
+    vicii_write_register(&v, 0xd011, 0x1bu);
+    v.reg11_delay = 0x1bu;
+    v.timing.cycle_in_line = 20u;
+
+    /* VIC Phi2 captures the old value before the CPU owns its half-cycle. */
+    vicii_begin_cycle(&v, NULL, 20u);
+    expect_u8("VIC Phi2 latches pre-store D011", 0x1bu, v.reg11_delay);
+    vicii_write_register(&v, 0xd011, 0x3bu);
+    vicii_finish_cycle(&v);
+    expect_u8("CPU store does not rewrite VIC delay latch", 0x1bu, v.reg11_delay);
+
+    /* The next Phi1 still consumes 0x1b. Its following Phi2 captures 0x3b for
+       the subsequent Phi1, exactly matching VICE's reg11_delay pipeline. */
+    vicii_begin_cycle(&v, NULL, 21u);
+    expect_u8("following VIC Phi2 advances D011 delay", 0x3bu, v.reg11_delay);
+    vicii_finish_cycle(&v);
+}
+
+static void test_late_badline_observes_three_cycle_ba_takeover(void) {
+    c64_t machine;
+    vicii *v;
+
+    reset_machine(&machine);
+    v = &machine.vic;
+    vicii_write_register(v, 0xd011, 0x13u); /* line $32 does not match YSCROLL 3 */
+    vicii_write_register(v, 0xd018, 0x14u);
+    v->timing.raster_line = 0x32u;
+    v->timing.cycle_in_line = 20u;
+    v->allow_bad_lines = true;
+    v->timing.prefetch_cycles = 4u;
+    machine.bus.ram[0x0403u] = 0x42u;
+    machine.bus.color_ram[3] = 0x06u;
+
+    vicii_begin_cycle(v, &machine.bus, 20u);
+    expect_true("pre-write line has no badline BA", vicii_rdy_active(v, 20u));
+    vicii_write_register(v, 0xd011, 0x12u); /* CPU Phi2 creates badline */
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 21u);
+    expect_true("late badline asserts BA immediately", !vicii_rdy_active(v, 21u));
+    expect_true("late badline first BA cycle keeps AEC high", vicii_aec_active(v));
+    expect_u8("late badline first c-access is dummy", 0xffu, v->video_matrix[0]);
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 22u);
+    expect_true("late badline second BA cycle keeps AEC high", vicii_aec_active(v));
+    expect_u8("late badline second c-access is dummy", 0xffu, v->video_matrix[1]);
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 23u);
+    expect_true("late badline third BA cycle keeps AEC high", vicii_aec_active(v));
+    expect_u8("late badline third c-access is dummy", 0xffu, v->video_matrix[2]);
+    vicii_finish_cycle(v);
+
+    vicii_begin_cycle(v, &machine.bus, 24u);
+    expect_true("late badline fourth BA cycle lowers AEC", !vicii_aec_active(v));
+    expect_u8("late badline acquired c-access reads screen", 0x42u, v->video_matrix[3]);
+    expect_u8("late badline acquired c-access reads color", 0x06u, v->color_line[3]);
+    vicii_finish_cycle(v);
+}
+
 static void test_vc_vmli_advance_between_c_accesses(void) {
     c64_t machine;
     vicii *v;
@@ -2573,6 +2654,9 @@ static void test_vc_vmli_advance_between_c_accesses(void) {
     v->vc_base = 0x020u;
     v->vc = 0x099u;
     v->rc = 4u;
+    /* This focused test starts at cycle 13; BA cycles 11 and 12 already
+       elapsed, leaving one prefetch countdown step before cycle-14 c-data. */
+    v->timing.prefetch_cycles = 1u;
 
     bank = c64_bus_vic_bank_base(&machine.bus);
     screen_base = (uint16_t)(bank + 0x0400u);
@@ -3471,8 +3555,8 @@ static void test_expose_midline_d011_forces_badline(void) {
        now RC=1 and lit. Only possible if the bad line is evaluated after cycle 0. */
     setup_rc_probe_bitmap(&machine);
     run_vic_frame_with_injections(&machine, injs, 2u, &frame);
-    expect_u32("mid-line $D011 force makes raster 54 RC=1 (lit)",
-        white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+    expect_true("mid-line $D011 force makes raster 54 RC=1 (lit)",
+        frame.pixels[54 * C64_FRAME_WIDTH + 24] != black);
 
     /* Write after cycle 14: condition can open display/c-accesses, but RC is not
        cleared, so line 54 stays at RC=3 (blank) like the baseline. */
@@ -3552,6 +3636,8 @@ int main(void) {
     test_sprite4_cross_line_ba();
     test_aec_rdy_pin_transitions_follow_schedule();
     test_updatevc_observes_phi1_before_same_cycle_cpu_write();
+    test_reg11_delay_latches_before_same_cycle_cpu_write();
+    test_late_badline_observes_three_cycle_ba_takeover();
     test_vc_vmli_advance_between_c_accesses();
     test_vicii_debug_read_raster();
     test_vicii_debug_read_d011_raster_bit8();

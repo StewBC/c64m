@@ -377,6 +377,7 @@ static void write_vic(snapshot_writer *w, const c64_t *m) {
     w_u32(w, (uint32_t)v->timing.standard);
     w_bool(w, v->timing.aec_active);
     w_bool(w, v->timing.rdy_active);
+    w_u8(w, v->timing.prefetch_cycles);
     w_u16(w, v->timing.raster_compare);
     w_u64(w, v->timing.ba_low_until_abs);
     w_u64(w, v->timing.sprite_ba_low_until_abs);
@@ -704,6 +705,7 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     v->timing.standard = (vicii_video_standard)r_u32(r);
     v->timing.aec_active = r_bool(r);
     v->timing.rdy_active = r_bool(r);
+    v->timing.prefetch_cycles = r_u8(r);
     v->timing.raster_compare = r_u16(r);
     v->timing.ba_low_until_abs = r_u64(r);
     v->timing.sprite_ba_low_until_abs = r_u64(r);

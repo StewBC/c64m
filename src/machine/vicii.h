@@ -54,6 +54,9 @@ typedef struct vicii_timing {
     vicii_bus_access_kind bus_access_phi1; /* Phi1: VIC-private bus work. */
     bool aec_active;                       /* AEC high: CPU owns Phi2 bus. */
     bool rdy_active;                       /* RDY high: CPU reads may advance. */
+    /* VICE prefetch_cycles: BA must remain low for three complete lead cycles
+       before the VIC can lower AEC and perform a real Phi2 fetch. */
+    uint8_t prefetch_cycles;
 
     /* Phase A additions */
     uint16_t raster_compare;          /* 9-bit: 0-311 PAL, 0-262 NTSC */
@@ -100,6 +103,7 @@ struct vicii {
     /* Previous-cycle $D011 (VICE reg11_delay). g-fetch address uses this so a
        mid-line ECM/BMM write takes effect one cycle late. */
     uint8_t  reg11_delay;
+
     uint8_t  irq_status;       /* live shadow of $D019 low nibble */
     uint8_t  irq_enable;       /* live shadow of $D01A low nibble */
 

@@ -176,6 +176,7 @@ static void prepare_interesting_state(c64_t *machine) {
     machine->vic.timing.raster_compare = 250;
     machine->vic.timing.ba_low_until_abs = 1111;
     machine->vic.timing.sprite_ba_low_until_abs = 2222;
+    machine->vic.timing.prefetch_cycles = 2;
     machine->vic.completed_frame_ready = true;
     machine->vic.vc = 0x0123;
     machine->vic.vc_base = 0x0234;
@@ -343,6 +344,7 @@ static void assert_restored_state(const c64_t *machine) {
     expect_u8("restored vic vmli", 17, machine->vic.vmli);
     expect_u8("restored vic graphics latch", 0x80, machine->vic.g_line[0]);
     expect_u8("restored vic reg11 delay", 0x5b, machine->vic.reg11_delay);
+    expect_u8("restored vic BA prefetch", 2, machine->vic.timing.prefetch_cycles);
     expect_true("restored vic frame ready", machine->vic.completed_frame_ready);
     expect_true("restored vic active sprite", machine->vic.sprite_active[3]);
     expect_u16("restored cia timer", 0x1002, machine->cia1.timer_a.counter);

@@ -259,9 +259,56 @@ static void c64_balog_maybe_emit(c64_t *machine) {
         }
     }
 }
+
+static void c64_cyclelog_emit(const c64_t *machine) {
+    static FILE *cyclelog = NULL;
+    static int init = 0;
+    static unsigned long f0 = 0, f1 = 0xffffffffUL;
+    static unsigned r0 = 0, r1 = 0xffffffffU;
+    unsigned active = 0;
+    int n;
+
+    if (!init) {
+        const char *p = getenv("C64M_CYCLELOG");
+        const char *a = getenv("C64M_VICLOG_F0");
+        const char *b = getenv("C64M_VICLOG_F1");
+        const char *ra = getenv("C64M_CYCLELOG_R0");
+        const char *rb = getenv("C64M_CYCLELOG_R1");
+        if (p) cyclelog = fopen(p, "wb");
+        if (a) f0 = strtoul(a, NULL, 10);
+        if (b) f1 = strtoul(b, NULL, 10);
+        if (ra) r0 = (unsigned)strtoul(ra, NULL, 10);
+        if (rb) r1 = (unsigned)strtoul(rb, NULL, 10);
+        init = 1;
+    }
+    if (!cyclelog || machine->vic.timing.frame_number < f0 ||
+        machine->vic.timing.frame_number > f1 ||
+        machine->vic.timing.raster_line < r0 ||
+        machine->vic.timing.raster_line > r1) {
+        return;
+    }
+    for (n = 0; n < 8; ++n) {
+        if (machine->vic.sprite_active[n]) active |= 1u << n;
+    }
+    fprintf(cyclelog,
+        "F%llu R%u C%u pc=%04X op=%02X ph=%u kind=%u micro=%u "
+        "rdy=%u aec=%u pf=%u bad=%u spr=%02X\n",
+        (unsigned long long)machine->vic.timing.frame_number,
+        machine->vic.timing.raster_line, machine->vic.timing.cycle_in_line,
+        machine->cpu.cpu.pc, machine->cpu.micro_opcode,
+        (unsigned)machine->cpu.micro_phase,
+        machine->cpu.micro_active ?
+            (unsigned)c6510_micro_access_kind(&machine->cpu) : 0xffu,
+        (unsigned)machine->cpu.micro_active,
+        vicii_rdy_active(&machine->vic, machine->clock.cycle) ? 1u : 0u,
+        vicii_aec_active(&machine->vic) ? 1u : 0u,
+        (unsigned)machine->vic.timing.prefetch_cycles,
+        machine->vic.bad_line ? 1u : 0u, active);
+}
 #else
 #define c64_balog_mark(stall)        ((void)0)
 #define c64_balog_maybe_emit(machine) ((void)0)
+#define c64_cyclelog_emit(machine)    ((void)0)
 #endif /* C64M_VIC_TRACE */
 
 /* Advance the CPU-visible VIC IRQ delay line. Raw pending comes from
@@ -299,6 +346,7 @@ static void c64_step_nonvic_devices_for_current_cycle(c64_t *machine) {
 static void c64_step_devices_for_current_cycle(c64_t *machine) {
     c64_begin_vic_for_current_cycle(machine);
     c64_step_nonvic_devices_for_current_cycle(machine);
+    c64_cyclelog_emit(machine);
 }
 
 static void c64_finish_cycle(c64_t *machine) {
@@ -1308,6 +1356,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
     }
 
     c64_step_nonvic_devices_for_current_cycle(machine);
+    c64_cyclelog_emit(machine);
 
     if (between_instructions_stalled) {
         c64_step_host_ba_stall(machine);
