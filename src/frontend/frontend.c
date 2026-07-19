@@ -33,14 +33,14 @@ enum {
     FRONTEND_DISK_LED_SIZE = 16,
     /* Host-time LED hold after each activity event (ms). Independent of pause. */
     FRONTEND_DISK_LED_HOLD_MS = 300,
-    FRONTEND_DISPLAY_CROP_X = 8,
-    /* Crop of the published frame. Each standard crops only rows its VIC-II
-       actually painted - never past frame->height. PAL (312 rasters) shows rows
-       28..275: the origin and height cover both top-border title/score sprites
-       (Galencia content from ~raster 29) and bottom-border HUD sprites (Y=254 ->
-       last painted line 275). */
-    FRONTEND_DISPLAY_PAL_CROP_Y = 28,
-    FRONTEND_DISPLAY_PAL_CROP_H = 248,
+    /* PAL's normal-border viewport is 384x272. Rows 20..291 retain the complete
+       upper and lower border effects (including EoD's FLIP/DISK labels), while
+       the full 384-pixel paint width preserves the same near-4:3 PAR-corrected
+       presentation as the former, overly tight 352x248 crop. */
+    FRONTEND_DISPLAY_PAL_CROP_X = 0,
+    FRONTEND_DISPLAY_PAL_CROP_Y = 20,
+    FRONTEND_DISPLAY_PAL_CROP_W = 384,
+    FRONTEND_DISPLAY_PAL_CROP_H = 272,
     /* NTSC has only 263 rasters (0..262). The display window is 51..250 on both
        standards (see vicii_get_border_geometry), so NTSC has just 12 border
        lines below it against PAL's 25. Rows 39..262 give 12 border lines above
@@ -48,7 +48,8 @@ enum {
        would run 13 rows past the frame and show uninitialised fill. */
     FRONTEND_DISPLAY_NTSC_CROP_Y = 39,
     FRONTEND_DISPLAY_NTSC_CROP_H = 224,
-    FRONTEND_DISPLAY_CROP_W = 352,
+    FRONTEND_DISPLAY_NTSC_CROP_X = 8,
+    FRONTEND_DISPLAY_NTSC_CROP_W = 352,
     /* Fixed-point scale for the fractional pixel aspect ratio. 256 keeps the
        PAR exact to ~1e-5 while leaving frontend_fit_rect()'s int multiply far
        from overflow at any plausible window size. */
@@ -771,6 +772,22 @@ static int frontend_display_crop_y_for_frame(const c64_frame *frame)
     return FRONTEND_DISPLAY_PAL_CROP_Y;
 }
 
+static int frontend_display_crop_x_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return FRONTEND_DISPLAY_NTSC_CROP_X;
+    }
+    return FRONTEND_DISPLAY_PAL_CROP_X;
+}
+
+static int frontend_display_crop_w_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return FRONTEND_DISPLAY_NTSC_CROP_W;
+    }
+    return FRONTEND_DISPLAY_PAL_CROP_W;
+}
+
 static int frontend_display_crop_h_for_frame(const c64_frame *frame)
 {
     if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
@@ -807,7 +824,7 @@ static void frontend_display_fit_source(const frontend *ui, int *out_w, int *out
     const c64_frame *frame = (ui != NULL && ui->has_frame) ? &ui->current_frame : NULL;
 
     *out_h = frontend_display_crop_h_for_frame(frame) * FRONTEND_DISPLAY_ASPECT_FIXED;
-    *out_w = (int)lroundf((float)FRONTEND_DISPLAY_CROP_W *
+    *out_w = (int)lroundf((float)frontend_display_crop_w_for_frame(frame) *
         (float)FRONTEND_DISPLAY_ASPECT_FIXED *
         frontend_display_par_for_frame(frame));
 }
@@ -922,9 +939,9 @@ static bool frontend_update_crt_texture(frontend *ui)
         ui->crt_pixels,
         C64_FRAME_WIDTH,
         (int)ui->current_frame.height,
-        FRONTEND_DISPLAY_CROP_X,
+        frontend_display_crop_x_for_frame(&ui->current_frame),
         crop_y,
-        FRONTEND_DISPLAY_CROP_W,
+        frontend_display_crop_w_for_frame(&ui->current_frame),
         frontend_display_crop_h_for_frame(&ui->current_frame),
         FRONTEND_CRT_RENDER_SCALE,
         &ui->crt_effects);
@@ -2786,10 +2803,10 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
                 (nk_ushort)(ui->current_frame.width * texture_scale),
                 (nk_ushort)(C64_FRAME_PAL_HEIGHT * texture_scale),
                 nk_rect(
-                    (float)(FRONTEND_DISPLAY_CROP_X * texture_scale),
+                    (float)(frontend_display_crop_x_for_frame(&ui->current_frame) * texture_scale),
                     (float)(frontend_display_crop_y_for_frame(&ui->current_frame) *
                         texture_scale),
-                    (float)(FRONTEND_DISPLAY_CROP_W * texture_scale),
+                    (float)(frontend_display_crop_w_for_frame(&ui->current_frame) * texture_scale),
                     (float)(frontend_display_crop_h_for_frame(&ui->current_frame) *
                         texture_scale)));
             int fit_w = 0;
@@ -9716,9 +9733,9 @@ static void frontend_render_display_only(frontend *ui)
 
     render_texture = frontend_display_texture_for_render(ui);
     texture_scale = render_texture == ui->crt_texture ? FRONTEND_CRT_RENDER_SCALE : 1;
-    src.x = FRONTEND_DISPLAY_CROP_X * texture_scale;
+    src.x = frontend_display_crop_x_for_frame(&ui->current_frame) * texture_scale;
     src.y = frontend_display_crop_y_for_frame(&ui->current_frame) * texture_scale;
-    src.w = FRONTEND_DISPLAY_CROP_W * texture_scale;
+    src.w = frontend_display_crop_w_for_frame(&ui->current_frame) * texture_scale;
     src.h = frontend_display_crop_h_for_frame(&ui->current_frame) * texture_scale;
     SDL_RenderCopy(ui->renderer, render_texture, &src, &dest);
 }

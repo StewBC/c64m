@@ -4,12 +4,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 enum {
     EOD_SWAP_PC = 0x020c,
     EOD_DEPACK_PC = 0x028a,
     EOD_CHECKER_PC = 0xa3bd,
+    EOD_PLASMA_PC = 0x1000,
     PAL_FRAME_CYCLES = 63 * 312
 };
 
@@ -111,14 +113,27 @@ static void write_ppm(const char *path, const c64_frame *frame) {
     fclose(file);
 }
 
-static int run_one_pal_frame(runtime_client *client, c64_frame *out) {
+static int run_live_frames(runtime_client *client, unsigned count, c64_frame *out) {
     runtime_event event;
 
-    if (!runtime_client_run_cycles(client, PAL_FRAME_CYCLES) ||
-        !wait_for_event(client, RUNTIME_EVENT_RUN_COMPLETE, &event, 10)) {
+    while (runtime_client_poll_event(client, &event)) {
+    }
+    while (runtime_client_poll_frame(client, out)) {
+    }
+    if (!runtime_client_run(client)) {
         return 0;
     }
-    return runtime_client_poll_frame(client, out);
+    for (unsigned i = 0; i < count; ++i) {
+        if (!wait_for_event(client, RUNTIME_EVENT_FRAME_READY, &event, 10) ||
+            !runtime_client_poll_frame(client, out)) {
+            return 0;
+        }
+    }
+    if (!runtime_client_pause(client) ||
+        !wait_for_event(client, RUNTIME_EVENT_PAUSED, &event, 10)) {
+        return 0;
+    }
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -128,15 +143,34 @@ int main(int argc, char **argv) {
     runtime_event event;
     c64_frame frame;
     unsigned advance_frames = 16u;
+    unsigned sample_count = 1u;
+    unsigned sample_interval = 50u;
+    const char *scene = "checker";
 
-    if (argc != 7 && argc != 8) {
+    if (argc < 7 || argc > 11) {
         fprintf(stderr,
-            "usage: %s SYSTEM CHAR 1541 DISK0 DISK1 OUTPUT.ppm [FRAMES]\n",
+            "usage: %s SYSTEM CHAR 1541 DISK0 DISK1 OUTPUT.ppm "
+            "[FRAMES] [checker|plasma|+RACE_FRAMES] [SAMPLES] [INTERVAL]\n",
             argv[0]);
         return 2;
     }
-    if (argc == 8) {
+    if (argc >= 8) {
         advance_frames = (unsigned)strtoul(argv[7], NULL, 10);
+    }
+    if (argc >= 9) {
+        scene = argv[8];
+        if (strcmp(scene, "checker") != 0 && strcmp(scene, "plasma") != 0 &&
+            scene[0] != '+') {
+            fail("unknown scene");
+        }
+    }
+    if (argc >= 10) {
+        sample_count = (unsigned)strtoul(argv[9], NULL, 10);
+        if (sample_count == 0u) fail("sample count must be nonzero");
+    }
+    if (argc == 11) {
+        sample_interval = (unsigned)strtoul(argv[10], NULL, 10);
+        if (sample_interval == 0u) fail("sample interval must be nonzero");
     }
 
     config.system_rom_path = argv[1];
@@ -182,29 +216,60 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "checker marker reached\n");
 
+    if (strcmp(scene, "plasma") == 0) {
+        if (!runtime_client_clear_all_breakpoints(client) ||
+            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !run_until_pc(client, EOD_PLASMA_PC, 300)) {
+            fail("plasma marker timed out");
+        }
+        fprintf(stderr, "plasma marker reached\n");
+    } else if (scene[0] == '+') {
+        unsigned long race_frames = strtoul(scene + 1, NULL, 10);
+        if (race_frames == 0ul ||
+            !runtime_client_clear_all_breakpoints(client) ||
+            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !runtime_client_run_cycles(client,
+                (size_t)race_frames * (size_t)PAL_FRAME_CYCLES) ||
+            !wait_for_event(client, RUNTIME_EVENT_RUN_COMPLETE, &event, 300)) {
+            fail("scene race timed out");
+        }
+        fprintf(stderr, "scene race advanced %lu frames\n", race_frames);
+    }
+
     if (!runtime_client_clear_all_breakpoints(client) ||
-        !runtime_client_set_turbo_multiplier(client, 1)) {
-        fail("checker capture timed out");
+        !runtime_client_set_turbo_multiplier(client, 7)) {
+        fail("live capture setup failed");
     }
 
     /* Turbo display uses a geometric debug reconstruction and the frame slot
        retains its oldest undrained frame.  Drain that slot, enable live video,
        then discard one full PAL frame so the cycle renderer starts from a clean
-       frame boundary.  Advance one frame at a time and drain each result so the
-       final payload really is the requested live raster frame. */
+       frame boundary.  Keep draining FRAME_READY payloads while advancing so
+       the final payload really is the requested live raster frame. */
     while (runtime_client_poll_frame(client, &frame)) {
     }
-    if (!run_one_pal_frame(client, &frame)) {
+    if (!run_live_frames(client, 1u, &frame)) {
         fail("live-video warm-up frame timed out");
     }
-    for (unsigned i = 0; i < advance_frames; ++i) {
-        if (!run_one_pal_frame(client, &frame)) {
-            fail("live checker frame timed out");
-        }
+    if (!run_live_frames(client, advance_frames, &frame)) {
+        fail("live scene frame timed out");
     }
-    fprintf(stderr, "captured frame %llu\n",
-        (unsigned long long)frame.frame_number);
-    write_ppm(argv[6], &frame);
+    for (unsigned sample = 0; sample < sample_count; ++sample) {
+        char path[1024];
+
+        if (sample != 0u &&
+            !run_live_frames(client, sample_interval, &frame)) {
+            fail("live sample interval timed out");
+        }
+        if (sample_count == 1u) {
+            snprintf(path, sizeof(path), "%s", argv[6]);
+        } else {
+            snprintf(path, sizeof(path), "%s.%03u.ppm", argv[6], sample);
+        }
+        fprintf(stderr, "captured frame %llu: %s\n",
+            (unsigned long long)frame.frame_number, path);
+        write_ppm(path, &frame);
+    }
 
     runtime_client_quit(client);
     runtime_stop(rt);

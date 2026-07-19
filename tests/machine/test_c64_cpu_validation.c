@@ -143,6 +143,8 @@ typedef struct timing_sample {
     uint32_t cycle_in_line_before;
     bool ba_before;
     bool pending_before;
+    bool rdy_after;
+    bool aec_after;
     size_t elapsed_before;
 } timing_sample;
 
@@ -161,6 +163,8 @@ static void capture_timing_step(c64_t *machine, timing_sample *sample) {
 
     sample->master_cycle_after = machine->clock.cycle;
     sample->cpu_cycles_after = machine->clock.cpu_cycles;
+    sample->rdy_after = vicii_rdy_active(&machine->vic, machine->clock.cycle);
+    sample->aec_after = vicii_aec_active(&machine->vic);
 }
 
 static c64_cpu_snapshot snapshot(const c64_t *machine) {
@@ -1487,19 +1491,21 @@ static void test_aec_blocks_pending_write_during_vic_phi2(void) {
     expect_true("AEC fixture has STA write pending",
         machine.pending_cpu_trace_active || machine.cpu.micro_active);
 
-    /* Put the pending write on a real bad-line c-access. RDY is not forced
-       here: AEC alone must keep the CPU off the Phi2 bus. */
+    /* Put the pending write on a real bad-line c-access. This fixture teleports
+       past BA's three-cycle lead, so explicitly model the completed acquisition:
+       current-cycle VIC evaluation must lower AEC before CPU Phi2 is applied. */
     vicii_write_register(&machine.vic, 0xd011, 0x13u);
     machine.vic.reg11_delay = machine.vic.registers[0x11];
     machine.vic.timing.raster_line = 0x33u;
     machine.vic.timing.cycle_in_line = 15u;
     machine.vic.allow_bad_lines = true;
+    machine.vic.timing.prefetch_cycles = 0u;
     before_cpu_cycles = machine.clock.cpu_cycles;
 
-    expect_true("AEC low at c-access", !vicii_aec_active(&machine.vic));
-    expect_true("RDY remains high without a preceding BA lead",
-        vicii_rdy_active(&machine.vic, machine.clock.cycle));
     step_machine_cycles(&machine, 1);
+    expect_true("AEC low at c-access", !vicii_aec_active(&machine.vic));
+    expect_true("RDY low during badline BA window",
+        !vicii_rdy_active(&machine.vic, machine.clock.cycle));
     expect_u8("AEC blocks pending write", 0x00u, c64_bus_read(&machine.bus, 0x1234));
     expect_u64("AEC blocks CPU cycle", before_cpu_cycles, machine.clock.cpu_cycles);
 
@@ -1613,17 +1619,18 @@ static void test_cpu_vic_pal_ntsc_interaction_traces(void) {
         10u, 54u, 0x33u);
 
     /* PAL sprite 0 data is scheduled at cycles 57/58; execute the opcode just
-       before BA is derived at 54. */
+       before BA falls at 54. The first operand read resumes at cycle 59. */
     run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 53u, false, 0,
-        53u, 60u, 101u);
+        53u, 59u, 100u);
 
-    /* NTSC sprite 0 uses the 6567R8 slot at cycles 59/60; BA derives at 56. */
-    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_NTSC, 100u, 55u, false, 0,
-        55u, 62u, 101u);
+    /* NTSC sprite 0 uses zero-based fetch cycles 58/59; BA falls at 55. */
+    run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_NTSC, 100u, 54u, false, 0,
+        54u, 60u, 100u);
 
-    /* PAL sprite 3 is the cross-line case: data is at line N+1/cycle 0/1. */
+    /* PAL sprite 3 is the cross-line case: BA spans cycles 60..62 and next-line
+       cycles 0..1, so operand reads resume on next-line cycle 2. */
     run_cpu_vic_interaction_trace(C64_VIDEO_STANDARD_PAL, 100u, 59u, false, 3,
-        59u, 66u, 101u);
+        59u, 65u, 101u);
 }
 
 static void test_instruction_and_cycle_step_share_ba_arbiter(void) {
@@ -1734,23 +1741,26 @@ static void test_timing_fixture_records_real_badline_stall(void) {
     capture_timing_step(&machine, &sample);
     expect_u64("badline fixture starts at cycle 12", 12, sample.cycle_in_line_before);
     expect_true("badline fixture BA high before VIC assertion", !sample.ba_before);
-    expect_true("badline fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+    expect_true("badline fixture VIC lowers RDY", !sample.rdy_after);
 
     held_cpu_cycles = machine.clock.cpu_cycles;
     for (i = 0; i < 40u; i++) {
         capture_timing_step(&machine, &sample);
-        expect_true("badline fixture BA stays low", sample.ba_before);
+        expect_true("badline fixture RDY stays low", !sample.rdy_after);
         expect_u64("badline fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
     }
 
-    /* BA rises for cycle 53, while AEC still blocks its final c-access. */
+    /* Cycle 53 is the final c-access and still has both RDY and AEC low. */
     capture_timing_step(&machine, &sample);
-    expect_true("badline fixture BA releases", !sample.ba_before);
+    expect_true("badline fixture RDY covers final c-access", !sample.rdy_after);
+    expect_true("badline fixture AEC covers final c-access", !sample.aec_after);
     expect_u64("badline fixture final AEC cycle holds CPU",
         held_cpu_cycles, sample.cpu_cycles_after);
 
+    /* Cycle 54 has neither a c-access nor live bad-line BA. */
     capture_timing_step(&machine, &sample);
-    expect_true("badline fixture remains released", !sample.ba_before);
+    expect_true("badline fixture RDY releases", sample.rdy_after);
+    expect_true("badline fixture AEC releases", sample.aec_after);
     expect_u64("badline fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
     step_machine_cycles(&machine, 3);
     expect_u8("badline fixture instruction completes", 0x5a, snapshot(&machine).a);
@@ -1783,17 +1793,17 @@ static void test_timing_fixture_records_sprite_ba_stall(
     capture_timing_step(&machine, &sample);
     expect_u64(prefix, ba_assert_cycle, sample.cycle_in_line_before);
     expect_true("sprite fixture BA high before VIC assertion", !sample.ba_before);
-    expect_true("sprite fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+    expect_true("sprite fixture VIC lowers RDY", !sample.rdy_after);
 
     held_cpu_cycles = machine.clock.cpu_cycles;
-    for (i = 0; i < 5u; i++) {
+    for (i = 0; i < 4u; i++) {
         capture_timing_step(&machine, &sample);
-        expect_true("sprite fixture BA stays low", sample.ba_before);
+        expect_true("sprite fixture RDY stays low", !sample.rdy_after);
         expect_u64("sprite fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
     }
 
     capture_timing_step(&machine, &sample);
-    expect_true("sprite fixture BA releases", !sample.ba_before);
+    expect_true("sprite fixture RDY releases", sample.rdy_after);
     expect_u64("sprite fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
 }
 
@@ -1807,7 +1817,7 @@ static void test_timing_fixture_records_pal_sprite_ba_stall(void) {
 static void test_timing_fixture_records_ntsc_sprite_ba_stall(void) {
     test_timing_fixture_records_sprite_ba_stall(
         C64_VIDEO_STANDARD_NTSC,
-        56u,
+        55u,
         "NTSC sprite fixture starts at NTSC sprite-0 BA cycle");
 }
 
@@ -1839,19 +1849,19 @@ static void test_timing_fixture_records_cross_line_sprite_ba_stall(void) {
     capture_timing_step(&machine, &sample);
     expect_u64("cross-line fixture starts at sprite-3 assert", 60,
         sample.cycle_in_line_before);
-    expect_true("cross-line fixture VIC asserts BA", vicii_ba_active(&machine.vic, machine.clock.cycle));
+    expect_true("cross-line fixture VIC lowers RDY", !sample.rdy_after);
 
     held_cpu_cycles = machine.clock.cpu_cycles;
-    for (i = 0; i < 5u; i++) {
+    for (i = 0; i < 4u; i++) {
         capture_timing_step(&machine, &sample);
         saw_next_line = saw_next_line || sample.raster_line_before == 50u;
-        expect_true("cross-line fixture BA stays low", sample.ba_before);
+        expect_true("cross-line fixture RDY stays low", !sample.rdy_after);
         expect_u64("cross-line fixture holds CPU", held_cpu_cycles, sample.cpu_cycles_after);
     }
     expect_true("cross-line fixture spans into next raster line", saw_next_line);
 
     capture_timing_step(&machine, &sample);
-    expect_true("cross-line fixture BA releases", !sample.ba_before);
+    expect_true("cross-line fixture RDY releases", sample.rdy_after);
     expect_u64("cross-line fixture CPU resumes", held_cpu_cycles + 1u, sample.cpu_cycles_after);
 }
 

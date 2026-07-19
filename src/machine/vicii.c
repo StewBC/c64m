@@ -96,7 +96,7 @@ static const uint32_t vicii_pal_sprite_fetch_cycle[8] = {
 };
 
 static const uint32_t vicii_ntsc_sprite_fetch_cycle[8] = {
-    59, 61, 63, 0, 2, 4, 6, 8
+    58, 60, 62, 64, 1, 3, 5, 7
 };
 
 /* VICE viciisc cycle_tab_{pal,ntsc}: sprite bits whose DMA makes BA low in
