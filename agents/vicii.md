@@ -17,17 +17,19 @@ Phi2 schedule; frontend frames are copies.
 - PAL 6569 and NTSC 6567R8 timing are selected per machine configuration.
 - Full PAL/NTSC frame heights are published: PAL 312 lines, NTSC 263. The
   frontend crop is per-standard and always stays inside the published frame:
-  PAL 352x248 from Y=28 (rows 28..275), NTSC 352x224 from Y=39 (rows 39..262).
-  The display window is 51..250 on both standards, so NTSC has only 12 border
-  lines below it; the 224-row crop takes 12 above and 12 below. Do not give NTSC
-  a PAL-sized 248-row crop - it runs 13 rows past raster 262 and exposes the
-  frame's fill colour as a band under the picture.
+  PAL uses the normal-border 384x272 viewport from X=0, Y=20 (rows 20..291),
+  which retains complete upper/lower border effects such as EoD's `FLIP`/`DISK`
+  labels; NTSC uses 352x224 from X=8, Y=39 (rows 39..262). The display window is
+  51..250 on both standards, so NTSC has only 12 border lines below it; the
+  224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
+  it runs past raster 262 and exposes the frame's fill colour as a band under
+  the picture.
 - Display aspect follows the frame, since the crops differ in height. The
   `True Aspect Ratio` option applies the pixel aspect ratio (PAL 0.9365, NTSC
   0.7500 - see codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the
-  real-world geometry: ~1.33 PAL, ~1.18 NTSC. Do not restore the old hardcoded
-  4:3: it is right for PAL only by coincidence (352x248 at PAL's PAR *is* 4:3)
-  and stretches NTSC ~13% too wide. With the option off the picture is not
+  real-world geometry: ~1.32 PAL, ~1.18 NTSC. Do not restore a hardcoded 4:3:
+  it is only an approximation for PAL and stretches NTSC ~13% too wide. With
+  the option off the picture is not
   corrected at all: it stretches to fill the view. Do not substitute a
   square-pixel aspect there - the display free-scales to its pane (there is no
   1:1 or integer-zoom mode), so square pixels would buy no pixel-exactness, just
@@ -39,8 +41,10 @@ Phi2 schedule; frontend frames are copies.
   sprites, priority, expansion, multicolor, pointers/data fetches, collisions,
   raster IRQ, and timed register writes are implemented.
 - The bus scheduler distinguishes Phi1 idle/graphics/sprite-pointer work from
-  Phi2 bad-line character and sprite-data work. BA is derived from scheduled Phi2
-  accesses with a three-cycle lead; AEC and RDY are exposed at cycle granularity.
+  Phi2 bad-line character and sprite-data work. Bad-line BA is low on cycles
+  11..53; sprite BA uses VICE's explicit live PAL/NTSC per-cycle DMA masks, not
+  a synthetic persistent six-cycle window. AEC and RDY are exposed at cycle
+  granularity.
 - Live rendering tracks main and vertical border flip-flops. The current source
   follows the Bauer 3.9 rule used by the `lft-nine` work: main border covers
   sprites with `$D020`; vertical border blanks graphics to B0C and does not blank
@@ -56,14 +60,16 @@ Phi2 schedule; frontend frames are copies.
   cycle 56 in Edge of Disgrace and at cycle 55 in lft-nine's CIA-synchronised
   loop. Both in-flight 1-to-0 transitions dodge the compare; a CSEL=0 value that
   is stable for two samples still closes the 38-column border normally.
-- Bad Line Condition is evaluated every cycle like VICE `check_badline` (set or
-  clear from DEN + range + live YSCROLL). RC is cleared at UpdateVc when
-  badline holds. **Machine order:** `vicii_begin_cycle` performs the VIC's
+- Bad Line Condition is evaluated every cycle like VICE `check_badline`, from
+  the frame-level DEN latch armed at raster `$30`, the `$30..$F7` range, and live
+  YSCROLL. RC is cleared at UpdateVc when badline holds. **Machine order:**
+  `vicii_begin_cycle` performs the VIC's
   Phi1/internal work and establishes current-cycle BA/AEC, the CPU may then use
   Phi2, and `vicii_finish_cycle` advances the raster. A same-cycle STA `$D011`
-  is therefore too late for that cycle's UpdateVc/badline but is latched into
-  `reg11_delay` for the next g-access. UpdateVc is VICE `PAL_CYCLE(14)` (0-based
-  **13**). UpdateRc is VICE Phi2(58), 0-based **57**, not a line-wrap shortcut.
+  is therefore too late for that cycle's UpdateVc/badline; the delay latch sees
+  it on the next VIC cycle, in time for the subsequent g-access. UpdateVc is
+  VICE `PAL_CYCLE(14)` (0-based **13**). UpdateRc is VICE Phi2(58), 0-based
+  **57**, not a line-wrap shortcut.
 - Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
   only re-checks the compare when the 9-bit line actually changes (RST8). A
   mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert
@@ -76,15 +82,19 @@ Phi2 schedule; frontend frames are copies.
   with an IRQ path that only acks raster `$01`).
 - Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
   not a fixed 512-dot wrap.
-- Turbo can disable host pixel output while retaining raster, BA, IRQ, sprite-DMA,
-  CIA, and SID timing.
+- Turbo 1..7 publishes the live per-cycle ARGB framebuffer. Turbo 8+ disables
+  host pixel output while retaining raster, BA, IRQ, sprite-DMA, CIA, and SID
+  timing; its published frame is geometric debug reconstruction, not visual
+  evidence for timing-sensitive effects.
 
 ## Timing/debugging rules
 
 Use the live path for timing-sensitive behavior. Snapshot rendering is a debugger
-and presentation fallback and is not a substitute for live bus timing. Trace builds
-can emit `C64M_VICLOG`, `C64M_BALOG`, and `C64M_SPRDMA`; the `lft-nine` workflow
-uses these to compare against VICE.
+and presentation fallback and is not a substitute for live bus timing. Drain any
+old frame payloads, use turbo 7 or lower, and discard one completed frame after
+lowering turbo before judging a capture. Trace builds can emit `C64M_VICLOG`,
+`C64M_BALOG`, and `C64M_SPRDMA`; the `lft-nine` workflow uses these to compare
+against VICE.
 
 For a timing investigation, classify the defect as (1) bus schedule/access kind,
 (2) BA/RDY/AEC arbitration, (3) raster/register timing, or (4) pixel composition.
@@ -114,8 +124,10 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   mode delay for fetches. The live paint path uses `g_line` rather than re-reading
   RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
   Snapshot rendering still re-reads RAM (no sequencer history).
-- `reg11_delay` is updated from `$D011` in `vicii_finish_cycle`, after the CPU's
-  Phi2 phase and after this cycle's fetches.
+- `reg11_delay` samples `$D011` at the end of `vicii_begin_cycle`, after this
+  cycle's VIC fetches but before the CPU's same-cycle Phi2 write. A same-cycle
+  CPU store therefore cannot affect the following cycle's g-fetch; it reaches
+  the delay latch on the next cycle instead.
 - UpdateVc sets `VC=VCBASE` and `VMLI=0` at cycle 13. Bad-line c-accesses run on
   Phi2 cycles 14..53. Display-state g-accesses run on Phi1 cycles 15..54, use
   the current VC/VMLI, then increment both; the same cycle's following c-access
@@ -124,10 +136,11 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   matrix reloads or scene-specific `$D018` repair.
 - At cycle 57, UpdateRc enters idle and copies `VCBASE=VC` when RC was 7, then
   increments RC and re-enters display state when the VICE condition holds.
-- Badline BA falls at cycle 11 for c-accesses 14..53. It has no artificial
-  post-fetch hold: BA may rise on cycle 53 because AEC itself blocks that final
-  Phi2, and the CPU resumes at 54. Sprite windows retain their tested release
-  tail. `c64_robocop_g64` still passes with this schedule.
+- Badline BA/RDY is low on cycles 11..53 for c-accesses 14..53. It has no
+  artificial post-fetch hold: AEC blocks the final Phi2 on cycle 53 and the CPU
+  resumes at 54. Sprite BA is re-evaluated from the VICE masks every cycle,
+  including cross-line starts and releases. `c64_robocop_g64` still passes with
+  this schedule.
 - The combined EoD model is now verified in one tree: the earlier face/3D band
   stays coherent, eod-3 remains contained in its black frame like VICE, and the
   following sister imagery plus the earlier open-border/checker/plasma scenes
@@ -139,7 +152,7 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 
 ## Verification
 
-Preserve PAL sprite BA coverage, NTSC late sprite windows, cross-line sprite
-windows, fetch schedule markers, frame timing constants, and the current border/
-`lft-nine` regressions. Run `ctest --test-dir build --output-on-failure` after VIC
-changes.
+Preserve PAL sprite BA coverage, NTSC late sprite windows and fetch slots
+(`58,60,62,64,1,3,5,7`), cross-line sprite windows, frame timing constants, and
+the current border/`lft-nine` regressions. Run `ctest --test-dir build
+--output-on-failure` after VIC changes.
