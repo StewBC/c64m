@@ -167,7 +167,8 @@ struct vicii {
     /* 6569 color_latency: $D020/$D021 take effect one pixel late (VICE
        draw_colors_6569 ring). lft-nine's six-write $D021 splits and the author's
        "one pixel delay to line up with XSCROLL=1" depend on this. Advanced once
-       per live-rendered pixel after the sample. */
+       per VIC dot after the sample — including HBLANK dots that are not written
+       to the 384-px frame, so a write before the left edge drains before x=0. */
     uint8_t  color_pipe_d020;
     uint8_t  color_pipe_d021;
 

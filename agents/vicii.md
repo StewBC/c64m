@@ -139,6 +139,12 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   open-border dodge `$D016=$62` / XSCROLL=2 at the right compare). Either
   mistake pads x=24 with B0C — the solid vertical fine-checker line. Snapshot
   path uses live `$D016`.
+- Live paint advances `color_pipe_d020` / `color_pipe_d021` once per VIC **dot**
+  of every cycle, including HBLANK dots that are not written into the 384-px
+  frame (VICE `draw_colors` runs for every cycle). Sampling only on painted
+  pixels left a 1px `$D020` delay stuck at x=0 across line edges (EoD
+  top/bottom black bar purple stub). Mid-line `$D020`/`$D021` splits still use
+  the one-pixel delay on visible columns.
 - `reg11_delay` samples `$D011` at the end of `vicii_begin_cycle`, after this
   cycle's VIC fetches but before the CPU's same-cycle Phi2 write. A same-cycle
   CPU store therefore cannot affect the following cycle's g-fetch; it reaches

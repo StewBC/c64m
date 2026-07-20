@@ -3288,6 +3288,32 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
         TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + 90]);
 }
 
+/* VICE draw_colors runs on every cycle, including HBLANK. A $D020 write at
+   cycle 0 of a border line must drain its 1px color_latency before the first
+   painted column (x=0 at cycle 12). Without HBLANK advances, x=0 kept the
+   previous colour — the EoD top/bottom black-bar stub. */
+static void test_color_latency_drains_during_hblank(void) {
+    c64_t     machine;
+    c64_frame frame;
+    const expose_injection injs[] = {
+        { 10u, 0u, 0xd020u, 0x05u }, /* cycle 0 of line 10: border -> green */
+    };
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red */
+
+    run_vic_frame_with_injections(&machine, injs, 1u, &frame);
+
+    expect_u32("HBLANK $D020 write: first visible pixel is new colour",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 0]);
+    expect_u32("HBLANK $D020 write: rest of line is new colour",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 90]);
+    /* Prior line was still red at its last painted columns. */
+    expect_u32("prior line still old border colour",
+        TEST_PALETTE_2, frame.pixels[9 * C64_FRAME_WIDTH + 90]);
+}
+
 /* Phase 2 (C64MVICIIEXPHASES): address generation is counter-driven. A bad line
    forced mid-character-row resets RC, which shifts the row-in-cell phase for the
    REST of that character row. The distinguishing property vs the old positional
@@ -3682,6 +3708,7 @@ int main(void) {
     test_vicii_debug_read_forced_high_bits();
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
+    test_color_latency_drains_during_hblank();
     test_expose_forced_badline_resets_row_counter();
     test_live_yscroll_shifts_content();
     test_live_yscroll_rsel0_fort_style();

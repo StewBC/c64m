@@ -46,8 +46,9 @@ verify it.
   separated frames. Treat turbo 8+ captures as debug geometry only. Optional
   `EOD_DUMP=<path>` writes a VIC/sprite/matrix dump after the first sample.
   Fine-checker bar: no mono column at x=24 (solid B0C pad), `ones@24 ≈ 50%`,
-  seam 23/24 = 0; moving double-pixel lattice is intentional. See
-  `eod-handoff.md` for scene landmarks and the left-edge XSCROLL pipe fix.
+  seam 23/24 = 0; moving double-pixel lattice is intentional. Top/bottom black
+  bars must be solid at x=0 (no 1px previous-`$D020` stub). See `eod-handoff.md`
+  for scene landmarks, the XSCROLL pipe fix, and HBLANK color_latency drain.
 - **VICE vs c64m on `assets/prg/` games:** follow `vice-oracle.md`. Collection
   PRGs need VICE `-autostartprgmode 1` and `-autoload "<path.prg>"` (IRQ after
   inject starts the game). Do not use a plain small-PRG autostart for those.

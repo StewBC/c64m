@@ -1303,8 +1303,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_border_geometry g;
     vicii_paint_prep prep;
     uint32_t y;
-    uint32_t x0;
-    uint32_t x1;
     uint32_t x;
     uint32_t cyc;
     bool     check_csel;
@@ -1385,57 +1383,64 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_hborder_flush(v, v->main_border_ff);
     v->hborder_pipe[0] = v->hborder_pipe[1];
 
-    /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle paints its
+    /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle owns its
        true 8 VIC dots, so buffer_x == VIC X-coordinate and the paint cycle for
        every column matches hardware. Display column 0 (X=24) is drawn at the
-       first g-access cycle (15); each cycle advances X by 8. Cycles whose dots
-       fall outside the 384-px crop (line start/end H-blank) produce an empty span
-       and paint nothing; every column 0..383 is still painted exactly once per
-       line (PAL cycles 12..59, NTSC 12..59). */
+       first g-access cycle (15); each cycle advances X by 8. Dots outside the
+       384-px crop (line start/end H-blank) are not written to the frame, but
+       still advance the 6569 color pipes — VICE's draw_colors ring runs for
+       every cycle, including HBLANK. Advancing only on painted pixels left a
+       1px $D020/$D021 delay stuck across the line edge (EoD top/bottom black
+       bar: x=0 still previous border colour). Every column 0..383 is painted
+       exactly once per line (PAL cycles 12..59, NTSC 12..59). */
     {
-        int32_t xs = (int32_t)VICII_HBORDER_LEFT_40 +
+        int32_t raw_xs = (int32_t)VICII_HBORDER_LEFT_40 +
             ((int32_t)cyc - (int32_t)VICII_GACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
-        int32_t xe = xs + (int32_t)VICII_CHARACTER_WIDTH;
-        if (xs < 0) xs = 0;
-        if (xe > (int32_t)C64_FRAME_WIDTH) xe = (int32_t)C64_FRAME_WIDTH;
-        if (xe < xs) xe = xs;
-        x0 = (uint32_t)xs;
-        x1 = (uint32_t)xe;
-    }
+        int      i;
 
-    /* Compute this cycle's content pixels (border decision applied later, at
-       flush) and buffer them. Content is the composed graphics/sprites/vertical-
-       border pixel with main_border=false; the border colour is captured at paint
-       time so its own colour_latency is unchanged. */
-    v->hborder_pipe[1].n = 0;
-    for (x = x0; x < x1; x++) {
-        uint8_t k = v->hborder_pipe[1].n;
-        v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
-        v->hborder_pipe[1].content[k] =
-            vicii_live_pixel(v, bus, &g, &prep, x, y, false,
-                v->vertical_border_active);
+        /* Compute this cycle's content pixels (border decision applied later, at
+           flush) and buffer them. Content is the composed graphics/sprites/
+           vertical-border pixel with main_border=false; the border colour is
+           captured at paint time so its own colour_latency is unchanged. */
+        v->hborder_pipe[1].n = 0;
+        for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+            int32_t x_i = raw_xs + i;
+
+            if (x_i >= 0 && x_i < (int32_t)C64_FRAME_WIDTH) {
+                uint8_t k = v->hborder_pipe[1].n;
+                x = (uint32_t)x_i;
+                v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
+                v->hborder_pipe[1].content[k] =
+                    vicii_live_pixel(v, bus, &g, &prep, x, y, false,
+                        v->vertical_border_active);
 #ifdef C64M_VIC_TRACE
-        if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
-            y >= 40u && y <= 250u) {
-            uint32_t pixel = v->hborder_pipe[1].content[k];
-            unsigned palette = 16u;
-            for (unsigned pi = 0; pi < 16u; ++pi) {
-                if (pixel == vicii_palette_argb[pi]) {
-                    palette = pi;
-                    break;
+                if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
+                    y >= 40u && y <= 250u) {
+                    uint32_t pixel = v->hborder_pipe[1].content[k];
+                    unsigned palette = 16u;
+                    for (unsigned pi = 0; pi < 16u; ++pi) {
+                        if (pixel == vicii_palette_argb[pi]) {
+                            palette = pi;
+                            break;
+                        }
+                    }
+                    vicii_trace_graphics_access(v, "p", cyc, x, 0,
+                        (uint8_t)palette);
                 }
-            }
-            vicii_trace_graphics_access(v, "p", cyc, x, 0,
-                (uint8_t)palette);
-        }
 #endif
-        v->hborder_pipe[1].border[k]  = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
-        v->hborder_pipe[1].n = (uint8_t)(k + 1u);
-        /* VICE 6569: advance color pipes after each pixel sample so a mid-line
-           $D020/$D021 write is visible one pixel later (color_latency). */
-        v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
-        v->color_pipe_d021 = (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+                v->hborder_pipe[1].border[k] =
+                    vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+                v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+            }
+            /* VICE 6569: advance color pipes after each dot (visible or not) so
+               a mid-line $D020/$D021 write is visible one pixel later, and a
+               write during HBLANK is fully drained before x=0. */
+            v->color_pipe_d020 =
+                (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+            v->color_pipe_d021 =
+                (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+        }
     }
 
     /* Latch CSEL for the next cycle's pre-store border check. */
@@ -1458,9 +1463,12 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         if (brdlog) {
             unsigned long fr = (unsigned long)v->timing.frame_number;
             if (fr >= bf0 && fr <= bf1 && y >= r0 && y <= r1) {
+                uint32_t paint_x0 = (v->hborder_pipe[1].n > 0u)
+                    ? (v->hborder_pipe[1].idx[0] % C64_FRAME_WIDTH)
+                    : 0u;
                 fprintf(brdlog, "F%lu R%u C%u x0=%u csel=%d chk=%d chk2=%d "
                         "mbff=%d vb=%d svb=%d d11=%02x d16=%02x\n",
-                        fr, y, cyc, x0, (v->registers[0x16] & 8) ? 1 : 0,
+                        fr, y, cyc, paint_x0, (v->registers[0x16] & 8) ? 1 : 0,
                         check_csel ? 1 : 0, check_prev_csel ? 1 : 0,
                         v->main_border_ff ? 1 : 0,
                         v->vertical_border_active ? 1 : 0,
