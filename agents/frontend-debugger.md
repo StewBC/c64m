@@ -21,8 +21,8 @@ disk/program/state, breakpoint, symbol lookup, and file-browser views. It never
 reads live machine state directly. Memory views distinguish CPU map, raw RAM, ROM,
 and 1541 map sources; debugger edits go through runtime commands.
 The window title is `c64m - VIDEO - TURBO - STATE`; it refreshes when PAL/NTSC,
-the active multiplier, state, or stop reason changes, and renders multiplier 256
-as `MAX`.
+the active turbo mode, state, or stop reason changes. Modes render as `Normal`,
+`Max`, and `Warp`.
 
 Host file selection uses the in-app cross-platform browser backed by
 `platform_fs`; it does not shell out to macOS scripts. Remembered browse directories

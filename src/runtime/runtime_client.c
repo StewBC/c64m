@@ -542,7 +542,9 @@ bool runtime_client_set_turbo_multiplier(runtime_client *client, uint32_t multip
         .type = RUNTIME_COMMAND_SET_TURBO_MULTIPLIER,
     };
 
-    if (!client || multiplier < 1u || multiplier > 256u) {
+    if (!client ||
+        multiplier < (uint32_t)RUNTIME_TURBO_MODE_NORMAL ||
+        multiplier > (uint32_t)RUNTIME_TURBO_MODE_LAST) {
         return false;
     }
 

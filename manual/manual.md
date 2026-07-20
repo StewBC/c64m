@@ -29,7 +29,7 @@ Useful flags:
 | `--nosaveini`          | Disable INI save on quit, regardless of other flags |
 | `--saveini` / `-v`     | Save INI on quit (one-time override)                |
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
-| `--turbo <list>` / `-t`| Set turbo multipliers, e.g. `2,4,8,16`             |
+| `--turbo <list>` / `-t`| Turbo mode list for Opt+T, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
 | `--video PAL|NTSC`, `-P`, `-N` | Override the configured video standard for this run |
 | `--disk <drive>=<image[,image...]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
@@ -155,15 +155,15 @@ help. On macOS, **Cmd+Q** quits.
 
 ### Window Title
 
-The OS window title shows the video standard, active turbo multiplier, and runtime state,
+The OS window title shows the video standard, active turbo mode, and runtime state,
 even when Debug Mode is closed and no other indicator is visible:
 
 | Title                                  | Meaning                                      |
 |----------------------------------------|----------------------------------------------|
-| `c64m - PAL - 1x - Running`            | PAL video, normal speed, executing normally. |
-| `c64m - NTSC - 4x - Paused (reason)`   | NTSC video at 4x; execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
-| `c64m - PAL - MAX - Running`           | The `256x` turbo setting is displayed as `MAX`. |
-| `c64m - NTSC - 1x - Error`             | The runtime hit an error and stopped.        |
+| `c64m - PAL - Normal - Running`        | PAL video, normal (real-time) speed, executing normally. |
+| `c64m - NTSC - Max - Paused (reason)`  | NTSC video in max free-run; execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
+| `c64m - PAL - Warp - Running`          | Warp free-run (live paint off; skip-ahead only). |
+| `c64m - NTSC - Normal - Error`         | The runtime hit an error and stopped.        |
 
 This lets you tell whether the emulator is paused or running without opening the debugger.
 
@@ -199,23 +199,23 @@ splitter positions are saved to the INI file on quit.
 
 ### Turbo Mode
 
-**Opt+T** cycles through the configured turbo multiplier list (default `2x, 4x, 8x, 16x`).
-Configure shows the list, which is stored in the INI file.
+**Opt+T** cycles through the configured turbo mode list (default when unset is
+just normal; Configure can set e.g. `1,2,3`). The list is stored in the INI file.
 
-Turbo multiplies wall-clock progress of the whole emulated machine (CPU, VIC-II,
-CIAs, SID timing, and drive sync stay in lock-step). `1x` matches real C64 time
-(PAL about 0.985 MHz Φ2, NTSC about 1.023 MHz). `2x` is twice real-time when the
-host can keep up. The multiplier is a *target*; if the host is slower than the
-target, the emulator free-runs as fast as it can.
+Turbo is three discrete modes for the whole emulated machine (CPU, VIC-II, CIAs,
+SID timing, and drive sync stay in lock-step):
 
-On an Apple M2 Mac Mini, `7x` (the fastest setting that still paints the live
-framebuffer every cycle) free-runs at about **5.2 MHz** emulated Φ2 — roughly
-5× real C64 speed. Higher multipliers do not go proportionally faster once the
-host is already free-running.
+| Mode | Title | Behaviour |
+|------|-------|-----------|
+| `1` | `Normal` | Real-time pace, live ARGB framebuffer (PAL about 0.985 MHz Φ2, NTSC about 1.023 MHz). |
+| `2` | `Max` | Free-run as fast as the host allows, still full live paint and collisions. |
+| `3` | `Warp` | Free-run with live paint off; frames are geometric debug snapshots. |
 
-At `8x` and above, c64m disables live per-cycle ARGB framebuffer rendering to keep
-high turbo useful. VIC-II timing continues, but frame captures are geometric debug
-snapshots. Select a turbo below `8x` to restore live rendering for subsequent frames.
+On an Apple M2 Mac Mini, max free-runs at about **5.2 MHz** emulated Φ2 — roughly
+5× real C64 speed — while keeping full correctness. Warp is only somewhat faster
+(paint-off) and is for skip-ahead to a breakpoint or load marker, not for judging
+pixels or collision-sensitive behaviour. Select mode `1` or `2` to restore live
+rendering for subsequent frames.
 
 ### Help
 
@@ -796,7 +796,7 @@ breakpoint.
 | Action  | Parameter field | Effect                                                  |
 |---------|-----------------|---------------------------------------------------------|
 | Break   | -               | Pause execution (default)                               |
-| Fast    | -               | Switch to maximum turbo speed                           |
+| Fast    | -               | Switch to free-run (breakpoint speed mode; paint off)   |
 | Slow    | -               | Restore normal paced speed                              |
 | Troff   | -               | Disable per-instruction execution trace                 |
 | Tron    | Filename        | Enable per-instruction execution trace; writes to the given file, or `trace.log` if the field is empty |
@@ -1250,7 +1250,7 @@ below the tab body on every tab.
 |-------------------|--------|
 | Video             | Select `NTSC` or `PAL`; changes take effect on reboot |
 | Keyboard Joystick | Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
-| Turbo Speeds      | Comma-separated multiplier list, e.g. `2,4,8,16` |
+| Turbo Modes       | Comma-separated mode list, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
 | Emulate 1541      | Route disk I/O through the real 1541 DOS ROM (needs a 1541 ROM); applies live |
 | 1541 media (GCR)  | When Emulate 1541 is on: GCR tracks, rotation, SYNC, motor/head; enables G64 |
 | Show disk LEDs    | Draw green (read) and red (write) activity LEDs in the window corner |
@@ -1353,7 +1353,7 @@ emulator removes comments.
 | `Save`            | `yes` -- save INI on quit                               |
 | `scroll_wheel_lines` | Integer; lines scrolled per wheel click             |
 | `symbol_files`    | Comma-separated list of symbol file paths              |
-| `turbo_speeds`    | Comma-separated turbo multipliers, e.g. `2,4,8,16`    |
+| `turbo_speeds`    | Comma-separated turbo modes, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
 
 ### [Video]
 
@@ -1512,7 +1512,7 @@ break.<suffix> = <address[-address]>[,access][,mapping][,actions][,count=N][,res
 | Token              | Meaning                                                              |
 |--------------------|----------------------------------------------------------------------|
 | `break`            | Pause execution                                                      |
-| `fast`             | Switch to maximum turbo speed                                        |
+| `fast`             | Free-run with paint off until a slow/normal path restores pacing       |
 | `slow`             | Restore normal paced speed                                           |
 | `troff`            | Disable execution trace                                              |
 | `tron`             | Enable execution trace; writes to `trace.log`                        |
@@ -1553,7 +1553,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **F11**             | Step over JSR                                         |
 | **F12**         | Run (resume execution)                                     |
 | **Shift+F12**   | Run to the cursor address in the Disassembly view          |
-| **Opt+T**       | Cycle turbo speed                                          |
+| **Opt+T**       | Cycle turbo mode                                           |
 | **Opt+Tab**     | Cycle active view: C64 -> Disassembly -> Misc -> Memory    |
 | **Shift+Opt+Tab** | Cycle active view in reverse                            |
 | **Opt+1**       | Map gamepad to joystick port 1                             |
@@ -1572,7 +1572,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Opt+Ins**        | Paste clipboard as timed C64 keystrokes (~40 ms per key) |
 | **Shift+Opt+Ins**  | Paste clipboard text via the input-encoding parser (same format as the Type breakpoint action) |
 
-Timed paste (**Opt+Ins**) scales with the active turbo multiplier. Parser-based paste
+Timed paste (**Opt+Ins**) advances with emulated time (faster wall-clock in max/warp). Parser-based paste
 (**Shift+Opt+Ins**) supports named keys, PETSCII escapes, matrix addresses, and joystick
 events in addition to literal text; see **Type text format** under **Breakpoints**.
 
@@ -1750,7 +1750,7 @@ machine reaches a new state. Use `wait-*` commands when a script needs to synchr
 | `run-cycles <count>` | Run for a positive cycle count |
 | `run-instructions <count>` | Run for a positive instruction count |
 | `run-to <addr>` | Run until the PC reaches a 16-bit address |
-| `set-turbo <1..256>` | Set the active turbo multiplier; 256 is `MAX` |
+| `set-turbo <1\|2\|3>` | Set turbo mode: 1=normal, 2=max, 3=warp |
 
 Accepted execution commands respond:
 
@@ -1758,17 +1758,17 @@ Accepted execution commands respond:
 <id> ok accepted=1
 ```
 
-`set-turbo` changes only the active multiplier; it does not modify the configured
-Opt+T turbo list. Its accepted response includes the requested multiplier:
+`set-turbo` changes only the active mode; it does not modify the configured Opt+T
+turbo list. Its accepted response includes the requested mode:
 
 ```text
-<id> ok accepted=1 turbo=7
+<id> ok accepted=1 turbo=2
 ```
 
-For settings 8 through 256, the response warns that live pixels are unavailable:
+For warp (mode 3), the response warns that live pixels are unavailable:
 
 ```text
-<id> ok accepted=1 turbo=8 warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered
+<id> ok accepted=1 turbo=3 warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2
 ```
 
 ### State and Snapshots
@@ -1807,9 +1807,9 @@ The frame metadata is:
 
 `<bytes>` is `height * stride`. `stride` is bytes per row.
 
-At turbo 8 and above, `get-frame` returns a geometric debug snapshot instead of the
-live ARGB framebuffer. Use `set-turbo 7` or lower and wait for a subsequent frame
-before inspecting live pixels.
+At turbo 3 (warp), `get-frame` returns a geometric debug snapshot instead of the
+live ARGB framebuffer. Use `set-turbo 1` or `set-turbo 2` and wait for a subsequent
+frame before inspecting live pixels.
 
 `get-debug-memory` returns concatenated 64 K buffers:
 

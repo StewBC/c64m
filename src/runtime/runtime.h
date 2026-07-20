@@ -9,6 +9,15 @@
 typedef struct runtime runtime;
 typedef struct runtime_client runtime_client;
 
+/* Turbo mode IDs (not wall-clock multipliers). Stored in active_turbo_multiplier
+   and turbo_speeds[] for historical field names / Opt+T list compatibility. */
+enum {
+    RUNTIME_TURBO_MODE_NORMAL = 1, /* real-time pace, live ARGB */
+    RUNTIME_TURBO_MODE_MAX = 2,    /* free-run, live ARGB (full correctness) */
+    RUNTIME_TURBO_MODE_WARP = 3,   /* free-run, paint off (debug frames only) */
+    RUNTIME_TURBO_MODE_LAST = RUNTIME_TURBO_MODE_WARP
+};
+
 typedef struct runtime_config {
     const char *basic_rom_path;
     const char *char_rom_path;

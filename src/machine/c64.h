@@ -436,7 +436,7 @@ const c64_drive_slot *c64_get_drive_slot(c64_t *machine, int device_number);
 c64_drive_slot *c64_get_drive_slot_mut(c64_t *machine, int device_number);
 void c64_set_audio_output_enabled(c64_t *machine, bool enabled);
 /* When false, VIC-II still advances timing/BA/IRQ but skips ARGB pixel fill and
-   completed-frame buffer copies. Used under high turbo. Default true. */
+   completed-frame buffer copies. Used under warp turbo mode. Default true. */
 void c64_set_video_output_enabled(c64_t *machine, bool enabled);
 bool c64_video_output_enabled(const c64_t *machine);
 void c64_restore(c64_t *machine);

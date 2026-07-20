@@ -163,8 +163,11 @@ static void test_parse_command_arguments(void)
     expect_true("parse set-turbo minimum", control_protocol_parse_request("23 set-turbo 1", &request, &error));
     expect_u32("set-turbo minimum", 1u, request.args.turbo_multiplier);
 
-    expect_true("parse set-turbo maximum", control_protocol_parse_request("23 set-turbo 256", &request, &error));
-    expect_u32("set-turbo maximum", 256u, request.args.turbo_multiplier);
+    expect_true("parse set-turbo max mode", control_protocol_parse_request("23 set-turbo 2", &request, &error));
+    expect_u32("set-turbo max mode", 2u, request.args.turbo_multiplier);
+
+    expect_true("parse set-turbo warp", control_protocol_parse_request("23 set-turbo 3", &request, &error));
+    expect_u32("set-turbo warp", 3u, request.args.turbo_multiplier);
 
     expect_true("parse get-memory", control_protocol_parse_request("24 get-memory $0400 64 map", &request, &error));
     expect_int("get-memory type", CONTROL_COMMAND_GET_MEMORY, request.type);
@@ -380,8 +383,11 @@ static void test_parse_rejects_invalid_input(void)
     expect_false("reject zero turbo", control_protocol_parse_request("11 set-turbo 0\n", &request, &error));
     expect_u32("zero turbo response id", 11, error.id);
 
-    expect_false("reject turbo over maximum", control_protocol_parse_request("11 set-turbo 257\n", &request, &error));
+    expect_false("reject turbo over maximum", control_protocol_parse_request("11 set-turbo 4\n", &request, &error));
     expect_u32("high turbo response id", 11, error.id);
+
+    expect_false("reject legacy turbo 256", control_protocol_parse_request("11 set-turbo 256\n", &request, &error));
+    expect_u32("legacy turbo 256 response id", 11, error.id);
 
     expect_false("reject missing turbo", control_protocol_parse_request("11 set-turbo\n", &request, &error));
     expect_u32("missing turbo response id", 11, error.id);

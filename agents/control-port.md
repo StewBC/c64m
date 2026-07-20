@@ -170,7 +170,7 @@ N step-out
 N run-cycles <positive-count>
 N run-instructions <positive-count>
 N run-to <address>
-N set-turbo <multiplier 1..256>
+N set-turbo <mode 1|2|3>
 ```
 
 Current fixed responses:
@@ -192,23 +192,30 @@ Run/step/load/input commands return `ok accepted=1` when the runtime command was
 queued, not when the operation has completed. Follow with `wait-event`,
 `get-state`, or a specific query.
 
-`set-turbo` changes the active multiplier without modifying the configured turbo
-list used by Opt+T. Values 1 through 256 are accepted; 256 is the `MAX` setting.
-At multipliers below 8 the response is:
+`set-turbo` changes the active turbo mode without modifying the configured Opt+T
+list. Modes are:
+
+| Mode | Name   | Meaning |
+|------|--------|---------|
+| 1    | normal | Real-time pace, live ARGB |
+| 2    | max    | Free-run, live ARGB (full correctness) |
+| 3    | warp   | Free-run, paint off (debug frames only) |
+
+At modes 1 and 2 the response is:
 
 ```text
-N ok accepted=1 turbo=7
+N ok accepted=1 turbo=2
 ```
 
-At 8 and above it includes a warning:
+At mode 3 (warp) it includes a warning:
 
 ```text
-N ok accepted=1 turbo=8 warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered
+N ok accepted=1 turbo=3 warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2
 ```
 
-At those high speeds VIC-II timing still advances, but the live per-cycle ARGB
-renderer is disabled and `get-frame` returns a geometric debug snapshot. Lowering
-turbo below 8 restores live rendering for subsequent frames.
+In warp, VIC-II timing still advances, but the live per-cycle ARGB renderer is
+disabled and `get-frame` returns a geometric debug snapshot. Lowering turbo to
+1 or 2 restores live rendering for subsequent frames.
 
 ## State, memory, and frames
 
@@ -241,8 +248,8 @@ width=384 height=312 stride=1536 format=argb8888 frame=... cycle=...
 
 The payload is row-major 32-bit ARGB8888 bytes, `height * stride` bytes. PAL is
 normally 384x312; NTSC is 384x263. The frontend crop is not applied to this payload.
-At turbo 8 and above this is a geometric debug snapshot rather than the live ARGB
-framebuffer; use `set-turbo 7` or lower before inspecting live pixels.
+At turbo 3 (warp) this is a geometric debug snapshot rather than the live ARGB
+framebuffer; use `set-turbo 1` or `set-turbo 2` before inspecting live pixels.
 
 `get-debug-memory` concatenates three 65536-byte arrays in this order: CPU map,
 raw RAM, raw ROM. With `write-history=1`, it appends 65536 little-endian `uint64`

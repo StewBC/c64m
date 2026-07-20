@@ -37,29 +37,43 @@ enum {
     STEP_OVER_FAST_LIMIT     = 500000,
     STEP_OVER_LOG_INTERVAL   = 10000,
 
-    /* At this turbo multiplier and above (and for breakpoint FAST mode), skip
-       per-cycle ARGB pixel fill / frame buffer copies and only publish a frame
-       when the UI slot is empty. 2x/4x keep full live video; 8x+ free-runs. */
-    RUNTIME_TURBO_DISPLAY_THRESHOLD = 8,
 };
+
+/* Turbo mode helpers. Field name remains active_turbo_multiplier; values are
+   RUNTIME_TURBO_MODE_* (1=normal, 2=max free-run full paint, 3=warp free-run). */
+static uint32_t runtime_turbo_mode(const runtime *rt) {
+    uint32_t mode;
+
+    if (rt == NULL) {
+        return (uint32_t)RUNTIME_TURBO_MODE_NORMAL;
+    }
+    mode = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
+    if (mode > (uint32_t)RUNTIME_TURBO_MODE_LAST) {
+        return (uint32_t)RUNTIME_TURBO_MODE_LAST;
+    }
+    return mode;
+}
+
+static bool runtime_turbo_is_free_run(const runtime *rt) {
+    return runtime_turbo_mode(rt) >= (uint32_t)RUNTIME_TURBO_MODE_MAX;
+}
 
 static void runtime_reset_pacer(runtime *rt) {
     uint64_t frequency;
-    uint32_t multiplier;
     uint32_t cpu_clock_hz;
     uint32_t cycles_per_frame;
 
     frequency = SDL_GetPerformanceFrequency();
-    multiplier = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
     /* Pace one emulated video frame to its real duration for the active video
        standard: frame_period = cycles_per_frame / cpu_clock_hz, so wall-clock
        ticks per frame = perf_freq * cycles_per_frame / cpu_clock_hz. This tracks
        emulated time to real time (PAL ~50.12 fps, NTSC ~59.83 fps). A fixed 60
-       fps ran PAL ~20% fast, over-running the audio buffer and distorting output. */
+       fps ran PAL ~20% fast, over-running the audio buffer and distorting output.
+       Max/Warp free-run modes skip pacing in runtime_pace_after_frame. */
     cpu_clock_hz = c64_config_clock_hz(&rt->machine_config);
     cycles_per_frame = c64_config_cycles_per_frame(&rt->machine_config);
     rt->frame_counter_step = (frequency * (uint64_t)cycles_per_frame) /
-        ((uint64_t)cpu_clock_hz * (uint64_t)multiplier);
+        (uint64_t)cpu_clock_hz;
     if (rt->frame_counter_step == 0) {
         rt->frame_counter_step = 1;
     }
@@ -71,7 +85,7 @@ static void runtime_pace_after_frame(runtime *rt) {
     uint64_t now;
     uint64_t frequency;
 
-    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
+    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST || runtime_turbo_is_free_run(rt)) {
         return;
     }
 
@@ -110,19 +124,17 @@ static void runtime_update_sid_sample_output(runtime *rt) {
     c64_set_audio_output_enabled(&rt->machine, enabled);
 }
 
-/* High turbo / FAST: do not fill VIC ARGB every cycle. Display frames are
-   rebuilt only when the frontend has drained the frame slot. */
+/* Warp / FAST: do not fill VIC ARGB every cycle. Display frames are rebuilt
+   only when the frontend has drained the frame slot (geometric debug snapshot).
+   Max (mode 2) free-runs with full live paint. */
 static bool runtime_turbo_display_mode(const runtime *rt) {
-    uint32_t multiplier;
-
     if (rt == NULL) {
         return false;
     }
     if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
         return true;
     }
-    multiplier = rt->active_turbo_multiplier > 0 ? rt->active_turbo_multiplier : 1u;
-    return multiplier >= (uint32_t)RUNTIME_TURBO_DISPLAY_THRESHOLD;
+    return runtime_turbo_mode(rt) >= (uint32_t)RUNTIME_TURBO_MODE_WARP;
 }
 
 static void runtime_update_video_output(runtime *rt) {
@@ -981,9 +993,9 @@ static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
     return true;
 }
 
-/* Turbo display path: if the UI still holds the previous frame, count a drop and
+/* Warp display path: if the UI still holds the previous frame, count a drop and
    do no pixel copies and no FRAME_READY event. When the slot is free, rebuild one
-   geometric snapshot for display (live ARGB path is off under turbo). */
+   geometric snapshot for display (live ARGB path is off in warp). */
 static bool runtime_publish_completed_frame_turbo(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_FRAME_READY,
@@ -1332,7 +1344,9 @@ static void runtime_cycle_turbo_speed(runtime *rt) {
 }
 
 static void runtime_set_turbo_multiplier(runtime *rt, uint32_t multiplier) {
-    if (rt == NULL || multiplier < 1u || multiplier > 256u) {
+    if (rt == NULL ||
+        multiplier < (uint32_t)RUNTIME_TURBO_MODE_NORMAL ||
+        multiplier > (uint32_t)RUNTIME_TURBO_MODE_LAST) {
         return;
     }
 

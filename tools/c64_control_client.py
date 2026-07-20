@@ -6,7 +6,7 @@ control port. Written for the lft-nine VIC-II investigation
 (md-files/lft-nine.md); reusable for any control-port scripting.
 
 Launch the emulator, e.g.:
-    ./build/c64m --headless --control-port 17652 --pal -a --turbo=7 \
+    ./build/c64m --headless --control-port 17652 --pal -a --turbo=2 \
         -p samples/lft-nine.prg
 
 Then:
@@ -19,9 +19,10 @@ Then:
     c.cmd("run"); c.cmd("wait-paused 5000")
 
 GOTCHAS (learned the hard way, see lft-nine.md):
-  * Rendering: at --turbo>=8 the live renderer is OFF and get-frame returns the
-    geometric DEBUG snapshot (closed border, border-region sprites MASKED). Use
-    --turbo<=7 for real frames. Register/memory reads are unaffected by turbo.
+  * Rendering: turbo modes are 1=normal, 2=max (free-run, live ARGB), 3=warp
+    (free-run, paint off). At turbo=3 get-frame returns the geometric DEBUG
+    snapshot (closed border, border-region sprites MASKED). Use turbo 1 or 2 for
+    real frames. Register/memory reads are unaffected by turbo.
   * Addresses parse base-0: prefix hex with '$' (mem() does this for you).
   * get-memory length must be DECIMAL (mem() handles it); max 1024 bytes/call.
   * break-create only supports 'exec' breakpoints via the control port

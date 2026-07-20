@@ -160,7 +160,7 @@ struct vicii {
 
     /* When false, raster/BA/IRQ/sprite-DMA timing still advances, but ARGB pixel
        fill, working-frame clears, and completed-frame copies are skipped. Used by
-       the runtime under high turbo so free-run is not bound by display work.
+       the runtime in warp turbo mode so free-run is not bound by display work.
        Sprite collision latches only update while pixel output is enabled. */
     bool     pixel_output_enabled;
 

@@ -2011,7 +2011,7 @@ static void frontend_draw_config_machine_tab(frontend *ui, frontend_config_dialo
     (void)ui;
 
     if (dialog->edited.turbo_multipliers == NULL) {
-        app_options_set_string(&dialog->edited.turbo_multipliers, "2,4,8,16");
+        app_options_set_string(&dialog->edited.turbo_multipliers, "1,2,3");
     }
     if (dialog->edited.keyboard_joystick_layout == NULL) {
         app_options_set_string(&dialog->edited.keyboard_joystick_layout, "numpad");
@@ -2051,7 +2051,7 @@ static void frontend_draw_config_machine_tab(frontend *ui, frontend_config_dialo
 
     nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 2);
     nk_layout_row_push(ctx, 0.30f);
-    nk_label(ctx, "Turbo Speeds", NK_TEXT_LEFT);
+    nk_label(ctx, "Turbo Modes (1,2,3)", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, 0.70f);
     frontend_edit_replace(ctx, NK_EDIT_FIELD, dialog->edited.turbo_multipliers, 256, nk_filter_default);
     nk_layout_row_end(ctx);

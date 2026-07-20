@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     c64_set_audio_output_enabled(&machine, false);
-    /* Optional third arg: "no-video" mirrors high-turbo pixel throttle. */
+    /* Optional third arg: "no-video" mirrors warp turbo pixel throttle. */
     if (argc >= 3 && strcmp(argv[2], "no-video") == 0) {
         c64_set_video_output_enabled(&machine, false);
         null_error = argc >= 4 && strcmp(argv[3], "null-error") == 0;

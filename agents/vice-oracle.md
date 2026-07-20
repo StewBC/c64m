@@ -78,7 +78,7 @@ Rough equivalent for the same class of file:
 ```
 
 Headless / control-port automation: see `control-port.md`. For live frames use
-`--turbo` at most 7 (higher turbo can disable live pixel output).
+turbo mode 1 or 2 (`--turbo=1` or `2`); mode 3 (warp) disables live pixel output.
 
 ## When this note applies
 

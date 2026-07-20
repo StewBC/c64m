@@ -82,25 +82,27 @@ Phi2 schedule; frontend frames are copies.
   with an IRQ path that only acks raster `$01`).
 - Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
   not a fixed 512-dot wrap.
-- Turbo 1..7 publishes the live per-cycle ARGB framebuffer. Turbo 8+ disables
-  host pixel output while retaining raster, BA, IRQ, sprite-DMA, CIA, and SID
-  timing; its published frame is geometric debug reconstruction, not visual
-  evidence for timing-sensitive effects.
+- Turbo modes 1 (normal) and 2 (max) publish the live per-cycle ARGB framebuffer.
+  Mode 3 (warp) disables host pixel output while retaining raster, BA, IRQ,
+  sprite-DMA, CIA, and SID timing; its published frame is geometric debug
+  reconstruction, not visual evidence for timing-sensitive effects. Sprite
+  collision latches only update while pixel output is enabled.
 - Live paint is the dominant host cost when pixel output is on. The 8-dot span
   in `vicii_render_live_cycle` precomputes cycle-constant mode, XSCROLL, B1–B3
   palette, idle ghost byte, and sprite-visibility once per cycle; background
   decode uses the latched `video_matrix` / `color_line` / `g_line` without
   re-deriving bank bases every pixel. Vertical-border spans with no visible
   sprites skip background decode (content is forced to B0C). Hot bus peeks
-  (`c64_bus_vic_*`) are header `static inline`. Do not “optimize” by lowering
-  the turbo-8 pixel-off threshold or by skipping BA/IRQ/sequencer work.
+  (`c64_bus_vic_*`) are header `static inline`. Do not “optimize” by turning
+  warp paint-off into a general free-run path or by skipping BA/IRQ/sequencer
+  work.
 
 ## Timing/debugging rules
 
 Use the live path for timing-sensitive behavior. Snapshot rendering is a debugger
 and presentation fallback and is not a substitute for live bus timing. Drain any
-old frame payloads, use turbo 7 or lower, and discard one completed frame after
-lowering turbo before judging a capture. Trace builds can emit `C64M_VICLOG`,
+old frame payloads, use turbo 1 or 2, and discard one completed frame after
+leaving warp before judging a capture. Trace builds can emit `C64M_VICLOG`,
 `C64M_BALOG`, and `C64M_SPRDMA`; the `lft-nine` workflow uses these to compare
 against VICE. `C64M_LINELOG` dumps the per-line sequencer state at UpdateVc, and
 `C64M_LINELOG_FULL=1` adds all forty `color_line`/`video_matrix`/`g_line`

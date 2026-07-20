@@ -1381,7 +1381,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_STRING('\0', "kbdjoy-layout", &kbdjoy_layout, "keyboard joystick layout: numpad or wasd", NULL, 0, 0),
         OPT_BOOLEAN('r', "remember", &remember, "add save at quit to ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('v', "saveini", &save_ini, "save to ini file at quit", NULL, 0, OPT_NONEG),
-        OPT_STRING('t', "turbo", &turbo, "comma separated set of turbo multipliers", NULL, 0, 0),
+        OPT_STRING('t', "turbo", &turbo, "comma separated turbo modes (1=normal,2=max,3=warp)", NULL, 0, 0),
         OPT_HELP(),
         OPT_END(),
     };

@@ -69,9 +69,9 @@ static runtime *start_real_1541_runtime(runtime_client **out_client) {
     runtime_event event;
 
     config.machine_config.emulate_1541 = 1;
-    config.turbo_speeds[0] = 256;
+    config.turbo_speeds[0] = 3; /* warp: free-run skip-ahead for load */
     config.turbo_speed_count = 1;
-    config.active_turbo_multiplier = 256;
+    config.active_turbo_multiplier = 3;
 
     expect_true("runtime init", runtime_init());
     rt = runtime_create(&config);

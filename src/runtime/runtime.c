@@ -12,8 +12,7 @@
 #include <ctype.h>
 
 enum {
-    RUNTIME_TURBO_DEFAULT_MULTIPLIER = 1,
-    RUNTIME_TURBO_MAX_MULTIPLIER = 256,
+    RUNTIME_TURBO_DEFAULT_MODE = RUNTIME_TURBO_MODE_NORMAL,
 };
 
 static char *runtime_copy_string(const char *value) {
@@ -46,9 +45,9 @@ void runtime_config_set_turbo_defaults(runtime_config *config) {
         return;
     }
 
-    config->turbo_speeds[0] = RUNTIME_TURBO_DEFAULT_MULTIPLIER;
+    config->turbo_speeds[0] = RUNTIME_TURBO_DEFAULT_MODE;
     config->turbo_speed_count = 1;
-    config->active_turbo_multiplier = RUNTIME_TURBO_DEFAULT_MULTIPLIER;
+    config->active_turbo_multiplier = RUNTIME_TURBO_DEFAULT_MODE;
 }
 
 bool runtime_config_set_turbo_csv(runtime_config *config, const char *csv) {
@@ -77,7 +76,9 @@ bool runtime_config_set_turbo_csv(runtime_config *config, const char *csv) {
         }
 
         value = strtoul(cursor, &end, 10);
-        if (end == cursor || value == 0 || value > RUNTIME_TURBO_MAX_MULTIPLIER) {
+        if (end == cursor ||
+            value < (unsigned long)RUNTIME_TURBO_MODE_NORMAL ||
+            value > (unsigned long)RUNTIME_TURBO_MODE_LAST) {
             runtime_config_set_turbo_defaults(config);
             return false;
         }

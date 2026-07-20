@@ -64,21 +64,27 @@ static void expect_string(const char *name, const char *expected, const char *ac
 static void test_runtime_turbo_csv_config(void) {
     runtime_config config = {0};
 
-    expect_true("parse turbo csv", runtime_config_set_turbo_csv(&config, "2, 4,8"));
+    expect_true("parse turbo csv", runtime_config_set_turbo_csv(&config, "1, 2,3"));
     expect_u8("turbo count", 3, config.turbo_speed_count);
-    expect_u64("turbo first speed", 2, config.turbo_speeds[0]);
-    expect_u64("turbo second speed", 4, config.turbo_speeds[1]);
-    expect_u64("turbo active", 2, config.active_turbo_multiplier);
+    expect_u64("turbo first speed", 1, config.turbo_speeds[0]);
+    expect_u64("turbo second speed", 2, config.turbo_speeds[1]);
+    expect_u64("turbo third speed", 3, config.turbo_speeds[2]);
+    expect_u64("turbo active", 1, config.active_turbo_multiplier);
 
     expect_true("parse empty turbo csv", runtime_config_set_turbo_csv(&config, ""));
     expect_u8("empty turbo count", 1, config.turbo_speed_count);
     expect_u64("empty turbo active", 1, config.active_turbo_multiplier);
 
-    if (runtime_config_set_turbo_csv(&config, "2,nope,8")) {
+    if (runtime_config_set_turbo_csv(&config, "1,nope,3")) {
         fail("invalid turbo csv accepted");
     }
     expect_u8("invalid turbo count fallback", 1, config.turbo_speed_count);
     expect_u64("invalid turbo active fallback", 1, config.active_turbo_multiplier);
+
+    if (runtime_config_set_turbo_csv(&config, "1,4")) {
+        fail("out-of-range turbo mode accepted");
+    }
+    expect_u8("oor turbo count fallback", 1, config.turbo_speed_count);
 }
 
 static uint32_t first_breakpoint_id(const runtime_event *event) {
@@ -577,15 +583,15 @@ static void test_runtime_cycle_turbo_speed(void) {
     runtime *rt;
     runtime_client *client;
 
-    rt = start_runtime_with_turbo(&client, "2,4,8");
+    rt = start_runtime_with_turbo(&client, "1,2,3");
 
-    request_and_expect_turbo_multiplier(client, 2);
-    expect_true("cycle turbo to second speed", runtime_client_cycle_turbo_speed(client));
-    expect_turbo_multiplier(client, 4);
-    expect_true("cycle turbo to third speed", runtime_client_cycle_turbo_speed(client));
-    expect_turbo_multiplier(client, 8);
-    expect_true("cycle turbo wraps to first speed", runtime_client_cycle_turbo_speed(client));
+    request_and_expect_turbo_multiplier(client, 1);
+    expect_true("cycle turbo to max", runtime_client_cycle_turbo_speed(client));
     expect_turbo_multiplier(client, 2);
+    expect_true("cycle turbo to warp", runtime_client_cycle_turbo_speed(client));
+    expect_turbo_multiplier(client, 3);
+    expect_true("cycle turbo wraps to normal", runtime_client_cycle_turbo_speed(client));
+    expect_turbo_multiplier(client, 1);
 
     stop_runtime(rt, client);
 }
@@ -594,19 +600,22 @@ static void test_runtime_set_turbo_multiplier(void) {
     runtime *rt;
     runtime_client *client;
 
-    rt = start_runtime_with_turbo(&client, "2,4,8");
+    rt = start_runtime_with_turbo(&client, "1,2,3");
 
-    expect_true("set turbo outside configured list", runtime_client_set_turbo_multiplier(client, 7));
-    expect_turbo_multiplier(client, 7);
-    expect_true("set maximum turbo", runtime_client_set_turbo_multiplier(client, 256));
-    expect_turbo_multiplier(client, 256);
+    expect_true("set turbo max", runtime_client_set_turbo_multiplier(client, 2));
+    expect_turbo_multiplier(client, 2);
+    expect_true("set turbo warp", runtime_client_set_turbo_multiplier(client, 3));
+    expect_turbo_multiplier(client, 3);
     expect_true("restore normal turbo", runtime_client_set_turbo_multiplier(client, 1));
     expect_turbo_multiplier(client, 1);
     if (runtime_client_set_turbo_multiplier(client, 0)) {
-        fail("zero turbo multiplier accepted");
+        fail("zero turbo mode accepted");
     }
-    if (runtime_client_set_turbo_multiplier(client, 257)) {
-        fail("turbo multiplier over maximum accepted");
+    if (runtime_client_set_turbo_multiplier(client, 4)) {
+        fail("turbo mode over maximum accepted");
+    }
+    if (runtime_client_set_turbo_multiplier(client, 256)) {
+        fail("legacy turbo 256 accepted");
     }
 
     stop_runtime(rt, client);

@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
     config.machine_config.video_standard = C64_VIDEO_STANDARD_PAL;
     config.machine_config.emulate_1541 = 1;
     config.machine_config.media_1541 = 1;
-    config.active_turbo_multiplier = 256;
+    config.active_turbo_multiplier = 3; /* warp: free-run, paint off */
     config.autorun = true;
 
     if (!runtime_init()) {
@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
         fail("runtime startup timed out");
     }
 
-    if (!runtime_client_set_turbo_multiplier(client, 256) ||
+    if (!runtime_client_set_turbo_multiplier(client, 3) ||
         !runtime_client_mount_d64(client, 8, argv[4]) ||
         !run_until_pc(client, EOD_SWAP_PC, 300)) {
         fail("disk-swap marker timed out");
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
         unsigned long race_frames = strtoul(scene + 1, NULL, 10);
         if (race_frames == 0ul ||
             !runtime_client_clear_all_breakpoints(client) ||
-            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !runtime_client_set_turbo_multiplier(client, 2) ||
             !runtime_client_run_cycles(client,
                 (size_t)race_frames * (size_t)PAL_FRAME_CYCLES) ||
             !wait_for_event(client, RUNTIME_EVENT_RUN_COMPLETE, &event, 600)) {
@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
     }
 
     if (!runtime_client_clear_all_breakpoints(client) ||
-        !runtime_client_set_turbo_multiplier(client, 7) ||
+        !runtime_client_set_turbo_multiplier(client, 2) ||
         !run_until_pc(client, EOD_CHECKER_PC, 300)) {
         fail("checker marker timed out");
     }
@@ -237,7 +237,7 @@ int main(int argc, char **argv) {
 
     if (strcmp(scene, "plasma") == 0) {
         if (!runtime_client_clear_all_breakpoints(client) ||
-            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !runtime_client_set_turbo_multiplier(client, 2) ||
             !run_until_pc(client, EOD_PLASMA_PC, 300)) {
             fail("plasma marker timed out");
         }
@@ -246,7 +246,7 @@ int main(int argc, char **argv) {
         unsigned long race_frames = strtoul(scene + 1, NULL, 10);
         if (race_frames == 0ul ||
             !runtime_client_clear_all_breakpoints(client) ||
-            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !runtime_client_set_turbo_multiplier(client, 2) ||
             !runtime_client_run_cycles(client,
                 (size_t)race_frames * (size_t)PAL_FRAME_CYCLES) ||
             !wait_for_event(client, RUNTIME_EVENT_RUN_COMPLETE, &event, 300)) {
@@ -257,15 +257,15 @@ int main(int argc, char **argv) {
 
 live_capture:
     if (!runtime_client_clear_all_breakpoints(client) ||
-        !runtime_client_set_turbo_multiplier(client, 7)) {
+        !runtime_client_set_turbo_multiplier(client, 2)) {
         fail("live capture setup failed");
     }
 
-    /* Turbo display uses a geometric debug reconstruction and the frame slot
-       retains its oldest undrained frame.  Drain that slot, enable live video,
-       then discard one full PAL frame so the cycle renderer starts from a clean
-       frame boundary.  Keep draining FRAME_READY payloads while advancing so
-       the final payload really is the requested live raster frame. */
+    /* Warp uses a geometric debug reconstruction and the frame slot retains its
+       oldest undrained frame. Drain that slot, switch to max (live ARGB), then
+       discard one full PAL frame so the cycle renderer starts from a clean frame
+       boundary. Keep draining FRAME_READY payloads while advancing so the final
+       payload really is the requested live raster frame. */
     while (runtime_client_poll_frame(client, &frame)) {
     }
     if (!run_live_frames(client, 1u, &frame)) {

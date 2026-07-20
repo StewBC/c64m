@@ -41,10 +41,15 @@ void frontend_format_window_title(
     if (turbo_multiplier == 0u) {
         turbo_multiplier = 1u;
     }
-    if (turbo_multiplier == 256u) {
-        snprintf(turbo, sizeof(turbo), "MAX");
+    /* Turbo modes: 1=normal, 2=max free-run full paint, 3=warp free-run. */
+    if (turbo_multiplier == 1u) {
+        snprintf(turbo, sizeof(turbo), "Normal");
+    } else if (turbo_multiplier == 2u) {
+        snprintf(turbo, sizeof(turbo), "Max");
+    } else if (turbo_multiplier == 3u) {
+        snprintf(turbo, sizeof(turbo), "Warp");
     } else {
-        snprintf(turbo, sizeof(turbo), "%ux", (unsigned int)turbo_multiplier);
+        snprintf(turbo, sizeof(turbo), "%u", (unsigned int)turbo_multiplier);
     }
 
     switch (state) {

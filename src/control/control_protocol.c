@@ -662,8 +662,8 @@ bool control_protocol_parse_request(
     } else if (type == CONTROL_COMMAND_SET_TURBO) {
         uint64_t multiplier = 0;
         if (!parse_u64_token(cursor, &cursor, &multiplier) ||
-            multiplier < 1u || multiplier > 256u) {
-            set_parse_error(out_error, id, "bad-args", "expected turbo multiplier 1..256");
+            multiplier < 1u || multiplier > 3u) {
+            set_parse_error(out_error, id, "bad-args", "expected turbo mode 1..3 (1=normal,2=max,3=warp)");
             return false;
         }
         args.turbo_multiplier = (uint16_t)multiplier;

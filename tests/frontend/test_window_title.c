@@ -24,15 +24,15 @@ static void expect_title(
 
 int main(void)
 {
-    expect_title("PAL running", "c64m - PAL - 1x - Running",
+    expect_title("PAL running", "c64m - PAL - Normal - Running",
         "PAL", 1, FRONTEND_RUNTIME_STATE_RUNNING, RUNTIME_STOP_REASON_NONE);
-    expect_title("NTSC turbo", "c64m - NTSC - 16x - Running",
-        "NTSC", 16, FRONTEND_RUNTIME_STATE_RUNNING, RUNTIME_STOP_REASON_NONE);
-    expect_title("maximum turbo", "c64m - PAL - MAX - Running",
-        "PAL", 256, FRONTEND_RUNTIME_STATE_RUNNING, RUNTIME_STOP_REASON_NONE);
-    expect_title("BRK pause", "c64m - PAL - 4x - Paused (BRK)",
-        "PAL", 4, FRONTEND_RUNTIME_STATE_PAUSED, RUNTIME_STOP_REASON_BRK);
-    expect_title("error", "c64m - NTSC - 2x - Error",
-        "NTSC", 2, FRONTEND_RUNTIME_STATE_ERROR, RUNTIME_STOP_REASON_ERROR);
+    expect_title("max turbo", "c64m - NTSC - Max - Running",
+        "NTSC", 2, FRONTEND_RUNTIME_STATE_RUNNING, RUNTIME_STOP_REASON_NONE);
+    expect_title("warp turbo", "c64m - PAL - Warp - Running",
+        "PAL", 3, FRONTEND_RUNTIME_STATE_RUNNING, RUNTIME_STOP_REASON_NONE);
+    expect_title("BRK pause", "c64m - PAL - Max - Paused (BRK)",
+        "PAL", 2, FRONTEND_RUNTIME_STATE_PAUSED, RUNTIME_STOP_REASON_BRK);
+    expect_title("error", "c64m - NTSC - Normal - Error",
+        "NTSC", 1, FRONTEND_RUNTIME_STATE_ERROR, RUNTIME_STOP_REASON_ERROR);
     return 0;
 }

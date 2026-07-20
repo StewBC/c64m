@@ -3828,11 +3828,11 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_SET_TURBO:
             if (accepted) {
                 char text[CONTROL_RESPONSE_TEXT_MAX];
-                if (request->args.turbo_multiplier >= 8u) {
+                if (request->args.turbo_multiplier >= 3u) {
                     snprintf(
                         text,
                         sizeof(text),
-                        "accepted=1 turbo=%u warning=turbo-8+-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-lowered",
+                        "accepted=1 turbo=%u warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2",
                         (unsigned int)request->args.turbo_multiplier);
                 } else {
                     snprintf(
