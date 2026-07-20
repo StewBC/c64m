@@ -1515,10 +1515,15 @@ static void test_den_clear_main_border_keeps_d020_full_height(void) {
                frame.pixels[100 * C64_FRAME_WIDTH + 100]);
 }
 
-/* Step D: an opened side border shows idle-state ghost-byte graphics (read from
-   $3FFF in non-ECM), not the background colour. With a patterned ghost byte the
-   revealed border reproduces that pattern -- the "ghost byte shine-through". */
-static void test_live_side_border_shows_ghost_byte(void) {
+/* Step D: an opened side border shows *zero* graphics data, not the $3FFF ghost
+   byte. No g-access loads the sequencer outside cycles 15..54, so VICE viciisc
+   forces the shift register to zero there (vicii-draw-cycle.c: `gbuf_pipe0_reg =
+   0` when the cycle is not visible); vicii_fetch_idle() reads $3FFF for the bus
+   but never assigns gbuf. Every pair is therefore 00 → B0C in text modes, and a
+   patterned ghost byte must NOT show through. Emitting the ghost byte instead
+   painted its set bits in colour 0, which put pure-black blocks under the
+   multicolor sprites in Edge of Disgrace's opened side border. */
+static void test_live_side_border_shows_zero_graphics(void) {
     c64_t     machine;
     c64_frame frame;
     uint64_t  abs;
@@ -1528,9 +1533,8 @@ static void test_live_side_border_shows_ghost_byte(void) {
     c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02); /* red border */
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
-    /* Ghost byte 0xF0 = 1111_0000: idle bit = 0x80 >> ((x-24) & 7), so the first
-       four dots of the 8-dot group at x=344 are foreground (black), the next four
-       are background (b0c/blue). */
+    /* A patterned ghost byte that must stay invisible: graphics data in the
+       over-border region is zero, so the revealed border is flat B0C. */
     machine.bus.ram[0x3fffu] = 0xf0u;
 
     abs = 0;
@@ -1542,18 +1546,20 @@ static void test_live_side_border_shows_ghost_byte(void) {
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    expect_true("ghost-byte side border frame",
+    expect_true("zero-graphics side border frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
-    expect_u32("opened border shows ghost-byte foreground", TEST_PALETTE_0,
-               frame.pixels[100 * C64_FRAME_WIDTH + 344]);
-    expect_u32("opened border shows ghost-byte background", TEST_PALETTE_6,
-               frame.pixels[100 * C64_FRAME_WIDTH + 348]);
+    expect_u32("opened border is B0C where the ghost byte had set bits",
+               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + 344]);
+    expect_u32("opened border is B0C where the ghost byte had clear bits",
+               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + 348]);
 }
 
-/* lft-nine uses XSCROLL to phase-align the idle ghostbyte with digit sprites.
-   Opening the right border with CSEL=0 while XSCROLL=3 must shift the
-   0xF0 pattern three dots relative to the XSCROLL=0 case. */
-static void test_live_ghost_byte_respects_xscroll(void) {
+/* XSCROLL phases the graphics shift register, but the over-border region has no
+   graphics data to phase: gbuf is zero there, so the revealed border is flat B0C
+   at every XSCROLL. This pins the companion property to the test above -- the old
+   model shifted a $3FFF ghost pattern by XSCROLL and produced colour-0 dots in
+   the opened border that VICE never draws. */
+static void test_live_open_border_ignores_xscroll(void) {
     c64_t     machine;
     c64_frame frame0;
     c64_frame frame3;
@@ -1571,25 +1577,21 @@ static void test_live_ghost_byte_respects_xscroll(void) {
              machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    /* CSEL=0 opens right; XSCROLL=0 keeps the 0xF0 phase at x=344..351. */
+    /* CSEL=0 opens the right border with XSCROLL=0. */
     c64_bus_write(&machine.bus, 0xd016, 0x00);
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    expect_true("ghost xscroll0 frame",
+    expect_true("open border xscroll0 frame",
                 vicii_copy_completed_frame(&machine.vic, &frame0, abs));
-    expect_u32("xscroll0 ghost fg at x=344", TEST_PALETTE_0,
+    expect_u32("xscroll0 open border B0C at x=344", TEST_PALETTE_6,
                frame0.pixels[100 * C64_FRAME_WIDTH + 344]);
-    expect_u32("xscroll0 ghost bg at x=348", TEST_PALETTE_6,
+    expect_u32("xscroll0 open border B0C at x=348", TEST_PALETTE_6,
                frame0.pixels[100 * C64_FRAME_WIDTH + 348]);
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
-    /* XSCROLL=3 must be stable *before* the revealed column (x=344, painted at
-       cycle 55) so it phases the ghost there. Like VICE, an XSCROLL change is
-       pipelined and would not reach x=344 if written in the cycle-56 open write,
-       so set it up front (CSEL still 1, border closed) and only flip CSEL at
-       cycle 56. */
+    /* Same run with XSCROLL=3 stable well before the revealed column. */
     c64_bus_write(&machine.bus, 0xd016, 0x0b); /* CSEL=1, XSCROLL=3 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
@@ -1600,22 +1602,25 @@ static void test_live_ghost_byte_respects_xscroll(void) {
              machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    /* Open the border (CSEL=0), keeping XSCROLL=3: phase shifts 3 dots — fg
-       starts at x=347. */
+    /* Open the border (CSEL=0), keeping XSCROLL=3. The revealed span is flat B0C
+       exactly as at XSCROLL=0: there is no ghost pattern to phase-shift. */
     c64_bus_write(&machine.bus, 0xd016, 0x03);
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    expect_true("ghost xscroll3 frame",
+    expect_true("open border xscroll3 frame",
                 vicii_copy_completed_frame(&machine.vic, &frame3, abs));
-    expect_u32("xscroll3 ghost bg at x=344", TEST_PALETTE_6,
-               frame3.pixels[100 * C64_FRAME_WIDTH + 344]);
-    expect_u32("xscroll3 ghost bg at x=346", TEST_PALETTE_6,
-               frame3.pixels[100 * C64_FRAME_WIDTH + 346]);
-    expect_u32("xscroll3 ghost fg at x=347", TEST_PALETTE_0,
-               frame3.pixels[100 * C64_FRAME_WIDTH + 347]);
-    expect_u32("xscroll3 ghost fg at x=350", TEST_PALETTE_0,
-               frame3.pixels[100 * C64_FRAME_WIDTH + 350]);
+    {
+        uint32_t x;
+        int same = 1;
+        for (x = 344u; x < 352u; x++) {
+            if (frame3.pixels[100 * C64_FRAME_WIDTH + x] != TEST_PALETTE_6 ||
+                frame0.pixels[100 * C64_FRAME_WIDTH + x] != TEST_PALETTE_6) {
+                same = 0;
+            }
+        }
+        expect_true("open border is flat B0C at XSCROLL 0 and 3", same);
+    }
 }
 
 /* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
@@ -1678,38 +1683,39 @@ static void test_set_vborder_latch_sticky_until_top(void) {
     expect_true("vertical stays closed with DEN=0 mid-frame", v.vertical_border_active);
 }
 
+/* The idle ghost byte is visible *inside* the 40-column window when the
+   sequencer leaves display state, not in the over-border region (which has no
+   g-access and therefore zero graphics data -- see
+   test_live_side_border_shows_zero_graphics). YSCROLL=7 puts the first bad line
+   at raster 55, so rasters 51..54 are already past the vertical-border top open
+   while the sequencer is still idle -- the ghost byte is on screen there. */
 static void test_live_mcm_idle_ghost_is_hires(void) {
     c64_t     machine;
     c64_frame frame;
     uint64_t  abs;
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd011, 0x1f); /* DEN=1, RSEL=1, YSCROLL=7 */
     c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
     machine.bus.ram[0x3fffu] = 0xf0u; /* 11110000 hires */
 
     abs = 0;
-    while (!(machine.vic.timing.raster_line == 100u &&
-             machine.vic.timing.cycle_in_line == 56u)) {
-        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
-    }
-    c64_bus_write(&machine.bus, 0xd016, 0x10); /* CSEL=0 open right, keep MCM */
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     expect_true("mcm idle ghost frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
-    /* Hires $F0: x=344..347 black, x=348..351 blue — not multicolor pairs. */
-    expect_u32("mcm idle hires fg at x=344", TEST_PALETTE_0,
-               frame.pixels[100 * C64_FRAME_WIDTH + 344]);
-    expect_u32("mcm idle hires fg at x=347", TEST_PALETTE_0,
-               frame.pixels[100 * C64_FRAME_WIDTH + 347]);
-    expect_u32("mcm idle hires bg at x=348", TEST_PALETTE_6,
-               frame.pixels[100 * C64_FRAME_WIDTH + 348]);
-    expect_u32("mcm idle hires bg at x=351", TEST_PALETTE_6,
-               frame.pixels[100 * C64_FRAME_WIDTH + 351]);
+    /* Inside the window the 8-dot ghost group starts at x=24. $F0 as hires:
+       x=96..99 foreground (colour 0), x=100..103 background (B0C) -- four solid
+       dots each, not multicolor pairs. */
+    expect_u32("mcm idle hires fg at x=96", TEST_PALETTE_0,
+               frame.pixels[52 * C64_FRAME_WIDTH + 96]);
+    expect_u32("mcm idle hires fg at x=99", TEST_PALETTE_0,
+               frame.pixels[52 * C64_FRAME_WIDTH + 99]);
+    expect_u32("mcm idle hires bg at x=100", TEST_PALETTE_6,
+               frame.pixels[52 * C64_FRAME_WIDTH + 100]);
 }
 
 static void test_den_clear_blanks_text_display(void) {
@@ -3669,8 +3675,8 @@ int main(void) {
     test_live_side_border_reveals_sprite();
     test_open_border_sprite_matrix_checker_joins();
     test_den_clear_main_border_keeps_d020_full_height();
-    test_live_side_border_shows_ghost_byte();
-    test_live_ghost_byte_respects_xscroll();
+    test_live_side_border_shows_zero_graphics();
+    test_live_open_border_ignores_xscroll();
     test_live_mcm_idle_ghost_is_hires();
     test_allow_bad_lines_latched_at_line_30();
     test_set_vborder_latch_sticky_until_top();

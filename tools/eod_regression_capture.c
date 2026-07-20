@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
     if (argc < 7 || argc > 11) {
         fprintf(stderr,
             "usage: %s SYSTEM CHAR 1541 DISK0 DISK1 OUTPUT.ppm "
-            "[FRAMES] [checker|plasma|+RACE_FRAMES] [SAMPLES] [INTERVAL]\n",
+            "[FRAMES] [checker|plasma|+RACE_FRAMES|@DEPACK_RACE] [SAMPLES] [INTERVAL]\n",
             argv[0]);
         return 2;
     }
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
     if (argc >= 9) {
         scene = argv[8];
         if (strcmp(scene, "checker") != 0 && strcmp(scene, "plasma") != 0 &&
-            scene[0] != '+') {
+            scene[0] != '+' && scene[0] != '@') {
             fail("unknown scene");
         }
     }
@@ -211,6 +211,23 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "disk-1 depack reached\n");
 
+    /* '@N' races N PAL frames straight from the depack marker, skipping the
+       checker wait.  The booze/plasma scene the freecolor work targets is
+       reached this way (~1m52s after the swap at turbo 1). */
+    if (scene[0] == '@') {
+        unsigned long race_frames = strtoul(scene + 1, NULL, 10);
+        if (race_frames == 0ul ||
+            !runtime_client_clear_all_breakpoints(client) ||
+            !runtime_client_set_turbo_multiplier(client, 7) ||
+            !runtime_client_run_cycles(client,
+                (size_t)race_frames * (size_t)PAL_FRAME_CYCLES) ||
+            !wait_for_event(client, RUNTIME_EVENT_RUN_COMPLETE, &event, 600)) {
+            fail("depack-relative race timed out");
+        }
+        fprintf(stderr, "raced %lu frames from depack\n", race_frames);
+        goto live_capture;
+    }
+
     if (!runtime_client_clear_all_breakpoints(client) ||
         !runtime_client_set_turbo_multiplier(client, 7) ||
         !run_until_pc(client, EOD_CHECKER_PC, 300)) {
@@ -238,6 +255,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "scene race advanced %lu frames\n", race_frames);
     }
 
+live_capture:
     if (!runtime_client_clear_all_breakpoints(client) ||
         !runtime_client_set_turbo_multiplier(client, 7)) {
         fail("live capture setup failed");

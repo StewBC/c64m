@@ -102,7 +102,18 @@ and presentation fallback and is not a substitute for live bus timing. Drain any
 old frame payloads, use turbo 7 or lower, and discard one completed frame after
 lowering turbo before judging a capture. Trace builds can emit `C64M_VICLOG`,
 `C64M_BALOG`, and `C64M_SPRDMA`; the `lft-nine` workflow uses these to compare
-against VICE.
+against VICE. `C64M_LINELOG` dumps the per-line sequencer state at UpdateVc, and
+`C64M_LINELOG_FULL=1` adds all forty `color_line`/`video_matrix`/`g_line`
+entries - that is what disproved the "colour latch `$8`" story behind the EoD
+plasma black blocks (every column was `$B`).
+
+**Read `README.md`'s "Diagnosis discipline" before theorising about a pixel
+defect.** The VIC-specific form of step 1 is: histogram *where* the wrong pixels
+are before naming a mechanism. Border-vs-field is the highest-value split, since
+x outside `[24,344)` is a different paint path entirely - a black-pixel histogram
+that landed every hit on x=0..23 and x=344..383 is what turned a supposed
+freecolor bug into a side-border one. Sprite-vs-graphics is the next split
+(`$D015` and `EOD_DUMP` answer it).
 
 For a timing investigation, classify the defect as (1) bus schedule/access kind,
 (2) BA/RDY/AEC arbitration, (3) raster/register timing, or (4) pixel composition.
@@ -120,7 +131,23 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
   Invalid modes (ECM with BMM and/or MCM) are solid black in idle as well as
   display — otherwise the ghost-byte MCM-bitmap path stipples EoD plasma's
-  post-FLI bottom frame (`$D011=$71`).
+  post-FLI bottom frame (`$D011=$71`). The ghost byte is only visible **inside**
+  the 40-column window; see the over-border rule below.
+- The horizontal over-border region (x outside the fixed 40-column span
+  `[24,344)`) has **no graphics data at all**: no g-access loads the sequencer
+  there, so the shift register reads as zero and every pixel pair is 00. VICE
+  models this as `gbuf_pipe0_reg = 0` when the cycle is not visible
+  (`vicii-draw-cycle.c`); `vicii_fetch_idle()` reads $3FFF for the bus but,
+  unlike `vicii_fetch_idle_gfx()`, never assigns `gbuf`. With pair 0 the mode's
+  colour reduces to B0C for hires/MCM text and MCM bitmap, to the vbuf low
+  nibble for standard bitmap, to `$D021 + (vbuf >> 6)` for ECM text, and to
+  black for invalid modes (`vicii_border_gfx_pixel`). vbuf/cbuf are *not*
+  zeroed — VICE retains the last display column, which is why the two
+  vbuf-sourced modes still need it. Emitting the $3FFF ghost byte here instead
+  painted its set bits in colour 0: that was the pure-black blocks under Edge of
+  Disgrace's plasma sprites in the opened side border. There is no "ghost byte
+  shine-through" in the border; when the border is closed `vicii_compose_pixel`
+  overrides this value anyway, so ordinary screens never see it.
 - Vertical border uses VICE's two-stage unit: `set_vborder` latch (bottom only
   sets) and `vertical_border_active` (applied at cycle 0 and left compare).
   Top+DEN clears both. This is required for the classic RSEL lower-border open.

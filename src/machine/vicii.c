@@ -843,6 +843,58 @@ static inline vicii_bg_pixel vicii_idle_pixel_decoded(
     }
 }
 
+/* Graphics output in the horizontal over-border region (outside the 40-column
+   g-access window).  VICE viciisc forces the graphics shift register to zero
+   there -- `vicii-draw-cycle.c`: `if (vis_en && vicii.vborder == 0)
+   gbuf_pipe0_reg = vicii.gbuf; else gbuf_pipe0_reg = 0;` -- because no g-access
+   loads the sequencer outside cycles 15..54.  `vicii_fetch_idle()` reads $3FFF
+   for the bus/AEC but, unlike `vicii_fetch_idle_gfx()`, never assigns gbuf.
+
+   With gbuf zero every pixel pair is 00, so VICE's `colors[]` table reduces to
+   the pair-0 entry of the current mode.  vbuf/cbuf are *not* zeroed: they retain
+   the last display column, which only matters for the two modes whose pair-0
+   colour comes from vbuf.  Emitting the $3FFF ghost byte here instead paints its
+   set bits in colour 0 -- the pure-black blocks in Edge of Disgrace's opened
+   side border, where the demo's multicolor sprites expect flat B0C underneath. */
+static inline vicii_bg_pixel vicii_border_gfx_pixel(
+    const vicii_line_ctx *lc,
+    uint32_t b0c,
+    uint32_t b1c,
+    uint32_t b2c,
+    uint32_t b3c,
+    bool ecm,
+    bool bmm,
+    bool mcm,
+    bool invalid_mode)
+{
+    uint8_t vbuf;
+
+    /* Invalid modes are COL_NONE in every pair slot. */
+    if (invalid_mode) {
+        return vicii_bg_pixel_make(vicii_palette_argb[0], false);
+    }
+
+    /* Retained c-data from the last display column (VICE keeps vbuf/cbuf). */
+    vbuf = (lc != NULL && lc->vm_latch != NULL) ? lc->vm_latch[39] : 0u;
+
+    if (bmm && !mcm) {
+        /* ECM=0 BMM=1 MCM=0 → COL_VBUF_L. */
+        return vicii_bg_pixel_make(vicii_palette_argb[vbuf & 0x0fu], false);
+    }
+    if (ecm && !bmm && !mcm) {
+        /* ECM=1 BMM=0 MCM=0 → COL_D02X_EXT = D021 + (vbuf >> 6). */
+        switch ((vbuf >> 6) & 3u) {
+        case 1u:  return vicii_bg_pixel_make(b1c, false);
+        case 2u:  return vicii_bg_pixel_make(b2c, false);
+        case 3u:  return vicii_bg_pixel_make(b3c, false);
+        default:  break;
+        }
+        return vicii_bg_pixel_make(b0c, false);
+    }
+    /* Remaining valid modes (hires/MCM text, MCM bitmap) → COL_D021. */
+    return vicii_bg_pixel_make(b0c, false);
+}
+
 static vicii_bg_pixel vicii_idle_pixel(
     const vicii *v, const c64_bus_t *bus, uint32_t x, uint8_t xscroll)
 {
@@ -911,22 +963,25 @@ static vicii_bg_pixel vicii_background_pixel_ex(
 
     if (x < (uint32_t)VICII_HBORDER_LEFT_40 || x >= (uint32_t)VICII_HBORDER_RIGHT_40) {
         /* Horizontal over-border region: outside the fixed 40-column display span
-           [24,344), independent of CSEL. The VIC emits idle-state graphics here
-           -- the ghost byte at $3FFF (or $39FF in ECM) -- which is overlaid by the
-           border colour while the main border flip-flop is closed, but shows
-           through when a timed $D016 CSEL write opens the side border (the "ghost
-           byte shine-through" lft-nine relies on). Rendering the idle pixel here
-           instead of b0c is what makes an opened side border reveal that content.
-           When the border is closed this value is overridden in
-           vicii_compose_pixel, so ordinary screens are unaffected.
-           Idle applies XSCROLL to the ghost phase and uses the low bits of x-24
-           (unsigned underflow for x<24 still indexes the 8-dot group correctly). */
+           [24,344), independent of CSEL. No g-access loads the sequencer here, so
+           the graphics data is zero (VICE gbuf_pipe0_reg) and every pair is 00.
+           This is what an opened side border reveals; while the main border
+           flip-flop is closed vicii_compose_pixel overrides it, so ordinary
+           screens are unaffected. See vicii_border_gfx_pixel. */
+        uint32_t bd0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
         if (prep != NULL) {
-            return vicii_idle_pixel_decoded(
-                v, x, xscroll, prep->idle_g,
+            return vicii_border_gfx_pixel(
+                lc, bd0c, b1c, b2c, b3c,
                 prep->idle_ecm, prep->idle_bmm, prep->idle_mcm, prep->idle_invalid);
         }
-        return vicii_idle_pixel(v, bus, x, xscroll);
+        {
+            bool becm = (v->registers[0x11] & 0x40u) != 0u;
+            bool bbmm = (v->registers[0x11] & 0x20u) != 0u;
+            bool bmcm = (v->registers[0x16] & 0x10u) != 0u;
+            return vicii_border_gfx_pixel(
+                lc, bd0c, b1c, b2c, b3c,
+                becm, bbmm, bmcm, becm && (bbmm || bmcm));
+        }
     }
 
     if (lc->idle_when_inactive) {
@@ -1949,6 +2004,22 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
                             (unsigned)v->color_line[2],
                             (unsigned)gaddr,
                             (unsigned)scr, (unsigned)bmp, (unsigned)ch);
+                    if (getenv("C64M_LINELOG_FULL") != NULL) {
+                        int q;
+                        fprintf(linelog, "  cl:");
+                        for (q = 0; q < 40; ++q) {
+                            fprintf(linelog, "%X", v->color_line[q] & 0x0fu);
+                        }
+                        fprintf(linelog, "\n  vm:");
+                        for (q = 0; q < 40; ++q) {
+                            fprintf(linelog, "%02X", v->video_matrix[q]);
+                        }
+                        fprintf(linelog, "\n  g_:");
+                        for (q = 0; q < 40; ++q) {
+                            fprintf(linelog, "%02X", v->g_line[q]);
+                        }
+                        fprintf(linelog, "\n");
+                    }
                 }
             }
         }
