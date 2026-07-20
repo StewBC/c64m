@@ -1837,12 +1837,17 @@ static void vicii_execute_phi2_fetch(vicii *v, const c64_bus_t *bus, uint32_t cy
     }
     if (v->timing.prefetch_cycles != 0u) {
         /* Until BA's three-cycle lead has elapsed, AEC is still high. VICE
-           records $ff for vbuf here instead of reading screen memory. Its cbuf
-           nibble comes from the CPU bus; $f is the open-bus approximation until
-           c64m exposes that Phi2 address to the VIC. */
+           vicii_fetch_matrix records vbuf=$ff and cbuf = ram[PC] & 0x0f (the
+           Phi2 open-bus byte the 6510 is driving). A fixed $0f made EoD's late
+           FLI badlines paint light-gray stripes in the left margin where VICE
+           shows open-bus blue matching the intentional colour RAM. */
         if (v->vmli < (uint8_t)VICII_TEXT_COLUMNS) {
+            uint8_t open_cbuf = 0x0fu;
+            if (bus != NULL) {
+                open_cbuf = (uint8_t)(bus->ram[bus->cpu_open_bus_pc] & 0x0fu);
+            }
             v->video_matrix[v->vmli] = 0xffu;
-            v->color_line[v->vmli] = 0x0fu;
+            v->color_line[v->vmli] = open_cbuf;
         }
         return;
     }

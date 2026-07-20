@@ -2537,6 +2537,10 @@ static void test_late_badline_observes_three_cycle_ba_takeover(void) {
     v->timing.prefetch_cycles = 4u;
     machine.bus.ram[0x0403u] = 0x42u;
     machine.bus.color_ram[3] = 0x06u;
+    /* VICE open-bus cbuf: ram[PC] & 0x0f during BA lead. Point PC at a blue
+       nibble so dummy columns are not stuck at the old hardcoded $0f. */
+    machine.bus.cpu_open_bus_pc = 0x1000u;
+    machine.bus.ram[0x1000u] = 0xA6u;
 
     vicii_begin_cycle(v, &machine.bus, 20u);
     expect_true("pre-write line has no badline BA", vicii_rdy_active(v, 20u));
@@ -2547,16 +2551,19 @@ static void test_late_badline_observes_three_cycle_ba_takeover(void) {
     expect_true("late badline asserts BA immediately", !vicii_rdy_active(v, 21u));
     expect_true("late badline first BA cycle keeps AEC high", vicii_aec_active(v));
     expect_u8("late badline first c-access is dummy", 0xffu, v->video_matrix[0]);
+    expect_u8("late badline first cbuf is open-bus nibble", 0x06u, v->color_line[0]);
     vicii_finish_cycle(v);
 
     vicii_begin_cycle(v, &machine.bus, 22u);
     expect_true("late badline second BA cycle keeps AEC high", vicii_aec_active(v));
     expect_u8("late badline second c-access is dummy", 0xffu, v->video_matrix[1]);
+    expect_u8("late badline second cbuf is open-bus nibble", 0x06u, v->color_line[1]);
     vicii_finish_cycle(v);
 
     vicii_begin_cycle(v, &machine.bus, 23u);
     expect_true("late badline third BA cycle keeps AEC high", vicii_aec_active(v));
     expect_u8("late badline third c-access is dummy", 0xffu, v->video_matrix[2]);
+    expect_u8("late badline third cbuf is open-bus nibble", 0x06u, v->color_line[2]);
     vicii_finish_cycle(v);
 
     vicii_begin_cycle(v, &machine.bus, 24u);

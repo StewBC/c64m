@@ -329,6 +329,9 @@ static void c64_update_vic_irq_delay(c64_t *machine) {
 /* Begin the VIC's current cycle first so BA/AEC describe this cycle before the
    6510 makes its bus decision. */
 static void c64_begin_vic_for_current_cycle(c64_t *machine) {
+    /* VICE open-bus cbuf during BA lead uses ram[PC]. Snapshot the 6510 PC as
+       it stands after the previous cycle's Phi2 (before this cycle's CPU work). */
+    machine->bus.cpu_open_bus_pc = machine->cpu.cpu.pc;
     c64_balog_maybe_emit(machine);
     c64_step_vic(machine);
 }

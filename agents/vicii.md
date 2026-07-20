@@ -125,7 +125,13 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 ## Known limits
 
 - Light pen `$D013/$D014` is stubbed.
-- Last-byte-on-bus behavior and analog/half-cycle AEC/RDY are not modeled.
+- Analog/half-cycle AEC/RDY are not modeled. General last-byte-on-bus is still
+  incomplete, but **BA-lead cbuf** follows VICE: while `prefetch_cycles != 0`,
+  a forced c-access stores `vbuf=$ff` and `cbuf = ram[cpu_open_bus_pc] & 0x0f`
+  (VICE `vicii_fetch_matrix` / `ram_base_phi2[reg_pc]`). The machine snapshots
+  the 6510 PC into `bus.cpu_open_bus_pc` before each VIC cycle. A hardcoded
+  `$0f` here painted light-gray FLI-bug stripes on EoD's helmet portrait
+  (samples `eod-stripes-*.png`) where open-bus was colour `$6`.
 - Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
   0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).

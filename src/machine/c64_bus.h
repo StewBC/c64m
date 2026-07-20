@@ -72,6 +72,11 @@ struct c64_bus_t {
     bool debugcart_enabled;
     bool debugcart_hit;
     uint8_t debugcart_value;
+
+    /* Host 6510 PC snapshot for VIC-II open-bus cbuf during BA lead-in.
+       VICE samples ram_base_phi2[reg_pc] & 0x0f when AEC is still high
+       (vicii_fetch_matrix). Updated by the machine before each VIC cycle. */
+    uint16_t cpu_open_bus_pc;
 };
 
 void c64_bus_init(c64_bus_t *bus);
