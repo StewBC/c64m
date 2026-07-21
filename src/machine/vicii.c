@@ -803,14 +803,32 @@ static inline vicii_bg_pixel vicii_idle_pixel_decoded(
 
     (void)ecm;
 
-    /* Invalid modes (ECM combined with BMM and/or MCM) always output black,
-       including in idle — same as VICE COL_NONE. Without this, EoD plasma's
-       post-FLI $D011=$71 (ECM+BMM) + MCM idle path decodes $39FF as MCM
-       bitmap pairs and draws a stippled bottom frame instead of a solid line. */
+    /* Invalid modes (ECM combined with BMM and/or MCM) output black in every
+       pixel slot — same as VICE COL_NONE. Forcing the colour black is what keeps
+       EoD plasma's post-FLI $D011=$71 (ECM+BMM)+MCM idle bottom frame a solid
+       black line instead of the ghost-byte MCM-bitmap stipple (pair 0 would
+       otherwise paint B0C).
+
+       The colour is forced black, but the graphics-derived foreground/priority
+       bit is NOT: the VIC still clocks the MC flip-flop from the sequencer in
+       invalid modes, so idle ghost-byte pixels still occlude behind-priority
+       (MDP=1) sprites and still raise sprite/background collisions. Returning
+       foreground=false here (the original fc5a58b fix) dropped that bit, which
+       let dkarcade2016's venetian-reveal sprites leak through the still-black
+       top/bottom border before their scanline had been uncovered. Foreground is
+       pair-based for multicolor *bitmap* (MCM+BMM — the dkarcade case, matching
+       the valid path below) and the hires bit otherwise (text idle stays hires
+       because idle cbuf=0). */
     if (invalid_mode) {
-        (void)g;
-        (void)phase;
-        return vicii_bg_pixel_make(black, false);
+        bool fg;
+        if (mcm && bmm) {
+            uint8_t pair = (uint8_t)((g >> (6u - (phase & 6u))) & 3u);
+            fg = pair >= 2u;
+        } else {
+            uint8_t bit = (uint8_t)(0x80u >> (phase & 7u));
+            fg = (g & bit) != 0u;
+        }
+        return vicii_bg_pixel_make(black, fg);
     }
 
     /* Idle forces c-access data to 0 (VICE vbuf/cbuf = 0). Multicolor *text*

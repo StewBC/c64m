@@ -137,10 +137,15 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
 - Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
   0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
-  Invalid modes (ECM with BMM and/or MCM) are solid black in idle as well as
-  display — otherwise the ghost-byte MCM-bitmap path stipples EoD plasma's
-  post-FLI bottom frame (`$D011=$71`). The ghost byte is only visible **inside**
-  the 40-column window; see the over-border rule below.
+  Invalid modes (ECM with BMM and/or MCM) force the pixel **colour** black in
+  idle as well as display — otherwise the ghost-byte MCM-bitmap path stipples EoD
+  plasma's post-FLI bottom frame (`$D011=$71`). Only the colour is forced: the
+  graphics-derived **foreground/priority** bit is still computed from the ghost
+  byte (pair≥2 for MCM bitmap, else the hires bit), because the VIC keeps
+  clocking the MC flip-flop in invalid modes. Returning `foreground=false` there
+  let dkarcade2016's venetian-reveal sprites leak through the still-black
+  top/bottom border before their scanline was uncovered. The ghost byte is only
+  visible **inside** the 40-column window; see the over-border rule below.
 - The horizontal over-border region (x outside the fixed 40-column span
   `[24,344)`) has **no graphics data at all**: no g-access loads the sequencer
   there, so the shift register reads as zero and every pixel pair is 00. VICE
