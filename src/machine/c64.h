@@ -389,6 +389,16 @@ typedef struct c64_t {
     bool instruction_complete;
     bool restore_pending;
     bool cia2_nmi_line;
+    /* When the 6510 is BA-stalled *between* instructions and an interrupt is
+       pending, the resume cycle is the interrupt's opcode (dummy) fetch and the
+       sequence begins the following cycle. cpu_prev_between_stall records that
+       the previous cycle was such a stall; cpu_deferred_interrupt carries the
+       polled interrupt kind into that next cycle. This matches VICE (where
+       DO_INTERRUPT's leading dummy fetch absorbs the BA steal) and c64m's own
+       mid-instruction-stall path; without it the IRQ enters one cycle early on
+       that boundary, which broke EoD's FLD stable-raster scroller. */
+    bool cpu_prev_between_stall;
+    c6510_interrupt_kind cpu_deferred_interrupt;
     /* VICE INTERRUPT_DELAY (2): CPU-visible VIC IRQ lags the internal
        irq_status/enable condition by two Phi2 clocks. Without this, lft-nine's
        CIA Timer B raster stabiliser sees too many "early" arrivals and cannot

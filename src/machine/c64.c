@@ -1246,7 +1246,16 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
     machine->pending_cpu_trace_active = true;
 }
 
-static bool c64_prepare_micro_instruction(c64_t *machine) {
+static void c64_begin_interrupt_now(c64_t *machine, c6510_interrupt_kind kind) {
+    if (machine->cpu_trace_enabled) {
+        c64_trace_reset(&machine->last_cpu_trace);
+    }
+    machine->cpu_trace_start_cycle = machine->clock.cycle;
+    machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    c6510_micro_begin_interrupt(&machine->cpu, kind);
+}
+
+static bool c64_prepare_micro_instruction(c64_t *machine, bool ba_stall_resume) {
     c6510_interrupt_kind interrupt_kind;
     uint8_t opcode;
 
@@ -1254,12 +1263,16 @@ static bool c64_prepare_micro_instruction(c64_t *machine) {
 
     interrupt_kind = c6510_micro_poll_interrupt(&machine->cpu);
     if (interrupt_kind != C6510_INTERRUPT_NONE) {
-        if (machine->cpu_trace_enabled) {
-            c64_trace_reset(&machine->last_cpu_trace);
+        /* When resuming from a between-instructions BA stall, this cycle is the
+           interrupt's opcode (dummy) fetch; begin the sequence next cycle so the
+           handler is entered one cycle later, matching VICE and the mid-
+           instruction-stall path. Burn this cycle as the fetch. */
+        if (ba_stall_resume) {
+            machine->cpu_deferred_interrupt = interrupt_kind;
+            machine->clock.cpu_cycles++;
+            return true;
         }
-        machine->cpu_trace_start_cycle = machine->clock.cycle;
-        machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
-        c6510_micro_begin_interrupt(&machine->cpu, interrupt_kind);
+        c64_begin_interrupt_now(machine, interrupt_kind);
         return true;
     }
 
@@ -1335,10 +1348,12 @@ static void c64_step_host_ba_stall(c64_t *machine) {
 static bool c64_step_cycle_internal(c64_t *machine) {
     bool between_instructions_stalled = false;
 
-    if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
+    if (machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
+        !machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
         (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine))) {
         machine->instruction_complete = true;
         machine->clock.cpu_cycles++;
+        machine->cpu_prev_between_stall = false;
         c64_advance_one_cycle(machine);
         return true;
     }
@@ -1349,14 +1364,25 @@ static bool c64_step_cycle_internal(c64_t *machine) {
     c64_begin_vic_for_current_cycle(machine);
 
     if (!machine->pending_cpu_trace_active && !machine->cpu.micro_active) {
+        bool resuming = machine->cpu_prev_between_stall;
         if (!vicii_aec_active(&machine->vic) ||
             !vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
-            /* Between instructions BA/AEC holds the 6510 only. */
+            /* Between instructions BA/AEC holds the 6510 only. A pending
+               interrupt deferred to its opcode dummy fetch also waits here for
+               the bus to free. */
             between_instructions_stalled = true;
-        } else if (!c64_prepare_micro_instruction(machine)) {
+        } else if (machine->cpu_deferred_interrupt != C6510_INTERRUPT_NONE) {
+            /* Last cycle was the BA-stall resume (the interrupt's opcode dummy
+               fetch); begin the interrupt sequence now, one cycle later than a
+               same-cycle begin would. */
+            c64_begin_interrupt_now(machine, machine->cpu_deferred_interrupt);
+            machine->cpu_deferred_interrupt = C6510_INTERRUPT_NONE;
+        } else if (!c64_prepare_micro_instruction(machine, resuming)) {
             c64_prepare_deferred_cpu_trace(machine);
         }
     }
+
+    machine->cpu_prev_between_stall = between_instructions_stalled;
 
     c64_step_nonvic_devices_for_current_cycle(machine);
     c64_cyclelog_emit(machine);
@@ -1765,6 +1791,8 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->restore_requests = 0;
     machine->restore_pending = false;
     machine->cia2_nmi_line = false;
+    machine->cpu_prev_between_stall = false;
+    machine->cpu_deferred_interrupt = C6510_INTERRUPT_NONE;
     machine->cpu_cycles_remaining = 0;
     machine->cpu_trace_start_cycle = 0;
     machine->cpu_trace_start_cpu_cycle = 0;

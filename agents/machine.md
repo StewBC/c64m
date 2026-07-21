@@ -26,6 +26,17 @@ the boundary between the CPU and C64-visible address decoding. The
 - IRQ is the OR of VIC-II and CIA #1 sources. CIA #2 and RESTORE use separate NMI
   sources; CIA #2 goes through the CPU NMI edge latch. NMI is sampled before IRQ
   at instruction entry.
+- When the 6510 is BA-stalled *between instructions* (RDY low at an instruction
+  boundary) and an interrupt is pending, the resume cycle is the interrupt's
+  opcode (dummy) fetch and the interrupt sequence begins the *following* cycle -
+  one cycle later than a same-cycle begin. This matches VICE (`DO_INTERRUPT`'s
+  leading `FETCH_PARAM_DUMMY` absorbs the BA steal) and the mid-instruction-stall
+  path, where the stalled read occupies the resume cycle before the interrupt.
+  `cpu_prev_between_stall` / `cpu_deferred_interrupt` carry this across the two
+  cycles. Without it the IRQ enters one cycle early on that boundary, which read
+  a stable-raster timer one cycle early and broke EoD's FLD scroller (a
+  `pad = ($28-$DC04)&7` residual wrapping `0 -> 7`). Mid-instruction stalls are
+  unaffected.
 - A fetched BRK auto-pauses free-running runtime loops before execution. Manual
   single-step still executes BRK as real 6502 hardware. The CPU BRK implementation
   pushes the return state and vectors through `$FFFE/$FFFF` when actually run.
