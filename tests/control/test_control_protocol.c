@@ -264,6 +264,20 @@ static void test_parse_command_arguments(void)
     expect_true("save-bin spaced write addr", request.args.write_file_address);
     expect_false("save-bin spaced basic", request.args.is_basic);
 
+    expect_true("parse load-state", control_protocol_parse_request("43 load-state snap.c64state", &request, &error));
+    expect_int("load-state type", CONTROL_COMMAND_LOAD_STATE, request.type);
+    expect_string("load-state path", "snap.c64state", request.args.text);
+
+    expect_true("parse load-state path spaces", control_protocol_parse_request("43 load-state states/Fort Apocalypse.c64state", &request, &error));
+    expect_string("load-state spaced path", "states/Fort Apocalypse.c64state", request.args.text);
+
+    expect_true("parse save-state", control_protocol_parse_request("44 save-state out.c64state", &request, &error));
+    expect_int("save-state type", CONTROL_COMMAND_SAVE_STATE, request.type);
+    expect_string("save-state path", "out.c64state", request.args.text);
+
+    expect_true("parse save-state path spaces", control_protocol_parse_request("44 save-state states/Fort Apocalypse.c64state", &request, &error));
+    expect_string("save-state spaced path", "states/Fort Apocalypse.c64state", request.args.text);
+
     expect_true("parse mount-d64", control_protocol_parse_request("40 mount-d64 8 disk.d64", &request, &error));
     expect_int("mount-d64 type", CONTROL_COMMAND_MOUNT_D64, request.type);
     expect_u32("mount-d64 device", 8u, request.args.device);

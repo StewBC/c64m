@@ -52,14 +52,17 @@ the boundary between the CPU and C64-visible address decoding. The
 - Cartridge ROM is read-only; writes update shadow RAM underneath. Plain reset
   preserves a cartridge. PRG/BASIC/T64 injection detaches it first. The frontend
   reset flow can explicitly detach or preserve it.
-- CLI startup supports `--disk`, `--crt`, `--prg`, `--basic`, `--autorun`, and
-  `--video PAL|NTSC`.
+- CLI startup supports `--disk`, `--crt`, `--prg`, `--basic`, `--sna`, `--autorun`,
+  and `--video PAL|NTSC`. `--sna <path>` loads a `.c64state` snapshot at startup
+  (takes priority over `--crt`/`--prg`/`--basic` when present). Control-port
+  equivalents are `load-state` / `save-state`.
 
 The loader distinction matters: `runtime_client_load_prg()` handles PRG/T64-style
-content, `runtime_client_load_crt()` attaches a cartridge and resets with it, and
+content, `runtime_client_load_crt()` attaches a cartridge and resets with it,
 `runtime_client_load_bin()` is the generic host binary/BASIC path with explicit
-address, file-header, reset, and BASIC flags. For debugger reads use
-`c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, and
+address, file-header, reset, and BASIC flags, and `runtime_client_load_state()` /
+`runtime_client_save_state()` restore or write machine snapshots. For debugger
+reads use `c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, and
 `c64_debug_read_drive_map`; normal bus reads can have I/O side effects.
 
 ## Save states

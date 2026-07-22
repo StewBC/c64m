@@ -412,6 +412,12 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 8 && strncmp(name, "save-bin", length) == 0) {
         return CONTROL_COMMAND_SAVE_BIN;
     }
+    if (length == 10 && strncmp(name, "load-state", length) == 0) {
+        return CONTROL_COMMAND_LOAD_STATE;
+    }
+    if (length == 10 && strncmp(name, "save-state", length) == 0) {
+        return CONTROL_COMMAND_SAVE_STATE;
+    }
     if (length == 9 && strncmp(name, "mount-d64", length) == 0) {
         return CONTROL_COMMAND_MOUNT_D64;
     }
@@ -727,7 +733,9 @@ bool control_protocol_parse_request(
             return false;
         }
         skip_spaces(&cursor);
-    } else if (type == CONTROL_COMMAND_LOAD_PRG) {
+    } else if (type == CONTROL_COMMAND_LOAD_PRG ||
+               type == CONTROL_COMMAND_LOAD_STATE ||
+               type == CONTROL_COMMAND_SAVE_STATE) {
         if (!copy_rest_argument(cursor, &cursor, args.text, sizeof(args.text))) {
             set_parse_error(out_error, id, "bad-args", "expected path");
             return false;

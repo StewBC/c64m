@@ -178,7 +178,7 @@ Current fixed responses:
 ```text
 hello        -> ok name=c64m protocol=C64M/1
 version      -> ok protocol=C64M/1 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu
 ping         -> ok
 ```
 
@@ -274,6 +274,8 @@ N paste-events-data <byte-count>\n<raw paste syntax>\n
 N load-prg <path>
 N load-bin <path> <address> <use-file-address> <reset-first> <is-basic>
 N save-bin <path> <start> <end> <write-file-address> <is-basic>
+N load-state <path>
+N save-state <path>
 N mount-d64 <8|9> <path>
 N unmount-disk <8|9>
 N get-disk-status <8|9>
@@ -281,6 +283,10 @@ N get-disk-status <8|9>
 
 Boolean tokens are `0`, `1`, `false`, or `true`. `load-bin` and `save-bin` path
 arguments may contain spaces because the last four tokens are parsed from the end.
+`load-state` and `save-state` take a path as the rest of the line (spaces allowed)
+and operate on machine `.c64state` snapshots via the runtime. They return
+`ok accepted=1` when queued; wait for `load-state-complete` or `save-state-complete`
+(or use `wait-event`) for completion. Failed loads leave the live machine unchanged.
 The control protocol currently exposes `is_basic`, but not the frontend's Basic
 Text flag; use the runtime/frontend path for Basic Text.
 
@@ -290,8 +296,9 @@ The joystick mask uses the C64 constants in `src/machine/c64.h`:
 bit 0 up, bit 1 down, bit 2 left, bit 3 right, bit 4 fire
 ```
 
-`load-prg`, `load-bin`, `save-bin`, and disk commands are accepted asynchronously;
-use `wait-event` or later state/status queries to observe completion.
+`load-prg`, `load-bin`, `save-bin`, `load-state`, `save-state`, and disk commands
+are accepted asynchronously; use `wait-event` or later state/status queries to
+observe completion.
 
 ## Breakpoints
 

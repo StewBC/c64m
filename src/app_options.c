@@ -1349,6 +1349,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *disk = NULL;
     const char *ini_path = NULL;
     const char *prg_path = NULL;
+    const char *sna_path = NULL;
     const char *audio_record_path = NULL;
     const char *turbo = NULL;
     const char *video_standard = NULL;
@@ -1374,6 +1375,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
         OPT_STRING('p', "prg", &prg_path, "load file as PRG at startup", NULL, 0, 0),
+        OPT_STRING('\0', "sna", &sna_path, "load machine snapshot (.c64state) at startup", NULL, 0, 0),
         OPT_BOOLEAN('P', "pal", &video_pal, "use PAL video timing", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('N', "ntsc", &video_ntsc, "use NTSC video timing", NULL, 0, OPT_NONEG),
         OPT_STRING('\0', "video", &video_standard, "video standard: PAL or NTSC", NULL, 0, 0),
@@ -1408,6 +1410,9 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     }
     if (prg_path != NULL) {
         replace_string(&options->prg_path, prg_path);
+    }
+    if (sna_path != NULL) {
+        replace_string(&options->sna_path, sna_path);
     }
     if (crt_path != NULL) {
         replace_string(&options->crt_path, crt_path);
@@ -1587,6 +1592,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
         !replace_string(&dest->crt_path, src->crt_path) ||
         !replace_string(&dest->prg_path, src->prg_path) ||
         !replace_string(&dest->basic_path, src->basic_path) ||
+        !replace_string(&dest->sna_path, src->sna_path) ||
         !replace_string(&dest->audio_record_path, src->audio_record_path) ||
         !replace_string(&dest->assembler_file, src->assembler_file) ||
         !replace_string(&dest->assembler_address, src->assembler_address) ||
@@ -1835,6 +1841,7 @@ void app_options_destroy(app_options *options)
     free(options->crt_path);
     free(options->prg_path);
     free(options->basic_path);
+    free(options->sna_path);
     free(options->audio_record_path);
     free(options->assembler_file);
     free(options->assembler_address);

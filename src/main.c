@@ -289,6 +289,9 @@ static const char *active_content_path(const app_options *options) {
     if (options == NULL) {
         return NULL;
     }
+    if (options->sna_path != NULL && options->sna_path[0] != '\0') {
+        return options->sna_path;
+    }
     if (options->crt_path != NULL && options->crt_path[0] != '\0') {
         return options->crt_path;
     }
@@ -3018,7 +3021,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file breakpoints wait assemble symbols drive-cpu",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu",
                 false);
             break;
 
@@ -3364,6 +3367,14 @@ static void dispatch_control_request(
                 request->args.write_file_address,
                 request->args.is_basic,
                 false);
+            break;
+
+        case CONTROL_COMMAND_LOAD_STATE:
+            accepted = runtime_client_load_state(client, request->args.text);
+            break;
+
+        case CONTROL_COMMAND_SAVE_STATE:
+            accepted = runtime_client_save_state(client, request->args.text);
             break;
 
         case CONTROL_COMMAND_MOUNT_D64:
@@ -3811,6 +3822,8 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_LOAD_PRG:
         case CONTROL_COMMAND_LOAD_BIN:
         case CONTROL_COMMAND_SAVE_BIN:
+        case CONTROL_COMMAND_LOAD_STATE:
+        case CONTROL_COMMAND_SAVE_STATE:
         case CONTROL_COMMAND_MOUNT_D64:
         case CONTROL_COMMAND_UNMOUNT_DISK:
             if (accepted) {
@@ -4386,7 +4399,9 @@ int main(int argc, char **argv) {
 
         send_run_command(client);
 
-        if (options.crt_path != NULL) {
+        if (options.sna_path != NULL) {
+            runtime_client_load_state(client, options.sna_path);
+        } else if (options.crt_path != NULL) {
             runtime_client_load_crt(client, options.crt_path);
         } else if (options.prg_path != NULL) {
             runtime_client_load_prg(client, options.prg_path);
@@ -4509,7 +4524,9 @@ int main(int argc, char **argv) {
 
     send_run_command(client);
 
-    if (options.crt_path != NULL) {
+    if (options.sna_path != NULL) {
+        runtime_client_load_state(client, options.sna_path);
+    } else if (options.crt_path != NULL) {
         runtime_client_load_crt(client, options.crt_path);
     } else if (options.prg_path != NULL) {
         runtime_client_load_prg(client, options.prg_path);

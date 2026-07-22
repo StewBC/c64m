@@ -57,6 +57,8 @@ typedef struct app_options {
     char *crt_path;
     char *prg_path;
     char *basic_path;
+    /* Startup machine snapshot (.c64state). Loaded after mount/setup when set. */
+    char *sna_path;
     /* Remembered file-browser folders, indexed by frontend_browse_slot. */
     char *browse_dirs[APP_BROWSE_DIR_COUNT];
     /* When true, runtime emits a 440 Hz square wave via the audio path to

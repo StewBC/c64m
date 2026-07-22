@@ -1,8 +1,9 @@
 # c64m - A Commodore 64 emulator written by Codex, Claude Code and Grok, produced by Stefan Wessels, 2026
 
 c64m is a Commodore 64 emulator with PAL and NTSC video support. It runs BASIC programs,
-`PRG` and `T64` files, `D64`/`G64` disk images, and `CRT` cartridges, and includes a
-debugger and assembler for C64 development.
+`PRG` and `T64` files, `D64`/`G64` disk images, and `CRT` cartridges; can save and
+restore full machine snapshots (`.c64state`); and includes a debugger and assembler for
+C64 development.
 
 c64m requires C64 ROM files. Place `basic`, `kernal` (or a single `system` file which
 combines both `basic` and `kernal`) and `character`, ROM files beside the executable
@@ -35,6 +36,7 @@ Useful flags:
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--crt <file>`         | Attach a generic 8K/16K cartridge at startup        |
+| `--sna <file>`         | Load a machine snapshot (`.c64state`) at startup    |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
 | `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
 | `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
@@ -72,6 +74,28 @@ updates the BASIC start and end pointers (`$2B-$2E`).
 
 For both options, the flag determines how the file is treated; the filename extension
 does not matter.
+
+### Machine Snapshots
+
+`--sna <file>` loads a machine snapshot (`.c64state`) at startup. Disks from `--disk`
+are mounted first; then the snapshot is restored after the runtime is running. When
+`--sna` is present it takes priority over `--crt`, `--prg`, and `--basic` (those
+loaders are not also applied). The snapshot must match the currently loaded ROMs.
+
+You can also restore or write snapshots while the emulator is running:
+
+- UI: Debugger / controls **[Load]** and **[Save]** (see **State**)
+- Drag and drop a `.c64state` file onto the window
+- Quickload / quicksave: **Shift+Opt+<** / **Shift+Opt+>**
+- Control port: `load-state <path>` and `save-state <path>` (async; wait for
+  `load-state-complete` or `save-state-complete` — see **Remote**)
+
+Example:
+
+```sh
+./c64m --sna demos/midload.c64state
+./c64m --headless --control-port 6510 --sna demos/midload.c64state
+```
 
 ### Cartridges
 
@@ -644,15 +668,20 @@ literally, but their exact bytes are always preserved through the numeric escape
 **[Save]** opens a save dialog and writes a named `.c64state` snapshot.
 
 State snapshots preserve the emulated machine state, RAM, color RAM, CPU, VIC-II, CIA,
-SID, attached generic cartridge, mounted D64 references, and the frontend keyboard
-joystick layout/port. The current v1 format stores references and hashes for external
-content rather than embedding every ROM or media byte, so a snapshot is expected to be
-loaded with the same ROM files available.
+SID, attached generic cartridge, mounted D64/G64 drive-slot data, live 1541 drive-object
+state when real 1541 emulation is on, and the frontend keyboard joystick layout/port.
+C64 ROM bytes are referenced and hash-validated rather than fully embedded, so a
+snapshot is expected to be loaded with the same ROM files available. A failed load
+leaves the live machine unchanged.
 
 **Shift+Opt+>** quicksaves to the snapshot folder (Configure -> Paths -> `snapshot`,
 which defaults to the current directory). Each quicksave creates a new timestamped
 `.c64state` file; existing quicksaves are not overwritten. **Shift+Opt+<** quickloads
 the newest `.c64state` in that folder.
+
+At startup, use `--sna <file>` to load a snapshot from the command line. Over the
+control port, use `load-state <path>` and `save-state <path>` (see **Machine Snapshots**
+and **Remote**).
 
 ### Emulator Controls
 
@@ -1629,6 +1658,13 @@ For automation without a visible window or host audio device, use headless mode:
 ./c64m --headless --control-port 6510
 ```
 
+To restore a machine snapshot as soon as the process starts (before remote commands),
+combine headless mode with `--sna`:
+
+```sh
+./c64m --headless --control-port 6510 --sna demos/midload.c64state
+```
+
 The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
 thread performs network I/O only; runtime commands and snapshot requests are dispatched
 by the main loop, so remote control follows the same thread-ownership rules as the GUI
@@ -1732,6 +1768,13 @@ when another deferred command is still pending. Deferred commands time out with:
 | `capabilities` | Space-separated capability names |
 | `ping` | `ok` |
 | `quit-client` | `ok`, then the server closes the client connection |
+
+`capabilities` currently includes (among others) `connection`, `introspection`,
+`execution`, `state`, `step`, `turbo`, `frame`, `memory`, `debug-memory`, `call-stack`,
+`input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`, and
+`drive-cpu`. The `snapshot` token means machine save/load (`.c64state`) via
+`load-state` / `save-state`. The `state` token means runtime inspection (`get-state`),
+not file snapshots.
 
 ### Execution Control
 
@@ -1837,7 +1880,8 @@ The default timeout is 2000 ms. Explicit timeouts must be 1..600000 ms.
 
 Useful event names include `running`, `paused`, `reset-complete`, `step-complete`,
 `run-complete`, `frame`, `breakpoints`, `disk-status`, `call-stack`, `debug-memory`,
-`assemble-complete`, `assemble-error`, `disk-swap`, `started`, `stopped`, and `error`.
+`assemble-complete`, `assemble-error`, `load-state-complete`, `save-state-complete`,
+`disk-swap`, `started`, `stopped`, and `error`.
 
 Example synchronization:
 
@@ -1850,6 +1894,15 @@ Example synchronization:
 6 pause
 7 wait-paused 2000
 8 get-state
+```
+
+Example machine-snapshot load:
+
+```text
+1 load-state demos/midload.c64state
+2 wait-event load-state-complete 10000
+3 get-state
+4 get-cpu
 ```
 
 ### Input and Paste
@@ -1891,16 +1944,24 @@ action.
 | `load-prg <path>` | Load a PRG file using the file's two-byte load address |
 | `load-bin <path> <addr> <use_file_addr> <reset_first> <is_basic>` | Load a binary file with explicit flags |
 | `save-bin <path> <start> <end> <write_file_addr> <is_basic>` | Save a host file from memory |
+| `load-state <path>` | Load a machine snapshot (`.c64state`) |
+| `save-state <path>` | Save a machine snapshot (`.c64state`) |
 | `mount-d64 <device> <path>` | Mount a D64 on device 8 or 9 |
 | `unmount-disk <device>` | Unmount device 8 or 9 |
 | `get-disk-status <device>` | Return mounted/status information |
 
 Boolean flags accept `0`, `1`, `false`, or `true`. Paths may contain spaces. For
-`load-prg` and `mount-d64`, the path is the rest of the line after the fixed arguments.
-For `load-bin` and `save-bin`, the parser treats the final fixed address/boolean
-arguments as command arguments and everything before them as the path. `save-bin` can
-overwrite host files, so use it with the same care as any other local file-writing
-command.
+`load-prg`, `load-state`, `save-state`, and `mount-d64`, the path is the rest of the
+line after the fixed arguments. For `load-bin` and `save-bin`, the parser treats the
+final fixed address/boolean arguments as command arguments and everything before them
+as the path. `save-bin` and `save-state` can overwrite host files, so use them with the
+same care as any other local file-writing command.
+
+`load-prg`, `load-bin`, `save-bin`, `load-state`, `save-state`, and disk commands return
+`ok accepted=1` when the runtime accepts the request, not when the file operation
+finishes. Follow with `wait-event` (for example `load-state-complete` or
+`save-state-complete`) or later state queries. A failed snapshot load leaves the live
+machine unchanged.
 
 ### Breakpoints
 
