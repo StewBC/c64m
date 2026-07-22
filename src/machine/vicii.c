@@ -990,13 +990,24 @@ static vicii_bg_pixel vicii_background_pixel_ex(
         b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
     }
 
-    if (x < (uint32_t)VICII_HBORDER_LEFT_40 || x >= (uint32_t)VICII_HBORDER_RIGHT_40) {
-        /* Horizontal over-border region: outside the fixed 40-column display span
-           [24,344), independent of CSEL. No g-access loads the sequencer here, so
-           the graphics data is zero (VICE gbuf_pipe0_reg) and every pair is 00.
-           This is what an opened side border reveals; while the main border
-           flip-flop is closed vicii_compose_pixel overrides it, so ordinary
-           screens are unaffected. See vicii_border_gfx_pixel. */
+    if (x < (uint32_t)VICII_HBORDER_LEFT_40 ||
+        x >= (uint32_t)VICII_HBORDER_RIGHT_40 + (uint32_t)xscroll) {
+        /* Horizontal over-border region: outside the 40-column display span. The
+           right edge is XSCROLL-delayed, not the fixed 344. VICE clocks the
+           graphics shift register with an xscroll-offset load (draw_graphics:
+           `if (i == xscroll_pipe) gbuf_reg = gbuf_pipe1_reg`), so the last
+           g-access column (39) is emitted at x = 336+xscroll .. 343+xscroll and
+           gbuf only becomes 0 (→ pair-0 over-border colour) at x = 344+xscroll.
+           A fixed 344 cutoff dropped column 39's final `xscroll` dots into the
+           B0C over-border path: on Deus Ex Machina's water scene, whose per-frame
+           ±1-dot shimmer toggles XSCROLL 0↔1 under an opened side border, that
+           painted a solid B0C vertical line at x=344 every second frame
+           (dem-handoff.md). No g-access loads the sequencer past 344+xscroll, so
+           there the graphics data is zero (VICE gbuf_pipe0_reg) and every pair is
+           00. While the main border flip-flop is closed vicii_compose_pixel
+           overrides this, so ordinary screens are unaffected. The left edge
+           (x<24) is unchanged: the xscroll left fill is handled below by the
+           sx_raw<xscroll B0C check. See vicii_border_gfx_pixel. */
         uint32_t bd0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
         if (prep != NULL) {
             return vicii_border_gfx_pixel(

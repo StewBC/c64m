@@ -3,8 +3,6 @@
 Operational handoff for Edge of Disgrace (EoD) visual work. Two mid/late scenes
 are coupled through VIC-II VC/RC/`$D011` timing and must not be fixed in isolation.
 
-**This handoff file is untracked.** Update it in place; do not commit unless asked.
-
 Legend used below:
 
 | Tag | Meaning |

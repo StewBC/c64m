@@ -1589,73 +1589,91 @@ static void test_live_side_border_shows_zero_graphics(void) {
                TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + 348]);
 }
 
-/* XSCROLL phases the graphics shift register, but the over-border region has no
-   graphics data to phase: gbuf is zero there, so the revealed border is flat B0C
-   at every XSCROLL. This pins the companion property to the test above -- the old
-   model shifted a $3FFF ghost pattern by XSCROLL and produced colour-0 dots in
-   the opened border that VICE never draws. */
-static void test_live_open_border_ignores_xscroll(void) {
+/* XSCROLL phases the graphics shift register, and that phasing carries the last
+   g-access column into the opened side border. VICE's draw_graphics loads the
+   shift register at `i == xscroll_pipe` (vicii-draw-cycle.c), so column 39 is
+   emitted at x = 336+XSCROLL .. 343+XSCROLL and gbuf only falls to zero
+   (→ over-border pair-0 colour) at x = 344+XSCROLL. The over-border right edge is
+   therefore XSCROLL-delayed, not the fixed x=344. Getting this wrong painted a
+   solid B0C vertical line at x=344 on every second frame of Deus Ex Machina's
+   water scene, whose ±1-dot shimmer toggles XSCROLL 0<->1 under an opened side
+   border (agents/demo/deusexmachina/dem-handoff.md).
+
+   Multicolor bitmap mode (as in the DEM water scene) gives a directly-controlled
+   g-byte whose over-border pair-0 colour is B0C. Column 39's last pixel pair
+   (sx=6,7) carries a foreground colour (pair 11 → colour RAM); at XSCROLL=0 it
+   lands at x=342..343 with over-border B0C at x=344, and at XSCROLL=1 the whole
+   column shifts one dot right so that foreground pair reaches x=343..344 (real
+   graphics, not B0C) with over-border B0C pushed to x=345. */
+static void test_live_open_border_right_edge_xscroll_delayed(void) {
     c64_t     machine;
     c64_frame frame0;
-    c64_frame frame3;
+    c64_frame frame1;
     uint64_t  abs;
+    /* Multicolor bitmap, D018=$18: screen $0400, bitmap base $2000. At raster 100
+       (YSCROLL=3) the sequencer is on character row 6 (VC=240), RC=1, so column 39
+       fetches bitmap byte $2000 + (279<<3) + 1 = $28B9 and its pair-11 colour from
+       colour RAM cell 279. g-byte $03 = pairs (00)(00)(00)(11): only the last pair
+       (sx=6,7) is foreground = colour RAM (palette 10); the rest is B0C. */
+    const uint16_t col39_gbyte = 0x28B9u;
+    const uint16_t col39_cell = 279u;
+    const uint32_t row = 100u;
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x1b);
-    c64_bus_write(&machine.bus, 0xd016, 0x08);
-    c64_bus_write(&machine.bus, 0xd020, 0x02);
-    c64_bus_write(&machine.bus, 0xd021, 0x06);
-    machine.bus.ram[0x3fffu] = 0xf0u; /* 11110000 */
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* border colour */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* B0C = palette 6 */
+    machine.bus.ram[col39_gbyte]     = 0x03u;  /* last pair (sx6,7) = 11 → cbuf */
+    machine.bus.color_ram[col39_cell] = 0x0Au; /* pair 11 → palette 10 */
 
     abs = 0;
-    while (!(machine.vic.timing.raster_line == 100u &&
+    while (!(machine.vic.timing.raster_line == row &&
              machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    /* CSEL=0 opens the right border with XSCROLL=0. */
-    c64_bus_write(&machine.bus, 0xd016, 0x00);
+    c64_bus_write(&machine.bus, 0xd016, 0x10); /* CSEL=0 opens the right border, XSCROLL=0 */
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
     expect_true("open border xscroll0 frame",
                 vicii_copy_completed_frame(&machine.vic, &frame0, abs));
-    expect_u32("xscroll0 open border B0C at x=344", TEST_PALETTE_6,
-               frame0.pixels[100 * C64_FRAME_WIDTH + 344]);
-    expect_u32("xscroll0 open border B0C at x=348", TEST_PALETTE_6,
-               frame0.pixels[100 * C64_FRAME_WIDTH + 348]);
+    /* XSCROLL=0: foreground pair at x=343 (validates the column-39 addressing),
+       over-border B0C begins at x=344. */
+    expect_u32("xscroll0 col39 foreground at x=343", TEST_PALETTE_10,
+               frame0.pixels[row * C64_FRAME_WIDTH + 343]);
+    expect_u32("xscroll0 over-border B0C at x=344", TEST_PALETTE_6,
+               frame0.pixels[row * C64_FRAME_WIDTH + 344]);
 
     reset_machine(&machine);
-    c64_bus_write(&machine.bus, 0xd011, 0x1b);
-    /* Same run with XSCROLL=3 stable well before the revealed column. */
-    c64_bus_write(&machine.bus, 0xd016, 0x0b); /* CSEL=1, XSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3b);
+    c64_bus_write(&machine.bus, 0xd016, 0x19); /* CSEL=1, MCM=1, XSCROLL=1 */
     c64_bus_write(&machine.bus, 0xd020, 0x02);
     c64_bus_write(&machine.bus, 0xd021, 0x06);
-    machine.bus.ram[0x3fffu] = 0xf0u;
+    machine.bus.ram[col39_gbyte]     = 0x03u;
+    machine.bus.color_ram[col39_cell] = 0x0Au;
 
     abs = 0;
-    while (!(machine.vic.timing.raster_line == 100u &&
+    while (!(machine.vic.timing.raster_line == row &&
              machine.vic.timing.cycle_in_line == 56u)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    /* Open the border (CSEL=0), keeping XSCROLL=3. The revealed span is flat B0C
-       exactly as at XSCROLL=0: there is no ghost pattern to phase-shift. */
-    c64_bus_write(&machine.bus, 0xd016, 0x03);
+    c64_bus_write(&machine.bus, 0xd016, 0x11); /* CSEL=0 opens the right border, XSCROLL=1 */
     while (!vicii_consume_frame_complete(&machine.vic)) {
         vicii_step_cycle(&machine.vic, &machine.bus, abs++);
     }
-    expect_true("open border xscroll3 frame",
-                vicii_copy_completed_frame(&machine.vic, &frame3, abs));
-    {
-        uint32_t x;
-        int same = 1;
-        for (x = 344u; x < 352u; x++) {
-            if (frame3.pixels[100 * C64_FRAME_WIDTH + x] != TEST_PALETTE_6 ||
-                frame0.pixels[100 * C64_FRAME_WIDTH + x] != TEST_PALETTE_6) {
-                same = 0;
-            }
-        }
-        expect_true("open border is flat B0C at XSCROLL 0 and 3", same);
-    }
+    expect_true("open border xscroll1 frame",
+                vicii_copy_completed_frame(&machine.vic, &frame1, abs));
+    /* XSCROLL=1: the whole display shifts one dot right, so column 39's foreground
+       pair now reaches x=344 as real graphics (the DEM fix) and over-border B0C is
+       pushed out to x=345. A fixed x>=344 over-border cutoff would paint B0C here
+       instead — the water-scene line. */
+    expect_u32("xscroll1 col39 foreground carried to x=344", TEST_PALETTE_10,
+               frame1.pixels[row * C64_FRAME_WIDTH + 344]);
+    expect_u32("xscroll1 over-border B0C at x=345", TEST_PALETTE_6,
+               frame1.pixels[row * C64_FRAME_WIDTH + 345]);
 }
 
 /* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
@@ -3801,7 +3819,7 @@ int main(void) {
     test_open_border_sprite_matrix_checker_joins();
     test_den_clear_main_border_keeps_d020_full_height();
     test_live_side_border_shows_zero_graphics();
-    test_live_open_border_ignores_xscroll();
+    test_live_open_border_right_edge_xscroll_delayed();
     test_live_mcm_idle_ghost_is_hires();
     test_allow_bad_lines_latched_at_line_30();
     test_set_vborder_latch_sticky_until_top();

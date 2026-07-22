@@ -64,6 +64,32 @@ correctly, but accuracy gaps remain.
 
 Testing has not been exhaustive — the project is still in active development.
 
+## Credit and thanks
+
+Stefan would like to acknowledge that none of this would have been possible without the countless people who have spent countless hours meticulously documenting the Commodore 64 and creating accurate emulations of its hardware.
+
+In particular, the agents used the following resources extensively during the development of c64m:
+
+* The VIC-II implementation was informed extensively by Christian Bauer's *The MOS 6567/6569 Video Controller (VIC-II) and Its Application in the Commodore 64*.
+
+* The VICE Team. Throughout development, the VICE emulator was used as an oracle. The agents ran VICE extensively to measure timings, compare behaviour, and understand the causes of bugs in c64m.
+
+* The following demos, which push the C64 hardware and served as the primary sources for compatibility and accuracy testing:
+
+  * *Nine* by lft (Linus Akesson).
+  * *Edge of Disgrace* by Booze Design. Code and design by HCL; music, code, and graphics by Dane; and graphics and design by Jailbird.
+  * *Deus Ex Machina* by Crest and Oxyron. Code by Crossbow, graphics by DeeKay, and music by Jeff.
+
+* The following games, each of which was used to test hardware behaviour or compatibility issues requiring special attention:
+
+  * *Donkey Kong* (2016) by Oxyron.
+  * *Galencia* by Jason Aldred.
+  * *RoboCop* by Data East and Ocean.
+  * *Arkanoid: Revenge of Doh* by Taito.
+  * *Fort Apocalypse* by Steve Hales and Joe Vierra, published by Synapse Software.
+
+Thank you all for your magnificent contributions.
+
 Stefan Wessels  
 swessels@email.com  
 First commit - June 14, 2026

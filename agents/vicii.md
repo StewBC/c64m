@@ -146,10 +146,10 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   let dkarcade2016's venetian-reveal sprites leak through the still-black
   top/bottom border before their scanline was uncovered. The ghost byte is only
   visible **inside** the 40-column window; see the over-border rule below.
-- The horizontal over-border region (x outside the fixed 40-column span
-  `[24,344)`) has **no graphics data at all**: no g-access loads the sequencer
-  there, so the shift register reads as zero and every pixel pair is 00. VICE
-  models this as `gbuf_pipe0_reg = 0` when the cycle is not visible
+- The horizontal over-border region (x below `24` on the left, or `>= 344 +
+  XSCROLL` on the right) has **no graphics data at all**: no g-access loads the
+  sequencer there, so the shift register reads as zero and every pixel pair is
+  00. VICE models this as `gbuf_pipe0_reg = 0` when the cycle is not visible
   (`vicii-draw-cycle.c`); `vicii_fetch_idle()` reads $3FFF for the bus but,
   unlike `vicii_fetch_idle_gfx()`, never assigns `gbuf`. With pair 0 the mode's
   colour reduces to B0C for hires/MCM text and MCM bitmap, to the vbuf low
@@ -160,7 +160,18 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   painted its set bits in colour 0: that was the pure-black blocks under Edge of
   Disgrace's plasma sprites in the opened side border. There is no "ghost byte
   shine-through" in the border; when the border is closed `vicii_compose_pixel`
-  overrides this value anyway, so ordinary screens never see it.
+  overrides this value anyway, so ordinary screens never see it. The right edge
+  is **XSCROLL-delayed**, not the fixed 344: VICE loads the shift register at
+  `i == xscroll_pipe`, so the last g-access column (39) is emitted at
+  x = 336+XSCROLL..343+XSCROLL and gbuf only falls to 0 at x = 344+XSCROLL.
+  A fixed 344 cutoff dropped column 39's final XSCROLL dots into the B0C
+  over-border path and painted a solid B0C vertical line at x=344 on every
+  second frame of Deus Ex Machina's water scene, whose ±1-dot shimmer toggles
+  XSCROLL 0↔1 under an opened side border (see
+  `demo/deusexmachina/dem-handoff.md`, `test_live_open_border_right_edge_xscroll_delayed`).
+  EoD's checker is unaffected: its `$D016=$62` (XSCROLL=2) dodge is written at
+  cycle 56 and excluded from `xscroll_pipe` (sampled only on g-access cycles
+  15..54), so the paint's effective XSCROLL there stays 0.
 - Vertical border uses VICE's two-stage unit: `set_vborder` latch (bottom only
   sets) and `vertical_border_active` (applied at cycle 0 and left compare).
   Top+DEN clears both. This is required for the classic RSEL lower-border open.
