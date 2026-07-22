@@ -4,7 +4,7 @@
 
 Implementation: `src/machine/vicii.{c,h}` and its integration in `c64.c`/`c64_bus.c`.
 Tests: `tests/machine/test_c64_vicii.c`, `tests/machine/test_c64_cpu_validation.c`,
-runtime frame tests, and the selected `samples/lft-nine.prg` diagnostics.
+runtime frame tests, and the selected `agents/demo/lft/lft-nine.prg` diagnostics.
 
 The main entry points are `vicii_step_cycle()`, `vicii_ba_active()`,
 `vicii_aec_active()`, `vicii_rdy_active()`, `vicii_bus_access()`, register read/write
@@ -133,7 +133,7 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   (VICE `vicii_fetch_matrix` / `ram_base_phi2[reg_pc]`). The machine snapshots
   the 6510 PC into `bus.cpu_open_bus_pc` before each VIC cycle. A hardcoded
   `$0f` here painted light-gray FLI-bug stripes on EoD's helmet portrait
-  (samples `eod-stripes-*.png`) where open-bus was colour `$6`.
+  (`agents/demo/eod/eod-stripes-*.png`) where open-bus was colour `$6`.
 - Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
   0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
   stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).

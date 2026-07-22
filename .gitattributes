@@ -4,6 +4,13 @@
 *.rom binary -eol
 *.png binary
 
+# C64 media / program images are binary
+*.d64 binary
+*.g64 binary
+*.prg binary
+*.crt binary
+*.tap binary
+
 # Font files are binary
 *.eot binary
 *.otf binary
