@@ -1421,9 +1421,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     cyc = v->timing.cycle_in_line;
 
-    /* CSEL used for this cycle's border check is the value latched at the end of
-       the previous cycle. c64m applies the CPU store before the VIC step, so this
-       reproduces VICE's check_hborder, which samples CSEL *before* the store. */
+    /* CSEL used for this cycle's border check is the value latched during the
+       preceding begin phase, before that cycle's CPU Phi2 store. This reproduces
+       VICE's check_hborder, which samples CSEL before the store. */
     check_csel = v->hborder_prev_csel;
     check_prev_csel = v->hborder_prev2_csel;
 
@@ -2139,6 +2139,31 @@ void vicii_finish_cycle(vicii *v) {
     uint32_t cyc;
 
     assert(v);
+
+    /* VICE resolves its eight buffered colour tokens after the CPU-owned Phi2
+       store, in draw_colors8().  On a 6569 the oldest token was resolved by the
+       preceding cycle, while the remaining tokens still observe a colour-register
+       write from this cycle.  Live rendering happens in begin_cycle and the
+       horizontal-border model keeps two unflushed spans: preserve dot zero of
+       the oldest span, repair its remaining dots, and repair the newer span in
+       full from the post-CPU $D020 value.
+
+       Without this finish-phase resolution, a same-cycle STA $D020 was not seen
+       until the next render cycle and acquired an extra eight-dot delay on top
+       of the real one-pixel latency. */
+    {
+        uint8_t d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+        if (d020 != v->color_pipe_d020) {
+            uint8_t i;
+            for (i = 1u; i < v->hborder_pipe[0].n; ++i) {
+                v->hborder_pipe[0].border[i] = vicii_palette_argb[d020];
+            }
+            for (i = 0u; i < v->hborder_pipe[1].n; ++i) {
+                v->hborder_pipe[1].border[i] = vicii_palette_argb[d020];
+            }
+            v->color_pipe_d020 = d020;
+        }
+    }
 
     /* XSCROLL pipe sample runs *after* this cycle's CPU Phi2 store (begin_cycle
        paints first, then the CPU, then finish_cycle).

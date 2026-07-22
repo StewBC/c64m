@@ -719,3 +719,42 @@ UpdateRc never captured `VCBASE` (`rc!=7`) → no coarse shift → object stuck 
 non-geom samples (logo/fist/star/face/eod-3/sister/tiles/woman-android/eye incl.
 top borders); scroller 16/16 good; plasma 0 side-border black blocks. The carry
 is unobservable on normal frames (first real bad line clears `rc` at UpdateVc).
+
+### Android portrait right-border gray band (2026-07-21, **FIXED**)
+
+**Repro:** launch the visible demo with `eod_debug.ini` at turbo MAX. This is
+required: it enables both `emulate_1541=true` and `media_1541=true` and supplies
+the 1541 ROM. Its one-shot advances disk 0 to 1A. Confirm 1A has taken by pausing
+after several seconds and checking that the CPU has left the `$020C` loop, then
+arm `$020C` again. At the second stop mount 1B, start a wall-clock timer with the
+mount, run, and pause/capture after 29 seconds. The portrait has an `edge of` /
+`disgrace` gray band at the upper right. Do not use `--noini`: the compatibility
+disk path does not run EoD's post-1A physical-media fastloader correctly.
+
+**Symptom:** c64m left a blue gap between the text box and the right-border gray
+band. Every one of the 34 band rows had 9 blue pixels at x=344..352, and 10 rows
+had 17 blue pixels through x=360. VICE carries the gray band through the border;
+only a one-pixel sparkle remains on some rows.
+
+**Root cause (VICE-confirmed):** CPU and raster phase already matched. The gray
+band is made by timed `STA $D020` writes, not by opening the graphics border.
+VICE `draw_colors8()` resolves its buffered colour tokens after the CPU-owned
+Phi2 store; on a 6569 only the oldest token retains the previous colour. c64m
+constructed its live span in `vicii_begin_cycle` and did not resolve a same-cycle
+CPU `$D020` write until the next render cycle, adding an erroneous eight-dot
+delay on top of the real one-pixel colour latency. The two-span horizontal-border
+compensation made that delay visible as the blue gap and teeth.
+
+**Fix:** `vicii_finish_cycle` now applies a changed post-CPU `$D020` value to the
+pending border-colour tokens: it preserves only dot zero of the oldest span,
+updates the rest of that span, updates the newer span in full, and carries the
+new value forward. Regression
+`test_color_latency_resolves_same_cycle_phi2_d020_write` exercises the production
+VIC-begin → CPU-Phi2-write → VIC-finish order.
+
+**Verification:** the correctly configured visible disk 0 → 1A → 1B run stopped
+at the second `$020C` on frame 32583 and captured frame 37920 exactly 29 seconds
+after mounting 1B. All 34 gray rows are solid from x=345 through x=383; 26 are
+also gray at x=344 and 8 retain only the expected one-pixel blue sparkle there.
+There are no 8-pixel teeth or wider blue gap. Running another wall-clock second
+at MAX (191 frames) produced the identical seam structure.

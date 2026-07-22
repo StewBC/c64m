@@ -3336,6 +3336,43 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
         TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + 90]);
 }
 
+/* The machine's real phase order is VIC begin -> CPU Phi2 -> VIC finish.  VICE
+   draw_colors8 resolves buffered colour tokens after that CPU store.  c64m's
+   horizontal-border compensation keeps two spans pending: only the oldest dot
+   stays red; the rest, including the newer span, must use the new $D020. */
+static void test_color_latency_resolves_same_cycle_phi2_d020_write(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs = 0;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red */
+
+    while (!(machine.vic.timing.raster_line == 10u &&
+             machine.vic.timing.cycle_in_line == 20u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    /* This is the production c64.c ordering for a CPU-owned Phi2 write. */
+    vicii_begin_cycle(&machine.vic, &machine.bus, abs++);
+    c64_bus_write(&machine.bus, 0xd020, 0x05); /* green */
+    vicii_finish_cycle(&machine.vic);
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("same-cycle Phi2 D020 frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    expect_u32("same-cycle Phi2 D020 keeps oldest pending dot old",
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 56]);
+    expect_u32("same-cycle Phi2 D020 changes next pending dot",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 57]);
+    expect_u32("same-cycle Phi2 D020 changes newer pending span",
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
+}
+
 /* VICE draw_colors runs on every cycle, including HBLANK. A $D020 write at
    cycle 0 of a border line must drain its 1px color_latency before the first
    painted column (x=0 at cycle 12). Without HBLANK advances, x=0 kept the
@@ -3757,6 +3794,7 @@ int main(void) {
     test_vicii_debug_read_forced_high_bits();
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
+    test_color_latency_resolves_same_cycle_phi2_d020_write();
     test_color_latency_drains_during_hblank();
     test_expose_forced_badline_resets_row_counter();
     test_live_yscroll_shifts_content();
