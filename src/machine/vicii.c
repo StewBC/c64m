@@ -2187,12 +2187,17 @@ void vicii_finish_cycle(vicii *v) {
         v->completed_frame_ready = false;
     }
 
+    /* VICE vicii_cycle_start_of_frame resets only vcbase and vc; it carries rc,
+       vmli and idle_state (display_state) across the frame boundary. Matching
+       that is required for idle-region VSP/AGSP: a partial bad line induced
+       above the first natural bad line advances VC by <40, and UpdateRc only
+       captures the shifted VCBASE while rc==7 (the value left in the bottom
+       border). Resetting rc=0 here discarded that offset, so EoD's geometric
+       object never scrolled horizontally. Normal frames are unaffected: the
+       first real bad line clears rc at UpdateVc before any display g-access.
+       bad_line is re-cleared at cycle 0 of every line, so it needs no reset. */
     v->vc            = 0;
     v->vc_base       = 0;
-    v->vmli          = 0;
-    v->rc            = 0;
-    v->display_state = false;
-    v->bad_line      = false;
 }
 
 void vicii_step_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {

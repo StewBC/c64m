@@ -197,6 +197,17 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   matrix reloads or scene-specific `$D018` repair.
 - At cycle 57, UpdateRc enters idle and copies `VCBASE=VC` when RC was 7, then
   increments RC and re-enters display state when the VICE condition holds.
+- The end-of-frame wrap resets **only `VC` and `VCBASE`** (VICE
+  `vicii_cycle_start_of_frame`); `RC`, `VMLI` and `display_state` (VICE
+  `idle_state`) **carry across the frame boundary**. This is load-bearing for
+  idle-region VSP/AGSP: a partial bad line induced above the first natural bad
+  line advances VC by fewer than 40, and UpdateRc captures the shifted `VCBASE`
+  only while `RC==7` — the value the bottom border leaves. Forcing `RC=0` here
+  discarded that offset and pinned EoD's rotating geometric object to the left
+  instead of letting it scroll horizontally across the screen. Normal frames are
+  unaffected: the first real bad line clears `RC` at UpdateVc before any display
+  g-access, so the carried value is never observed. See
+  `test_frame_boundary_carries_rc_vmli_display`.
 - Badline BA/RDY is low on cycles 11..53 for c-accesses 14..53. It has no
   artificial post-fetch hold: AEC blocks the final Phi2 on cycle 53 and the CPU
   resumes at 54. Sprite BA is re-evaluated from the VICE masks every cycle,

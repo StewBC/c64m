@@ -205,6 +205,41 @@ static void test_raster_progression(void) {
     expect_true("frame complete cleared", !vicii_consume_frame_complete(&v));
 }
 
+static void test_frame_boundary_carries_rc_vmli_display(void) {
+    /* VICE vicii_cycle_start_of_frame resets only vc and vcbase; it deliberately
+       carries rc, vmli and idle_state across the frame boundary. That carry is
+       load-bearing for idle-region VSP/AGSP: a partial bad line induced above
+       the first natural bad line advances VC by <40, and UpdateRc captures the
+       shifted VCBASE only while rc==7 (the value the bottom border leaves). c64m
+       used to force rc=0 (and vmli=0/display_state=false) here, which discarded
+       the offset and left EoD's geometric object unable to scroll horizontally.
+       Normal frames are unaffected: the first real bad line clears rc at UpdateVc
+       before any display g-access. */
+    vicii v;
+    char error[256];
+
+    expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
+
+    /* Park at the final cycle of the final line, with the bottom-border state a
+       real demo leaves (rc at its max, display counters non-zero). */
+    v.timing.raster_line = v.timing.lines_per_frame - 1u;
+    v.timing.cycle_in_line = v.timing.cycles_per_line - 1u;
+    v.rc = 7u;
+    v.vmli = 25u;
+    v.display_state = true;
+    v.vc = 0x123u;
+    v.vc_base = 0x123u;
+
+    vicii_step_cycle(&v, NULL, 0u);
+
+    expect_u32("frame wrapped to line 0", 0u, v.timing.raster_line);
+    expect_u8("rc carries across frame boundary", 7u, v.rc);
+    expect_u8("vmli carries across frame boundary", 25u, v.vmli);
+    expect_true("display_state carries across frame boundary", v.display_state);
+    expect_u32("vc resets at frame start", 0u, v.vc);
+    expect_u32("vc_base resets at frame start", 0u, v.vc_base);
+}
+
 static void test_irq_status_high_bit_reports_enabled_pending_irq(void) {
     vicii v;
     char error[256];
@@ -3644,6 +3679,7 @@ int main(void) {
     test_config_frame_timing();
     test_vicii_reset_state();
     test_raster_progression();
+    test_frame_boundary_carries_rc_vmli_display();
     test_irq_status_high_bit_reports_enabled_pending_irq();
     test_raster_compare_write_triggers_same_line_irq();
     test_d011_yscroll_write_does_not_retrigger_same_line_irq();
