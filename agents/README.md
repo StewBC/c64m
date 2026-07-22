@@ -85,8 +85,9 @@ Component handoffs:
 - `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
   (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
 
-Current baseline is 51/51 passing. That baseline includes the real 1541 ROM/IEC,
-G64, Arkanoid, and Robocop paths.
+Current baseline is 52/52 passing (includes `c64_snapshot_1541_midload`). That
+baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541
+drive-object snapshot paths.
 
 The verification command is:
 

@@ -65,16 +65,20 @@ address, file-header, reset, and BASIC flags. For debugger reads use
 ## Save states
 
 `c64_snapshot.{c,h}` provides a versioned, chunked, all-or-nothing machine
-serializer. It includes CPU, RAM/color RAM, banking, VIC-II, CIA, SID, controls,
-cartridge, and D64 drive-slot data. ROM bytes are referenced and hash-validated;
-full 1541 CPU/VIA state, SDL/frontend/runtime state, CLI loading, and self-contained
-ROM/media embedding are not part of the current format.
+serializer (format version 9). It includes CPU, RAM/color RAM, banking, VIC-II, CIA,
+SID, controls, cartridge, D64/G64 drive-slot data, and — when real 1541 emulation is
+on with a drive ROM loaded — full live 1541 drive-object state (CPU including mid-
+instruction micro fields, both VIAs, 2 KiB RAM, media scalars, and verbatim GCR
+track buffers) plus `clock.drive_accum` / `drive_synced_cycle`. C64 ROM bytes are
+referenced and hash-validated; 1541 ROM bytes stay host-side (not embedded).
+SDL/frontend/runtime state, CLI loading, and self-contained ROM/media embedding are
+not part of the format. Version-8 snapshots still load: drive objects hard-reset as
+before.
 
 ## Do not claim
 
 Do not claim perfect electrical RDY/AEC timing, exact chip-revision behavior for
-unstable opcodes, last-byte-on-bus behavior, broader cartridge mappers, or full
-1541 drive-state restoration.
+unstable opcodes, last-byte-on-bus behavior, or broader cartridge mappers.
 
 ## Change checklist
 

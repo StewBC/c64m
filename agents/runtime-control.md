@@ -62,7 +62,8 @@ Python client, read `control-port.md`.
 
 Runtime file I/O for machine snapshots happens on the runtime thread. Successful
 save/load emits completion events; failed loads preserve the live machine. The
-machine serializer does not capture SDL/frontend state or full 1541 CPU/VIA state.
+machine serializer does not capture SDL/frontend state; with real 1541 + ROM it
+does capture full drive-object state (v9).
 
 ## Common pitfalls
 

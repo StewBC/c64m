@@ -29,6 +29,9 @@ typedef struct c1541 {
 } c1541;
 
 void c1541_init(c1541 *drive, c64_t *c64, int device_number);
+/* Re-attach bus callbacks and the c64 back-pointer without memset/reset.
+   Used after snapshot restore of live drive state. */
+void c1541_rewire(c1541 *drive, c64_t *c64);
 void c1541_destroy(c1541 *drive);
 void c1541_reset(c1541 *drive);
 int  c1541_load_rom(c1541 *drive, const char *path);

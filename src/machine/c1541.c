@@ -629,6 +629,14 @@ void c1541_init(c1541 *drive, c64_t *c64, int device_number) {
     c6510_set_irq_pending_callback(&drive->cpu, c1541_irq_pending);
 }
 
+void c1541_rewire(c1541 *drive, c64_t *c64) {
+    drive->c64 = c64;
+    drive->cpu.user = drive;
+    drive->cpu.read = c1541_bus_read;
+    drive->cpu.write = c1541_bus_write;
+    c6510_set_irq_pending_callback(&drive->cpu, c1541_irq_pending);
+}
+
 void c1541_destroy(c1541 *drive) {
     c1541_media_free_tracks(&drive->media);
     memset(drive, 0, sizeof(c1541));

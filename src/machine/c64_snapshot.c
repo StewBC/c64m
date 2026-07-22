@@ -26,7 +26,9 @@ enum {
     TAG_MACH = C64_SNAPSHOT_TAG('M', 'A', 'C', 'H'),
     TAG_CART = C64_SNAPSHOT_TAG('C', 'A', 'R', 'T'),
     TAG_DRV8 = C64_SNAPSHOT_TAG('D', 'R', 'V', '8'),
-    TAG_DRV9 = C64_SNAPSHOT_TAG('D', 'R', 'V', '9')
+    TAG_DRV9 = C64_SNAPSHOT_TAG('D', 'R', 'V', '9'),
+    TAG_DR8C = C64_SNAPSHOT_TAG('D', 'R', '8', 'C'),
+    TAG_DR9C = C64_SNAPSHOT_TAG('D', 'R', '9', 'C')
 };
 
 typedef struct snapshot_writer {
@@ -69,6 +71,8 @@ typedef struct parsed_chunks {
     bool cart;
     bool drv8;
     bool drv9;
+    bool drv8_core;
+    bool drv9_core;
 } parsed_chunks;
 
 static uint64_t snapshot_hash64(const uint8_t *data, size_t size) {
@@ -144,6 +148,10 @@ static void w_double(snapshot_writer *w, double value) {
     w_u64(w, bits);
 }
 
+static void w_i32(snapshot_writer *w, int32_t value) {
+    w_u32(w, (uint32_t)value);
+}
+
 static void w_frame(snapshot_writer *w, const c64_frame *frame) {
     size_t i;
 
@@ -216,6 +224,10 @@ static double r_double(snapshot_reader *r) {
     return value;
 }
 
+static int32_t r_i32(snapshot_reader *r) {
+    return (int32_t)r_u32(r);
+}
+
 static void r_bytes(snapshot_reader *r, void *out, size_t size) {
     if (!r->ok || size > r->len || r->pos > r->len - size) {
         r->ok = false;
@@ -284,12 +296,16 @@ static uint32_t snapshot_flags_for_machine(const c64_t *m) {
     uint32_t flags = C64_SNAPSHOT_FLAG_EXTERNAL_ROMS_REQUIRED;
 
     if ((m->drive8.rom_loaded || m->drive9.rom_loaded) && m->config.emulate_1541) {
-        flags |= C64_SNAPSHOT_FLAG_1541_STATE_DEFERRED;
+        flags |= C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED;
     }
     if (m->drives[0].mounted || m->drives[1].mounted) {
         flags |= C64_SNAPSHOT_FLAG_EXTERNAL_MEDIA_REFERENCES;
     }
     return flags;
+}
+
+static bool snapshot_includes_1541_core(uint32_t version, uint32_t flags) {
+    return version >= 9u && (flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0u;
 }
 
 static void write_meta(snapshot_writer *w, const c64_t *m, uint32_t flags) {
@@ -519,6 +535,8 @@ static void write_mach(snapshot_writer *w, const c64_t *m) {
     w_u64(w, m->clock.cpu_cycles);
     w_u64(w, m->clock.vic_cycles);
     w_u64(w, m->clock.cia_cycles);
+    w_u64(w, m->clock.drive_accum);
+    w_u64(w, m->clock.drive_synced_cycle);
     w_u64(w, m->keyboard_events);
     w_u64(w, m->restore_requests);
     w_bool(w, m->restore_pending);
@@ -528,6 +546,7 @@ static void write_mach(snapshot_writer *w, const c64_t *m) {
     w_u8(w, (uint8_t)m->config.video_standard);
     w_u8(w, (uint8_t)(m->config.emulate_1541 ? 1u : 0u));
     w_bool(w, m->instruction_complete);
+    w_u8(w, (uint8_t)(m->config.media_1541 ? 1u : 0u));
     end_chunk(w, chunk);
 }
 
@@ -578,6 +597,137 @@ static void write_drive(snapshot_writer *w, uint32_t tag, const c64_drive_slot *
     end_chunk(w, chunk);
 }
 
+static void write_cpu_fields(snapshot_writer *w, const CPU *cpu) {
+    w_u16(w, cpu->pc);
+    w_u16(w, cpu->opcode_pc);
+    w_u16(w, cpu->sp);
+    w_u8(w, cpu->A);
+    w_u8(w, cpu->X);
+    w_u8(w, cpu->Y);
+    w_u8(w, cpu->flags);
+    w_u16(w, cpu->address_16);
+    w_u16(w, cpu->scratch_16);
+    w_u8(w, cpu->page_fault);
+    w_u8(w, cpu->irq_defer);
+    w_u8(w, cpu->irq_defer_i);
+    w_u8(w, cpu->opcode_active);
+    w_u32(w, cpu->class);
+    w_u64(w, cpu->cycles);
+    w_u64(w, cpu->irq_entries);
+    w_u64(w, cpu->nmi_entries);
+}
+
+static void write_c6510_drive(snapshot_writer *w, const C6510 *cpu) {
+    write_cpu_fields(w, &cpu->cpu);
+    w_u32(w, (uint32_t)cpu->bus_access_kind);
+    w_u8(w, cpu->micro_active);
+    w_u8(w, cpu->micro_opcode);
+    w_u8(w, cpu->micro_phase);
+    w_u8(w, cpu->micro_branch_taken);
+    w_u16(w, cpu->micro_target);
+    w_u16(w, cpu->micro_interrupt_vector);
+    w_u8(w, cpu->micro_is_interrupt);
+}
+
+static void write_via(snapshot_writer *w, const via6522 *v) {
+    w_u8(w, v->ora);
+    w_u8(w, v->orb);
+    w_u8(w, v->ddra);
+    w_u8(w, v->ddrb);
+    w_u8(w, v->port_a_in);
+    w_u8(w, v->port_b_in);
+    w_u16(w, v->t1_counter);
+    w_u16(w, v->t1_latch);
+    w_i32(w, v->t1_running);
+    w_i32(w, v->t1_pb7_state);
+    w_u16(w, v->t2_counter);
+    w_u8(w, v->t2_latch_low);
+    w_i32(w, v->t2_running);
+    w_u8(w, v->sr);
+    w_u8(w, v->acr);
+    w_u8(w, v->pcr);
+    w_u8(w, v->ifr);
+    w_u8(w, v->ier);
+    w_u8(w, v->ca1_last);
+}
+
+static void write_media(snapshot_writer *w, const c1541_media *media) {
+    int i;
+
+    w_i32(w, media->enabled);
+    w_i32(w, media->motor_on);
+    w_i32(w, media->motor_ready);
+    w_u32(w, media->motor_spin_left);
+    w_i32(w, media->half_track);
+    w_u8(w, media->stepper_phase);
+    w_i32(w, media->density);
+    w_u32(w, media->bit_acc);
+    w_u32(w, media->ref_cycle);
+    w_u32(w, media->bit_event_ref);
+    w_u32(w, media->ref_tick_accum);
+    w_u32(w, media->ref_advance);
+    w_u32(w, media->req_ref_cycles);
+    w_u32(w, media->flux_acc);
+    w_i32(w, media->filter_counter);
+    w_i32(w, media->filter_state);
+    w_i32(w, media->filter_last_state);
+    w_i32(w, media->no_flux_cycles);
+    w_u32(w, media->flux_rand);
+    w_i32(w, media->ue7_counter);
+    w_i32(w, media->uf4_counter);
+    w_u32(w, media->head_bit_pos);
+    w_u16(w, media->shift10);
+    w_i32(w, media->in_sync);
+    w_i32(w, media->bits_in_byte);
+    w_u8(w, media->shifting_byte);
+    w_u8(w, media->port_a_byte);
+    w_i32(w, media->byte_ready);
+    w_i32(w, media->so_pulse);
+    w_i32(w, media->so_delay);
+    w_i32(w, media->writing);
+    w_i32(w, media->write_bits_left);
+    w_u8(w, media->write_shift);
+    w_i32(w, media->last_write_bit);
+    w_i32(w, media->tracks_valid);
+    w_i32(w, media->from_g64);
+    w_bool(w, media->built_from != NULL);
+    w_size(w, media->built_size);
+    w_u32(w, media->built_from_seq);
+    w_u32(w, media->attach_left);
+    w_i32(w, media->attach_pending);
+
+    for (i = 0; i < C1541_MEDIA_HALF_SLOTS; ++i) {
+        const c1541_track *tr = &media->halves[i];
+        int present = (tr->data != NULL && tr->length > 0) ? 1 : 0;
+
+        w_bool(w, present != 0);
+        if (!present) {
+            continue;
+        }
+        w_size(w, tr->length);
+        w_i32(w, tr->density);
+        w_i32(w, tr->dirty);
+        w_bytes(w, tr->data, tr->length);
+    }
+}
+
+static void write_drive_core(snapshot_writer *w, uint32_t tag, const c1541 *drive) {
+    size_t chunk;
+
+    begin_chunk(w, tag, &chunk);
+    /* TODO(total-snapshot §5): optional FNV hash of drive ROM for load validation. */
+    w_bytes(w, drive->ram, sizeof(drive->ram));
+    w_i32(w, drive->rom_loaded);
+    w_i32(w, drive->device_number);
+    w_size(w, drive->cpu_cycles_remaining);
+    w_i32(w, drive->via2_t1_pb7_last);
+    write_c6510_drive(w, &drive->cpu);
+    write_via(w, &drive->via1);
+    write_via(w, &drive->via2);
+    write_media(w, &drive->media);
+    end_chunk(w, chunk);
+}
+
 static bool write_snapshot(const c64_t *m, uint8_t *out, size_t out_cap, size_t *out_size) {
     snapshot_writer w;
     uint32_t flags;
@@ -605,6 +755,10 @@ static bool write_snapshot(const c64_t *m, uint8_t *out, size_t out_cap, size_t 
     write_cart(&w, m);
     write_drive(&w, TAG_DRV8, &m->drives[0]);
     write_drive(&w, TAG_DRV9, &m->drives[1]);
+    if ((flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0u) {
+        write_drive_core(&w, TAG_DR8C, &m->drive8);
+        write_drive_core(&w, TAG_DR9C, &m->drive9);
+    }
 
     if (!w.ok) {
         return false;
@@ -824,7 +978,7 @@ static void read_sid(snapshot_reader *r, c64_t *m) {
     s->voice3_env_read = r_u8(r);
 }
 
-static void read_mach(snapshot_reader *r, c64_t *m) {
+static void read_mach(snapshot_reader *r, c64_t *m, uint32_t version) {
     size_t i;
 
     for (i = 0; i < 8; ++i) {
@@ -840,6 +994,13 @@ static void read_mach(snapshot_reader *r, c64_t *m) {
     m->clock.cpu_cycles = r_u64(r);
     m->clock.vic_cycles = r_u64(r);
     m->clock.cia_cycles = r_u64(r);
+    if (version >= 9u) {
+        m->clock.drive_accum = r_u64(r);
+        m->clock.drive_synced_cycle = r_u64(r);
+    } else {
+        m->clock.drive_accum = 0;
+        m->clock.drive_synced_cycle = 0;
+    }
     m->keyboard_events = r_u64(r);
     m->restore_requests = r_u64(r);
     m->restore_pending = r_bool(r);
@@ -849,6 +1010,11 @@ static void read_mach(snapshot_reader *r, c64_t *m) {
     m->config.video_standard = (c64_video_standard)r_u8(r);
     m->config.emulate_1541 = r_u8(r) != 0;
     m->instruction_complete = r_bool(r);
+    if (version >= 9u) {
+        m->config.media_1541 = r_u8(r) != 0;
+    } else {
+        m->config.media_1541 = 0;
+    }
 }
 
 static void read_cart(snapshot_reader *r, c64_t *m) {
@@ -934,6 +1100,203 @@ static void read_drive(snapshot_reader *r, c64_drive_slot *slot) {
     slot->entry_count = entry_count;
 }
 
+static void read_cpu_fields(snapshot_reader *r, CPU *cpu) {
+    cpu->pc = r_u16(r);
+    cpu->opcode_pc = r_u16(r);
+    cpu->sp = r_u16(r);
+    cpu->A = r_u8(r);
+    cpu->X = r_u8(r);
+    cpu->Y = r_u8(r);
+    cpu->flags = r_u8(r);
+    cpu->address_16 = r_u16(r);
+    cpu->scratch_16 = r_u16(r);
+    cpu->page_fault = r_u8(r) ? 1u : 0u;
+    cpu->irq_defer = r_u8(r);
+    cpu->irq_defer_i = r_u8(r);
+    cpu->opcode_active = r_u8(r);
+    cpu->class = r_u32(r);
+    cpu->cycles = r_u64(r);
+    cpu->irq_entries = r_u64(r);
+    cpu->nmi_entries = r_u64(r);
+}
+
+static void read_c6510_drive(snapshot_reader *r, C6510 *cpu) {
+    read_cpu_fields(r, &cpu->cpu);
+    cpu->bus_access_kind = (c6510_bus_access_kind)r_u32(r);
+    cpu->micro_active = r_u8(r);
+    cpu->micro_opcode = r_u8(r);
+    cpu->micro_phase = r_u8(r);
+    cpu->micro_branch_taken = r_u8(r);
+    cpu->micro_target = r_u16(r);
+    cpu->micro_interrupt_vector = r_u16(r);
+    cpu->micro_is_interrupt = r_u8(r);
+}
+
+static void read_via(snapshot_reader *r, via6522 *v) {
+    v->ora = r_u8(r);
+    v->orb = r_u8(r);
+    v->ddra = r_u8(r);
+    v->ddrb = r_u8(r);
+    v->port_a_in = r_u8(r);
+    v->port_b_in = r_u8(r);
+    v->t1_counter = r_u16(r);
+    v->t1_latch = r_u16(r);
+    v->t1_running = r_i32(r);
+    v->t1_pb7_state = r_i32(r);
+    v->t2_counter = r_u16(r);
+    v->t2_latch_low = r_u8(r);
+    v->t2_running = r_i32(r);
+    v->sr = r_u8(r);
+    v->acr = r_u8(r);
+    v->pcr = r_u8(r);
+    v->ifr = r_u8(r);
+    v->ier = r_u8(r);
+    v->ca1_last = r_u8(r);
+}
+
+static void read_media(snapshot_reader *r, c1541_media *media) {
+    int i;
+    bool has_built_from;
+
+    c1541_media_free_tracks(media);
+
+    media->enabled = r_i32(r);
+    media->motor_on = r_i32(r);
+    media->motor_ready = r_i32(r);
+    media->motor_spin_left = r_u32(r);
+    media->half_track = r_i32(r);
+    media->stepper_phase = r_u8(r);
+    media->density = r_i32(r);
+    media->bit_acc = r_u32(r);
+    media->ref_cycle = r_u32(r);
+    media->bit_event_ref = r_u32(r);
+    media->ref_tick_accum = r_u32(r);
+    media->ref_advance = r_u32(r);
+    media->req_ref_cycles = r_u32(r);
+    media->flux_acc = r_u32(r);
+    media->filter_counter = r_i32(r);
+    media->filter_state = r_i32(r);
+    media->filter_last_state = r_i32(r);
+    media->no_flux_cycles = r_i32(r);
+    media->flux_rand = r_u32(r);
+    media->ue7_counter = r_i32(r);
+    media->uf4_counter = r_i32(r);
+    media->head_bit_pos = r_u32(r);
+    media->shift10 = r_u16(r);
+    media->in_sync = r_i32(r);
+    media->bits_in_byte = r_i32(r);
+    media->shifting_byte = r_u8(r);
+    media->port_a_byte = r_u8(r);
+    media->byte_ready = r_i32(r);
+    media->so_pulse = r_i32(r);
+    media->so_delay = r_i32(r);
+    media->writing = r_i32(r);
+    media->write_bits_left = r_i32(r);
+    media->write_shift = r_u8(r);
+    media->last_write_bit = r_i32(r);
+    media->tracks_valid = r_i32(r);
+    media->from_g64 = r_i32(r);
+    has_built_from = r_bool(r);
+    media->built_size = r_size(r);
+    media->built_from_seq = r_u32(r);
+    media->attach_left = r_u32(r);
+    media->attach_pending = r_i32(r);
+    /* Non-NULL sentinel: re-pointed to the restored slot image in apply. */
+    media->built_from = has_built_from ? (const uint8_t *)(uintptr_t)1 : NULL;
+
+    for (i = 0; i < C1541_MEDIA_HALF_SLOTS; ++i) {
+        c1541_track *tr = &media->halves[i];
+        bool present = r_bool(r);
+        size_t length;
+        uint8_t *data;
+
+        tr->data = NULL;
+        tr->length = 0;
+        tr->density = 0;
+        tr->dirty = 0;
+        if (!present || !r->ok) {
+            continue;
+        }
+        length = r_size(r);
+        tr->density = r_i32(r);
+        tr->dirty = r_i32(r);
+        if (!r->ok || length == 0 || length > C64_SNAPSHOT_MAX_CHUNK_SIZE) {
+            r->ok = false;
+            return;
+        }
+        data = (uint8_t *)malloc(length);
+        if (data == NULL) {
+            r->ok = false;
+            return;
+        }
+        r_bytes(r, data, length);
+        if (!r->ok) {
+            free(data);
+            return;
+        }
+        tr->data = data;
+        tr->length = length;
+    }
+}
+
+static void read_drive_core(snapshot_reader *r, c1541 *drive) {
+    r_bytes(r, drive->ram, sizeof(drive->ram));
+    drive->rom_loaded = r_i32(r);
+    drive->device_number = r_i32(r);
+    drive->cpu_cycles_remaining = r_size(r);
+    drive->via2_t1_pb7_last = r_i32(r);
+    read_c6510_drive(r, &drive->cpu);
+    read_via(r, &drive->via1);
+    read_via(r, &drive->via2);
+    read_media(r, &drive->media);
+}
+
+static void clear_media_track_ownership(c1541_media *media) {
+    int i;
+
+    for (i = 0; i < C1541_MEDIA_HALF_SLOTS; ++i) {
+        media->halves[i].data = NULL;
+        media->halves[i].length = 0;
+        media->halves[i].density = 0;
+        media->halves[i].dirty = 0;
+    }
+}
+
+/* Move serialised drive-object state from src into dst, preserving host ROM
+   bytes already loaded on dst. Track buffers transfer ownership from src. */
+static void apply_drive_core(c1541 *dst, c1541 *src, c64_t *owner, const c64_drive_slot *slot) {
+    uint8_t rom[C1541_ROM_SIZE];
+
+    memcpy(rom, dst->rom, sizeof(rom));
+    c1541_media_free_tracks(&dst->media);
+
+    dst->cpu = src->cpu;
+    dst->via1 = src->via1;
+    dst->via2 = src->via2;
+    memcpy(dst->ram, src->ram, sizeof(dst->ram));
+    memcpy(dst->rom, rom, sizeof(dst->rom));
+    dst->rom_loaded = src->rom_loaded;
+    dst->device_number = src->device_number;
+    dst->cpu_cycles_remaining = src->cpu_cycles_remaining;
+    dst->via2_t1_pb7_last = src->via2_t1_pb7_last;
+    dst->media = src->media;
+    clear_media_track_ownership(&src->media);
+
+    if (dst->media.built_from != NULL && slot != NULL && slot->image_bytes != NULL) {
+        dst->media.built_from = slot->image_bytes;
+        dst->media.built_size = slot->image_size;
+        /* Slot image_content_seq is not in the DRV chunk; keep ensure_tracks
+           from rebuilding over the verbatim GCR we just restored. */
+        dst->media.built_from_seq = slot->image_content_seq;
+    } else {
+        dst->media.built_from = NULL;
+        dst->media.built_size = 0;
+        dst->media.built_from_seq = 0;
+    }
+
+    c1541_rewire(dst, owner);
+}
+
 static void move_drive_slot(c64_drive_slot *dst, c64_drive_slot *src) {
     clear_drive_slot(dst);
     *dst = *src;
@@ -947,7 +1310,7 @@ static void snapshot_clear_trace(c64_cpu_instruction_trace *trace) {
     trace->total_cycles = 0;
 }
 
-static void apply_loaded_machine(c64_t *dst, c64_t *src) {
+static void apply_loaded_machine(c64_t *dst, c64_t *src, bool restore_1541_core) {
     c64_memory_access_fn memory_access = dst->memory_access;
     void *memory_access_user = dst->memory_access_user;
     bool cpu_trace_enabled = dst->cpu_trace_enabled;
@@ -957,8 +1320,9 @@ static void apply_loaded_machine(c64_t *dst, c64_t *src) {
     bool has_basic_rom = dst->has_basic_rom;
     bool has_kernal_rom = dst->has_kernal_rom;
     bool has_character_rom = dst->has_character_rom;
-    c1541 drive8 = dst->drive8;
-    c1541 drive9 = dst->drive9;
+    /* Shallow-preserve host drive objects (ROM + callbacks) for the legacy path. */
+    c1541 drive8_host = dst->drive8;
+    c1541 drive9_host = dst->drive9;
 
     memcpy(basic_rom, dst->bus.basic_rom, sizeof(basic_rom));
     memcpy(kernal_rom, dst->bus.kernal_rom, sizeof(kernal_rom));
@@ -1026,26 +1390,57 @@ static void apply_loaded_machine(c64_t *dst, c64_t *src) {
     dst->pending_cpu_elapsed = 0;
     dst->cpu_bus_mode = 0;
     dst->pending_cpu_trace_active = false;
+    /* Snapshots are only written at a C64 instruction boundary (save refuses
+       micro_active). The format does not store the resumable micro/bus fields
+       or the BA-stall interrupt deferral. Clear host-side mid-instruction
+       residue so loading into a free-running machine cannot resume a foreign
+       micro-op under the restored PC — that path was observed as a spurious
+       post-load BRK pause (title bar "BRK") after SYS 64738 then load-state. */
+    dst->cpu.micro_active = 0;
+    dst->cpu.micro_opcode = 0;
+    dst->cpu.micro_phase = 0;
+    dst->cpu.micro_branch_taken = 0;
+    dst->cpu.micro_target = 0;
+    dst->cpu.micro_interrupt_vector = 0;
+    dst->cpu.micro_is_interrupt = 0;
+    dst->cpu.bus_access_kind = C6510_BUS_ACCESS_DATA_READ;
+    dst->cpu_prev_between_stall = false;
+    dst->cpu_deferred_interrupt = C6510_INTERRUPT_NONE;
 
     dst->cia1.keyboard = NULL;
     dst->cia2.keyboard = NULL;
     cia_attach_port_input(&dst->cia1, src->cia1.port_input, dst);
     cia_attach_port_input(&dst->cia2, src->cia2.port_input, dst);
     dst->cpu.user = dst;
-    dst->drive8 = drive8;
-    dst->drive9 = drive9;
-    dst->drive8.c64 = dst;
-    dst->drive9.c64 = dst;
-    if ((dst->config.emulate_1541 && (dst->drive8.rom_loaded || dst->drive9.rom_loaded))) {
-        c1541_reset(&dst->drive8);
-        c1541_reset(&dst->drive9);
-    }
 
     move_drive_slot(&dst->drives[0], &src->drives[0]);
     move_drive_slot(&dst->drives[1], &src->drives[1]);
+
+    if (restore_1541_core) {
+        /* Host ROM bytes stay on dst; live drive state comes from src. */
+        apply_drive_core(&dst->drive8, &src->drive8, dst, &dst->drives[0]);
+        apply_drive_core(&dst->drive9, &src->drive9, dst, &dst->drives[1]);
+    } else {
+        /* Legacy v8 / deferred: keep host drive objects and hard-reset. */
+        dst->drive8 = drive8_host;
+        dst->drive9 = drive9_host;
+        dst->drive8.c64 = dst;
+        dst->drive9.c64 = dst;
+        c1541_rewire(&dst->drive8, dst);
+        c1541_rewire(&dst->drive9, dst);
+        if (dst->config.emulate_1541 && (dst->drive8.rom_loaded || dst->drive9.rom_loaded)) {
+            c1541_reset(&dst->drive8);
+            c1541_reset(&dst->drive9);
+        }
+    }
 }
 
-static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uint8_t *in, size_t in_len) {
+static bool read_snapshot_into_temp(
+    c64_t *temp,
+    const c64_t *current,
+    const uint8_t *in,
+    size_t in_len,
+    bool *out_restore_1541_core) {
     snapshot_reader top;
     snapshot_meta meta;
     parsed_chunks seen;
@@ -1054,9 +1449,13 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
     uint32_t header_size;
     uint32_t content_mode;
     uint32_t flags;
+    bool restore_1541_core;
 
     memset(&seen, 0, sizeof(seen));
     memset(&meta, 0, sizeof(meta));
+    if (out_restore_1541_core != NULL) {
+        *out_restore_1541_core = false;
+    }
 
     if (in == NULL || in_len < C64_SNAPSHOT_HEADER_SIZE) {
         return false;
@@ -1076,13 +1475,15 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
     (void)r_u32(&top);
     if (!top.ok ||
         magic != C64_SNAPSHOT_MAGIC ||
-        version != C64_SNAPSHOT_VERSION ||
+        version < C64_SNAPSHOT_VERSION_MIN ||
+        version > C64_SNAPSHOT_VERSION ||
         header_size < C64_SNAPSHOT_HEADER_SIZE ||
         header_size > in_len ||
         content_mode != C64_SNAPSHOT_CONTENT_REFERENCED) {
         return false;
     }
     top.pos = header_size;
+    restore_1541_core = snapshot_includes_1541_core(version, flags);
 
     c64_init(temp);
     memcpy(temp->bus.basic_rom, current->bus.basic_rom, sizeof(temp->bus.basic_rom));
@@ -1147,7 +1548,7 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
             seen.sid = chunk.ok;
             break;
         case TAG_MACH:
-            read_mach(&chunk, temp);
+            read_mach(&chunk, temp, version);
             seen.mach = chunk.ok;
             break;
         case TAG_CART:
@@ -1161,6 +1562,14 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
         case TAG_DRV9:
             read_drive(&chunk, &temp->drives[1]);
             seen.drv9 = chunk.ok;
+            break;
+        case TAG_DR8C:
+            read_drive_core(&chunk, &temp->drive8);
+            seen.drv8_core = chunk.ok;
+            break;
+        case TAG_DR9C:
+            read_drive_core(&chunk, &temp->drive9);
+            seen.drv9_core = chunk.ok;
             break;
         default:
             chunk.pos = chunk.len;
@@ -1182,8 +1591,14 @@ static bool read_snapshot_into_temp(c64_t *temp, const c64_t *current, const uin
         !seen.cart || !seen.drv8 || !seen.drv9) {
         return false;
     }
+    if (restore_1541_core && (!seen.drv8_core || !seen.drv9_core)) {
+        return false;
+    }
     if (meta.flags != flags || !meta_matches_loaded_roms(current, &meta)) {
         return false;
+    }
+    if (out_restore_1541_core != NULL) {
+        *out_restore_1541_core = restore_1541_core;
     }
     return true;
 }
@@ -1209,6 +1624,7 @@ size_t c64_snapshot_save(const c64_t *m, uint8_t *out, size_t out_cap) {
 bool c64_snapshot_load(c64_t *m, const uint8_t *in, size_t in_len) {
     c64_t *temp;
     bool ok;
+    bool restore_1541_core = false;
 
     if (m == NULL || in == NULL) {
         return false;
@@ -1219,14 +1635,18 @@ bool c64_snapshot_load(c64_t *m, const uint8_t *in, size_t in_len) {
         return false;
     }
 
-    ok = read_snapshot_into_temp(temp, m, in, in_len);
+    ok = read_snapshot_into_temp(temp, m, in, in_len, &restore_1541_core);
     if (!ok) {
+        c1541_destroy(&temp->drive8);
+        c1541_destroy(&temp->drive9);
         c64_unmount_all_drives(temp);
         free(temp);
         return false;
     }
 
-    apply_loaded_machine(m, temp);
+    apply_loaded_machine(m, temp, restore_1541_core);
+    c1541_destroy(&temp->drive8);
+    c1541_destroy(&temp->drive9);
     c64_unmount_all_drives(temp);
     free(temp);
     return true;

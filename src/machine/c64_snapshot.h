@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 #define C64_SNAPSHOT_MAGIC 0x63363453u
-#define C64_SNAPSHOT_VERSION 8u
+#define C64_SNAPSHOT_VERSION 9u
+#define C64_SNAPSHOT_VERSION_MIN 8u
 
 typedef enum c64_snapshot_content_mode {
     C64_SNAPSHOT_CONTENT_REFERENCED = 1,
@@ -17,7 +18,10 @@ typedef enum c64_snapshot_content_mode {
 enum {
     C64_SNAPSHOT_FLAG_EXTERNAL_ROMS_REQUIRED = 0x00000001u,
     C64_SNAPSHOT_FLAG_EXTERNAL_MEDIA_REFERENCES = 0x00000002u,
-    C64_SNAPSHOT_FLAG_1541_STATE_DEFERRED = 0x00000004u
+    /* Legacy v8: drive *object* not in the snapshot; load hard-resets drives. */
+    C64_SNAPSHOT_FLAG_1541_STATE_DEFERRED = 0x00000004u,
+    /* v9+: full 1541 CPU/VIA/RAM/media state present as DR8C/DR9C chunks. */
+    C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED = 0x00000008u
 };
 
 size_t c64_snapshot_size(const c64_t *m);

@@ -106,11 +106,31 @@ add_executable(test_c64_snapshot
 
 target_compile_features(test_c64_snapshot PRIVATE c_std_99)
 
+target_compile_definitions(test_c64_snapshot PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 target_link_libraries(test_c64_snapshot PRIVATE
     machine
 )
 
 add_test(NAME c64_snapshot COMMAND test_c64_snapshot)
+
+add_executable(test_c64_snapshot_1541_midload
+    tests/machine/test_c64_snapshot_1541_midload.c
+)
+
+target_compile_features(test_c64_snapshot_1541_midload PRIVATE c_std_99)
+
+target_compile_definitions(test_c64_snapshot_1541_midload PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_c64_snapshot_1541_midload PRIVATE
+    machine
+)
+
+add_test(NAME c64_snapshot_1541_midload COMMAND test_c64_snapshot_1541_midload)
 
 add_executable(test_sid
     tests/machine/test_sid.c

@@ -61,9 +61,11 @@ this is not broad commercial compatibility.
 ## Explicit limits
 
 G64 write-back, pure Port-A GCR write fidelity, cross-drive copy, block/memory
-commands, devices beyond 8/9, 1571/other ROM variants, full drive save-state, and
-exhaustive fast-loader support are deferred. Do not add machine-to-host file I/O;
-runtime owns flushing.
+commands, devices beyond 8/9, 1571/other ROM variants, and exhaustive fast-loader
+support are deferred. Full 1541 drive-object save-state is supported in snapshot
+format v9 (`DR8C`/`DR9C` chunks: CPU/VIA/RAM/media + verbatim GCR tracks) so a
+mid-transfer custom-loader snapshot can resume; v8 snapshots still hard-reset the
+drives on load. Do not add machine-to-host file I/O; runtime owns flushing.
 
 ## Practical workflows
 
