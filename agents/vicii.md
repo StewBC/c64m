@@ -185,11 +185,15 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   pixels left a 1px `$D020` delay stuck at x=0 across line edges (EoD
   top/bottom black bar purple stub). Mid-line `$D020`/`$D021` splits still use
   the one-pixel delay on visible columns. Because live spans are constructed in
-  `vicii_begin_cycle`, `vicii_finish_cycle` resolves a same-cycle CPU Phi2
-  `$D020` write into the two pending horizontal-border spans: dot zero of the
-  oldest span retains the prior colour, its remaining dots and the newer span
-  take the new colour. This mirrors VICE `draw_colors8()` resolving its buffered
-  colour tokens after CPU Phi2 and avoids adding an erroneous full 8-dot delay.
+  `vicii_begin_cycle`, `vicii_finish_cycle` resolves same-cycle CPU Phi2
+  `$D020` and `$D021` writes into the two pending horizontal-border spans: dot
+  zero of the oldest span retains the prior colour, its remaining dots and the
+  newer span take the new colour. `$D021` identity is retained only when B0C is
+  the winning composed layer, so a sprite pixel that happens to share its
+  palette value is not recoloured. This mirrors VICE `draw_colors8()` resolving
+  its buffered colour tokens after CPU Phi2 and avoids the erroneous full
+  8-dot delay that exposed old-background ghost fragments between lft-nine's
+  upper-border digits.
 - `reg11_delay` samples `$D011` at the end of `vicii_begin_cycle`, after this
   cycle's VIC fetches but before the CPU's same-cycle Phi2 write. A same-cycle
   CPU store therefore cannot affect the following cycle's g-fetch; it reaches

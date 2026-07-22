@@ -3373,6 +3373,51 @@ static void test_color_latency_resolves_same_cycle_phi2_d020_write(void) {
         TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
 }
 
+/* $D021 uses the same unresolved-colour-token ring as $D020 in VICE.  A
+   CPU-owned Phi2 store therefore leaves only the oldest pending dot on the old
+   background colour; the remaining buffered background dots resolve through
+   the new register value.  Nine relies on this exact one-pixel delay for six
+   colour splits on every Device raster line. */
+static void test_color_latency_resolves_same_cycle_phi2_d021_write(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs = 0;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, RAM charset $2000 */
+    c64_bus_write(&machine.bus, 0xd021, 0x02); /* red background */
+    /* A red sprite begins at x=65 on the sampled row.  It deliberately shares
+       the old B0C palette value but is not a D021 token and must stay red. */
+    setup_solid_sprite(&machine, 0, 0x0340, 65, 99, 2);
+
+    while (!(machine.vic.timing.raster_line == 100u &&
+             machine.vic.timing.cycle_in_line == 20u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+
+    /* Production order: VIC draw tokens, CPU Phi2 store, token resolution. */
+    vicii_begin_cycle(&machine.vic, &machine.bus, abs++);
+    c64_bus_write(&machine.bus, 0xd021, 0x05); /* green background */
+    vicii_finish_cycle(&machine.vic);
+
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("same-cycle Phi2 D021 frame",
+                vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    expect_u32("same-cycle Phi2 D021 keeps oldest pending dot old",
+        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + 56]);
+    expect_u32("same-cycle Phi2 D021 changes next pending dot",
+        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + 57]);
+    expect_u32("same-cycle Phi2 D021 changes newer pending span",
+        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + 64]);
+    expect_u32("same-cycle Phi2 D021 does not recolour matching sprite pixel",
+        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + 65]);
+}
+
 /* VICE draw_colors runs on every cycle, including HBLANK. A $D020 write at
    cycle 0 of a border line must drain its 1px color_latency before the first
    painted column (x=0 at cycle 12). Without HBLANK advances, x=0 kept the
@@ -3795,6 +3840,7 @@ int main(void) {
     test_expose_harness_renders_bitmap_and_metric();
     test_expose_harness_midline_injection_hits_exact_column();
     test_color_latency_resolves_same_cycle_phi2_d020_write();
+    test_color_latency_resolves_same_cycle_phi2_d021_write();
     test_color_latency_drains_during_hblank();
     test_expose_forced_badline_resets_row_counter();
     test_live_yscroll_shifts_content();

@@ -316,6 +316,7 @@ typedef struct vicii_border_geometry {
 typedef struct vicii_bg_pixel {
     uint32_t color;
     bool     foreground;
+    bool     color_is_d021;
 } vicii_bg_pixel;
 
 typedef struct vicii_sprite_pixel {
@@ -636,6 +637,16 @@ static inline vicii_bg_pixel vicii_bg_pixel_make(uint32_t color, bool foreground
 
     pixel.color = color;
     pixel.foreground = foreground;
+    pixel.color_is_d021 = false;
+    return pixel;
+}
+
+static inline vicii_bg_pixel vicii_bg_pixel_make_d021(uint32_t color, bool foreground) {
+    vicii_bg_pixel pixel;
+
+    pixel.color = color;
+    pixel.foreground = foreground;
+    pixel.color_is_d021 = true;
     return pixel;
 }
 
@@ -841,7 +852,7 @@ static inline vicii_bg_pixel vicii_idle_pixel_decoded(
     if (mcm && bmm) {
         uint8_t pair = (uint8_t)((g >> (6u - (phase & 6u))) & 3u);
         if (pair == 0u) {
-            return vicii_bg_pixel_make(b0c, false);
+            return vicii_bg_pixel_make_d021(b0c, false);
         }
         /* 01/10/11 → black via zero vbuf/cbuf; pairs 10/11 are "fg" for coll. */
         return vicii_bg_pixel_make(black, pair >= 2u);
@@ -857,7 +868,7 @@ static inline vicii_bg_pixel vicii_idle_pixel_decoded(
         if (g & bit) {
             return vicii_bg_pixel_make(black, true);
         }
-        return vicii_bg_pixel_make(b0c, false);
+        return vicii_bg_pixel_make_d021(b0c, false);
     }
 }
 
@@ -907,10 +918,10 @@ static inline vicii_bg_pixel vicii_border_gfx_pixel(
         case 3u:  return vicii_bg_pixel_make(b3c, false);
         default:  break;
         }
-        return vicii_bg_pixel_make(b0c, false);
+        return vicii_bg_pixel_make_d021(b0c, false);
     }
     /* Remaining valid modes (hires/MCM text, MCM bitmap) → COL_D021. */
-    return vicii_bg_pixel_make(b0c, false);
+    return vicii_bg_pixel_make_d021(b0c, false);
 }
 
 static vicii_bg_pixel vicii_idle_pixel(
@@ -1036,17 +1047,17 @@ static vicii_bg_pixel vicii_background_pixel_ex(
        replaces the previous YSCROLL-adjusted range check; for a static screen the
        active span is identical, but it now also tracks bad-line forcing. */
     if (!lc->display_active) {
-        return vicii_bg_pixel_make(b0c, false);
+        return vicii_bg_pixel_make_d021(b0c, false);
     }
 
     if (sx_raw < (uint32_t)xscroll) {
-        return vicii_bg_pixel_make(b0c, false);
+        return vicii_bg_pixel_make_d021(b0c, false);
     }
 
     sx = sx_raw - (uint32_t)xscroll;
     col = sx / 8u;
     if (col >= 40u) {
-        return vicii_bg_pixel_make(b0c, false);
+        return vicii_bg_pixel_make_d021(b0c, false);
     }
 
     /* Address generation is now counter-driven: the row within the character
@@ -1097,7 +1108,7 @@ static vicii_bg_pixel vicii_background_pixel_ex(
             if (glyph & bit) {
                 return vicii_bg_pixel_make(vicii_palette_argb[fg & 0x0fu], true);
             }
-            return vicii_bg_pixel_make(b0c, false);
+            return vicii_bg_pixel_make_d021(b0c, false);
         }
 
     case 1u:
@@ -1110,12 +1121,12 @@ static vicii_bg_pixel vicii_background_pixel_ex(
                 if (glyph & bit) {
                     return vicii_bg_pixel_make(vicii_palette_argb[color_nib & 0x0fu], true);
                 }
-                return vicii_bg_pixel_make(b0c, false);
+                return vicii_bg_pixel_make_d021(b0c, false);
             } else {
                 uint8_t pair = (uint8_t)((glyph >> (6u - (sx & 6u))) & 3u);
                 switch (pair) {
                 case 0u:
-                    return vicii_bg_pixel_make(b0c, false);
+                    return vicii_bg_pixel_make_d021(b0c, false);
                 case 1u:
                     return vicii_bg_pixel_make(b1c, true);
                 case 2u:
@@ -1143,7 +1154,7 @@ static vicii_bg_pixel vicii_background_pixel_ex(
             uint8_t pair = (uint8_t)((bdata >> (6u - (sx & 6u))) & 3u);
             switch (pair) {
             case 0u:
-                return vicii_bg_pixel_make(b0c, false);
+                return vicii_bg_pixel_make_d021(b0c, false);
             case 1u:
                 return vicii_bg_pixel_make(vicii_palette_argb[(vm_byte >> 4) & 0x0fu], true);
             case 2u:
@@ -1167,7 +1178,7 @@ static vicii_bg_pixel vicii_background_pixel_ex(
             }
 
             switch (ecm_sel) {
-            case 0u:  ecm_bg = b0c; break;
+            case 0u:  return vicii_bg_pixel_make_d021(b0c, false);
             case 1u:  ecm_bg = b1c; break;
             case 2u:  ecm_bg = b2c; break;
             default:  ecm_bg = b3c; break;
@@ -1244,9 +1255,13 @@ static uint32_t vicii_compose_pixel(
     bool vertical_border,
     uint32_t border_color,
     vicii_bg_pixel bg,
-    const vicii_sprite_pixel sprites[8])
+    const vicii_sprite_pixel sprites[8],
+    bool *out_color_is_d021)
 {
     int n;
+    if (out_color_is_d021 != NULL) {
+        *out_color_is_d021 = false;
+    }
     vicii_note_sprite_collisions(v, bg, sprites);
 
     if (main_border) {
@@ -1257,6 +1272,7 @@ static uint32_t vicii_compose_pixel(
     if (vertical_border) {
         bg.color = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
         bg.foreground = false;
+        bg.color_is_d021 = true;
     }
 
     for (n = 0; n < 8; n++) {
@@ -1266,6 +1282,9 @@ static uint32_t vicii_compose_pixel(
     }
 
     if (bg.foreground) {
+        if (out_color_is_d021 != NULL) {
+            *out_color_is_d021 = bg.color_is_d021;
+        }
         return bg.color;
     }
 
@@ -1275,6 +1294,9 @@ static uint32_t vicii_compose_pixel(
         }
     }
 
+    if (out_color_is_d021 != NULL) {
+        *out_color_is_d021 = bg.color_is_d021;
+    }
     return bg.color;
 }
 
@@ -1286,13 +1308,18 @@ static uint32_t vicii_live_pixel(
     uint32_t x,
     uint32_t y,
     bool main_border,
-    bool vertical_border)
+    bool vertical_border,
+    bool *out_color_is_d021)
 {
     uint32_t border_color = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
     uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
     vicii_bg_pixel bg;
     vicii_sprite_pixel sprites[8];
     int n;
+
+    if (out_color_is_d021 != NULL) {
+        *out_color_is_d021 = false;
+    }
 
     /* Paint from the line-latched row (sprite_visible), not from $D015.
        VICE's sprite_display_bits is sticky once set at the Y-match/display
@@ -1309,9 +1336,16 @@ static uint32_t vicii_live_pixel(
             return border_color;
         }
         if (vertical_border) {
+            if (out_color_is_d021 != NULL) {
+                *out_color_is_d021 = true;
+            }
             return b0c;
         }
-        return vicii_background_pixel_ex(v, bus, g, &prep->lc, prep, x, y).color;
+        bg = vicii_background_pixel_ex(v, bus, g, &prep->lc, prep, x, y);
+        if (out_color_is_d021 != NULL) {
+            *out_color_is_d021 = bg.color_is_d021;
+        }
+        return bg.color;
     }
 
     bg = vicii_background_pixel_ex(v, bus, g, &prep->lc, prep, x, y);
@@ -1330,7 +1364,8 @@ static uint32_t vicii_live_pixel(
         }
     }
 
-    return vicii_compose_pixel(v, main_border, vertical_border, border_color, bg, sprites);
+    return vicii_compose_pixel(v, main_border, vertical_border, border_color,
+        bg, sprites, out_color_is_d021);
 }
 
 /* VICE check_vborder_top: top compare + DEN clears both the latch and the
@@ -1486,7 +1521,8 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
                 v->hborder_pipe[1].content[k] =
                     vicii_live_pixel(v, bus, &g, &prep, x, y, false,
-                        v->vertical_border_active);
+                        v->vertical_border_active,
+                        &v->hborder_pipe[1].content_d021[k]);
 #ifdef C64M_VIC_TRACE
                 if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
                     y >= 40u && y <= 250u) {
@@ -2165,6 +2201,31 @@ void vicii_finish_cycle(vicii *v) {
         }
     }
 
+    /* $D021 is carried through the same unresolved-colour-token ring as
+       $D020 in VICE.  Preserve the identity of pixels whose winning layer is
+       COL_D021 so a same-cycle CPU Phi2 store can resolve those tokens here,
+       after composition but before the two pending spans are flushed.  Dot
+       zero of the oldest span has already crossed the 6569 one-pixel latency;
+       every later D021 token observes the new register value. */
+    {
+        uint8_t d021 =
+            (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+        if (d021 != v->color_pipe_d021) {
+            uint8_t i;
+            for (i = 1u; i < v->hborder_pipe[0].n; ++i) {
+                if (v->hborder_pipe[0].content_d021[i]) {
+                    v->hborder_pipe[0].content[i] = vicii_palette_argb[d021];
+                }
+            }
+            for (i = 0u; i < v->hborder_pipe[1].n; ++i) {
+                if (v->hborder_pipe[1].content_d021[i]) {
+                    v->hborder_pipe[1].content[i] = vicii_palette_argb[d021];
+                }
+            }
+            v->color_pipe_d021 = d021;
+        }
+    }
+
     /* XSCROLL pipe sample runs *after* this cycle's CPU Phi2 store (begin_cycle
        paints first, then the CPU, then finish_cycle).
        Only g-access cycles 15..54: never 0..14 (would pick up a still-live
@@ -2676,7 +2737,8 @@ static bool vicii_make_frame_snapshot_internal(
             }
 
             /* Snapshot path: hborder stands in for main_border_ff. */
-            pixel = vicii_compose_pixel(v, hborder, vborder, border_color, bg, sprites);
+            pixel = vicii_compose_pixel(v, hborder, vborder, border_color, bg,
+                sprites, NULL);
             out_frame->pixels[y * C64_FRAME_WIDTH + x] = pixel;
         }
     }

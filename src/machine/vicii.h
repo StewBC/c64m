@@ -191,6 +191,7 @@ struct vicii {
         uint8_t  n;
         uint32_t idx[8];
         uint32_t content[8];
+        bool     content_d021[8];
         uint32_t border[8];
     } hborder_pipe[2];
 };
