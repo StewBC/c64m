@@ -24,13 +24,25 @@ Phi2 schedule; frontend frames are copies.
   effects such as EoD's `FLIP`/`DISK` labels (they sit inside 16..287); a wider
   crop (the former rows 20..291) exposed lower-border content VICE hides - e.g.
   Deus Ex Machina's parked-pillar sprite-7 retract at raster 288 read as a
-  grey->black "dropout". Horizontally the PAL 384 crop keeps **framebuffer x =
-  VIC X** (24/40 left/right borders for the 320 display). A VICE-style +8 origin
-  (32/32, `VICII_SCREEN_PAL_NORMAL_*BORDERWIDTH = 0x20`) was tried in 9f1ea9e:
-  modular wrap of X 496..503 into frame x 0..7 broke EoD's black frame (parked
-  sprites / early-cycle colour pipes), and filling the pad by duplicating X=0..7
-  made the first checker column 2× wide under large blocks. Offset stays 0 until
-  a pad model matches VICE without those defects (`VICII_PAL_FRAME_X_OFFSET`).
+  grey->black "dropout". Horizontally **framebuffer x = VIC X** everywhere: the
+  pixel buffer is the full raster line (`C64_FRAME_PAL_WIDTH` 504 /
+  `C64_FRAME_NTSC_WIDTH` 520, array stride `C64_FRAME_WIDTH`), so no origin
+  offset or machine-side crop exists to get wrong. `frame->width` is the
+  standard's line length and is **not** the row pitch - index rows by
+  `C64_FRAME_WIDTH` or `stride_bytes`.
+
+  Only part of that line is composed so far: `VICII_PAINT_DOTS` (384) columns
+  from VIC X 0, with the rest left at the frame's border fill. Painting X
+  384..503 means running `vicii_live_pixel` - and its collision latching - on
+  cycles it has never run on, so widening it is gated on a dot-for-dot compare
+  against VICE's per-line draw buffer (`VICII_DRAW_BUFFER_SIZE = 65*8`, the same
+  full-line shape). The PAL frontend crop is still X 0..383, giving 24/40
+  left/right borders. A VICE-style 32/32 window (`VICII_SCREEN_PAL_NORMAL_*
+  BORDERWIDTH = 0x20`) needs VIC X 496..503 as its left 8 columns - those are
+  now representable in the buffer but not yet painted. 9f1ea9e tried to reach
+  32/32 by shifting the *origin* instead (modular +8), which both invented a
+  left band and dropped X 376..383; it broke EoD's black frame and is not the
+  route to retry (`pal-border.md`).
   NTSC crop is 352x224 from X=8, Y=39 (rows 39..262). The display window is
   51..250 on both standards, so NTSC has only 12 border lines below it; the
   224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
@@ -223,8 +235,8 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   closed side border is overridden by the main flip-flop at flush. See
   `test_live_mcm_toggle_reaches_column0_same_cycle` and `dem-handoff.md`.
 - Live paint advances `color_pipe_d020` / `color_pipe_d021` once per VIC **dot**
-  of every cycle, including HBLANK dots that are not written into the 384-px
-  frame (VICE `draw_colors` runs for every cycle). Sampling only on painted
+  of every cycle, including dots outside `VICII_PAINT_DOTS` that are not written
+  into the frame (VICE `draw_colors` runs for every cycle). Sampling only on painted
   pixels left a 1px `$D020` delay stuck at x=0 across line edges (EoD
   top/bottom black bar purple stub). Mid-line `$D020`/`$D021` splits still use
   the one-pixel delay on visible columns. Because live spans are constructed in

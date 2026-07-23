@@ -259,7 +259,8 @@ static bool r_frame_geometry_ok(const c64_frame *frame) {
         frame->stride_bytes == 0u && frame->pixel_format == 0u) {
         return true;
     }
-    return frame->width == (uint32_t)C64_FRAME_WIDTH &&
+    return (frame->width == (uint32_t)C64_FRAME_PAL_WIDTH ||
+            frame->width == (uint32_t)C64_FRAME_NTSC_WIDTH) &&
         frame->height > 0u &&
         frame->height <= (uint32_t)C64_FRAME_HEIGHT &&
         frame->stride_bytes ==

@@ -97,7 +97,7 @@ static void reset_machine_with_roms_standard(c64_t *machine, const c64_rom_set *
 
     c64_init(machine);
 
-    /* PAL is the canonical video standard for most tests: the 384×PAL-height pixel
+    /* PAL is the canonical video standard for most tests: the PAL-height pixel
        buffer matches PAL dimensions and border compare values (top=51, left=24).
        Targeted NTSC tests opt in through reset_machine_with_standard(). */
     memset(&cfg, 0, sizeof(cfg));
@@ -428,7 +428,7 @@ static void test_frame_snapshot_geometry_and_regions(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x05);
 
     expect_true("make frame", c64_make_frame_snapshot(&machine, &frame));
-    expect_u32("frame width", C64_FRAME_WIDTH, frame.width);
+    expect_u32("frame width", C64_FRAME_PAL_WIDTH, frame.width);
     expect_u32("frame height", C64_FRAME_HEIGHT, frame.height);
     expect_u32("frame stride", C64_FRAME_WIDTH * sizeof(frame.pixels[0]), frame.stride_bytes);
     expect_u32("frame format", C64_FRAME_PIXEL_FORMAT_ARGB8888, frame.pixel_format);

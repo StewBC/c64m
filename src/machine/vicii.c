@@ -76,6 +76,17 @@ enum {
        wrong colour-pipe state or duplicated X=0..7 (2× first checker column on
        EoD). Leave 0 until a pad model matches VICE without those defects. */
     VICII_PAL_FRAME_X_OFFSET    = 0,
+
+    /* Dots per line the renderer actually composes, starting at VIC X 0.
+
+       The framebuffer is now the full raster line, but paint deliberately still
+       stops at the historical 384-column window. Composing X 384..503 would run
+       vicii_live_pixel over cycles it has never run on - and that call also
+       drives sprite-sprite/sprite-background collision latching, so switching it
+       on is a machine-state change, not just extra pixels. Widening this to the
+       full line is its own step, gated on a dot-for-dot compare against VICE's
+       per-line draw buffer. Until then, columns past this stay border fill. */
+    VICII_PAINT_DOTS            = 384,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -146,6 +157,16 @@ static uint32_t vicii_line_dots(const vicii *v) {
     return v->timing.cycles_per_line * (uint32_t)VICII_CHARACTER_WIDTH;
 }
 
+/* Published frame width: the standard's real line length, clamped to the buffer.
+   This is NOT the row pitch - the pixel array is always C64_FRAME_WIDTH wide so
+   one shape serves both standards (same split as vicii_frame_height above). */
+static uint32_t vicii_frame_width(const vicii *v) {
+    uint32_t dots = vicii_line_dots(v);
+
+    assert(v);
+    return dots < C64_FRAME_WIDTH ? dots : (uint32_t)C64_FRAME_WIDTH;
+}
+
 /* Horizontal framebuffer origin relative to VIC X. Decouples paint landing
    from VIC-X semantics (border compares, sprites, XSCROLL) so the 384 crop can
    be VICE-centred without changing hardware X constants. */
@@ -156,8 +177,9 @@ static int32_t vicii_frame_x_offset(const vicii *v) {
     return 0;
 }
 
-/* VIC X → framebuffer x, or -1 if outside the 384 crop. With offset 0 this is
-   identity for on-screen columns. */
+/* VIC X → framebuffer x, or -1 if outside the painted window. With offset 0 this
+   is identity. The bound is VICII_PAINT_DOTS, not the buffer width: the buffer
+   holds the whole raster line, but only the painted window is composed. */
 static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
     int32_t dots = (int32_t)vicii_line_dots(v);
     int32_t fb;
@@ -166,7 +188,7 @@ static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
         vic_x += dots;
     }
     fb = vic_x + vicii_frame_x_offset(v);
-    if (fb < 0 || fb >= (int32_t)C64_FRAME_WIDTH) {
+    if (fb < 0 || fb >= (int32_t)VICII_PAINT_DOTS) {
         return -1;
     }
     return fb;
@@ -183,10 +205,10 @@ static uint32_t vicii_frame_x_to_vic_x(const vicii *v, uint32_t fb_x) {
     return (uint32_t)vic;
 }
 
-static void vicii_prepare_frame(c64_frame *frame, uint32_t height, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
+static void vicii_prepare_frame(c64_frame *frame, uint32_t width, uint32_t height, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
     assert(frame);
 
-    frame->width = C64_FRAME_WIDTH;
+    frame->width = width;
     frame->height = height;
     frame->stride_bytes = C64_FRAME_WIDTH * sizeof(frame->pixels[0]);
     frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
@@ -211,7 +233,7 @@ static void vicii_begin_live_frame(vicii *v) {
        $D021-coloured band under a $D020-coloured boot screen. */
     fill_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     fill_color = vicii_palette_argb[fill_index];
-    vicii_prepare_frame(&v->working_frame, vicii_frame_height(v), v->timing.frame_number, 0, fill_color);
+    vicii_prepare_frame(&v->working_frame, vicii_frame_width(v), vicii_frame_height(v), v->timing.frame_number, 0, fill_color);
     /* Do NOT reset the vertical border flip-flop here. On real hardware it is
        only toggled by the top/bottom RSEL compares, so a program that dodges the
        bottom compare (the classic "open the border" trick) keeps the border open
@@ -2838,7 +2860,7 @@ static bool vicii_make_frame_snapshot_internal(
     border_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
     border_color = vicii_palette_argb[border_index];
 
-    out_frame->width        = C64_FRAME_WIDTH;
+    out_frame->width        = vicii_frame_width(v);
     out_frame->height       = vicii_frame_height(v);
     out_frame->stride_bytes = C64_FRAME_WIDTH * sizeof(out_frame->pixels[0]);
     out_frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
@@ -2861,7 +2883,7 @@ static bool vicii_make_frame_snapshot_internal(
 
         vicii_snapshot_sprite_line(v, bus, y, spr_rows);
 
-        for (uint32_t fb_x = 0; fb_x < C64_FRAME_WIDTH; fb_x++) {
+        for (uint32_t fb_x = 0; fb_x < VICII_PAINT_DOTS; fb_x++) {
             vicii_bg_pixel bg;
             vicii_sprite_pixel sprites[8];
             uint32_t pixel;

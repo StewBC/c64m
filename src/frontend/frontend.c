@@ -39,7 +39,9 @@ enum {
        it - notably Deus Ex Machina's parked pillar, whose sprite-7 lower-border
        retract at raster 288 sits just past line 287 and so is not shown (a wider
        viewport exposed a grey->black "dropout" that VICE crops away). The full
-       384-pixel paint width preserves the near-4:3 PAR-corrected presentation. */
+       384-column crop preserves the near-4:3 PAR-corrected presentation. The
+       machine buffer is wider (a full raster line); this window selects VIC X
+       0..383, which is why crop_x is 0 and framebuffer x = VIC X. */
     FRONTEND_DISPLAY_PAL_CROP_X = 0,
     FRONTEND_DISPLAY_PAL_CROP_Y = 16,
     FRONTEND_DISPLAY_PAL_CROP_W = 384,
@@ -8136,7 +8138,9 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         return false;
     }
 
-    if (frame->width != C64_FRAME_WIDTH ||
+    /* width is the standard's line length (PAL 504 / NTSC 520); the row pitch is
+       always C64_FRAME_WIDTH, which is why the stride check is not width-based. */
+    if ((frame->width != C64_FRAME_PAL_WIDTH && frame->width != C64_FRAME_NTSC_WIDTH) ||
         (frame->height != C64_FRAME_PAL_HEIGHT && frame->height != C64_FRAME_NTSC_HEIGHT) ||
         frame->stride_bytes != C64_FRAME_WIDTH * sizeof(frame->pixels[0]) ||
         frame->pixel_format != C64_FRAME_PIXEL_FORMAT_ARGB8888) {

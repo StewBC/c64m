@@ -215,13 +215,13 @@ static void prepare_interesting_state(c64_t *machine) {
        writes all four fields together, so a frame carrying a width but a zero
        stride/format is a shape no real machine holds - and the snapshot reader
        now rejects it. */
-    machine->vic.working_frame.width = C64_FRAME_WIDTH;
+    machine->vic.working_frame.width = C64_FRAME_PAL_WIDTH;
     machine->vic.working_frame.height = C64_FRAME_HEIGHT;
     machine->vic.working_frame.stride_bytes =
         C64_FRAME_WIDTH * sizeof(machine->vic.working_frame.pixels[0]);
     machine->vic.working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     machine->vic.working_frame.pixels[17] = 0xff112233u;
-    machine->vic.completed_frame.width = C64_FRAME_WIDTH;
+    machine->vic.completed_frame.width = C64_FRAME_PAL_WIDTH;
     machine->vic.completed_frame.height = C64_FRAME_HEIGHT;
     machine->vic.completed_frame.stride_bytes =
         C64_FRAME_WIDTH * sizeof(machine->vic.completed_frame.pixels[0]);
@@ -491,7 +491,8 @@ static size_t find_frame_header(const uint8_t *snapshot, size_t size) {
         uint32_t stride = read_le32(snapshot + offset + 8);
         uint32_t format = read_le32(snapshot + offset + 12);
 
-        if (width == (uint32_t)C64_FRAME_WIDTH &&
+        if ((width == (uint32_t)C64_FRAME_PAL_WIDTH ||
+             width == (uint32_t)C64_FRAME_NTSC_WIDTH) &&
             height > 0u && height <= (uint32_t)C64_FRAME_HEIGHT &&
             stride == (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t) &&
             format == (uint32_t)C64_FRAME_PIXEL_FORMAT_ARGB8888) {
@@ -510,6 +511,9 @@ static void test_reject_frame_geometry_mismatch(void) {
     uint8_t *snapshot;
     size_t snapshot_size;
     size_t header;
+    uint32_t original_width;
+    uint32_t original_height;
+    uint32_t original_stride;
 
     init_ready_machine(&source);
     init_ready_machine(&target);
@@ -520,25 +524,27 @@ static void test_reject_frame_geometry_mismatch(void) {
     if (header == 0) {
         fail("frame header not found in snapshot");
     }
+    original_width = read_le32(snapshot + header);
+    original_height = read_le32(snapshot + header + 4);
+    original_stride = read_le32(snapshot + header + 8);
 
-    write_le32(snapshot + header, (uint32_t)C64_FRAME_WIDTH + 8u);
+    write_le32(snapshot + header, original_width + 8u);
     expect_false("reject frame width mismatch",
                  c64_snapshot_load(&target, snapshot, snapshot_size));
 
-    write_le32(snapshot + header, (uint32_t)C64_FRAME_WIDTH);
-    write_le32(snapshot + header + 8,
-               (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t) + 32u);
+    write_le32(snapshot + header, original_width);
+    write_le32(snapshot + header + 8, original_stride + 32u);
     expect_false("reject frame stride mismatch",
                  c64_snapshot_load(&target, snapshot, snapshot_size));
 
-    write_le32(snapshot + header + 8, (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t));
+    write_le32(snapshot + header + 8, original_stride);
     write_le32(snapshot + header + 4, (uint32_t)C64_FRAME_HEIGHT + 1u);
     expect_false("reject frame height overflow",
                  c64_snapshot_load(&target, snapshot, snapshot_size));
 
     /* Restoring every field makes it load again, proving the rejections came
        from the geometry check and not from collateral damage to the buffer. */
-    write_le32(snapshot + header + 4, (uint32_t)C64_FRAME_HEIGHT);
+    write_le32(snapshot + header + 4, original_height);
     expect_true("accept repaired frame header",
                 c64_snapshot_load(&target, snapshot, snapshot_size));
     assert_restored_state(&target);
@@ -916,10 +922,19 @@ static void init_real_rom_machine(c64_t *machine, int emulate_1541) {
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
 }
 
-static void test_legacy_v8_fixture_loads(void) {
+/* v10 widened the framebuffer, so pre-v10 files carry a frame that cannot be
+   reconstructed into the current buffer. They are sunset, not migrated: the
+   header version check must reject them and leave the machine untouched. The v8
+   fixture is kept as the evidence that the rejection is real rather than a
+   constant nobody exercises. */
+static void test_legacy_versions_rejected(void) {
     c64_t machine;
     uint8_t *fixture;
+    uint8_t *before;
+    uint8_t *after;
     size_t fixture_size;
+    size_t before_size;
+    size_t after_size;
     char path[512];
     uint32_t version;
 
@@ -929,11 +944,20 @@ static void test_legacy_v8_fixture_loads(void) {
     version = (uint32_t)fixture[4] | ((uint32_t)fixture[5] << 8) | ((uint32_t)fixture[6] << 16) |
               ((uint32_t)fixture[7] << 24);
     expect_u64("fixture version 8", 8, version);
+    expect_true("fixture predates the minimum", version < C64_SNAPSHOT_VERSION_MIN);
 
     init_real_rom_machine(&machine, 0);
-    expect_true("load legacy v8 fixture", c64_snapshot_load(&machine, fixture, fixture_size));
+    before = save_snapshot(&machine, &before_size);
+    expect_false("reject legacy v8 fixture",
+                 c64_snapshot_load(&machine, fixture, fixture_size));
+    after = save_snapshot(&machine, &after_size);
+    if (before_size != after_size || memcmp(before, after, before_size) != 0) {
+        fail("rejected legacy load changed the machine");
+    }
 
     free(fixture);
+    free(before);
+    free(after);
     c64_unmount_all_drives(&machine);
 }
 
@@ -1081,7 +1105,7 @@ int main(void) {
     test_reject_rom_hash_mismatch();
     test_reject_mid_instruction_state();
     test_1541_core_round_trip();
-    test_legacy_v8_fixture_loads();
+    test_legacy_versions_rejected();
     test_synthetic_v9_deferred_resets_drives();
     test_load_clears_host_micro_state();
     return 0;

@@ -68,15 +68,19 @@ reads use `c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, 
 ## Save states
 
 `c64_snapshot.{c,h}` provides a versioned, chunked, all-or-nothing machine
-serializer (format version 9). It includes CPU, RAM/color RAM, banking, VIC-II, CIA,
+serializer (format version 10). It includes CPU, RAM/color RAM, banking, VIC-II, CIA,
 SID, controls, cartridge, D64/G64 drive-slot data, and — when real 1541 emulation is
 on with a drive ROM loaded — full live 1541 drive-object state (CPU including mid-
 instruction micro fields, both VIAs, 2 KiB RAM, media scalars, and verbatim GCR
 track buffers) plus `clock.drive_accum` / `drive_synced_cycle`. C64 ROM bytes are
 referenced and hash-validated; 1541 ROM bytes stay host-side (not embedded).
 SDL/frontend/runtime state, CLI loading, and self-contained ROM/media embedding are
-not part of the format. Version-8 snapshots still load: drive objects hard-reset as
-before.
+not part of the format. Versions 9 and earlier are **sunset**: v10 widened the
+VIC-II framebuffer to the full raster line, so an older file's frame cannot be
+reconstructed without inventing columns it never captured. `VERSION_MIN` moved up
+with `VERSION` and the header check rejects them, leaving the machine untouched
+(`test_legacy_versions_rejected`). The v8 deferred-drive-state flag path is still
+in the reader but is now unreachable.
 
 Stored VIC-II frames carry their own geometry header (width, height, stride,
 format) and the reader validates it against this build's `c64_frame` before

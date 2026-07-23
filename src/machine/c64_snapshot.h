@@ -7,8 +7,14 @@
 #include <stdint.h>
 
 #define C64_SNAPSHOT_MAGIC 0x63363453u
-#define C64_SNAPSHOT_VERSION 9u
-#define C64_SNAPSHOT_VERSION_MIN 8u
+/* v10 widened the VIC-II framebuffer from a 384-px crop to the full raster line
+   (C64_FRAME_WIDTH), which changes both the stored frame geometry and the pixel
+   payload size. Nothing in a v9-or-earlier file can be reinterpreted into the
+   new buffer without inventing the columns that were never captured, so those
+   versions are sunset rather than migrated: VERSION_MIN moves up with VERSION
+   and the existing header check rejects them cleanly. */
+#define C64_SNAPSHOT_VERSION 10u
+#define C64_SNAPSHOT_VERSION_MIN 10u
 
 typedef enum c64_snapshot_content_mode {
     C64_SNAPSHOT_CONTENT_REFERENCED = 1,

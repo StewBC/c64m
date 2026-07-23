@@ -114,8 +114,9 @@ static void reset_machine(c64_t *machine, const c64_rom_set *roms) {
 
     c64_init(machine);
 
-    /* PAL is the canonical video standard for all tests: the 384×272 pixel
-       buffer matches PAL dimensions and border compare values (top=51, left=24). */
+    /* PAL is the canonical video standard for all tests: the 384×272 display
+       crop matches PAL border compare values (top=51, left=24). Sample points
+       below are VIC X, which is also framebuffer x. */
     cfg.video_standard = C64_VIDEO_STANDARD_PAL;
     c64_set_config(machine, &cfg);
 

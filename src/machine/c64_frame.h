@@ -3,7 +3,21 @@
 #include <stdint.h>
 
 enum {
-    C64_FRAME_WIDTH = 384,
+    /* Paint width equals the full VIC-II raster line: every dot the chip clocks
+       out, HBLANK included (6569: 63 cycles x 8 = 504; 6567: 65 x 8 = 520). The
+       buffer therefore holds the whole line in VIC-X order with no crop and no
+       origin offset - framebuffer x IS VIC X, for every x. Windowing is entirely
+       a frontend decision, which is what keeps the left border (VIC X 496..503
+       on PAL, chronologically just before the wrap to 0) representable at all.
+       This mirrors VICE's per-line draw buffer (VICII_DRAW_BUFFER_SIZE = 65*8),
+       so a c64m line and a VICE line are directly comparable dot for dot. */
+    C64_FRAME_PAL_WIDTH = 504,
+    C64_FRAME_NTSC_WIDTH = 520,
+    /* Row stride of the pixel array: the longer of the two lines, so one buffer
+       shape serves both standards. frame->width carries the standard's real
+       line length and is NOT the row pitch - index rows by C64_FRAME_WIDTH (or
+       frame->stride_bytes), never by frame->width. */
+    C64_FRAME_WIDTH = C64_FRAME_NTSC_WIDTH,
     /* PAL paint height equals the full VIC-II raster (6569: 312 lines, 0..311).
        Timing and paint coverage match so demo/border effects are never clipped
        by a short pixel buffer. Frontend still crops for normal display.

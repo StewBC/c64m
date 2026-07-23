@@ -102,11 +102,13 @@ static void write_ppm(const char *path, const c64_frame *frame) {
     if (file == NULL) {
         fail("failed to create capture");
     }
+    /* frame->width is the standard's line length, not the row pitch: rows are
+       always C64_FRAME_WIDTH apart (see c64_frame.h). */
     fprintf(file, "P6\n%u %u\n255\n", frame->width, frame->height);
     for (y = 0; y < frame->height; ++y) {
         uint32_t x;
         for (x = 0; x < frame->width; ++x) {
-            uint32_t argb = frame->pixels[y * frame->width + x];
+            uint32_t argb = frame->pixels[y * C64_FRAME_WIDTH + x];
             fputc((int)((argb >> 16) & 0xffu), file);
             fputc((int)((argb >> 8) & 0xffu), file);
             fputc((int)(argb & 0xffu), file);
@@ -366,10 +368,10 @@ live_capture:
             }
             /* Mono-column scan on this frame */
             for (x = 0; x < 64; x++) {
-                uint32_t first = frame.pixels[60 * (int)frame.width + x];
+                uint32_t first = frame.pixels[60 * C64_FRAME_WIDTH + x];
                 int mono = 1;
                 for (y = 52; y < 245; y++) {
-                    if (frame.pixels[y * (int)frame.width + x] != first) {
+                    if (frame.pixels[y * C64_FRAME_WIDTH + x] != first) {
                         mono = 0;
                         break;
                     }
