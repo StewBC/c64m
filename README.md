@@ -81,6 +81,8 @@ In particular, the agents used the following resources extensively during the de
   * *Arkanoid: Revenge of Doh* by Taito.
   * *Fort Apocalypse* by Steve Hales and Joe Vierra, published by Synapse Software.
 
+* Special thanks to StatMat for the *OneLoad64* Games Collection.
+
 Thank you all for your magnificent contributions.
 
 Stefan Wessels  
