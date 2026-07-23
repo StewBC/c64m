@@ -84,6 +84,12 @@ Component handoffs:
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
 - `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
   (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
+- `pal-border.md` - **resolved case study**, not an open problem. How the PAL
+  32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
+  for months. Read it before any c64m-vs-VICE pixel comparison: it carries the
+  VIC-II **model-matching** trap (VICE defaults to 8565, c64m models 6569, ~8
+  dots apart in the border region) that produced two confident wrong answers,
+  plus the binary-monitor snapshot-load and frame-publishing recipes.
 
 Current baseline is 52/52 passing (includes `c64_snapshot_1541_midload`). That
 baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541
