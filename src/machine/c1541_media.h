@@ -72,6 +72,9 @@ typedef struct c1541_media {
     int write_bits_left;  /* remaining bits of current write byte (0 = need latch) */
     uint8_t write_shift;  /* bits still to write, MSB first */
     int last_write_bit;   /* held while waiting for next Port A write */
+    /* Remaining hold-1 stream advances for DOS SYNC pad (ROM: STA $FF + 5×BVC).
+       Counts down only while writing; 0 disables hold-1 stream advance (data). */
+    int write_sync_hold_left;
 
     /* Flux store indexed by (half_track - MIN): [0]=1.0, [1]=1.5, ... */
     c1541_track halves[C1541_MEDIA_HALF_SLOTS];
@@ -98,7 +101,8 @@ int c1541_media_build_from_d64(
     const uint8_t *image_bytes,
     size_t image_size);
 
-/* Attach raw GCR half-tracks from a parsed G64 image (read-only host mount). */
+/* Attach raw GCR half-tracks from a parsed G64 image.
+   Host write-back is separate (c1541_media_sync_dirty_to_g64 when writable). */
 int c1541_media_build_from_g64(
     c1541_media *m,
     const uint8_t *image_bytes,
@@ -138,6 +142,14 @@ int c1541_media_rebuild_track(struct c1541 *drive, uint8_t track);
 
 /* Decode dirty GCR tracks back into the mounted D64 image_bytes; marks dirty. */
 int c1541_media_sync_dirty_to_d64(struct c1541 *drive);
+
+/* Export dirty G64 half-tracks into slot->image_bytes (host mirror only).
+   Live halves[] are never rotated; export may phase-normalize the host payload.
+   Coheres built_from_seq so ensure_tracks does not rebuild from the snapshot. */
+int c1541_media_sync_dirty_to_g64(struct c1541 *drive);
+
+/* Dispatch Stage A: D64 sector mirror or G64 flux export. */
+int c1541_media_sync_dirty(struct c1541 *drive);
 
 /* Invalidate synthesised tracks (e.g. after mount/unmount). */
 void c1541_media_invalidate(c1541_media *m);

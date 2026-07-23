@@ -54,18 +54,44 @@ stream perfect, so only the depacked output was wrong.
 
 `[disk] media_1541=1` requires `emulate_1541=1`. It provides D64-to-GCR track
 synthesis, rotation/SYNC/BYTE READY, disk VIA motor/stepper/WPS behavior, physical
-read, hybrid write/format, and read-only G64 mounting. The validated fast-loader
-matrix includes Arkanoid V-MAX PAL dumps and Robocop NTSC load-to-game byte checks;
-this is not broad commercial compatibility.
+read, hybrid write/format on D64, and G64 mounting with optional flux write-back.
+The validated fast-loader matrix includes Arkanoid V-MAX PAL dumps and Robocop
+NTSC load-to-game byte checks; this is not broad commercial compatibility.
+
+### G64 write-back (Phase 1)
+
+G64 mounts are read-only by default; `c64_set_drive_writable` (or the mount
+writable flag via runtime) enables writing. Requires `media_1541` for a useful
+path (no sector map / no KERNAL-trap SAVE into G64).
+
+- **Physical path only:** with media active, job WRITE is not intercepted for
+  G64 (ROM Port-A write). RO or media-off reports write-protect.
+- **Live vs host:** `halves[].data` is the live bit ring; `slot->image_bytes` is
+  the host G64 blob. Stage A export is **copy-only** — the live ring is never
+  phase-rotated.
+- **Stage A triggers:** leave write gate, seek-off-dirty (stepper leaves a
+  dirty half-track), unmount, and media path disable. Coheres
+  `built_from_seq = image_content_seq` so `ensure_tracks` does not rebuild live
+  halves from a rotated host snapshot.
+- **Export phase:** if a stable SYNC (≥10 ones) is found, host payload is
+  rotated so byte 0 is that SYNC start; otherwise unrotated pack of the live
+  ring. Length-preserving in-place patch only (no empty-slot grow / format
+  rebuild yet).
+- **Stage B:** existing runtime dirty flush writes `image_bytes` to the host
+  path (same as D64).
+- **Half-tracks:** G64/`halves[84]` map tracks 1.0…42.5 (indices 0…83). Media
+  head steps 2…84 → indices 0…82 (through 42.0); slot 83 is file storage for
+  42.5. Stage A walks all 84 dirty slots.
 
 ## Explicit limits
 
-G64 write-back, pure Port-A GCR write fidelity, cross-drive copy, block/memory
-commands, devices beyond 8/9, 1571/other ROM variants, and exhaustive fast-loader
-support are deferred. Full 1541 drive-object save-state is supported in snapshot
-format v9 (`DR8C`/`DR9C` chunks: CPU/VIA/RAM/media + verbatim GCR tracks) so a
-mid-transfer custom-loader snapshot can resume; v8 snapshots still hard-reset the
-drives on load. Do not add machine-to-host file I/O; runtime owns flushing.
+G64 empty-track grow / format rebuild, pure Port-A GCR write fidelity polish,
+cross-drive copy, block/memory commands, devices beyond 8/9, 1571/other ROM
+variants, and exhaustive fast-loader support are deferred. Full 1541 drive-object
+save-state is supported in snapshot format v9 (`DR8C`/`DR9C` chunks: CPU/VIA/RAM/
+media + verbatim GCR tracks) so a mid-transfer custom-loader snapshot can resume;
+v8 snapshots still hard-reset the drives on load. Do not add machine-to-host file
+I/O; runtime owns flushing.
 
 ## Practical workflows
 

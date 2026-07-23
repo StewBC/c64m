@@ -369,7 +369,7 @@ static void test_build_from_g64(void) {
     printf("PASS: test_build_from_g64\n");
 }
 
-static void test_mount_g64_readonly(void) {
+static void test_mount_g64_default_readonly_can_enable_write(void) {
     static c64_t c64;
     size_t sz;
     uint8_t *g = make_min_g64(&sz);
@@ -382,12 +382,304 @@ static void test_mount_g64_readonly(void) {
     {
         const c64_drive_slot *slot = c64_get_drive_slot(&c64, 8);
         if (!slot->mounted || slot->image_kind != C64_DRIVE_IMAGE_G64) fail("kind");
-        if (slot->writable) fail("g64 should be read-only");
-        if (c64_set_drive_writable(&c64, 8, true)) fail("cannot force writable");
-        if (slot->writable) fail("still writable");
+        if (slot->writable) fail("g64 should be read-only by default");
+        if (!c64_set_drive_writable(&c64, 8, true)) fail("should allow writable");
+        if (!slot->writable) fail("writable not set");
+        if (!c64_set_drive_writable(&c64, 8, false)) fail("should allow RO again");
+        if (slot->writable) fail("should be RO again");
     }
     c64_unmount_drive(&c64, 8);
-    printf("PASS: test_mount_g64_readonly\n");
+    printf("PASS: test_mount_g64_default_readonly_can_enable_write\n");
+}
+
+/* G64 with track1: 8 bytes of 0x00 then 56 bytes of 0xFF (SYNC not at phase 0). */
+static uint8_t *make_g64_offset_sync(size_t *out_size) {
+    uint8_t *b = make_min_g64(out_size);
+    const size_t track_off = 0x2ACu;
+    memset(b + track_off + 2, 0x00, 8);
+    memset(b + track_off + 2 + 8, 0xFF, 56);
+    return b;
+}
+
+/* G64 with track1: all 0xAA — no run of ≥10 ones (no stable SYNC). */
+static uint8_t *make_g64_no_sync(size_t *out_size) {
+    uint8_t *b = make_min_g64(out_size);
+    const size_t track_off = 0x2ACu;
+    memset(b + track_off + 2, 0xAA, 64);
+    return b;
+}
+
+static void g64_write_paint_and_leave(c1541 *drive, uint8_t write_byte) {
+    uint32_t i;
+
+    drive->media.half_track = 2; /* track 1.0 */
+    drive->media.motor_on = 1;
+    drive->media.motor_ready = 1;
+    drive->via2.ddrb = 0x64u;
+    drive->via2.orb = 0x64u;
+    drive->via2.ddra = 0xFFu;
+    drive->via2.pcr = 0xC0u;
+    drive->media.head_bit_pos = 0;
+
+    c1541_media_step(drive);
+    if (!drive->media.writing) fail("not in write mode");
+    c1541_media_on_port_a_write(drive, write_byte);
+    for (i = 0; i < 2000u; ++i) {
+        c1541_media_step(drive);
+        if (drive->media.halves[0].dirty) {
+            break;
+        }
+    }
+    if (!drive->media.halves[0].dirty) fail("track not dirty after paint");
+
+    /* Leave write gate → Stage A export. */
+    drive->via2.ddra = 0x00u;
+    c1541_media_step(drive);
+    if (drive->media.writing) fail("still writing after leave");
+}
+
+static void test_g64_writeback_rotate_export_not_live(void) {
+    static c64_t c64;
+    static c1541 drive;
+    size_t sz;
+    uint8_t *g = make_g64_offset_sync(&sz);
+    c64_drive_slot *slot;
+    uint8_t live0_before;
+    uint8_t host0_before;
+    const size_t track_payload = 0x2ACu + 2u;
+    uint32_t seq_before;
+    uint8_t *live_ptr;
+
+    c64_init(&c64);
+    c64.config.emulate_1541 = 1;
+    c64.config.media_1541 = 1;
+    c1541_init(&drive, &c64, 8);
+    drive.rom_loaded = 1;
+    drive.media.enabled = 1;
+
+    if (c64_mount_g64(&c64, 8, g, sz, "offs.g64") != C64_DRIVE_STATUS_OK) {
+        fail("mount");
+    }
+    free(g);
+    if (!c64_set_drive_writable(&c64, 8, true)) fail("writable");
+
+    slot = c64_get_drive_slot_mut(&c64, 8);
+    if (!c1541_media_build_from_g64(
+            &drive.media, slot->image_bytes, slot->image_size)) {
+        fail("build");
+    }
+    drive.media.built_from_seq = slot->image_content_seq;
+    drive.media.enabled = 1;
+
+    live0_before = drive.media.halves[0].data[0];
+    host0_before = slot->image_bytes[track_payload];
+    if (live0_before != 0x00u) fail("live should start with 0x00 pad");
+    if (host0_before != 0x00u) fail("host should start with 0x00 pad");
+    live_ptr = drive.media.halves[0].data;
+    seq_before = slot->image_content_seq;
+
+    g64_write_paint_and_leave(&drive, 0x00u);
+
+    if (drive.media.halves[0].dirty) fail("dirty should clear after Stage A");
+    if (!slot->dirty) fail("slot should be dirty for host flush");
+    if (slot->image_content_seq == seq_before) fail("content seq should advance");
+    if (drive.media.built_from_seq != slot->image_content_seq) {
+        fail("built_from_seq must match after Stage A");
+    }
+    /* Live ring not rotated: still starts with pad byte (or painted bits). */
+    if (drive.media.halves[0].data != live_ptr) fail("live buffer realloced");
+    if (drive.media.halves[0].data[0] != live0_before &&
+        drive.media.halves[0].data[0] == 0xFFu) {
+        fail("live ring was rotated to SYNC (must not)");
+    }
+    /* Host export rotates to SYNC start (0xFF). */
+    if (slot->image_bytes[track_payload] != 0xFFu) {
+        fail("host export should start at SYNC after rotate");
+    }
+
+    /* ensure_tracks must not rebuild from rotated host into a fresh halves[]. */
+    c1541_media_step(&drive);
+    if (drive.media.halves[0].data != live_ptr) {
+        fail("ensure_tracks rebuilt live ring after Stage A");
+    }
+
+    c64_unmount_drive(&c64, 8);
+    c1541_destroy(&drive);
+    printf("PASS: test_g64_writeback_rotate_export_not_live\n");
+}
+
+static void test_g64_writeback_no_sync_unrotated(void) {
+    static c64_t c64;
+    static c1541 drive;
+    size_t sz;
+    uint8_t *g = make_g64_no_sync(&sz);
+    c64_drive_slot *slot;
+    const size_t track_payload = 0x2ACu + 2u;
+    uint8_t live_copy[64];
+    int i;
+
+    c64_init(&c64);
+    c64.config.emulate_1541 = 1;
+    c64.config.media_1541 = 1;
+    c1541_init(&drive, &c64, 8);
+    drive.rom_loaded = 1;
+    drive.media.enabled = 1;
+
+    if (c64_mount_g64(&c64, 8, g, sz, "nosync.g64") != C64_DRIVE_STATUS_OK) {
+        fail("mount");
+    }
+    free(g);
+    if (!c64_set_drive_writable(&c64, 8, true)) fail("writable");
+
+    slot = c64_get_drive_slot_mut(&c64, 8);
+    if (!c1541_media_build_from_g64(
+            &drive.media, slot->image_bytes, slot->image_size)) {
+        fail("build");
+    }
+    drive.media.built_from_seq = slot->image_content_seq;
+    drive.media.enabled = 1;
+
+    g64_write_paint_and_leave(&drive, 0x00u);
+
+    if (drive.media.halves[0].length != 64) fail("length");
+    memcpy(live_copy, drive.media.halves[0].data, 64);
+
+    /* Host payload must match live ring bit-for-bit (unrotated). */
+    for (i = 0; i < 64; ++i) {
+        if (slot->image_bytes[track_payload + (size_t)i] != live_copy[i]) {
+            fail("no-SYNC export must be unrotated pack of live ring");
+        }
+    }
+    if (drive.media.built_from_seq != slot->image_content_seq) {
+        fail("built_from_seq after no-SYNC export");
+    }
+
+    c64_unmount_drive(&c64, 8);
+    c1541_destroy(&drive);
+    printf("PASS: test_g64_writeback_no_sync_unrotated\n");
+}
+
+static void test_g64_writeback_ro_does_not_paint(void) {
+    static c64_t c64;
+    static c1541 drive;
+    size_t sz;
+    uint8_t *g = make_min_g64(&sz);
+    c64_drive_slot *slot;
+    uint8_t before;
+    uint32_t i;
+
+    c64_init(&c64);
+    c64.config.emulate_1541 = 1;
+    c64.config.media_1541 = 1;
+    c1541_init(&drive, &c64, 8);
+    drive.rom_loaded = 1;
+    drive.media.enabled = 1;
+
+    if (c64_mount_g64(&c64, 8, g, sz, "ro.g64") != C64_DRIVE_STATUS_OK) {
+        fail("mount");
+    }
+    free(g);
+    /* Leave RO. */
+
+    slot = c64_get_drive_slot_mut(&c64, 8);
+    if (!c1541_media_build_from_g64(
+            &drive.media, slot->image_bytes, slot->image_size)) {
+        fail("build");
+    }
+    drive.media.built_from_seq = slot->image_content_seq;
+    drive.media.enabled = 1;
+
+    drive.media.half_track = 2;
+    drive.media.motor_ready = 1;
+    drive.via2.ddrb = 0x64u;
+    drive.via2.orb = 0x64u;
+    drive.via2.ddra = 0xFFu;
+    drive.via2.pcr = 0xC0u;
+    drive.media.head_bit_pos = 0;
+    before = drive.media.halves[0].data[0];
+
+    c1541_media_step(&drive);
+    c1541_media_on_port_a_write(&drive, 0x00u);
+    for (i = 0; i < 2000u; ++i) {
+        c1541_media_step(&drive);
+    }
+    if (drive.media.halves[0].dirty) fail("RO must not dirty flux");
+    if (drive.media.halves[0].data[0] != before) fail("RO must not paint flux");
+    if (slot->dirty) fail("RO must not mark host dirty");
+
+    c64_unmount_drive(&c64, 8);
+    c1541_destroy(&drive);
+    printf("PASS: test_g64_writeback_ro_does_not_paint\n");
+}
+
+static void test_g64_writeback_seek_off_dirty(void) {
+    static c64_t c64;
+    static c1541 drive;
+    size_t sz;
+    uint8_t *g = make_min_g64(&sz);
+    c64_drive_slot *slot;
+    uint32_t i;
+
+    c64_init(&c64);
+    c64.config.emulate_1541 = 1;
+    c64.config.media_1541 = 1;
+    c1541_init(&drive, &c64, 8);
+    drive.rom_loaded = 1;
+    drive.media.enabled = 1;
+
+    if (c64_mount_g64(&c64, 8, g, sz, "seek.g64") != C64_DRIVE_STATUS_OK) {
+        fail("mount");
+    }
+    free(g);
+    if (!c64_set_drive_writable(&c64, 8, true)) fail("writable");
+
+    slot = c64_get_drive_slot_mut(&c64, 8);
+    if (!c1541_media_build_from_g64(
+            &drive.media, slot->image_bytes, slot->image_size)) {
+        fail("build");
+    }
+    drive.media.built_from_seq = slot->image_content_seq;
+    drive.media.enabled = 1;
+
+    /* Dirt track 1 via direct bit paint (bypass leave-write). */
+    drive.media.halves[0].data[0] = 0x00u;
+    drive.media.halves[0].dirty = 1;
+
+    /* Step outward with motor on: seek-off-dirty should Stage A. */
+    drive.media.half_track = 2;
+    drive.media.stepper_phase = 0;
+    drive.media.motor_ready = 1;
+    drive.via2.ddrb = 0x07u;
+    drive.via2.orb = 0x05u; /* motor + phase 01 */
+    for (i = 0; i < 5u; ++i) {
+        c1541_media_step(&drive);
+        if (!drive.media.halves[0].dirty) {
+            break;
+        }
+    }
+    if (drive.media.halves[0].dirty) fail("seek should export dirty track");
+    if (!slot->dirty) fail("slot dirty after seek export");
+    if (drive.media.built_from_seq != slot->image_content_seq) {
+        fail("built_from_seq after seek export");
+    }
+    /* Live ring keeps the paint; host gets a SYNC-rotated export of that ring
+       (not bit-identical at offset 0). */
+    if (drive.media.halves[0].data[0] != 0x00u) fail("live paint lost");
+    {
+        int all_ff = 1;
+        int j;
+        for (j = 0; j < 64; ++j) {
+            if (slot->image_bytes[0x2ACu + 2u + (size_t)j] != 0xFFu) {
+                all_ff = 0;
+                break;
+            }
+        }
+        if (all_ff) fail("host track not updated on seek export");
+    }
+
+    c64_unmount_drive(&c64, 8);
+    c1541_destroy(&drive);
+    printf("PASS: test_g64_writeback_seek_off_dirty\n");
 }
 
 /* Regression: D64 writes while media is off must force GCR rebuild when media
@@ -475,7 +767,11 @@ int main(void) {
     test_sync_dirty_track_to_d64();
     test_write_mode_mutates_track();
     test_build_from_g64();
-    test_mount_g64_readonly();
+    test_mount_g64_default_readonly_can_enable_write();
+    test_g64_writeback_ro_does_not_paint();
+    test_g64_writeback_rotate_export_not_live();
+    test_g64_writeback_no_sync_unrotated();
+    test_g64_writeback_seek_off_dirty();
     test_media_rebuild_after_offline_d64_write();
     printf("All c1541_media tests passed.\n");
     return 0;

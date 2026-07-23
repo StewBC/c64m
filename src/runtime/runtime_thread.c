@@ -780,7 +780,7 @@ static bool runtime_flush_disk_slot(runtime *rt, uint8_t device, bool publish_cl
     if (path[0] == '\0' ||
         !runtime_write_file_bytes(path, slot->image_bytes, slot->image_size)) {
         slot->last_result = C64_DRIVE_STATUS_IO_ERROR;
-        snprintf(message, sizeof(message), "failed to flush writable D64 `%s`", path);
+        snprintf(message, sizeof(message), "failed to flush writable disk image `%s`", path);
         runtime_publish_error(rt, message);
         runtime_publish_drive_status(rt, device);
         return false;
@@ -845,7 +845,8 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         return;
     }
 
-    /* G64 path: raw track dumps for media-level 1541 (read-only v1). */
+    /* G64 path: raw track dumps for media-level 1541. Mount is RO by default;
+       honor the mount writable flag via c64_set_drive_writable (flux write-back). */
     if (size >= 12u && bytes[0] == 'G' && bytes[1] == 'C' && bytes[2] == 'R' &&
         bytes[3] == '-' && bytes[4] == '1' && bytes[5] == '5' && bytes[6] == '4' &&
         bytes[7] == '1') {
@@ -862,6 +863,12 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
                 sizeof(rt->mounted_disk_paths[slot_index]),
                 "%s",
                 command->data.mount_d64.path);
+            if (command->data.mount_d64.writable != 0) {
+                (void)c64_set_drive_writable(
+                    &rt->machine,
+                    command->data.mount_d64.device,
+                    true);
+            }
         } else {
             int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
             if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {

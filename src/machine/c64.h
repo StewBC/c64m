@@ -490,8 +490,8 @@ c64_drive_status_result c64_mount_d64_ex(
     const char *dos_type,
     uint16_t free_blocks,
     bool writable);
-/* Mount a G64 image. v1 is read-only (writable flag ignored / forced false).
-   Requires media_1541 + 1541 ROM for useful loads (no sector intercept). */
+/* Mount a G64 image. Default is read-only; use c64_set_drive_writable to enable
+   flux write-back (requires media_1541). No KERNAL-trap / sector-intercept path. */
 c64_drive_status_result c64_mount_g64(
     c64_t *machine,
     uint8_t device,

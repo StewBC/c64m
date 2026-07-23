@@ -446,10 +446,11 @@ static void media_shift_bit_write(c1541 *drive, c1541_track *tr) {
         bit = (m->write_shift >> 7) & 1;
         m->write_shift = (uint8_t)(m->write_shift << 1);
         m->write_bits_left--;
+        /* Hold level for idle bit-clocks until the next Port-A latch (real
+           write amp keeps the last shifted polarity, 0 or 1). */
         m->last_write_bit = bit;
         m->bits_in_byte = 0;
         if (tr != NULL) {
-            /* Only mutate flux while actively shifting a latched byte. */
             set_track_bit(tr, m->head_bit_pos, bit);
         }
         if (m->write_bits_left == 0) {
@@ -459,9 +460,15 @@ static void media_shift_bit_write(c1541 *drive, c1541_track *tr) {
             m->so_pulse = 1;
         }
     } else {
-        /* No fresh latch: do not paint the track (write amp still gated but no
-           new data). Re-assert BYTE READY every 8 bit-times for BVC pads. */
+        /* No fresh latch: write gate still open — hardware holds the last
+           shifted bit on the head. Paint that polarity (not a hardcoded 1)
+           so SYNC pads and data bytes ending in 0 both stay correct, and the
+           head does not advance over unpainted cells that smear later
+           latches forward into the next sector header. */
         bit = m->last_write_bit;
+        if (tr != NULL) {
+            set_track_bit(tr, m->head_bit_pos, bit);
+        }
         m->bits_in_byte++;
         if (m->bits_in_byte >= 8) {
             m->bits_in_byte = 0;
@@ -621,7 +628,7 @@ int c1541_media_sync_dirty_to_d64(c1541 *drive) {
     }
 
     if (m->from_g64) {
-        return 0; /* G64 mounts are read-only in v1; no D64 sector mirror. */
+        return 0; /* G64 uses sync_dirty_to_g64, not a sector mirror. */
     }
 
     for (t = 1; t <= 35; ++t) {
@@ -645,6 +652,195 @@ int c1541_media_sync_dirty_to_d64(c1541 *drive) {
         m->built_from_seq = slot->image_content_seq;
     }
     return any;
+}
+
+/* First bit of a stable SYNC run (≥10 ones). Prefer a run that is followed by a
+   0 (framed data). Returns (uint32_t)-1 if none. Live ring is not mutated. */
+static uint32_t g64_find_export_sync_bit(const c1541_track *tr) {
+    uint32_t nbits;
+    uint32_t pos;
+    uint32_t run = 0;
+    uint32_t run_start = 0;
+    uint32_t first_long = (uint32_t)-1;
+
+    if (tr == NULL || tr->data == NULL || tr->length == 0) {
+        return (uint32_t)-1;
+    }
+    nbits = (uint32_t)tr->length * 8u;
+    for (pos = 0; pos < nbits; ++pos) {
+        if (track_bit(tr, pos)) {
+            if (run == 0u) {
+                run_start = pos;
+            }
+            run++;
+            if (run == 10u && first_long == (uint32_t)-1) {
+                first_long = run_start;
+            }
+        } else {
+            if (run >= 10u) {
+                /* End of SYNC: export starts at first 1 of this run. */
+                return run_start;
+            }
+            run = 0;
+        }
+    }
+    /* Wrap: ones at end + start may form a SYNC, but for export we only accept
+       an interior/end-aligned run; wrap-around SYNC falls back to first_long. */
+    if (run >= 10u) {
+        return run_start;
+    }
+    return first_long;
+}
+
+/* Pack tr->length bytes from the live ring starting at start_bit (mod nbits). */
+static void g64_pack_track_from_bit(
+    const c1541_track *tr,
+    uint32_t start_bit,
+    uint8_t *dst) {
+    size_t bi;
+    uint32_t nbits = (uint32_t)tr->length * 8u;
+
+    for (bi = 0; bi < tr->length; ++bi) {
+        uint8_t byte = 0;
+        int b;
+        for (b = 0; b < 8; ++b) {
+            uint32_t idx = (start_bit + (uint32_t)bi * 8u + (uint32_t)b) % nbits;
+            if (track_bit(tr, idx)) {
+                byte |= (uint8_t)(0x80u >> b);
+            }
+        }
+        dst[bi] = byte;
+    }
+}
+
+static int g64_patch_half_track_in_image(
+    uint8_t *image,
+    size_t image_size,
+    int half_index,
+    const uint8_t *payload,
+    size_t payload_len) {
+    size_t off_pos;
+    uint32_t toff;
+    uint16_t actual;
+
+    if (image == NULL || payload == NULL || half_index < 0 ||
+        half_index >= G64_MAX_HALF_TRACKS || payload_len == 0) {
+        return 0;
+    }
+    if (image_size < G64_HEADER_SIZE) {
+        return 0;
+    }
+
+    off_pos = 12u + (size_t)half_index * 4u;
+    if (off_pos + 4u > image_size) {
+        return 0;
+    }
+    toff = (uint32_t)image[off_pos]
+        | ((uint32_t)image[off_pos + 1u] << 8)
+        | ((uint32_t)image[off_pos + 2u] << 16)
+        | ((uint32_t)image[off_pos + 3u] << 24);
+    if (toff == 0u) {
+        /* Phase 1: length-preserving in-place only; empty slots need rebuild. */
+        return 0;
+    }
+    if ((size_t)toff + 2u > image_size) {
+        return 0;
+    }
+    actual = (uint16_t)image[toff] | ((uint16_t)image[toff + 1u] << 8);
+    /* Phase 1: keep host actual length; only rewrite when lengths match. */
+    if ((size_t)actual != payload_len) {
+        return 0;
+    }
+    if ((size_t)toff + 2u + payload_len > image_size) {
+        return 0;
+    }
+    memcpy(image + toff + 2u, payload, payload_len);
+    return 1;
+}
+
+int c1541_media_sync_dirty_to_g64(c1541 *drive) {
+    c1541_media *m;
+    c64_drive_slot *slot;
+    int i;
+    int any = 0;
+    uint8_t *pack = NULL;
+    size_t pack_cap = 0;
+
+    if (drive == NULL) {
+        return 0;
+    }
+    m = &drive->media;
+    if (!m->enabled || !m->tracks_valid || !m->from_g64) {
+        return 0;
+    }
+
+    slot = c64_get_drive_slot_mut(drive->c64, drive->device_number);
+    if (slot == NULL || !slot->mounted || slot->image_bytes == NULL ||
+        slot->image_kind != C64_DRIVE_IMAGE_G64 || !slot->writable) {
+        return 0;
+    }
+
+    for (i = 0; i < C1541_MEDIA_HALF_SLOTS; ++i) {
+        c1541_track *tr = slot_track(m, i);
+        uint32_t start_bit;
+        size_t len;
+
+        if (tr == NULL || !tr->dirty || tr->data == NULL || tr->length == 0) {
+            continue;
+        }
+        len = tr->length;
+        if (len > pack_cap) {
+            uint8_t *grown = (uint8_t *)realloc(pack, len);
+            if (grown == NULL) {
+                free(pack);
+                return any;
+            }
+            pack = grown;
+            pack_cap = len;
+        }
+
+        /* Export-on-copy only: never rotate the live halves[] ring. */
+        start_bit = g64_find_export_sync_bit(tr);
+        if (start_bit == (uint32_t)-1) {
+            start_bit = 0; /* no stable SYNC: unrotated pack */
+        }
+        g64_pack_track_from_bit(tr, start_bit, pack);
+
+        if (g64_patch_half_track_in_image(
+                slot->image_bytes, slot->image_size, i, pack, len)) {
+            any = 1;
+            tr->dirty = 0;
+        }
+        /* If patch failed (empty slot / length mismatch), leave dirty for a
+           later rebuild path; do not clear dirty or corrupt the host blob. */
+    }
+
+    free(pack);
+
+    if (any) {
+        slot->dirty = true;
+        slot->image_content_seq++;
+        /* Critical: cohere built_from_seq so ensure_tracks does not re-import
+           the rotated host snapshot into a fresh halves[] (live ring was never
+           rotated). Mirrors sync_dirty_to_d64. */
+        m->built_from = slot->image_bytes;
+        m->built_size = slot->image_size;
+        m->built_from_seq = slot->image_content_seq;
+    }
+    return any;
+}
+
+int c1541_media_sync_dirty(c1541 *drive) {
+    const c64_drive_slot *slot;
+
+    if (drive == NULL || drive->c64 == NULL) {
+        return 0;
+    }
+    slot = c64_get_drive_slot(drive->c64, drive->device_number);
+    if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+        return c1541_media_sync_dirty_to_g64(drive);
+    }
+    return c1541_media_sync_dirty_to_d64(drive);
 }
 
 static int slot_is_writable(c1541 *drive) {
@@ -793,18 +989,30 @@ static void sample_disk_via_outputs(c1541 *drive) {
         if (phase != m->stepper_phase) {
             c1541_track *old_track = current_track(m);
             uint32_t old_bits = old_track != NULL ? (uint32_t)old_track->length * 8u : 0u;
+            int prev_half = m->half_track;
             int diff = (int)((phase - m->stepper_phase) & 3);
+            int stepped = 0;
+
             if (diff == 1) {
                 if (m->half_track < C1541_MEDIA_MAX_HALF_TRACK) {
                     m->half_track++;
+                    stepped = 1;
                 }
             } else if (diff == 3) {
                 if (m->half_track > C1541_MEDIA_MIN_HALF_TRACK) {
                     m->half_track--;
+                    stepped = 1;
                 }
             }
             m->stepper_phase = phase;
             m->write_bits_left = 0;
+
+            /* Seek-off-dirty Stage A: export the track we left before engaging
+               the new half-track. Live ring is not rotated (export is copy-only). */
+            if (stepped && m->half_track != prev_half) {
+                (void)c1541_media_sync_dirty(drive);
+            }
+
             if (m->from_g64) {
                 c1541_track *new_track = current_track(m);
                 uint32_t new_bits = new_track != NULL ? (uint32_t)new_track->length * 8u : 0u;
@@ -831,12 +1039,16 @@ static void sample_disk_via_outputs(c1541 *drive) {
         m->byte_ready = 1;
         m->so_pulse = 1;
         m->in_sync = 0;
+        /* DOS data-block write: one STA $FF then 5×BVC while amp holds 1.
+           5×8 − 8 (the latched FF) = 32 additional stream ones for SYNC. */
+        m->write_sync_hold_left = 32;
     } else if (!want_write && m->writing) {
         m->writing = 0;
         m->write_bits_left = 0;
         m->bits_in_byte = 0;
-        /* Leaving write mode: push dirty GCR back into the D64 sector image. */
-        (void)c1541_media_sync_dirty_to_d64(drive);
+        m->write_sync_hold_left = 0;
+        /* Leaving write mode: Stage A — D64 sector mirror or G64 host export. */
+        (void)c1541_media_sync_dirty(drive);
     }
 }
 
@@ -1017,7 +1229,26 @@ void c1541_media_step(c1541 *drive) {
 
             if (m->writing) {
                 if (slot_is_writable(drive)) {
+                    /*
+                     * Wall-clock bit times always pace SR / BYTE READY / SO.
+                     * GCR stream cells advance on latched shifts always, and on
+                     * hold-1 only while write_sync_hold_left > 0 (DOS SYNC pad
+                     * after the single STA $FF). After that budget, hold does
+                     * not advance — packed tracks have no dead-time padding.
+                     */
+                    int latched = (m->write_bits_left > 0) ? 1 : 0;
+                    int sync_hold_adv = 0;
                     media_shift_bit_write(drive, tr);
+                    if (!latched && m->last_write_bit && m->write_sync_hold_left > 0) {
+                        sync_hold_adv = 1;
+                        m->write_sync_hold_left--;
+                    }
+                    if ((latched || sync_hold_adv) && tr != NULL && tr->length > 0) {
+                        m->head_bit_pos++;
+                        if (m->head_bit_pos >= (uint32_t)tr->length * 8u) {
+                            m->head_bit_pos = 0;
+                        }
+                    }
                 } else {
                     if (m->write_bits_left > 0) {
                         m->write_shift = (uint8_t)(m->write_shift << 1);
@@ -1025,6 +1256,12 @@ void c1541_media_step(c1541 *drive) {
                         if (m->write_bits_left == 0) {
                             m->byte_ready = 1;
                             m->so_pulse = 1;
+                        }
+                        if (tr != NULL && tr->length > 0) {
+                            m->head_bit_pos++;
+                            if (m->head_bit_pos >= (uint32_t)tr->length * 8u) {
+                                m->head_bit_pos = 0;
+                            }
                         }
                     }
                 }
@@ -1034,12 +1271,11 @@ void c1541_media_step(c1541 *drive) {
                     bit = track_bit(tr, m->head_bit_pos);
                 }
                 media_shift_bit_read(drive, bit);
-            }
-
-            if (tr != NULL && tr->length > 0) {
-                m->head_bit_pos++;
-                if (m->head_bit_pos >= (uint32_t)tr->length * 8u) {
-                    m->head_bit_pos = 0;
+                if (tr != NULL && tr->length > 0) {
+                    m->head_bit_pos++;
+                    if (m->head_bit_pos >= (uint32_t)tr->length * 8u) {
+                        m->head_bit_pos = 0;
+                    }
                 }
             }
         }

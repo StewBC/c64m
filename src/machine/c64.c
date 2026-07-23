@@ -1695,8 +1695,8 @@ void c64_set_config(c64_t *machine, const c64_config *config) {
 
     if (prev_media != next_media) {
         if (prev_media && !next_media) {
-            (void)c1541_media_sync_dirty_to_d64(&machine->drive8);
-            (void)c1541_media_sync_dirty_to_d64(&machine->drive9);
+            (void)c1541_media_sync_dirty(&machine->drive8);
+            (void)c1541_media_sync_dirty(&machine->drive9);
         }
         c1541_media_invalidate(&machine->drive8.media);
         c1541_media_invalidate(&machine->drive9.media);
@@ -2221,7 +2221,7 @@ c64_drive_status_result c64_mount_g64(
     free(slot->entries);
     memset(slot, 0, sizeof(*slot));
     slot->mounted = true;
-    slot->writable = false; /* G64 v1 read-only */
+    slot->writable = false; /* RO by default; c64_set_drive_writable enables flux write-back */
     slot->dirty = false;
     slot->image_kind = C64_DRIVE_IMAGE_G64;
     slot->last_result = C64_DRIVE_STATUS_OK;
@@ -2252,11 +2252,8 @@ bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable) {
     if (slot_index < 0 || !machine->drives[slot_index].mounted) {
         return false;
     }
-    /* G64 mounts stay read-only in v1. */
-    if (machine->drives[slot_index].image_kind == C64_DRIVE_IMAGE_G64) {
-        machine->drives[slot_index].writable = false;
-        return writable == false;
-    }
+    /* D64 and G64 both support the writable flag. G64 writes require media_1541
+       (physical Port-A path); without media, WPS still follows the flag. */
     machine->drives[slot_index].writable = writable;
     return true;
 }
@@ -2272,12 +2269,12 @@ void c64_unmount_drive(c64_t *machine, uint8_t device) {
         return;
     }
 
-    /* Push dirty GCR back to the D64, then drop track buffers. */
+    /* Push dirty GCR back to the host image (D64 sectors or G64 tracks), then drop. */
     if (device == 8) {
-        (void)c1541_media_sync_dirty_to_d64(&machine->drive8);
+        (void)c1541_media_sync_dirty(&machine->drive8);
         c1541_media_invalidate(&machine->drive8.media);
     } else if (device == 9) {
-        (void)c1541_media_sync_dirty_to_d64(&machine->drive9);
+        (void)c1541_media_sync_dirty(&machine->drive9);
         c1541_media_invalidate(&machine->drive9.media);
     }
 

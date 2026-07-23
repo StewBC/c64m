@@ -385,9 +385,9 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
             return 1;
 
         case C1541_JOB_CMD_WRITE: {
-            /* Hybrid media write: persist the job buffer to the D64 (reliable),
-               then poke the matching GCR data block so media reads stay coherent.
-               G64 mounts are read-only. */
+            /* D64: hybrid media write — persist job buffer, then poke GCR.
+               G64: no sector map. With physical media, leave the job to the ROM
+               Port-A path; without media (or RO) report write-protect. */
             uint8_t wr;
             uint8_t trk, sec;
             uint16_t buf_addr;
@@ -395,6 +395,9 @@ static int c1541_satisfy_queued_job(c1541 *drive, uint8_t n) {
 
             slot = c64_get_drive_slot(drive->c64, drive->device_number);
             if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+                if (c1541_media_physical_write_active(drive) && slot->writable) {
+                    return 0; /* ROM physical write */
+                }
                 c1541_complete_queued_job(drive, n, C1541_JOB_WRITE_PROT);
                 return 1;
             }
@@ -530,6 +533,9 @@ static int c1541_satisfy_physical_job(c1541 *drive) {
 
             slot = c64_get_drive_slot(drive->c64, drive->device_number);
             if (slot != NULL && slot->image_kind == C64_DRIVE_IMAGE_G64) {
+                if (c1541_media_physical_write_active(drive) && slot->writable) {
+                    return 0; /* ROM physical write */
+                }
                 c1541_complete_job(drive, C1541_JOB_WRITE_PROT);
                 return 1;
             }

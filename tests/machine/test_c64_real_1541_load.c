@@ -1,5 +1,6 @@
 #include "c64.h"
 #include "c64_rom.h"
+#include "c1541_media.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -366,10 +367,168 @@ static void test_real_1541_media_g64_star_load_returns(void) {
     }
 }
 
+/*
+ * DOS 2.6 data-block write ($F575..$F5D6 on this ROM):
+ *   gate on → 5×SYNC + 69 + 256 GCR latches (330) → drain BVC → gate off.
+ * Expected painted span if 1:1 with latches: 330 GCR bytes.
+ * Standard zone-2 sector pitch is 371 bytes; data payload starts ~24 bytes
+ * after the header, leaving ~17 bytes of gap before the next header.
+ *
+ * "SAVE returned OK" is intentionally NOT a pass criterion.
+ */
+enum {
+    DOS_WRITE_LATCH_BYTES = 330,
+    T18_SECTOR_PITCH = 371,
+    T18_HEADER_COUNT = 19
+};
+
+static int count_gcr_headers(const uint8_t *tr, size_t len) {
+    size_t i;
+    int n = 0;
+    if (tr == NULL || len < 6u) {
+        return 0;
+    }
+    for (i = 0; i + 6u <= len; ++i) {
+        if (tr[i] == 0xFFu && tr[i + 1u] == 0xFFu && tr[i + 2u] == 0xFFu &&
+            tr[i + 3u] == 0xFFu && tr[i + 4u] == 0xFFu && tr[i + 5u] == 0x52u) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/*
+ * Regression: physical G64 DOS write must not overrun the data-block footprint
+ * into the next sector header. Captures the write-gate / bit-clock stretch bug
+ * where head motion while write_bits_left==0 smears a 330-byte ROM write across
+ * ~400 track bytes and smashes the following FFFFFF…52 mark.
+ *
+ * Fixture: standard blank DOS G64 (35 tracks, zone-2 track 18, 19 headers at
+ * 371-byte pitch). Placed under assets/disks/ like other machine-test images.
+ */
+static void test_g64_dos_write_footprint_next_header_intact(void) {
+    c64_t machine;
+    uint8_t *g64 = NULL;
+    size_t g64_size = 0;
+    uint8_t expected[] = {0x01, 0x08, 0x11, 0x22, 0x33, 0x44};
+    size_t i;
+    c1541_track *t18;
+    uint8_t *before = NULL;
+    size_t before_len;
+    int headers_before;
+    int headers_after;
+    size_t first_chg = (size_t)-1;
+    size_t last_chg = 0;
+    size_t changed = 0;
+    int h;
+    char path[512];
+
+    install_real_roms_ex(&machine, 1);
+
+    snprintf(path, sizeof(path), "%s/assets/disks/blank_dos.g64", C64M_SOURCE_DIR);
+    expect_true(
+        "read assets/disks/blank_dos.g64 (standard blank DOS G64 fixture)",
+        read_file(path, &g64, &g64_size) != 0);
+    expect_true(
+        "mount g64 fixture",
+        c64_mount_g64(&machine, 8, g64, g64_size, "blank_dos.g64") == C64_DRIVE_STATUS_OK);
+    free(g64);
+    expect_true("writable", c64_set_drive_writable(&machine, 8, true));
+
+    step_cycles(&machine, 2500000u);
+    expect_true("media tracks", machine.drive8.media.tracks_valid != 0);
+    expect_true("from_g64", machine.drive8.media.from_g64 != 0);
+
+    t18 = &machine.drive8.media.halves[34];
+    expect_true("t18 present", t18->data != NULL && t18->length > 1000u);
+    before_len = t18->length;
+    before = (uint8_t *)malloc(before_len);
+    expect_true("oom before", before != NULL);
+    memcpy(before, t18->data, before_len);
+    headers_before = count_gcr_headers(before, before_len);
+    expect_true("t18 has 19 headers before write", headers_before == T18_HEADER_COUNT);
+
+    for (i = 2; i < sizeof(expected); ++i) {
+        machine.bus.ram[0x0801u + (uint16_t)(i - 2u)] = expected[i];
+    }
+    setup_save_call(&machine, "SAVED", 0x0801u, 0x0805u);
+    step_cycles(&machine, 250000000u);
+
+    /* Must not treat KERNAL success alone as pass — inspect the ring. */
+    t18 = &machine.drive8.media.halves[34];
+    expect_true("t18 still present", t18->data != NULL && t18->length == before_len);
+    headers_after = count_gcr_headers(t18->data, t18->length);
+
+    for (i = 0; i < before_len; ++i) {
+        if (t18->data[i] != before[i]) {
+            if (first_chg == (size_t)-1) {
+                first_chg = i;
+            }
+            last_chg = i;
+            changed++;
+        }
+    }
+
+    /* Every pre-existing header mark must remain (no smash of next sector). */
+    if (headers_after != headers_before) {
+        fprintf(stderr,
+            "g64 write footprint: header count %d -> %d (SAVE pc=%04X C=%d dirty=%d "
+            "changed=%zu first=%zu last=%zu span=%zu)\n",
+            headers_before,
+            headers_after,
+            machine.cpu.cpu.pc,
+            machine.cpu.cpu.flags & 1,
+            machine.drives[0].dirty ? 1 : 0,
+            changed,
+            first_chg,
+            last_chg,
+            (first_chg != (size_t)-1) ? (last_chg - first_chg + 1u) : 0u);
+        free(before);
+        fail("g64 DOS write smashed at least one GCR header on track 18");
+    }
+    for (h = 0; h < T18_HEADER_COUNT; ++h) {
+        size_t off = (size_t)h * (size_t)T18_SECTOR_PITCH;
+        if (off + 6u > before_len) {
+            break;
+        }
+        if (memcmp(t18->data + off, before + off, 6) != 0) {
+            fprintf(stderr, "header at byte %zu corrupted\n", off);
+            free(before);
+            fail("g64 DOS write corrupted a sector header footprint");
+        }
+    }
+
+    /*
+     * Any single write's dirty span must fit the ROM data-block budget.
+     * SAVE issues several writes; require each changed run is not absurdly
+     * larger than 330 bytes — if the whole track dirties past 330*writes,
+     * something stretched. Primary gate is header integrity above.
+     */
+    if (changed > 0 && first_chg != (size_t)-1) {
+        size_t span = last_chg - first_chg + 1u;
+        /* Upper bound: a few DOS writes (BAM+dir+data) × 330 with gap slack. */
+        if (span > (size_t)DOS_WRITE_LATCH_BYTES * 8u) {
+            fprintf(stderr,
+                "g64 write dirty span %zu exceeds %d (changed=%zu first=%zu last=%zu)\n",
+                span,
+                DOS_WRITE_LATCH_BYTES * 8,
+                changed,
+                first_chg,
+                last_chg);
+            free(before);
+            fail("g64 DOS write dirty span unreasonably large");
+        }
+    }
+
+    free(before);
+    printf("PASS: test_g64_dos_write_footprint_next_header_intact\n");
+}
+
 int main(void) {
     test_real_1541_star_load_returns();
     test_real_1541_media_star_load_returns();
     test_real_1541_media_save_small_prg();
     test_real_1541_media_g64_star_load_returns();
+    test_g64_dos_write_footprint_next_header_intact();
     return 0;
 }
