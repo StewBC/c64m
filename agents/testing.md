@@ -28,6 +28,31 @@ verify it.
 - Tools/util: assembler tests, `disasm_6502`, `symbol_table`, `t64`, `crt`,
   `basic_v2`, and `paste_parser`.
 
+## PAL line geometry and mid-line register timing
+
+Three `c64_vicii` tests pin the work that produced the 32/320/32 PAL viewport.
+They are in-process and deterministic - no snapshot, no PRG, no control port -
+and each was confirmed to fail with its fix reverted:
+
+- `test_live_d011_mode_write_resolves_at_vice_edge` - a same-cycle Phi2 `$D011`
+  ECM/BMM store must land at VICE's mid-cycle edges: dots 0..3 of the previous
+  span keep the old mode, dots 4..7 take the new one, and the span composed
+  during the store cycle is stale throughout. Reverting the resolution leaves
+  the old foreground where black is required.
+- `test_live_full_line_paints_pre_wrap_band` - VIC X 496..503 must be composed
+  content, not begin-frame fill. It changes `$D020` mid-frame so fill and paint
+  are different colours; restoring a 384-column paint window makes it fail.
+- `test_live_viewport_left_border_is_32_dots` - X 496..503 plus X 0..23 are all
+  border and X 24 is display, which is what makes the frontend viewport
+  32/320/32 instead of lopsided. A paint-anchor change cannot silently move the
+  viewport without tripping this.
+
+The Edge of Disgrace checker scene stays a **manual** oracle comparison, not a
+test: it needs a 1.8 MB snapshot pinned to the current save-state version, and
+`assets/` is gitignored. See `pal-border.md` for that workflow and for the
+VIC-II model-matching trap that must be cleared before any c64m-vs-VICE pixel
+compare.
+
 ## Focused workflows
 
 - Use `--help` for a non-blocking binary smoke test.

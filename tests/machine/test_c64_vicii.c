@@ -1743,6 +1743,163 @@ static void test_live_mcm_toggle_reaches_column0_same_cycle(void) {
                TEST_PALETTE_10, frame.pixels[row * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
+/* A same-cycle Phi2 $D011 store must reach the dots painted around that cycle,
+   and it must reach them at VICE's mid-cycle edge positions -- not a whole cycle
+   late, and not a whole cycle early.
+
+   c64m composes a cycle's 8-dot span in begin_cycle, before the CPU's Phi2
+   store, so without the finish_cycle ECM/BMM resolution the mode change was
+   invisible until the next cycle. On Edge of Disgrace's checker the bottom black
+   frame line comes from $D011=$60 (ECM+BMM -> invalid mode -> black) stored at
+   cycle 11; against VICE 6569 the transition sat 12 dots late (X504 instead of
+   X492) once those columns were painted at all.
+
+   VICE does not switch a whole cycle at once. draw_graphics8 samples the two
+   bits mid-cycle and asymmetrically (viciisc vmode11_pipe): `|=` at pixel 4 and
+   `&=` at pixel 6, so within a cycle dots 0..3 keep the old bits and dots 4..7
+   see the new ones on a rising edge. Two spans are in flight under c64m's
+   2-cycle paint delay, so a store at cycle N lands as:
+       cycle N-1 span: dots 4..7 only   (the edge rule)
+       cycle N   span: all 8 dots       (composed before the store, wholly stale)
+   Repairing only one of them leaves a 4-dot island of the old mode.
+
+   Store at cycle 20 with hires bitmap foreground either side: the cycle-19 span
+   is X56..63 and the cycle-20 span is X64..71, so X56..59 must keep the old
+   foreground and X60..71 must all be black. */
+static void test_live_d011_mode_write_resolves_at_vice_edge(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+    const uint32_t row = 100u;
+    /* Row 100, YSCROLL=3 -> column 0 is cell 240 at RC=1 (see the xscroll test).
+       X56 and X64 are display columns 4 and 5, i.e. cells 244 and 245. */
+    const uint16_t cell_x56  = 244u;
+    const uint16_t cell_x64  = 245u;
+    const uint16_t gbyte_x56 = (uint16_t)(0x2000u + 244u * 8u + 1u);
+    const uint16_t gbyte_x64 = (uint16_t)(0x2000u + 245u * 8u + 1u);
+    uint32_t i;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+    machine.bus.ram[gbyte_x56] = 0xffu;        /* all dots foreground */
+    machine.bus.ram[gbyte_x64] = 0xffu;
+    machine.bus.ram[0x0400u + cell_x56] = 0x2Au; /* VM high nibble 2 -> palette 2 */
+    machine.bus.ram[0x0400u + cell_x64] = 0x2Au;
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == row &&
+             machine.vic.timing.cycle_in_line == 20u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    /* Split cycle 20: begin composes X64..71 under the old mode, the Phi2 store
+       adds ECM (ECM+BMM = invalid = black), finish resolves both spans. */
+    vicii_begin_cycle(&machine.vic, &machine.bus, abs);
+    c64_bus_write(&machine.bus, 0xd011, 0x7b); /* ECM=1 on top of BMM=1 */
+    vicii_finish_cycle(&machine.vic);
+    abs++;
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("d011 edge frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    /* dots 0..3 of the cycle-19 span keep the pre-store mode */
+    for (i = 56u; i <= 59u; ++i) {
+        expect_u32("d011 store leaves dots 0..3 of the previous span alone",
+                   TEST_PALETTE_2,
+                   frame.pixels[row * C64_FRAME_WIDTH + (i + TEST_PAL_FX)]);
+    }
+    /* dots 4..7 of that span take the new mode (VICE pixel-4 rising edge) */
+    for (i = 60u; i <= 63u; ++i) {
+        expect_u32("d011 store reaches dots 4..7 of the previous span",
+                   TEST_PALETTE_0,
+                   frame.pixels[row * C64_FRAME_WIDTH + (i + TEST_PAL_FX)]);
+    }
+    /* the span composed during the store cycle is stale throughout */
+    for (i = 64u; i <= 71u; ++i) {
+        expect_u32("d011 store reaches the whole span composed that cycle",
+                   TEST_PALETTE_0,
+                   frame.pixels[row * C64_FRAME_WIDTH + (i + TEST_PAL_FX)]);
+    }
+}
+
+/* The VIC-II paints every dot of the raster line, HBLANK included, so VIC X
+   496..503 -- the eight columns before the line wraps to 0, and the left edge of
+   VICE's 32/320/32 PAL viewport -- is composed content and not leftover frame
+   fill. Distinguish the two by changing $D020 after the frame has begun: the
+   fill colour is captured once in vicii_begin_live_frame, so a later row showing
+   the *new* border colour there can only have been painted. */
+static void test_live_full_line_paints_pre_wrap_band(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+    const uint32_t row = 100u;
+    uint32_t i;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1 */
+    c64_bus_write(&machine.bus, 0xd020, 0x06); /* frame fill will be blue */
+
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == 10u &&
+             machine.vic.timing.cycle_in_line == 0u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* red for the rest of the frame */
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("full-line frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    for (i = 496u; i <= 503u; ++i) {
+        expect_u32("pre-wrap band X496..503 is painted, not frame fill",
+                   TEST_PALETTE_2,
+                   frame.pixels[row * C64_FRAME_WIDTH + i]);
+    }
+}
+
+/* Geometry the PAL 32/320/32 viewport depends on. The frontend window opens at
+   VIC X 496 and runs through the wrap, so its first 32 columns are X 496..503
+   followed by X 0..23, and its column 32 is the display's first column at X 24.
+   Assert that on the machine side: those 32 dots are all border and X24 is not,
+   which is what makes the viewport 32/320/32 rather than lopsided. Keeping this
+   here means a paint-anchor change cannot silently move the viewport. */
+static void test_live_viewport_left_border_is_32_dots(void) {
+    c64_t     machine;
+    c64_frame frame;
+    uint64_t  abs;
+    const uint32_t row = 100u;
+    uint32_t i;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b); /* DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, XSCROLL=0 */
+    c64_bus_write(&machine.bus, 0xd020, 0x02); /* border red    */
+    c64_bus_write(&machine.bus, 0xd021, 0x06); /* background blue */
+
+    abs = 0;
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("viewport frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+
+    /* viewport columns 0..7 */
+    for (i = 496u; i <= 503u; ++i) {
+        expect_u32("viewport cols 0..7 (VIC X496..503) are border",
+                   TEST_PALETTE_2, frame.pixels[row * C64_FRAME_WIDTH + i]);
+    }
+    /* viewport columns 8..31 */
+    for (i = 0u; i <= 23u; ++i) {
+        expect_u32("viewport cols 8..31 (VIC X0..23) are border",
+                   TEST_PALETTE_2, frame.pixels[row * C64_FRAME_WIDTH + i]);
+    }
+    /* viewport column 32 is display column 0 */
+    expect_u32("viewport col 32 (VIC X24) is the display window",
+               TEST_PALETTE_6, frame.pixels[row * C64_FRAME_WIDTH + 24u]);
+}
+
 /* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
    Idle forces cbuf=0, so MCM=1 + BMM=0 idle is still hires (ghost $F0 → four
    solid fg dots, four bg). Decoding idle as multicolor pairs broke open-border
@@ -3888,6 +4045,9 @@ int main(void) {
     test_live_side_border_shows_zero_graphics();
     test_live_open_border_right_edge_xscroll_delayed();
     test_live_mcm_toggle_reaches_column0_same_cycle();
+    test_live_d011_mode_write_resolves_at_vice_edge();
+    test_live_full_line_paints_pre_wrap_band();
+    test_live_viewport_left_border_is_32_dots();
     test_live_mcm_idle_ghost_is_hires();
     test_allow_bad_lines_latched_at_line_30();
     test_set_vborder_latch_sticky_until_top();
