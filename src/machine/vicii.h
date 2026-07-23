@@ -172,25 +172,26 @@ struct vicii {
     uint8_t  color_pipe_d020;
     uint8_t  color_pipe_d021;
 
-    /* Horizontal-border pipeline (VICE viciisc check_hborder model). The main
-       border flip-flop is decided by cycle-based checks (PAL/NTSC left cycles
-       17/18, right cycles 56/57, csel-dependent) using the CSEL value latched at
-       the end of the previous cycle (pre-store, matching VICE which checks the
-       border before the CPU store). c64m folds the VIC's ~2-cycle pixel pipeline
-       into its paint anchor, so the border decision must be applied to pixels two
-       cycles earlier than the check: content pixels are buffered and flushed two
-       render cycles late with the then-current flip-flop. This lets a mid-line
-       $D016 CSEL write dodge the right-border compare (open side borders) while
-       keeping normal-screen edges at VIC X 24/344 (framebuffer x 32/352 on
-       PAL after the +8 frame origin). Two CSEL samples are retained because
-       c64m currently projects VICE's cycle-56 store at cycle 56 in EoD and
-       cycle 55 in lft-nine's CIA-synchronised loop; both are still in flight
-       at the compare, while a stable 38-column value closes normally. */
+    /* Horizontal-border pipeline (VICE viciisc check_hborder + draw_border8).
+       The main flip-flop is decided by cycle-based checks using the CSEL value
+       latched at the end of the previous cycle (pre-store). c64m folds the VIC's
+       ~2-cycle pixel pipeline into its paint anchor, so the flip-flop is applied
+       to pixels two render cycles late. CSEL=1 (40-col) applies one border state
+       to the whole 8-dot span. CSEL=0 (38-col) follows VICE draw_border8: the
+       first 7 dots keep the previous output state and only the last dot takes
+       the new flip-flop — that is the hardware 7-pixel inset (left 31 / right
+       335). Check cycles under this delay model: left always 17; right 57
+       (CSEL=1) or 55 (CSEL=0). Two CSEL samples are retained because c64m can
+       project VICE's cycle-56 CSEL store at cycle 56 (EoD) or 55 (lft-nine);
+       an in-flight 1→0 must not look like a stable 38-col close. */
     bool     hborder_prev_csel;
     bool     hborder_prev2_csel;
+    /* Output border state after the last flushed span (VICE border_state). */
+    bool     hborder_out_state;
     struct {
         uint8_t  n;
         uint8_t  mode;               /* graphics mode used to paint this span */
+        bool     csel;               /* CSEL used when this span was checked/painted */
         uint32_t idx[8];
         uint32_t content[8];
         bool     content_d021[8];

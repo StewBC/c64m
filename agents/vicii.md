@@ -63,12 +63,15 @@ Phi2 schedule; frontend frames are copies.
   DEN clear from the start, the vertical border never opens and `$D020` covers
   the frame; if software has already opened the border, idle/display output and
   sprites can remain visible underneath it.
-- Horizontal-border checks use the VICE `check_hborder` cycles and a delayed
-  output pipeline. c64m retains two CSEL samples at the right compare because
-  its CPU/VIC projection currently places the same VICE cycle-56 store at c64m
-  cycle 56 in Edge of Disgrace and at cycle 55 in lft-nine's CIA-synchronised
-  loop. Both in-flight 1-to-0 transitions dodge the compare; a CSEL=0 value that
-  is stable for two samples still closes the 38-column border normally.
+- Horizontal-border checks use the VICE `check_hborder` model under a 2-cycle
+  paint delay: left compare at cycle 17; right at 57 (CSEL=1) or 55 (CSEL=0).
+  CSEL=1 applies one border state to the whole 8-dot span. CSEL=0 follows VICE
+  `draw_border8`: first 7 dots keep the previous output state, last dot takes the
+  new flip-flop (38-col edges at VIC X 31/335 — framebuffer 39/343 on PAL). A
+  prior whole-span CSEL=0 close left a 1px open B0C column at the right edge
+  (DEM top-bar hang). Two CSEL samples are retained because c64m can project
+  VICE's cycle-56 store at cycle 56 (EoD) or 55 (lft-nine); in-flight 1→0 dodges
+  the stable 38-col close.
 - Bad Line Condition is evaluated every cycle like VICE `check_badline`, from
   the frame-level DEN latch armed at raster `$30`, the `$30..$F7` range, and live
   YSCROLL. RC is cleared at UpdateVc when badline holds. **Machine order:**

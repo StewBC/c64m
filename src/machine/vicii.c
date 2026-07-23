@@ -227,6 +227,8 @@ static void vicii_begin_live_frame(vicii *v) {
        it anyway so a freshly begun frame starts empty. */
     v->hborder_pipe[0].n = 0;
     v->hborder_pipe[1].n = 0;
+    v->hborder_pipe[0].csel = true;
+    v->hborder_pipe[1].csel = true;
 }
 
 bool vicii_init(vicii *v, char *error, size_t error_size) {
@@ -300,6 +302,9 @@ void vicii_reset(vicii *v) {
     v->vertical_border_active = true;
     v->set_vborder            = true;
     v->main_border_ff         = true;
+    v->hborder_out_state      = true;
+    v->hborder_prev_csel      = true;
+    v->hborder_prev2_csel     = true;
     /* Default on; runtime turbo policy re-applies after reset when needed. */
     v->pixel_output_enabled = true;
     v->color_pipe_d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
@@ -1461,16 +1466,41 @@ static void vicii_apply_vborder_latch(vicii *v) {
     v->vertical_border_active = v->set_vborder;
 }
 
-/* Flush the oldest buffered render span (painted two cycles ago) into the frame,
-   choosing border colour vs. content per pixel from the main border flip-flop as
-   it stands *now* — this is the 2-cycle border-decision delay that lets a timed
-   $D016 CSEL write dodge the right-border compare while keeping normal edges. */
+/* Flush the oldest buffered render span (painted two cycles ago) into the frame.
+   The 2-cycle delay lets a timed $D016 CSEL write dodge the right-border compare.
+   CSEL=1: one border decision for the whole 8-dot span (previous model).
+   CSEL=0: VICE draw_border8 — first 7 dots keep hborder_out_state, last dot takes
+   the new main_border (38-col edges at VIC X 31/335). */
 static void vicii_hborder_flush(vicii *v, bool main_border) {
     uint8_t i;
-    for (i = 0; i < v->hborder_pipe[0].n; i++) {
+    uint8_t n = v->hborder_pipe[0].n;
+
+    if (n == 0u) {
+        v->hborder_out_state = main_border;
+        return;
+    }
+
+    if (v->hborder_pipe[0].csel) {
+        for (i = 0; i < n; i++) {
+            v->working_frame.pixels[v->hborder_pipe[0].idx[i]] =
+                main_border ? v->hborder_pipe[0].border[i]
+                            : v->hborder_pipe[0].content[i];
+        }
+        v->hborder_out_state = main_border;
+        return;
+    }
+
+    /* CSEL=0: 7 dots previous state, then sample main_border for the last. */
+    for (i = 0; i < n && i < 7u; i++) {
         v->working_frame.pixels[v->hborder_pipe[0].idx[i]] =
-            main_border ? v->hborder_pipe[0].border[i]
-                        : v->hborder_pipe[0].content[i];
+            v->hborder_out_state ? v->hborder_pipe[0].border[i]
+                                 : v->hborder_pipe[0].content[i];
+    }
+    v->hborder_out_state = main_border;
+    if (n > 7u) {
+        v->working_frame.pixels[v->hborder_pipe[0].idx[7]] =
+            v->hborder_out_state ? v->hborder_pipe[0].border[7]
+                                 : v->hborder_pipe[0].content[7];
     }
 }
 
@@ -1544,22 +1574,16 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     check_csel = v->hborder_prev_csel;
     check_prev_csel = v->hborder_prev2_csel;
 
-    /* VICE viciisc check_hborder (PAL/NTSC identical cycles). Right compare sets
-       the main flip-flop at cycle 57 (csel=1) or 56 (csel=0); left compare at
-       cycle 17 (csel=1) or 18 (csel=0) applies the vertical-border latch and
-       clears main when the vertical border is inactive. */
-    /* c64m's CPU/VIC projection places the VICE cycle-56 CSEL fall at cycle 56
-       in EoD but at cycle 55 in lft-nine's CIA-synchronised stable raster.  In
-       the latter case CSEL has been low for one render cycle when the CSEL=0
-       compare is reached, while it was still high at the preceding sample.
-       Preserve that in-flight transition rather than mistaking it for a stable
-       38-column compare.  A CSEL=0 value stable for two samples still closes at
-       cycle 56, and the normal CSEL=1 compare remains cycle 57. */
-    if (cyc == (check_csel ? 57u : 56u) &&
+    /* VICE check_hborder under c64m's 2-cycle paint delay: left compare is always
+       cycle 17 (CSEL selects 40 vs 38 via draw_border8's 7+1 split, not the check
+       cycle). Right compare is cycle 57 (CSEL=1) or 55 (CSEL=0). A CSEL 1→0 that
+       is still in flight (prev sample high, current low) must not count as a
+       stable 38-col right compare — that is the side-border open window. */
+    if (cyc == (check_csel ? 57u : 55u) &&
         !(!check_csel && check_prev_csel)) {
         v->main_border_ff = true;
     }
-    if (cyc == (check_csel ? 17u : 18u)) {
+    if (cyc == 17u) {
         vicii_check_vborder_bottom(v);
         vicii_check_vborder_top(v);
         vicii_apply_vborder_latch(v);
@@ -1597,6 +1621,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
            captured at paint time so its own colour_latency is unchanged. */
         v->hborder_pipe[1].n = 0;
         v->hborder_pipe[1].mode = prep.mode;
+        v->hborder_pipe[1].csel = check_csel;
         for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
             int32_t raw_x = raw_xs + i;
             int32_t vic_x = raw_x;
