@@ -24,11 +24,15 @@ Phi2 schedule; frontend frames are copies.
   effects such as EoD's `FLIP`/`DISK` labels (they sit inside 16..287); a wider
   crop (the former rows 20..291) exposed lower-border content VICE hides - e.g.
   Deus Ex Machina's parked-pillar sprite-7 retract at raster 288 read as a
-  grey->black "dropout". NTSC uses 352x224 from X=8, Y=39 (rows 39..262). The display window is
-  51..250 on both standards, so NTSC has only 12 border lines below it; the
-  224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
-  it runs past raster 262 and exposes the frame's fill colour as a band under
-  the picture.
+  grey->black "dropout". Horizontally the PAL 384 crop is **VICE-centred**:
+  framebuffer x = VIC X + 8 (mod 504), so the 320 display lands at x32..351 with
+  32/32 left/right borders (`VICII_SCREEN_PAL_NORMAL_*BORDERWIDTH = 0x20`). VIC
+  hardware compares stay at X 24/344; only the paint landing shifts. NTSC still
+  uses offset 0 (measure before changing). NTSC crop is 352x224 from X=8, Y=39
+  (rows 39..262). The display window is 51..250 on both standards, so NTSC has
+  only 12 border lines below it; the 224-row crop takes 12 above and 12 below.
+  Do not give NTSC a PAL-sized crop - it runs past raster 262 and exposes the
+  frame's fill colour as a band under the picture.
 - Display aspect follows the frame, since the crops differ in height. The
   `True Aspect Ratio` option applies the pixel aspect ratio (PAL 0.9365, NTSC
   0.7500 - see codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the
@@ -117,10 +121,11 @@ plasma black blocks (every column was `$B`).
 **Read `README.md`'s "Diagnosis discipline" before theorising about a pixel
 defect.** The VIC-specific form of step 1 is: histogram *where* the wrong pixels
 are before naming a mechanism. Border-vs-field is the highest-value split, since
-x outside `[24,344)` is a different paint path entirely - a black-pixel histogram
-that landed every hit on x=0..23 and x=344..383 is what turned a supposed
-freecolor bug into a side-border one. Sprite-vs-graphics is the next split
-(`$D015` and `EOD_DUMP` answer it).
+VIC X outside `[24,344)` is a different paint path entirely (framebuffer x
+outside `[32,352)` on PAL after the +8 origin) - a black-pixel histogram that
+landed every hit on the side borders is what turned a supposed freecolor bug
+into a side-border one. Sprite-vs-graphics is the next split (`$D015` and
+`EOD_DUMP` answer it).
 
 For a timing investigation, classify the defect as (1) bus schedule/access kind,
 (2) BA/RDY/AEC arbitration, (3) raster/register timing, or (4) pixel composition.

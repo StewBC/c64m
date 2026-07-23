@@ -11,6 +11,8 @@ enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_COLOR_GREEN = 0xff56ac4du,
     TEST_COLOR_BLUE = 0xff2e2c9bu,
+    /* PAL framebuffer x = VIC X + 8 (VICE-centred 32/32 borders). */
+    TEST_PAL_FX = 8,
 };
 
 #define TEST_PALETTE_0   0xff000000u  /* black      */
@@ -435,7 +437,7 @@ static void test_frame_snapshot_geometry_and_regions(void) {
 
     corner = frame.pixels[0];
     /* PAL CSEL=1/RSEL=1: display window starts at x=24, y=51 */
-    active = frame.pixels[(51 + 10) * C64_FRAME_WIDTH + (24 + 10)];
+    active = frame.pixels[(51 + 10) * C64_FRAME_WIDTH + (24 + 10 + TEST_PAL_FX)];
     expect_true("corner is visible border", corner != 0);
     expect_not_u32("active differs from border", corner, active);
 }
@@ -478,16 +480,16 @@ static void test_character_rendering_uses_screen_char_rom_and_color_ram(void) {
     /* PAL CSEL=1/RSEL=1: display window starts at x=24, y=51.
        Character 1 glyph row 0=0x80 (bit 7 set) → foreground at sx=0 (x=24).
        Glyph row 1=0x40 (bit 6 set) → foreground at sx=1 (x=25) on next line. */
-    glyph_pixel          = frame_a.pixels[51 * C64_FRAME_WIDTH + 24];
-    background_pixel     = frame_a.pixels[51 * C64_FRAME_WIDTH + 25];
-    next_row_glyph_pixel = frame_a.pixels[52 * C64_FRAME_WIDTH + 25];
+    glyph_pixel          = frame_a.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)];
+    background_pixel     = frame_a.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)];
+    next_row_glyph_pixel = frame_a.pixels[52 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)];
 
     expect_u32("glyph foreground color", TEST_COLOR_GREEN, glyph_pixel);
     expect_u32("glyph background color", TEST_COLOR_BLUE, background_pixel);
     expect_u32("second glyph row foreground", TEST_COLOR_GREEN, next_row_glyph_pixel);
     expect_u32("deterministic glyph pixel",
-        frame_a.pixels[51 * C64_FRAME_WIDTH + 24],
-        frame_b.pixels[51 * C64_FRAME_WIDTH + 24]);
+        frame_a.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)],
+        frame_b.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_ntsc_character_rendering_uses_ntsc_top_border(void) {
@@ -530,10 +532,10 @@ static void test_border_rsel_csel(void) {
     expect_true("make frame rsel0", c64_make_frame_snapshot(&machine, &frame));
     /* y=52 is inside the extended top border (RSEL=0 top=55, was 51) */
     expect_u32("rsel0 extended top border at y=52", red,
-               frame.pixels[52 * C64_FRAME_WIDTH + 50]);
+               frame.pixels[52 * C64_FRAME_WIDTH + (50 + TEST_PAL_FX)]);
     /* y=56 is inside the display window with RSEL=0 (top=55 clears vborder) */
     expect_not_u32("rsel0 display at y=56", red,
-                   frame.pixels[56 * C64_FRAME_WIDTH + 50]);
+                   frame.pixels[56 * C64_FRAME_WIDTH + (50 + TEST_PAL_FX)]);
 
     /* CSEL=0: left border extends to x=30 (compare moves from 24 to 31).
        $D016 = 0x00: bit 3 (CSEL)=0 → 38 columns, left=31. XSCROLL=0. */
@@ -545,10 +547,10 @@ static void test_border_rsel_csel(void) {
     expect_true("make frame csel0", c64_make_frame_snapshot(&machine, &frame));
     /* x=26 is inside the extended left border (CSEL=0 left=31, was 24) */
     expect_u32("csel0 extended left border at x=26", red,
-               frame.pixels[60 * C64_FRAME_WIDTH + 26]);
+               frame.pixels[60 * C64_FRAME_WIDTH + (26 + TEST_PAL_FX)]);
     /* x=32 is inside the display window with CSEL=0 */
     expect_not_u32("csel0 display at x=32", red,
-                   frame.pixels[60 * C64_FRAME_WIDTH + 32]);
+                   frame.pixels[60 * C64_FRAME_WIDTH + (32 + TEST_PAL_FX)]);
 }
 
 static void test_xscroll_shifts_content(void) {
@@ -572,11 +574,11 @@ static void test_xscroll_shifts_content(void) {
     expect_true("xscroll1 frame", c64_make_frame_snapshot(&machine, &frame1));
 
     /* XSCROLL=0: foreground at x=24 (left=24, sx=0, glyph bit 7 set) */
-    expect_u32("xscroll0 fg at x=24", green, frame0.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("xscroll0 fg at x=24", green, frame0.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* XSCROLL=1: output is delayed by one pixel, so the same glyph bit moves to x=25. */
-    expect_not_u32("xscroll1 no fg at x=24", green, frame1.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("xscroll1 fg at x=25", green, frame1.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_not_u32("xscroll1 no fg at x=24", green, frame1.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u32("xscroll1 fg at x=25", green, frame1.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 }
 
 static void test_yscroll_shifts_content(void) {
@@ -600,11 +602,11 @@ static void test_yscroll_shifts_content(void) {
     expect_true("yscroll4 frame", c64_make_frame_snapshot(&machine, &frame4));
 
     /* YSCROLL=3: glyph row 0 at y=51 */
-    expect_u32("yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* YSCROLL=4: output is delayed by one raster line, so glyph row 0 moves to y=52. */
-    expect_not_u32("yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + 24]);
+    expect_not_u32("yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u32("yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_default_yscroll_fills_display_rows(void) {
@@ -625,9 +627,9 @@ static void test_default_yscroll_fills_display_rows(void) {
 
     expect_true("default yscroll frame", c64_make_frame_snapshot(&machine, &frame));
     expect_u32("default yscroll top row starts at display top",
-               green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               green, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("default yscroll bottom row reaches display bottom",
-               green, frame.pixels[250 * C64_FRAME_WIDTH + 24]);
+               green, frame.pixels[250 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_ecm_text_mode(void) {
@@ -659,14 +661,14 @@ static void test_ecm_text_mode(void) {
     make_live_frame(&machine, &frame, "make live ecm frame");
 
     /* Cell 0, sx=0 (x=24): glyph bit7 set → fg (green) */
-    expect_u32("ecm cell0 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("ecm cell0 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     /* Cell 0, sx=1 (x=25): glyph bit6 clear → B0C (blue) */
-    expect_u32("ecm cell0 bg is b0c", blue, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("ecm cell0 bg is b0c", blue, frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 
     /* Cell 1, sx=8 (x=32): glyph bit7 set → fg (green) */
-    expect_u32("ecm cell1 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+    expect_u32("ecm cell1 fg pixel", green, frame.pixels[51 * C64_FRAME_WIDTH + (32 + TEST_PAL_FX)]);
     /* Cell 1, sx=9 (x=33): glyph bit6 clear → B3C (cyan) */
-    expect_u32("ecm cell1 bg is b3c", cyan, frame.pixels[51 * C64_FRAME_WIDTH + 33]);
+    expect_u32("ecm cell1 bg is b3c", cyan, frame.pixels[51 * C64_FRAME_WIDTH + (33 + TEST_PAL_FX)]);
 }
 
 static void test_standard_bitmap_mode(void) {
@@ -684,9 +686,9 @@ static void test_standard_bitmap_mode(void) {
     make_live_frame(&machine, &frame, "make live bitmap frame");
 
     /* sx=0 (x=24): bitmap bit7=1 → fg = palette[10] */
-    expect_u32("bitmap fg at x=24", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("bitmap fg at x=24", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     /* sx=1 (x=25): bitmap bit6=0 → bg = palette[11] */
-    expect_u32("bitmap bg at x=25", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("bitmap bg at x=25", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 }
 
 static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
@@ -706,9 +708,9 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
 
     make_live_frame(&machine, &frame, "make live basic hires setup frame");
     expect_u32("basic hires setup foreground", 0xffffffffu,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("basic hires setup background", TEST_PALETTE_0,
-               frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 }
 
 static void test_multicolor_bitmap_mode(void) {
@@ -731,13 +733,13 @@ static void test_multicolor_bitmap_mode(void) {
     make_live_frame(&machine, &frame, "make live mcm bitmap frame");
 
     /* sx=0 (x=24): pair=3 → palette[color_ram[0]] = palette[5] = green */
-    expect_u32("mcmbm pair11 at x=24", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("mcmbm pair11 at x=24", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     /* sx=2 (x=26): pair=2 → palette[vm_byte & 0x0F] = palette[0xB] = palette[11] */
-    expect_u32("mcmbm pair10 at x=26", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + 26]);
+    expect_u32("mcmbm pair10 at x=26", TEST_PALETTE_11, frame.pixels[51 * C64_FRAME_WIDTH + (26 + TEST_PAL_FX)]);
     /* sx=4 (x=28): pair=1 → palette[(vm_byte>>4) & 0x0F] = palette[0xA] = palette[10] */
-    expect_u32("mcmbm pair01 at x=28", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + 28]);
+    expect_u32("mcmbm pair01 at x=28", TEST_PALETTE_10, frame.pixels[51 * C64_FRAME_WIDTH + (28 + TEST_PAL_FX)]);
     /* sx=6 (x=30): pair=0 → B0C = blue */
-    expect_u32("mcmbm pair00 at x=30", blue, frame.pixels[51 * C64_FRAME_WIDTH + 30]);
+    expect_u32("mcmbm pair00 at x=30", blue, frame.pixels[51 * C64_FRAME_WIDTH + (30 + TEST_PAL_FX)]);
 }
 
 static void test_mcm_text_mode(void) {
@@ -769,14 +771,14 @@ static void test_mcm_text_mode(void) {
     make_live_frame(&machine, &frame, "make live mcm text frame");
 
     /* Cell 0 hires: sx=0 (x=24) → glyph bit7=1 → fg = palette[5] = green */
-    expect_u32("mcm hires fg at x=24", green, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("mcm hires fg at x=24", green, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     /* Cell 0 hires: sx=1 (x=25) → glyph bit6=0 → B0C = blue */
-    expect_u32("mcm hires bg at x=25", blue, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("mcm hires bg at x=25", blue, frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 
     /* Cell 1 multicolor: sx=8 (x=32) → pair=2 → B2C = green */
-    expect_u32("mcm color pair2 at x=32", green, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+    expect_u32("mcm color pair2 at x=32", green, frame.pixels[51 * C64_FRAME_WIDTH + (32 + TEST_PAL_FX)]);
     /* Cell 1 multicolor: sx=10 (x=34) → pair=0 → B0C = blue */
-    expect_u32("mcm color pair0 at x=34", blue, frame.pixels[51 * C64_FRAME_WIDTH + 34]);
+    expect_u32("mcm color pair0 at x=34", blue, frame.pixels[51 * C64_FRAME_WIDTH + (34 + TEST_PAL_FX)]);
 }
 
 static void test_invalid_mode_forces_black(void) {
@@ -799,9 +801,9 @@ static void test_invalid_mode_forces_black(void) {
 
     /* Display window pixel: must be black */
     expect_u32("invalid display black at (51,24)", black,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("invalid display black at (100,100)", black,
-               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
 
     /* Mode 5: ECM=1, MCM=1 */
     reset_machine(&machine);
@@ -810,7 +812,7 @@ static void test_invalid_mode_forces_black(void) {
     c64_bus_write(&machine.bus, 0xd020, 0x02);
 
     make_live_frame(&machine, &frame, "make live mode5 frame");
-    expect_u32("mode5 display black", black, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("mode5 display black", black, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_live_raster_border_change_and_text(void) {
@@ -845,8 +847,8 @@ static void test_live_raster_border_change_and_text(void) {
        renderer paints a uniform border line at the written color. */
     expect_u32("live border left is written green", TEST_PALETTE_5, frame.pixels[8]);
     expect_u32("live border mid is written green", TEST_PALETTE_5, frame.pixels[32]);
-    expect_u32("live standard text foreground", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("live standard text background", TEST_PALETTE_6, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+    expect_u32("live standard text foreground", TEST_PALETTE_5, frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u32("live standard text background", TEST_PALETTE_6, frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
 }
 
 static void test_sprite_hires_appears_at_position(void) {
@@ -878,14 +880,14 @@ static void test_sprite_hires_appears_at_position(void) {
 
     make_live_frame(&machine, &frame, "sprite hires live frame");
 
-    px = frame.pixels[101 * C64_FRAME_WIDTH + 100];
+    px = frame.pixels[101 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)];
     if (px != sprite_color) {
         fprintf(stderr,
             "sprite at (100,101): got 0x%08x, expected 0x%08x\n",
             px, sprite_color);
         exit(1);
     }
-    px = frame.pixels[101 * C64_FRAME_WIDTH + 123];
+    px = frame.pixels[101 * C64_FRAME_WIDTH + (123 + TEST_PAL_FX)];
     if (px != sprite_color) {
         fprintf(stderr,
             "sprite at (123,101): got 0x%08x, expected 0x%08x\n",
@@ -926,9 +928,9 @@ static void test_sprite_midline_x_write_affects_remaining_dots(void) {
     expect_true("midline sprite x write frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("dots already painted keep original x", TEST_PALETTE_7,
-               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
     expect_u32("midline x write places sprite at new x for later dots", TEST_PALETTE_7,
-               frame.pixels[101 * C64_FRAME_WIDTH + 200]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (200 + TEST_PAL_FX)]);
 }
 
 static void test_sprite_y50_touches_top_border_fully_revealed(void) {
@@ -945,11 +947,11 @@ static void test_sprite_y50_touches_top_border_fully_revealed(void) {
     make_live_frame(&machine, &frame, "sprite y50 top border frame");
 
     expect_u32("sprite y50 does not draw in top border", TEST_PALETTE_2,
-               frame.pixels[50 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[50 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("sprite y50 first visible row touches display top", TEST_PALETTE_7,
-               frame.pixels[51 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("sprite y50 last row fully visible", TEST_PALETTE_7,
-               frame.pixels[71 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[71 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
@@ -960,9 +962,9 @@ static void test_sprite_y50_touches_top_border_fully_revealed(void) {
 
     make_live_frame(&machine, &frame, "sprite y51 one-line gap frame");
     expect_u32("sprite y51 leaves one display line above", TEST_PALETTE_6,
-               frame.pixels[51 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("sprite y51 starts on following line", TEST_PALETTE_7,
-               frame.pixels[52 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[52 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
 }
 
 static void test_sprite_sprite_collision_priority_and_irq(void) {
@@ -979,7 +981,7 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
     make_live_frame(&machine, &frame, "sprite-sprite collision frame");
 
     expect_u32("sprite 0 wins visual priority", TEST_PALETTE_7,
-               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
     expect_u8("immc irq pending", 0xf5, vicii_read_register(&machine.vic, 0xd019));
 
     /* Bauer/VICE: IRQ only on 0→nonzero latch. Ack $D019 while $D01E stays set
@@ -1016,7 +1018,7 @@ static void test_sprite_background_priority_and_collision(void) {
 
     make_live_frame(&machine, &frame, "front sprite over text frame");
     expect_u32("front sprite hides foreground text", TEST_PALETTE_7,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u8("imbc irq pending", 0xf3, vicii_read_register(&machine.vic, 0xd019));
     expect_u8("d01f front sprite collides with foreground", 0x01, vicii_read_register(&machine.vic, 0xd01f));
 
@@ -1031,7 +1033,7 @@ static void test_sprite_background_priority_and_collision(void) {
 
     make_live_frame(&machine, &frame, "behind sprite over text frame");
     expect_u32("foreground text hides behind sprite", TEST_PALETTE_5,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u8("behind sprite still collides with foreground", 0x01, vicii_read_register(&machine.vic, 0xd01f));
 
     reset_machine(&machine);
@@ -1043,7 +1045,7 @@ static void test_sprite_background_priority_and_collision(void) {
 
     make_live_frame(&machine, &frame, "behind sprite over background frame");
     expect_u32("behind sprite visible over background", TEST_PALETTE_7,
-               frame.pixels[101 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
     expect_u8("no sprite-background collision on background pixel", 0x00, vicii_read_register(&machine.vic, 0xd01f));
 }
 
@@ -1060,7 +1062,7 @@ static void test_border_hides_sprites_but_collision_latches(void) {
     make_live_frame(&machine, &frame, "border sprite collision frame");
 
     expect_u32("border hides sprite pixel", TEST_PALETTE_2,
-               frame.pixels[11 * C64_FRAME_WIDTH + 10]);
+               frame.pixels[11 * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
     expect_u8("sprite collision latches under border", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
@@ -1191,7 +1193,7 @@ static void test_live_bottom_border_can_be_opened_for_sprites(void) {
 
     make_live_frame(&machine, &frame, "closed bottom border frame");
     expect_u32("closed bottom border hides sprite", TEST_PALETTE_2,
-               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
@@ -1217,11 +1219,11 @@ static void test_live_bottom_border_can_be_opened_for_sprites(void) {
     expect_true("opened bottom border frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("opened bottom border shows sprite first row", TEST_PALETTE_7,
-               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("opened bottom border shows sprite last row", TEST_PALETTE_7,
-               frame.pixels[271 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[271 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("opened bottom border keeps side border", TEST_PALETTE_2,
-               frame.pixels[251 * C64_FRAME_WIDTH + 10]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
 }
 
 static void test_ntsc_live_bottom_border_can_be_opened_for_sprites(void) {
@@ -1238,7 +1240,7 @@ static void test_ntsc_live_bottom_border_can_be_opened_for_sprites(void) {
 
     make_live_frame(&machine, &frame, "ntsc closed bottom border frame");
     expect_u32("ntsc closed bottom border hides sprite", TEST_PALETTE_2,
-               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
 
     reset_machine_with_standard(&machine, C64_VIDEO_STANDARD_NTSC);
     c64_bus_write(&machine.bus, 0xd011, 0x1b);
@@ -1266,11 +1268,11 @@ static void test_ntsc_live_bottom_border_can_be_opened_for_sprites(void) {
     expect_true("ntsc opened bottom border frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("ntsc opened bottom border shows sprite first row", TEST_PALETTE_7,
-               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("ntsc opened bottom border shows sprite last row", TEST_PALETTE_7,
-               frame.pixels[261 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[261 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("ntsc opened bottom border keeps side border", TEST_PALETTE_2,
-               frame.pixels[251 * C64_FRAME_WIDTH + 10]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
 }
 
 /* Galencia-class HUD: sprite Y=254 paints lines 255..275. PAL paint height is
@@ -1304,9 +1306,9 @@ static void test_live_deep_bottom_border_sprite_is_painted(void) {
     expect_u32("PAL paint height matches lines_per_frame",
                machine.vic.timing.lines_per_frame, frame.height);
     expect_u32("deep sprite first row", TEST_PALETTE_7,
-               frame.pixels[255 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[255 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("deep sprite last row", TEST_PALETTE_7,
-               frame.pixels[275 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[275 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
 }
 
 /* VICE sprite_display_bits is sticky once set while DMA is on: clearing $D015
@@ -1350,13 +1352,13 @@ static void test_d015_clear_keeps_active_sprite_display(void) {
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("sprite still paints first open-border row", TEST_PALETTE_7,
-               frame.pixels[251 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[251 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("sprite still paints after d015 clear", TEST_PALETTE_7,
-               frame.pixels[260 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[260 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("sprite still paints last dma row after d015 clear", TEST_PALETTE_7,
-               frame.pixels[271 * C64_FRAME_WIDTH + 46]);
+               frame.pixels[271 * C64_FRAME_WIDTH + (46 + TEST_PAL_FX)]);
     expect_u32("side border still covers sprites", TEST_PALETTE_2,
-               frame.pixels[260 * C64_FRAME_WIDTH + 10]);
+               frame.pixels[260 * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
 }
 
 /* Step B/C main-border flip-flop: a timed $D016 CSEL 1->0 write at cycle 56 (the
@@ -1382,7 +1384,7 @@ static void test_live_right_side_border_opens(void) {
     c64_bus_write(&machine.bus, 0xd021, 0x06); /* blue background */
     make_live_frame(&machine, &frame, "closed right side border frame");
     expect_u32("closed right side border is border colour", TEST_PALETTE_2,
-               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (350 + TEST_PAL_FX)]);
 
     /* Opened: flip CSEL 1->0 at cycle 56 of raster 100. Neither the CSEL=1 right
        compare (cycle 57) nor the CSEL=0 right compare (cycle 56) fires for this
@@ -1405,10 +1407,10 @@ static void test_live_right_side_border_opens(void) {
     expect_true("opened right side border frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("opened right side border shows background", TEST_PALETTE_6,
-               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (350 + TEST_PAL_FX)]);
     /* A line the write did not touch keeps its closed right border. */
     expect_u32("untouched line keeps closed right border", TEST_PALETTE_2,
-               frame.pixels[99 * C64_FRAME_WIDTH + 350]);
+               frame.pixels[99 * C64_FRAME_WIDTH + (350 + TEST_PAL_FX)]);
 }
 
 /* Writing CSEL too early (well before the cycle-56 open window) makes the VIC
@@ -1436,7 +1438,7 @@ static void test_live_side_border_wrong_cycle_stays_closed(void) {
     expect_true("wrong-cycle side border frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("wrong-cycle write keeps right border closed", TEST_PALETTE_2,
-               frame.pixels[100 * C64_FRAME_WIDTH + 350]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (350 + TEST_PAL_FX)]);
 }
 
 /* The flip-flop persists across the line boundary: opening the right border on
@@ -1468,7 +1470,7 @@ static void test_live_side_border_flip_flop_persists_left(void) {
     expect_true("persist-left side border frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("left region open on next line (flip-flop stayed clear)",
-               TEST_PALETTE_6, frame.pixels[101 * C64_FRAME_WIDTH + 10]);
+               TEST_PALETTE_6, frame.pixels[101 * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
 }
 
 /* A sprite positioned in the right side border is hidden while the border is
@@ -1488,7 +1490,7 @@ static void test_live_side_border_reveals_sprite(void) {
     setup_solid_sprite(&machine, 0, 0x0340, 350, 100, 7);
     make_live_frame(&machine, &frame, "closed side border sprite frame");
     expect_u32("closed side border hides sprite", TEST_PALETTE_2,
-               frame.pixels[101 * C64_FRAME_WIDTH + 352]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (352 + TEST_PAL_FX)]);
 
     /* Opened on raster 101: the sprite becomes visible in the side border. */
     reset_machine(&machine);
@@ -1509,7 +1511,7 @@ static void test_live_side_border_reveals_sprite(void) {
     expect_true("opened side border sprite frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("opened side border reveals sprite", TEST_PALETTE_7,
-               frame.pixels[101 * C64_FRAME_WIDTH + 352]);
+               frame.pixels[101 * C64_FRAME_WIDTH + (352 + TEST_PAL_FX)]);
 }
 
 /* Main-border strips always use $D020 (even when DEN=0). Leave the vertical
@@ -1542,12 +1544,12 @@ static void test_den_clear_main_border_keeps_d020_full_height(void) {
 
     for (y = 60; y < 200u; y++) {
         expect_u32("left main-border strip is d020 when DEN=0", TEST_PALETTE_0,
-                   frame.pixels[y * C64_FRAME_WIDTH + 10]);
+                   frame.pixels[y * C64_FRAME_WIDTH + (10 + TEST_PAL_FX)]);
         expect_u32("right main-border strip is d020 when DEN=0", TEST_PALETTE_0,
-                   frame.pixels[y * C64_FRAME_WIDTH + 360]);
+                   frame.pixels[y * C64_FRAME_WIDTH + (360 + TEST_PAL_FX)]);
     }
     expect_u32("den0 interior is d021", TEST_PALETTE_6,
-               frame.pixels[100 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
 }
 
 /* Step D: an opened side border shows *zero* graphics data, not the $3FFF ghost
@@ -1584,9 +1586,9 @@ static void test_live_side_border_shows_zero_graphics(void) {
     expect_true("zero-graphics side border frame",
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("opened border is B0C where the ghost byte had set bits",
-               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + 344]);
+               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + (344 + TEST_PAL_FX)]);
     expect_u32("opened border is B0C where the ghost byte had clear bits",
-               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + 348]);
+               TEST_PALETTE_6, frame.pixels[100 * C64_FRAME_WIDTH + (348 + TEST_PAL_FX)]);
 }
 
 /* XSCROLL phases the graphics shift register, and that phasing carries the last
@@ -1642,9 +1644,9 @@ static void test_live_open_border_right_edge_xscroll_delayed(void) {
     /* XSCROLL=0: foreground pair at x=343 (validates the column-39 addressing),
        over-border B0C begins at x=344. */
     expect_u32("xscroll0 col39 foreground at x=343", TEST_PALETTE_10,
-               frame0.pixels[row * C64_FRAME_WIDTH + 343]);
+               frame0.pixels[row * C64_FRAME_WIDTH + (343 + TEST_PAL_FX)]);
     expect_u32("xscroll0 over-border B0C at x=344", TEST_PALETTE_6,
-               frame0.pixels[row * C64_FRAME_WIDTH + 344]);
+               frame0.pixels[row * C64_FRAME_WIDTH + (344 + TEST_PAL_FX)]);
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x18);
@@ -1671,9 +1673,9 @@ static void test_live_open_border_right_edge_xscroll_delayed(void) {
        pushed out to x=345. A fixed x>=344 over-border cutoff would paint B0C here
        instead — the water-scene line. */
     expect_u32("xscroll1 col39 foreground carried to x=344", TEST_PALETTE_10,
-               frame1.pixels[row * C64_FRAME_WIDTH + 344]);
+               frame1.pixels[row * C64_FRAME_WIDTH + (344 + TEST_PAL_FX)]);
     expect_u32("xscroll1 over-border B0C at x=345", TEST_PALETTE_6,
-               frame1.pixels[row * C64_FRAME_WIDTH + 345]);
+               frame1.pixels[row * C64_FRAME_WIDTH + (345 + TEST_PAL_FX)]);
 }
 
 /* A same-cycle Phi2 $D016 MCM write must reach the display column painted on
@@ -1710,7 +1712,7 @@ static void test_live_mcm_toggle_reaches_column0_same_cycle(void) {
     }
     expect_true("control frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("MCM=0 col0 x=24 is hires fg (VM high, palette 2)",
-               TEST_PALETTE_2, frame.pixels[row * C64_FRAME_WIDTH + 24]);
+               TEST_PALETTE_2, frame.pixels[row * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* Fix: MCM=0 through begin_cycle(15) (column 0 paints hires), then the CPU
        sets MCM=1 during that same cycle's Phi2, before finish_cycle(15). Column
@@ -1738,7 +1740,7 @@ static void test_live_mcm_toggle_reaches_column0_same_cycle(void) {
     }
     expect_true("mcm-toggle frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("same-cycle MCM write reaches col0 x=24 (MC, VM low, palette 10)",
-               TEST_PALETTE_10, frame.pixels[row * C64_FRAME_WIDTH + 24]);
+               TEST_PALETTE_10, frame.pixels[row * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 /* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
@@ -1829,11 +1831,11 @@ static void test_live_mcm_idle_ghost_is_hires(void) {
        x=96..99 foreground (colour 0), x=100..103 background (B0C) -- four solid
        dots each, not multicolor pairs. */
     expect_u32("mcm idle hires fg at x=96", TEST_PALETTE_0,
-               frame.pixels[52 * C64_FRAME_WIDTH + 96]);
+               frame.pixels[52 * C64_FRAME_WIDTH + (96 + TEST_PAL_FX)]);
     expect_u32("mcm idle hires fg at x=99", TEST_PALETTE_0,
-               frame.pixels[52 * C64_FRAME_WIDTH + 99]);
+               frame.pixels[52 * C64_FRAME_WIDTH + (99 + TEST_PAL_FX)]);
     expect_u32("mcm idle hires bg at x=100", TEST_PALETTE_6,
-               frame.pixels[52 * C64_FRAME_WIDTH + 100]);
+               frame.pixels[52 * C64_FRAME_WIDTH + (100 + TEST_PAL_FX)]);
 }
 
 static void test_den_clear_blanks_text_display(void) {
@@ -1850,16 +1852,16 @@ static void test_den_clear_blanks_text_display(void) {
 
     expect_true("den set snapshot", c64_make_frame_snapshot(&machine, &frame));
     expect_u32("den set text foreground", TEST_PALETTE_5,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     c64_bus_write(&machine.bus, 0xd011, 0x0b); /* DEN=0, RSEL=1, YSCROLL=3 */
     expect_true("den clear snapshot", c64_make_frame_snapshot(&machine, &frame));
     /* DEN=0 prevents the top vertical-FF clear, so main never opens and the
        whole frame is $D020 (including former display pixels). */
     expect_u32("den clear keeps d020 on former foreground", TEST_PALETTE_2,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("den clear keeps d020 on background pixel", TEST_PALETTE_2,
-               frame.pixels[51 * C64_FRAME_WIDTH + 25]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
     expect_u32("den clear snapshot border keeps d020", TEST_PALETTE_2,
                frame.pixels[0]);
 }
@@ -1901,7 +1903,7 @@ static void test_den_clear_mid_display_keeps_graphics_pipeline(void) {
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
     expect_u32("den clear mid-display preserves foreground graphics",
                TEST_PALETTE_5,
-               frame.pixels[100 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[100 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_den_clear_keeps_sprite_visible(void) {
@@ -1931,15 +1933,15 @@ static void test_den_clear_keeps_sprite_visible(void) {
 
     make_live_frame(&machine, &frame, "den clear sprite visible frame");
     expect_u32("den clear live border keeps d020", TEST_PALETTE_2,
-               frame.pixels[40 * C64_FRAME_WIDTH + 20]);
+               frame.pixels[40 * C64_FRAME_WIDTH + (20 + TEST_PAL_FX)]);
     expect_u32("den clear live crop bottom keeps d020", TEST_PALETTE_2,
-               frame.pixels[270 * C64_FRAME_WIDTH + 20]);
+               frame.pixels[270 * C64_FRAME_WIDTH + (20 + TEST_PAL_FX)]);
     expect_u32("den clear live frame bottom keeps d020", TEST_PALETTE_2,
-               frame.pixels[(C64_FRAME_HEIGHT - 1) * C64_FRAME_WIDTH + 20]);
+               frame.pixels[(C64_FRAME_HEIGHT - 1) * C64_FRAME_WIDTH + (20 + TEST_PAL_FX)]);
     expect_u32("den clear live display background is d021", TEST_PALETTE_6,
-               frame.pixels[51 * C64_FRAME_WIDTH + 60]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (60 + TEST_PAL_FX)]);
     expect_u32("den clear sprite visible over blanked display", TEST_PALETTE_7,
-               frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 static void test_den_clear_idle_has_no_sprite_background_collision(void) {
@@ -2960,10 +2962,10 @@ static void test_live_yscroll_shifts_content(void) {
     machine.bus.color_ram[0] = 5;
     run_vic_frame_with_injections(&machine, NULL, 0, &frame4);
 
-    expect_u32("live yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_not_u32("live yscroll3 no fg at y=52", green, frame3.pixels[52 * C64_FRAME_WIDTH + 24]);
-    expect_not_u32("live yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + 24]);
-    expect_u32("live yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + 24]);
+    expect_u32("live yscroll3 fg at y=51", green, frame3.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_not_u32("live yscroll3 no fg at y=52", green, frame3.pixels[52 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_not_u32("live yscroll4 no fg at y=51", green, frame4.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u32("live yscroll4 fg at y=52", green, frame4.pixels[52 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 /* Fort Apocalypse: DEN=1, RSEL=0 (24 rows), $D011 = $10 | YSCROLL. Soft scroll
@@ -2992,9 +2994,9 @@ static void test_live_yscroll_rsel0_fort_style(void) {
     run_vic_frame_with_injections(&machine, NULL, 0, &frame4);
 
     /* Synthetic char 1 has row 7 = 0x80. YSCROLL=3: RC=7 at y=58; YSCROLL=4: at y=59. */
-    expect_u32("rsel0 yscroll3 row7 at y=58", green, frame3.pixels[58 * C64_FRAME_WIDTH + 24]);
-    expect_u32("rsel0 yscroll4 row7 at y=59", green, frame4.pixels[59 * C64_FRAME_WIDTH + 24]);
-    expect_not_u32("rsel0 yscroll4 y=58 not row7", green, frame4.pixels[58 * C64_FRAME_WIDTH + 24]);
+    expect_u32("rsel0 yscroll3 row7 at y=58", green, frame3.pixels[58 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u32("rsel0 yscroll4 row7 at y=59", green, frame4.pixels[59 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_not_u32("rsel0 yscroll4 y=58 not row7", green, frame4.pixels[58 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 
@@ -3048,10 +3050,10 @@ static void test_fort_dual_zone_yscroll(void) {
 
     /* Find first green in lower half (y>=130) column 24 for each frame */
     for (y = 130u; y < 250u; y++) {
-        if (found3 == 0xffffffffu && f3.pixels[y * C64_FRAME_WIDTH + 24] == green) {
+        if (found3 == 0xffffffffu && f3.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == green) {
             found3 = y;
         }
-        if (found4 == 0xffffffffu && f4.pixels[y * C64_FRAME_WIDTH + 24] == green) {
+        if (found4 == 0xffffffffu && f4.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == green) {
             found4 = y;
         }
     }
@@ -3122,10 +3124,10 @@ static void test_fort_soft_scroll_unique_rows(void) {
     run_vic_frame_with_injections(&machine, inj4, 2u, &f4);
 
     for (y = 51u; y < 250u; y++) {
-        if (f3.pixels[y * C64_FRAME_WIDTH + 24] == white && n3 < 40u) {
+        if (f3.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n3 < 40u) {
             lit3[n3++] = y;
         }
-        if (f4.pixels[y * C64_FRAME_WIDTH + 24] == white && n4 < 40u) {
+        if (f4.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n4 < 40u) {
             lit4[n4++] = y;
         }
     }
@@ -3208,10 +3210,10 @@ static void test_fort_soft_y7_to_y6_transition(void) {
     run_vic_frame_with_injections(&machine, inj6, 2u, &f6);
 
     for (y = 130u; y < 250u; y++) {
-        if (f7.pixels[y * C64_FRAME_WIDTH + 24] == white && n7 < 40u) {
+        if (f7.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n7 < 40u) {
             lit7[n7++] = y;
         }
-        if (f6.pixels[y * C64_FRAME_WIDTH + 24] == white && n6 < 40u) {
+        if (f6.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n6 < 40u) {
             lit6[n6++] = y;
         }
     }
@@ -3282,10 +3284,10 @@ static void test_fort_soft_y1_to_y2_smooth(void) {
     run_vic_frame_with_injections(&machine, inj2, 2u, &f2);
 
     for (y = 130u; y < 250u; y++) {
-        if (f1.pixels[y * C64_FRAME_WIDTH + 24] == white && n1 < 40u) {
+        if (f1.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n1 < 40u) {
             lit1[n1++] = y;
         }
-        if (f2.pixels[y * C64_FRAME_WIDTH + 24] == white && n2 < 40u) {
+        if (f2.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] == white && n2 < 40u) {
             lit2[n2++] = y;
         }
     }
@@ -3375,15 +3377,15 @@ static void test_expose_harness_renders_bitmap_and_metric(void) {
     run_vic_frame_with_injections(&machine, NULL, 0, &frame);
 
     /* Inside the display window (row 100, a solid column) -> white foreground. */
-    in_window = frame.pixels[100 * C64_FRAME_WIDTH + 160];
+    in_window = frame.pixels[100 * C64_FRAME_WIDTH + (160 + TEST_PAL_FX)];
     expect_u32("harness bitmap in-window is white", white, in_window);
 
     /* Above the display window (row 10) -> border/idle black. */
-    above_window = frame.pixels[10 * C64_FRAME_WIDTH + 160];
+    above_window = frame.pixels[10 * C64_FRAME_WIDTH + (160 + TEST_PAL_FX)];
     expect_u32("harness bitmap above-window is black", black, above_window);
 
     /* Display window is 200 lines (raster 51..250); all lit, nothing else. */
-    lit = count_lit_rows(&frame, 24u, 344u, black);
+    lit = count_lit_rows(&frame, 24u + (uint32_t)TEST_PAL_FX, 344u + (uint32_t)TEST_PAL_FX, black);
     expect_u32("lit-row metric counts the 200 display rows", 200u, lit);
 }
 
@@ -3408,15 +3410,15 @@ static void test_expose_harness_midline_injection_hits_exact_column(void) {
        $D020 by one pixel: x=63 (cycle 19) and x=64 (first pixel of the write
        cycle) stay red; x=65 is the first green. */
     expect_u32("border last dot before mid-line write is red",
-        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 63]);
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + (63 + TEST_PAL_FX)]);
     expect_u32("border write-cycle first pixel still red (6569 1px latency)",
-        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + (64 + TEST_PAL_FX)]);
     expect_u32("border second pixel of write cycle is green",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 65]);
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + (65 + TEST_PAL_FX)]);
 
     /* The next line (11) is fully past the write -> entirely green. */
     expect_u32("subsequent line fully takes new border color",
-        TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + 90]);
+        TEST_PALETTE_5, frame.pixels[11 * C64_FRAME_WIDTH + (90 + TEST_PAL_FX)]);
 }
 
 /* The machine's real phase order is VIC begin -> CPU Phi2 -> VIC finish.  VICE
@@ -3449,11 +3451,11 @@ static void test_color_latency_resolves_same_cycle_phi2_d020_write(void) {
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("same-cycle Phi2 D020 keeps oldest pending dot old",
-        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + 56]);
+        TEST_PALETTE_2, frame.pixels[10 * C64_FRAME_WIDTH + (56 + TEST_PAL_FX)]);
     expect_u32("same-cycle Phi2 D020 changes next pending dot",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 57]);
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + (57 + TEST_PAL_FX)]);
     expect_u32("same-cycle Phi2 D020 changes newer pending span",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 64]);
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + (64 + TEST_PAL_FX)]);
 }
 
 /* $D021 uses the same unresolved-colour-token ring as $D020 in VICE.  A
@@ -3492,13 +3494,13 @@ static void test_color_latency_resolves_same_cycle_phi2_d021_write(void) {
                 vicii_copy_completed_frame(&machine.vic, &frame, abs));
 
     expect_u32("same-cycle Phi2 D021 keeps oldest pending dot old",
-        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + 56]);
+        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + (56 + TEST_PAL_FX)]);
     expect_u32("same-cycle Phi2 D021 changes next pending dot",
-        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + 57]);
+        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + (57 + TEST_PAL_FX)]);
     expect_u32("same-cycle Phi2 D021 changes newer pending span",
-        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + 64]);
+        TEST_PALETTE_5, frame.pixels[100 * C64_FRAME_WIDTH + (64 + TEST_PAL_FX)]);
     expect_u32("same-cycle Phi2 D021 does not recolour matching sprite pixel",
-        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + 65]);
+        TEST_PALETTE_2, frame.pixels[100 * C64_FRAME_WIDTH + (65 + TEST_PAL_FX)]);
 }
 
 /* VICE draw_colors runs on every cycle, including HBLANK. A $D020 write at
@@ -3519,12 +3521,12 @@ static void test_color_latency_drains_during_hblank(void) {
     run_vic_frame_with_injections(&machine, injs, 1u, &frame);
 
     expect_u32("HBLANK $D020 write: first visible pixel is new colour",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 0]);
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + (0 + TEST_PAL_FX)]);
     expect_u32("HBLANK $D020 write: rest of line is new colour",
-        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + 90]);
+        TEST_PALETTE_5, frame.pixels[10 * C64_FRAME_WIDTH + (90 + TEST_PAL_FX)]);
     /* Prior line was still red at its last painted columns. */
     expect_u32("prior line still old border colour",
-        TEST_PALETTE_2, frame.pixels[9 * C64_FRAME_WIDTH + 90]);
+        TEST_PALETTE_2, frame.pixels[9 * C64_FRAME_WIDTH + (90 + TEST_PAL_FX)]);
 }
 
 /* Phase 2 (C64MVICIIEXPHASES): address generation is counter-driven. A bad line
@@ -3560,9 +3562,9 @@ static void test_expose_forced_badline_resets_row_counter(void) {
     /* Baseline: no forcing. With YSCROLL=3, raster 54 is RC=3 -> blank cell row. */
     run_vic_frame_with_injections(&machine, NULL, 0, &frame);
     expect_u32("baseline raster 52 (RC=1) is lit",
-        white, frame.pixels[52 * C64_FRAME_WIDTH + 24]);
+        white, frame.pixels[52 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("baseline raster 54 (RC=3) is blank",
-        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+        black, frame.pixels[54 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* Forced: the extra bad line at 53 resets RC, so raster 54 is now RC=1 and
        lit -- even though YSCROLL is back to 3, exactly as in the baseline. */
@@ -3577,7 +3579,7 @@ static void test_expose_forced_badline_resets_row_counter(void) {
 
     run_vic_frame_with_injections(&machine, injs, 2u, &frame);
     expect_u32("forced bad line shifts raster 54 to RC=1 (now lit)",
-        white, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+        white, frame.pixels[54 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 /* Phase 3 (C64MVICIIEXPHASES): the display reads character/colour data from the
@@ -3612,14 +3614,14 @@ static void test_expose_video_matrix_latched_at_badline(void) {
     setup_latch_bitmap(&machine);
     run_vic_frame_with_injections(&machine, pre, 1u, &frame);
     expect_u32("pre-badline RAM write is latched (green)",
-        green, frame.pixels[53 * C64_FRAME_WIDTH + 24]);
+        green, frame.pixels[53 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* After the bad line: latch keeps the old value for the rest of the row ->
        raster 53 stays red even though screen RAM now reads 0x15. */
     setup_latch_bitmap(&machine);
     run_vic_frame_with_injections(&machine, post, 1u, &frame);
     expect_u32("post-badline RAM write is NOT seen this row (red)",
-        red, frame.pixels[53 * C64_FRAME_WIDTH + 24]);
+        red, frame.pixels[53 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 /* Phase 4 (C64MVICIIEXPHASES): idle vs display is selected by the sequencer's
@@ -3655,16 +3657,16 @@ static void test_expose_idle_state_shows_idle_graphics_in_window(void) {
 
     /* Raster 57 (display state on, RC=6) shows the bitmap foreground. */
     expect_u32("in-display line shows bitmap (white)",
-        white, frame.pixels[57 * C64_FRAME_WIDTH + 24]);
+        white, frame.pixels[57 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* Raster 59 (bad line suppressed -> display state off) shows idle graphics
        (black), NOT the bitmap and NOT the red B0C background. */
     expect_u32("suppressed-badline line shows idle graphics (black)",
-        black, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+        black, frame.pixels[59 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_not_u32("suppressed-badline line is not the B0C background",
-        red, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+        red, frame.pixels[59 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_not_u32("suppressed-badline line is not the bitmap",
-        white, frame.pixels[59 * C64_FRAME_WIDTH + 24]);
+        white, frame.pixels[59 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 /* Phase 5 (C64MVICIIEXPHASES): Bad Line Condition is evaluated every cycle, so a
@@ -3709,23 +3711,23 @@ static void test_expose_midline_d011_forces_badline(void) {
     setup_rc_probe_bitmap(&machine);
     run_vic_frame_with_injections(&machine, NULL, 0, &frame);
     expect_u32("baseline raster 52 is RC=1 (lit)",
-        white, frame.pixels[52 * C64_FRAME_WIDTH + 24]);
+        white, frame.pixels[52 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("baseline raster 54 is RC=3 (blank)",
-        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+        black, frame.pixels[54 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 
     /* Mid-line force at cycle 12 of raster 53 restarts the row, so raster 54 is
        now RC=1 and lit. Only possible if the bad line is evaluated after cycle 0. */
     setup_rc_probe_bitmap(&machine);
     run_vic_frame_with_injections(&machine, injs, 2u, &frame);
     expect_true("mid-line $D011 force makes raster 54 RC=1 (lit)",
-        frame.pixels[54 * C64_FRAME_WIDTH + 24] != black);
+        frame.pixels[54 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)] != black);
 
     /* Write after cycle 14: condition can open display/c-accesses, but RC is not
        cleared, so line 54 stays at RC=3 (blank) like the baseline. */
     setup_rc_probe_bitmap(&machine);
     run_vic_frame_with_injections(&machine, late, 2u, &frame);
     expect_u32("post-cycle-14 $D011 force does not reset RC (raster 54 blank)",
-        black, frame.pixels[54 * C64_FRAME_WIDTH + 24]);
+        black, frame.pixels[54 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
 }
 
 
@@ -3794,20 +3796,20 @@ static void test_open_border_sprite_matrix_checker_joins(void) {
 
         for (y = 60; y <= 70; y++) {
             int x;
-            for (x = 0; x < 24; x++) {
+            for (x = 0; x < 32; x++) {
                 if (frame.pixels[y * C64_FRAME_WIDTH + x] == yellow) {
                     yellow_px++;
                 }
             }
             {
-                uint32_t a = frame.pixels[y * C64_FRAME_WIDTH + 23];
-                uint32_t b = frame.pixels[y * C64_FRAME_WIDTH + 24];
+                uint32_t a = frame.pixels[y * C64_FRAME_WIDTH + (23 + TEST_PAL_FX)];
+                uint32_t b = frame.pixels[y * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)];
                 if ((a == yellow || a == blue) && (b == yellow || b == blue)) {
                     rows++;
                     if (a == b) seams++;
                 }
-                if (frame.pixels[y * C64_FRAME_WIDTH + 16] ==
-                    frame.pixels[y * C64_FRAME_WIDTH + 17]) {
+                if (frame.pixels[y * C64_FRAME_WIDTH + (16 + TEST_PAL_FX)] ==
+                    frame.pixels[y * C64_FRAME_WIDTH + (17 + TEST_PAL_FX)]) {
                     doubles++;
                 }
             }

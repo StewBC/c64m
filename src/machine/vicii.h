@@ -181,9 +181,10 @@ struct vicii {
        cycles earlier than the check: content pixels are buffered and flushed two
        render cycles late with the then-current flip-flop. This lets a mid-line
        $D016 CSEL write dodge the right-border compare (open side borders) while
-       keeping normal-screen edges at x=24/344. Two CSEL samples are retained
-       because c64m currently projects VICE's cycle-56 store at cycle 56 in EoD
-       and cycle 55 in lft-nine's CIA-synchronised loop; both are still in flight
+       keeping normal-screen edges at VIC X 24/344 (framebuffer x 32/352 on
+       PAL after the +8 frame origin). Two CSEL samples are retained because
+       c64m currently projects VICE's cycle-56 store at cycle 56 in EoD and
+       cycle 55 in lft-nine's CIA-synchronised loop; both are still in flight
        at the compare, while a stable 38-column value closes normally. */
     bool     hborder_prev_csel;
     bool     hborder_prev2_csel;

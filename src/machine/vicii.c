@@ -69,6 +69,12 @@ enum {
     VICII_HBORDER_RIGHT_40      = 344,
     VICII_HBORDER_LEFT_38       = 31,
     VICII_HBORDER_RIGHT_38      = 335,
+
+    /* PAL published frame is 384 wide with the 320 display centred (VICE
+       VICII_SCREEN_PAL_NORMAL_*BORDERWIDTH = 32/32). Hardware display still
+       starts at VIC X=24; the framebuffer origin is shifted +8 so left/right
+       borders are 32/32. NTSC keeps offset 0 until measured separately. */
+    VICII_PAL_FRAME_X_OFFSET    = 8,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -132,6 +138,50 @@ static uint32_t vicii_frame_height(const vicii *v) {
     return v->timing.lines_per_frame < C64_FRAME_HEIGHT ?
         v->timing.lines_per_frame :
         (uint32_t)C64_FRAME_HEIGHT;
+}
+
+/* Dots per raster line: PAL 504, NTSC 520. */
+static uint32_t vicii_line_dots(const vicii *v) {
+    return v->timing.cycles_per_line * (uint32_t)VICII_CHARACTER_WIDTH;
+}
+
+/* Horizontal framebuffer origin relative to VIC X. Decouples paint landing
+   from VIC-X semantics (border compares, sprites, XSCROLL) so the 384 crop can
+   be VICE-centred without changing hardware X constants. */
+static int32_t vicii_frame_x_offset(const vicii *v) {
+    if (v->timing.standard == VICII_VIDEO_STANDARD_PAL) {
+        return (int32_t)VICII_PAL_FRAME_X_OFFSET;
+    }
+    return 0;
+}
+
+/* VIC X (possibly negative before modular normalise) → framebuffer x, or -1 if
+   outside the 384-wide published crop. Wrap uses the full line length so the
+   extra 8 left-border pixels come from the previous line's tail (VIC X ~496..503
+   on PAL). */
+static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
+    int32_t dots = (int32_t)vicii_line_dots(v);
+    int32_t fb;
+
+    if (vic_x < 0) {
+        vic_x += dots;
+    }
+    fb = (vic_x + vicii_frame_x_offset(v)) % dots;
+    if (fb < 0 || fb >= (int32_t)C64_FRAME_WIDTH) {
+        return -1;
+    }
+    return fb;
+}
+
+/* Inverse of the paint map for a pixel already inside the 384 crop. */
+static uint32_t vicii_frame_x_to_vic_x(const vicii *v, uint32_t fb_x) {
+    int32_t dots = (int32_t)vicii_line_dots(v);
+    int32_t vic = (int32_t)fb_x - vicii_frame_x_offset(v);
+
+    if (vic < 0) {
+        vic += dots;
+    }
+    return (uint32_t)vic;
 }
 
 static void vicii_prepare_frame(c64_frame *frame, uint32_t height, uint64_t frame_number, uint64_t machine_cycle, uint32_t fill_color) {
@@ -1523,20 +1573,22 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_hborder_flush(v, v->main_border_ff);
     v->hborder_pipe[0] = v->hborder_pipe[1];
 
-    /* Anchored dot mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle owns its
-       true 8 VIC dots, so buffer_x == VIC X-coordinate and the paint cycle for
-       every column matches hardware. Display column 0 (X=24) is drawn at the
-       first g-access cycle (15); each cycle advances X by 8. Dots outside the
-       384-px crop (line start/end H-blank) are not written to the frame, but
-       still advance the 6569 color pipes — VICE's draw_colors ring runs for
-       every cycle, including HBLANK. Advancing only on painted pixels left a
-       1px $D020/$D021 delay stuck across the line edge (EoD top/bottom black
-       bar: x=0 still previous border colour). Every column 0..383 is painted
-       exactly once per line (PAL cycles 12..59, NTSC 12..59). */
+    /* Anchored VIC-X mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle owns its
+       true 8 VIC dots. Display column 0 (VIC X=24) is drawn at the first
+       g-access cycle (15); each cycle advances X by 8. Framebuffer x is *not*
+       identical to VIC X: PAL shifts by +8 (mod line dots) so the 384 crop is
+       VICE-centred (32/32 borders); graphics/sprites/border logic still uses
+       VIC X. Dots outside the 384 crop are not written, but still advance the
+       6569 color pipes — VICE's draw_colors ring runs every cycle including
+       HBLANK. Advancing only on painted pixels left a 1px $D020/$D021 delay
+       stuck across the line edge (EoD top/bottom black bar). Every frame
+       column 0..383 is painted exactly once per line (PAL cycles 11..58 with
+       the +8 origin, NTSC 12..59 with offset 0). */
     {
         int32_t raw_xs = (int32_t)VICII_HBORDER_LEFT_40 +
             ((int32_t)cyc - (int32_t)VICII_GACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
+        int32_t dots = (int32_t)vicii_line_dots(v);
         int      i;
 
         /* Compute this cycle's content pixels (border decision applied later, at
@@ -1546,12 +1598,20 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         v->hborder_pipe[1].n = 0;
         v->hborder_pipe[1].mode = prep.mode;
         for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
-            int32_t x_i = raw_xs + i;
+            int32_t raw_x = raw_xs + i;
+            int32_t vic_x = raw_x;
+            int32_t fb_x;
 
-            if (x_i >= 0 && x_i < (int32_t)C64_FRAME_WIDTH) {
+            if (vic_x < 0) {
+                vic_x += dots;
+            }
+            fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+
+            if (fb_x >= 0) {
                 uint8_t k = v->hborder_pipe[1].n;
-                x = (uint32_t)x_i;
-                v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
+                x = (uint32_t)vic_x;
+                v->hborder_pipe[1].idx[k] =
+                    y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                 v->hborder_pipe[1].content[k] =
                     vicii_live_pixel(v, bus, &g, &prep, x, y, false,
                         v->vertical_border_active, true,
@@ -1577,7 +1637,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
             }
             /* VICE 6569: advance color pipes after each dot (visible or not) so
                a mid-line $D020/$D021 write is visible one pixel later, and a
-               write during HBLANK is fully drained before x=0. */
+               write during HBLANK is fully drained before frame x=0. */
             v->color_pipe_d020 =
                 (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
             v->color_pipe_d021 =
@@ -2294,8 +2354,9 @@ void vicii_finish_cycle(vicii *v) {
             uint8_t k;
             vicii_build_paint_prep(v, v->paint_bus, &prep); /* prep.mode == new_mode */
             for (k = 0; k < v->hborder_pipe[1].n; ++k) {
-                uint32_t x =
+                uint32_t fb_x =
                     v->hborder_pipe[1].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
                 v->hborder_pipe[1].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
                         v->vertical_border_active, false,
@@ -2785,12 +2846,15 @@ static bool vicii_make_frame_snapshot_internal(
 
         vicii_snapshot_sprite_line(v, bus, y, spr_rows);
 
-        for (x = 0; x < C64_FRAME_WIDTH; x++) {
+        for (uint32_t fb_x = 0; fb_x < C64_FRAME_WIDTH; fb_x++) {
             vicii_bg_pixel bg;
             vicii_sprite_pixel sprites[8];
             uint32_t pixel;
             uint8_t enable_reg;
             int n;
+
+            /* Paint logic stays in VIC-X space; fb_x is only the frame index. */
+            x = vicii_frame_x_to_vic_x(v, fb_x);
 
             /* Horizontal flip-flop transitions (Bauer §3.9) */
             if (x == g.right) hborder = true;
@@ -2818,7 +2882,7 @@ static bool vicii_make_frame_snapshot_internal(
             /* Snapshot path: hborder stands in for main_border_ff. */
             pixel = vicii_compose_pixel(v, hborder, vborder, border_color, bg,
                 sprites, true, NULL);
-            out_frame->pixels[y * C64_FRAME_WIDTH + x] = pixel;
+            out_frame->pixels[y * C64_FRAME_WIDTH + fb_x] = pixel;
         }
     }
 
