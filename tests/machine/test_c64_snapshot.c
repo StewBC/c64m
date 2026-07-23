@@ -211,11 +211,21 @@ static void prepare_interesting_state(c64_t *machine) {
     machine->vic.sprite_sprite_collision = 0x34;
     machine->vic.sprite_background_collision = 0x56;
     machine->vic.vertical_border_active = false;
+    /* Set the full geometry, not just width/height: vicii_prepare_frame always
+       writes all four fields together, so a frame carrying a width but a zero
+       stride/format is a shape no real machine holds - and the snapshot reader
+       now rejects it. */
     machine->vic.working_frame.width = C64_FRAME_WIDTH;
     machine->vic.working_frame.height = C64_FRAME_HEIGHT;
+    machine->vic.working_frame.stride_bytes =
+        C64_FRAME_WIDTH * sizeof(machine->vic.working_frame.pixels[0]);
+    machine->vic.working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     machine->vic.working_frame.pixels[17] = 0xff112233u;
     machine->vic.completed_frame.width = C64_FRAME_WIDTH;
     machine->vic.completed_frame.height = C64_FRAME_HEIGHT;
+    machine->vic.completed_frame.stride_bytes =
+        C64_FRAME_WIDTH * sizeof(machine->vic.completed_frame.pixels[0]);
+    machine->vic.completed_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
     machine->vic.completed_frame.pixels[19] = 0xff445566u;
 
     machine->cia1.registers[0] = 0x12;
@@ -318,6 +328,13 @@ static uint8_t *save_snapshot(const c64_t *machine, size_t *out_size) {
     }
     *out_size = size;
     return bytes;
+}
+
+static uint32_t read_le32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] |
+        ((uint32_t)bytes[1] << 8) |
+        ((uint32_t)bytes[2] << 16) |
+        ((uint32_t)bytes[3] << 24);
 }
 
 static void write_le32(uint8_t *bytes, uint32_t value) {
@@ -455,6 +472,78 @@ static void test_reject_and_leave_unchanged(void) {
     free(snapshot);
     free(before);
     free(after);
+    c64_unmount_all_drives(&source);
+    c64_unmount_all_drives(&target);
+}
+
+/* Locate a stored frame header (width, height, stride, format) in a saved
+   snapshot. The VIC chunk writes two of them; the first is enough. Returns 0 if
+   not found - the pattern is far too specific to appear in RAM by chance. */
+static size_t find_frame_header(const uint8_t *snapshot, size_t size) {
+    size_t offset;
+
+    if (size < 16) {
+        return 0;
+    }
+    for (offset = 0; offset + 16 <= size; ++offset) {
+        uint32_t width = read_le32(snapshot + offset);
+        uint32_t height = read_le32(snapshot + offset + 4);
+        uint32_t stride = read_le32(snapshot + offset + 8);
+        uint32_t format = read_le32(snapshot + offset + 12);
+
+        if (width == (uint32_t)C64_FRAME_WIDTH &&
+            height > 0u && height <= (uint32_t)C64_FRAME_HEIGHT &&
+            stride == (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t) &&
+            format == (uint32_t)C64_FRAME_PIXEL_FORMAT_ARGB8888) {
+            return offset;
+        }
+    }
+    return 0;
+}
+
+/* A frame header that does not match this build's framebuffer must fail the
+   load outright. Before the reader validated it, the fixed-size pixel loop ran
+   past the mismatched header, silently misaligning every following chunk. */
+static void test_reject_frame_geometry_mismatch(void) {
+    c64_t source;
+    c64_t target;
+    uint8_t *snapshot;
+    size_t snapshot_size;
+    size_t header;
+
+    init_ready_machine(&source);
+    init_ready_machine(&target);
+    prepare_interesting_state(&source);
+    snapshot = save_snapshot(&source, &snapshot_size);
+
+    header = find_frame_header(snapshot, snapshot_size);
+    if (header == 0) {
+        fail("frame header not found in snapshot");
+    }
+
+    write_le32(snapshot + header, (uint32_t)C64_FRAME_WIDTH + 8u);
+    expect_false("reject frame width mismatch",
+                 c64_snapshot_load(&target, snapshot, snapshot_size));
+
+    write_le32(snapshot + header, (uint32_t)C64_FRAME_WIDTH);
+    write_le32(snapshot + header + 8,
+               (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t) + 32u);
+    expect_false("reject frame stride mismatch",
+                 c64_snapshot_load(&target, snapshot, snapshot_size));
+
+    write_le32(snapshot + header + 8, (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t));
+    write_le32(snapshot + header + 4, (uint32_t)C64_FRAME_HEIGHT + 1u);
+    expect_false("reject frame height overflow",
+                 c64_snapshot_load(&target, snapshot, snapshot_size));
+
+    /* Restoring every field makes it load again, proving the rejections came
+       from the geometry check and not from collateral damage to the buffer. */
+    write_le32(snapshot + header + 4, (uint32_t)C64_FRAME_HEIGHT);
+    expect_true("accept repaired frame header",
+                c64_snapshot_load(&target, snapshot, snapshot_size));
+    assert_restored_state(&target);
+
+    free(snapshot);
     c64_unmount_all_drives(&source);
     c64_unmount_all_drives(&target);
 }
@@ -988,6 +1077,7 @@ int main(void) {
     test_round_trip();
     test_ignores_unknown_chunk();
     test_reject_and_leave_unchanged();
+    test_reject_frame_geometry_mismatch();
     test_reject_rom_hash_mismatch();
     test_reject_mid_instruction_state();
     test_1541_core_round_trip();

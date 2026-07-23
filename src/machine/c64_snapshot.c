@@ -239,6 +239,34 @@ static void r_bytes(snapshot_reader *r, void *out, size_t size) {
     r->pos += size;
 }
 
+/* The pixel payload is always the full C64_FRAME_WIDTH x C64_FRAME_HEIGHT array
+   regardless of the stored height - NTSC keeps its 263 visible rows in the same
+   312-row buffer (w_frame above). So honouring the header means *validating* it,
+   not sizing the read from it. Do not "fix" this loop to run to frame->height:
+   that would desynchronise it from the writer.
+
+   Validation matters because the geometry is a build-time constant. A file whose
+   frame does not match this build's framebuffer cannot be loaded, and the old
+   code did not notice: it read a fixed pixel count past a mismatched header, so
+   every chunk after the VIC state landed at the wrong offset and the load either
+   failed far from the real cause or restored garbage. Reject it here instead.
+
+   A frame that has never been painted is legitimately all-zero (vicii_reset
+   memsets both frames; completed_frame stays zeroed until the first frame
+   finishes), so accept that shape too. */
+static bool r_frame_geometry_ok(const c64_frame *frame) {
+    if (frame->width == 0u && frame->height == 0u &&
+        frame->stride_bytes == 0u && frame->pixel_format == 0u) {
+        return true;
+    }
+    return frame->width == (uint32_t)C64_FRAME_WIDTH &&
+        frame->height > 0u &&
+        frame->height <= (uint32_t)C64_FRAME_HEIGHT &&
+        frame->stride_bytes ==
+            (uint32_t)C64_FRAME_WIDTH * (uint32_t)sizeof(frame->pixels[0]) &&
+        frame->pixel_format == (uint32_t)C64_FRAME_PIXEL_FORMAT_ARGB8888;
+}
+
 static void r_frame(snapshot_reader *r, c64_frame *frame) {
     size_t i;
 
@@ -248,6 +276,12 @@ static void r_frame(snapshot_reader *r, c64_frame *frame) {
     frame->pixel_format = r_u32(r);
     frame->frame_number = r_u64(r);
     frame->machine_cycle = r_u64(r);
+
+    if (!r->ok || !r_frame_geometry_ok(frame)) {
+        r->ok = false;
+        return;
+    }
+
     for (i = 0; i < C64_FRAME_WIDTH * C64_FRAME_HEIGHT; ++i) {
         frame->pixels[i] = r_u32(r);
     }

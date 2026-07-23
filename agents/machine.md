@@ -78,6 +78,14 @@ SDL/frontend/runtime state, CLI loading, and self-contained ROM/media embedding 
 not part of the format. Version-8 snapshots still load: drive objects hard-reset as
 before.
 
+Stored VIC-II frames carry their own geometry header (width, height, stride,
+format) and the reader validates it against this build's `c64_frame` before
+consuming the pixel payload; a mismatch fails the whole load. The payload itself
+is always the full `C64_FRAME_WIDTH * C64_FRAME_HEIGHT` array regardless of the
+stored height (NTSC's 263 rows live in the same 312-row buffer), so the header
+bounds nothing — do not size the read loop from it. An all-zero header is valid
+and means a frame that has never been painted.
+
 ## Do not claim
 
 Do not claim perfect electrical RDY/AEC timing, exact chip-revision behavior for
