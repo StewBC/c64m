@@ -28,7 +28,7 @@ that contain spaces). Example (absolute path; adjust to your tree):
 ```sh
 /Applications/vice-arm64-gtk3-3.10/bin/x64sc \
   -autostartprgmode 1 \
-  -autoload "/Users/swessels/Develop/github/personal/c64m/agents/demo/fort-apocalypse/Fort Apocalypse.prg" \
+  -autoload "/Users/swessels/Develop/github/personal/c64m/assets/prg/Fort Apocalypse.prg" \
   -remotemonitor -remotemonitoraddress ip4://127.0.0.1:6518
 ```
 

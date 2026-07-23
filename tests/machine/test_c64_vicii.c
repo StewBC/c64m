@@ -11,8 +11,8 @@ enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_COLOR_GREEN = 0xff56ac4du,
     TEST_COLOR_BLUE = 0xff2e2c9bu,
-    /* PAL framebuffer x = VIC X + 8 (VICE-centred 32/32 borders). */
-    TEST_PAL_FX = 8,
+    /* PAL framebuffer x == VIC X (offset 0; see VICII_PAL_FRAME_X_OFFSET). */
+    TEST_PAL_FX = 0,
 };
 
 #define TEST_PALETTE_0   0xff000000u  /* black      */

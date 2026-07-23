@@ -40,8 +40,8 @@ verify it.
   `lft-nine` or sprite/raster investigations.
 - For Edge of Disgrace visual regression checks, use `build/eod_regression_capture`
   with `roms/system.rom`, `roms/character.rom`, `roms/1541.rom`,
-  `agents/demo/eod/EdgeOfDisgrace_0.d64`, and
-  `agents/demo/eod/EdgeOfDisgrace_1a.d64`. It swaps at `$020C`, reaches the checker
+  `assets/disks/EdgeOfDisgrace_0.d64`, and
+  `assets/disks/EdgeOfDisgrace_1a.d64`. It swaps at `$020C`, reaches the checker
   marker at `$A3BD`, then captures live turbo-2 (max) frames. Optional scene values
   are `checker`, `plasma`, or `+RACE_FRAMES`; optional sample count and interval
   write separated frames. Treat turbo-3 (warp) captures as debug geometry only.

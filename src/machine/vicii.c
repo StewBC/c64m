@@ -70,11 +70,12 @@ enum {
     VICII_HBORDER_LEFT_38       = 31,
     VICII_HBORDER_RIGHT_38      = 335,
 
-    /* PAL published frame is 384 wide with the 320 display centred (VICE
-       VICII_SCREEN_PAL_NORMAL_*BORDERWIDTH = 32/32). Hardware display still
-       starts at VIC X=24; the framebuffer origin is shifted +8 so left/right
-       borders are 32/32. NTSC keeps offset 0 until measured separately. */
-    VICII_PAL_FRAME_X_OFFSET    = 8,
+    /* Horizontal framebuffer origin relative to VIC X. 0 keeps buffer_x == VIC X
+       (24/40 left/right border for the 384 crop). A VICE-style +8 (32/32) was
+       tried; filling the invented left pad either revealed parked sprites /
+       wrong colour-pipe state or duplicated X=0..7 (2× first checker column on
+       EoD). Leave 0 until a pad model matches VICE without those defects. */
+    VICII_PAL_FRAME_X_OFFSET    = 0,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -155,10 +156,8 @@ static int32_t vicii_frame_x_offset(const vicii *v) {
     return 0;
 }
 
-/* VIC X (possibly negative before modular normalise) → framebuffer x, or -1 if
-   outside the 384-wide published crop. Wrap uses the full line length so the
-   extra 8 left-border pixels come from the previous line's tail (VIC X ~496..503
-   on PAL). */
+/* VIC X → framebuffer x, or -1 if outside the 384 crop. With offset 0 this is
+   identity for on-screen columns. */
 static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
     int32_t dots = (int32_t)vicii_line_dots(v);
     int32_t fb;
@@ -166,7 +165,7 @@ static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
     if (vic_x < 0) {
         vic_x += dots;
     }
-    fb = (vic_x + vicii_frame_x_offset(v)) % dots;
+    fb = vic_x + vicii_frame_x_offset(v);
     if (fb < 0 || fb >= (int32_t)C64_FRAME_WIDTH) {
         return -1;
     }
@@ -1599,20 +1598,17 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     /* Anchored VIC-X mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle owns its
        true 8 VIC dots. Display column 0 (VIC X=24) is drawn at the first
-       g-access cycle (15); each cycle advances X by 8. Framebuffer x is *not*
-       identical to VIC X: PAL shifts by +8 (mod line dots) so the 384 crop is
-       VICE-centred (32/32 borders); graphics/sprites/border logic still uses
-       VIC X. Dots outside the 384 crop are not written, but still advance the
-       6569 color pipes — VICE's draw_colors ring runs every cycle including
-       HBLANK. Advancing only on painted pixels left a 1px $D020/$D021 delay
-       stuck across the line edge (EoD top/bottom black bar). Every frame
-       column 0..383 is painted exactly once per line (PAL cycles 11..58 with
-       the +8 origin, NTSC 12..59 with offset 0). */
+       g-access cycle (15); each cycle advances X by 8. With
+       VICII_PAL_FRAME_X_OFFSET=0, buffer_x == VIC X. Dots outside the 384 crop
+       are not written, but still advance the 6569 color pipes — VICE's
+       draw_colors ring runs every cycle including HBLANK. Advancing only on
+       painted pixels left a 1px $D020/$D021 delay stuck across the line edge
+       (EoD top/bottom black bar). Every frame column 0..383 is painted exactly
+       once per line (PAL/NTSC cycles 12..59 with offset 0). */
     {
         int32_t raw_xs = (int32_t)VICII_HBORDER_LEFT_40 +
             ((int32_t)cyc - (int32_t)VICII_GACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
-        int32_t dots = (int32_t)vicii_line_dots(v);
         int      i;
 
         /* Compute this cycle's content pixels (border decision applied later, at
@@ -1624,17 +1620,11 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         v->hborder_pipe[1].csel = check_csel;
         for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
             int32_t raw_x = raw_xs + i;
-            int32_t vic_x = raw_x;
-            int32_t fb_x;
-
-            if (vic_x < 0) {
-                vic_x += dots;
-            }
-            fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+            int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
 
             if (fb_x >= 0) {
                 uint8_t k = v->hborder_pipe[1].n;
-                x = (uint32_t)vic_x;
+                x = (uint32_t)raw_x;
                 v->hborder_pipe[1].idx[k] =
                     y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                 v->hborder_pipe[1].content[k] =
