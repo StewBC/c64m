@@ -250,9 +250,8 @@ The payload is row-major 32-bit ARGB8888 bytes, `height * stride` bytes. The
 buffer is a full VIC-II raster line in VIC-X order, so framebuffer x = VIC X:
 PAL is 504x312 and NTSC 520x263. **`stride` is always 2080 bytes (520 px), not
 `width * 4`** - PAL rows carry 16 bytes of slack so one buffer shape serves both
-standards. Index rows by `stride`, never by `width`. Columns past
-`VICII_PAINT_DOTS` (384) are currently border fill rather than composed pixels.
-The frontend crop is not applied to this payload.
+standards. Index rows by `stride`, never by `width`. Every dot of the line is
+composed, HBLANK included. The frontend crop is not applied to this payload.
 At turbo 3 (warp) this is a geometric debug snapshot rather than the live ARGB
 framebuffer; use `set-turbo 1` or `set-turbo 2` before inspecting live pixels.
 

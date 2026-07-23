@@ -31,18 +31,26 @@ Phi2 schedule; frontend frames are copies.
   standard's line length and is **not** the row pitch - index rows by
   `C64_FRAME_WIDTH` or `stride_bytes`.
 
-  Only part of that line is composed so far: `VICII_PAINT_DOTS` (384) columns
-  from VIC X 0, with the rest left at the frame's border fill. Painting X
-  384..503 means running `vicii_live_pixel` - and its collision latching - on
-  cycles it has never run on, so widening it is gated on a dot-for-dot compare
-  against VICE's per-line draw buffer (`VICII_DRAW_BUFFER_SIZE = 65*8`, the same
-  full-line shape). The PAL frontend crop is still X 0..383, giving 24/40
-  left/right borders. A VICE-style 32/32 window (`VICII_SCREEN_PAL_NORMAL_*
-  BORDERWIDTH = 0x20`) needs VIC X 496..503 as its left 8 columns - those are
-  now representable in the buffer but not yet painted. 9f1ea9e tried to reach
-  32/32 by shifting the *origin* instead (modular +8), which both invented a
-  left band and dropped X 376..383; it broke EoD's black frame and is not the
-  route to retry (`pal-border.md`).
+  The whole line is composed, HBLANK included - there is no paint window any
+  more. VIC X 496..503, the left 8 columns of VICE's 32/32 PAL viewport, are
+  therefore real painted content. The PAL frontend crop is still X 0..383
+  (24/40 borders); moving it to 32/32 is a frontend change.
+
+  Verified dot-for-dot against VICE 6569 on the EoD checker snapshot: raster 245
+  (the bottom black frame line) is `X408..491=2 X492..503=0` in both. Getting
+  there required the same-cycle `$D011` fix below. **Match VIC-II models before
+  comparing** - VICE's default is an 8565 and its output differs from a 6569 by
+  ~8 dots here, which silently invalidated two earlier rounds of this analysis.
+  A `.vsf` only loads when the model matches, so a snapshot that refuses to load
+  is a model mismatch, not a corrupt file.
+
+  One known deviation remains, outside every viewport: c64m assigns X 392..407
+  to the *end* of a frame row while VICE assigns it to the *start* of the next
+  (a 16-dot, 2-cycle row-boundary offset). The 32/32 window is X 496..503 +
+  X 0..375, so this band is never displayed; it only shows up in whole-line
+  compares. 9f1ea9e tried to reach 32/32 by shifting the *origin* (modular +8),
+  which both invented a left band and dropped X 376..383 - not the route to
+  retry (`pal-border.md`).
   NTSC crop is 352x224 from X=8, Y=39 (rows 39..262). The display window is
   51..250 on both standards, so NTSC has only 12 border lines below it; the
   224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
@@ -235,8 +243,7 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   closed side border is overridden by the main flip-flop at flush. See
   `test_live_mcm_toggle_reaches_column0_same_cycle` and `dem-handoff.md`.
 - Live paint advances `color_pipe_d020` / `color_pipe_d021` once per VIC **dot**
-  of every cycle, including dots outside `VICII_PAINT_DOTS` that are not written
-  into the frame (VICE `draw_colors` runs for every cycle). Sampling only on painted
+  of every cycle (VICE `draw_colors` runs for every cycle). Sampling only on painted
   pixels left a 1px `$D020` delay stuck at x=0 across line edges (EoD
   top/bottom black bar purple stub). Mid-line `$D020`/`$D021` splits still use
   the one-pixel delay on visible columns. Because live spans are constructed in

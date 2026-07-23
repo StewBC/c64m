@@ -76,17 +76,6 @@ enum {
        wrong colour-pipe state or duplicated X=0..7 (2× first checker column on
        EoD). Leave 0 until a pad model matches VICE without those defects. */
     VICII_PAL_FRAME_X_OFFSET    = 0,
-
-    /* Dots per line the renderer actually composes, starting at VIC X 0.
-
-       The framebuffer is now the full raster line, but paint deliberately still
-       stops at the historical 384-column window. Composing X 384..503 would run
-       vicii_live_pixel over cycles it has never run on - and that call also
-       drives sprite-sprite/sprite-background collision latching, so switching it
-       on is a machine-state change, not just extra pixels. Widening this to the
-       full line is its own step, gated on a dot-for-dot compare against VICE's
-       per-line draw buffer. Until then, columns past this stay border fill. */
-    VICII_PAINT_DOTS            = 384,
 };
 
 /* c64_frame pixels are ARGB8888, so the palette values can be copied directly. */
@@ -177,9 +166,11 @@ static int32_t vicii_frame_x_offset(const vicii *v) {
     return 0;
 }
 
-/* VIC X → framebuffer x, or -1 if outside the painted window. With offset 0 this
-   is identity. The bound is VICII_PAINT_DOTS, not the buffer width: the buffer
-   holds the whole raster line, but only the painted window is composed. */
+/* VIC X → framebuffer x, or -1 if outside the raster line. With offset 0 this is
+   identity for every dot: the whole line is composed, HBLANK included, matching
+   VICE's per-line draw buffer. The bound is the standard's line length, not
+   C64_FRAME_WIDTH - PAL's 504 dots occupy the first 504 columns of the 520-wide
+   array and columns 504..519 are never painted. */
 static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
     int32_t dots = (int32_t)vicii_line_dots(v);
     int32_t fb;
@@ -188,7 +179,7 @@ static int32_t vicii_vic_x_to_frame_x(const vicii *v, int32_t vic_x) {
         vic_x += dots;
     }
     fb = vic_x + vicii_frame_x_offset(v);
-    if (fb < 0 || fb >= (int32_t)VICII_PAINT_DOTS) {
+    if (fb < 0 || fb >= (int32_t)vicii_line_dots(v)) {
         return -1;
     }
     return fb;
@@ -2979,7 +2970,7 @@ static bool vicii_make_frame_snapshot_internal(
 
         vicii_snapshot_sprite_line(v, bus, y, spr_rows);
 
-        for (uint32_t fb_x = 0; fb_x < VICII_PAINT_DOTS; fb_x++) {
+        for (uint32_t fb_x = 0; fb_x < vicii_frame_width(v); fb_x++) {
             vicii_bg_pixel bg;
             vicii_sprite_pixel sprites[8];
             uint32_t pixel;
