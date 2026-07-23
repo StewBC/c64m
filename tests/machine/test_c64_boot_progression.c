@@ -243,8 +243,8 @@ static void test_rom_driven_screen_and_device_writes_update_frame(void) {
     /* $D011=$1B → DEN=1, RSEL=1 (top=51), YSCROLL=3, so the top visible line
        samples glyph row 0. $D016=$08 → CSEL=1 (left=24). Character 1 glyph row
        0=0x80 has bit 7 set, so the foreground pixel is at x=24. */
-    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
-    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[51 * C64_FRAME_WIDTH + 33]);
+    expect_u32("foreground from color ram", TEST_COLOR_GREEN, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
+    expect_u32("background from d021", TEST_COLOR_BLUE, frame.pixels[51 * C64_FRAME_WIDTH + 25]);
 }
 
 static void test_d018_selects_screen_memory(void) {
@@ -266,7 +266,7 @@ static void test_d018_selects_screen_memory(void) {
     expect_true("make d018 frame", c64_make_frame_snapshot(&machine, &frame));
     /* $D011=$1B → DEN=1, RSEL=1 (top=51), YSCROLL=3; $D016=$08 → CSEL=1 (left=24).
        The top visible line samples glyph row 0, whose bit 7 lands at x=24. */
-    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[51 * C64_FRAME_WIDTH + 32]);
+    expect_u32("d018 screen base foreground", TEST_COLOR_GREEN, frame.pixels[51 * C64_FRAME_WIDTH + 24]);
 }
 
 static void test_real_rom_progresses_to_device_checkpoints(void) {
