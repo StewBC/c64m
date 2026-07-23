@@ -13,7 +13,7 @@ coding agents — ChatGPT's Codex (5.5), Claude Code (4.8) and Grok (4.5). There
 
 ## What it does
 
-c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from D64 disk images (read-only by default, optionally writable). It also attaches generic 8K/16K `.crt` cartridges and can save and restore full machine snapshots to `.c64state` files. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode, free-runs around **5 MHz** with full live rendering (turbo max), and can go faster in warp mode (paint off, for skip-ahead only).
+c64m boots a real C64 ROM set and runs a broad range of software: BASIC programs, single-file PRG binaries, and games and demos loaded from D64 and G64 disk images (read-only by default, optionally writable). It also attaches generic 8K/16K `.crt` cartridges and can save and restore full machine snapshots to `.c64state` files. It handles both PAL and NTSC timing. On an Apple M2 Mac Mini, the emulator runs at roughly the real C64's 1 MHz in normal mode, free-runs around **5 MHz** with full live rendering (turbo max), and can go faster in warp mode (paint off, for skip-ahead only).
 
 The built-in debugger gives you a live disassembler, a hex memory editor, a full breakpoint system with read/write/execute watchpoints, a call-stack view, and a hardware-state inspector covering VIC-II, both CIAs, and SID. Both the disassembly and memory views can be switched independently between three source modes — the CPU-mapped address space, raw RAM, or the physical ROM bytes — so you can inspect what the CPU sees, what is underneath it, or what is in the ROM regardless of which is currently banked in.
 
@@ -48,17 +48,20 @@ Press **F9** to toggle the debugger layout.
 The emulation is a work in progress. Many games from single-load collections run
 correctly, but accuracy gaps remain.
 
-- D64 images mount read-only by default; marking an image writable enables saving. SAVE
-  works through the compatibility KERNAL trap, and with 1541 emulation enabled
-  (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS write path also handles
-  SAVE, sequential/relative file writes, and the scratch/rename/validate/format command
-  and error channels. Optional media path (`[disk] media_1541=1`) adds GCR track
-  rotation/SYNC/head/motor, hybrid WRITE/FORMT on D64, and read-only G64 mounts. Stock
-  media LOAD/SAVE and some multi-stage/fast-loader paths (e.g. Robocop G64 load-to-game
-  via dual-bit ILOAD and protection self-checks) work; this is not a claim that every
-  commercial title or full playthrough is covered. Still missing: pure media-level write
-  fidelity, G64 write-back, cross-drive copy, block/memory-execute commands, devices
-  beyond 8 and 9, and exhaustive fast-loader coverage.
+- D64 and G64 images mount read-only by default; marking an image writable enables
+  saving. On D64, SAVE works through the compatibility KERNAL trap, and with 1541
+  emulation enabled (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS
+  write path also handles SAVE, sequential/relative file writes, and the
+  scratch/rename/validate/format command and error channels. Optional media path
+  (`[disk] media_1541=1`) adds GCR track rotation/SYNC/head/motor, hybrid WRITE/FORMT
+  on D64, and G64 mounts. Writable G64 with media + 1541 uses physical Port-A flux
+  write-back (e.g. BASIC `SAVE` / `LOAD"$",8` round-trips and remount). Stock media
+  LOAD/SAVE and some multi-stage/fast-loader paths (e.g. Robocop G64 load-to-game via
+  dual-bit ILOAD and protection self-checks) work; this is not a claim that every
+  commercial title or full playthrough is covered. Still missing: pure media-level
+  write fidelity polish, G64 empty-track grow/format rebuild, cross-drive copy,
+  block/memory-execute commands, devices beyond 8 and 9, and exhaustive fast-loader
+  coverage.
 - Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
   last-byte-on-bus open-bus behavior and VIC idle-state fetches.
 

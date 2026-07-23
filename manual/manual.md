@@ -55,12 +55,17 @@ if it was paused, it remains paused. For a one-run override, use `--video PAL`,
 
 ### Disk Images
 
-c64m supports D64 images on devices 8 and 9. Images mount read-only by default.
+c64m supports D64 and G64 images on devices 8 and 9. Images mount read-only by default.
 `LOAD "NAME",8`, `LOAD "NAME",8,1`, wildcard loads, and `LOAD "$",8` work through a
-compatibility KERNAL trap by default. When an image is marked writable, `SAVE "NAME",8`
-writes a PRG into the mounted D64 and flushes the host `.d64` file. If a 1541 ROM is
-available and `[disk] emulate_1541=1` is set, standard disk loads for devices 8 and 9
-use the C64 KERNAL IEC routines and the emulated 1541 DOS ROM.
+compatibility KERNAL trap by default for D64. When a D64 is marked writable,
+`SAVE "NAME",8` writes a PRG into the mounted image and flushes the host `.d64` file.
+If a 1541 ROM is available and `[disk] emulate_1541=1` is set, standard disk loads for
+devices 8 and 9 use the C64 KERNAL IEC routines and the emulated 1541 DOS ROM.
+
+G64 needs `[disk] media_1541=1` (and `emulate_1541`) for the rotating GCR path. Mark a
+G64 writable to allow physical DOS writes (BASIC `SAVE`, sequential writes, and similar
+ROM paths); dirty tracks are written back to the host `.g64` on unmount and related
+flush points. There is no KERNAL-trap SAVE into G64 without media.
 
 ### PRG and BASIC Files
 
@@ -141,6 +146,7 @@ The file extension determines how the file is handled:
 | Extension | Action                                                         |
 |-----------|----------------------------------------------------------------|
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
+| `.g64`    | Mount the G64 image on device 8 (same as D64; use media path for GCR) |
 | `.c64state` | Load a saved machine state snapshot                         |
 | `.crt`    | Attach a generic 8K/16K cartridge and reset with it running |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B-$2E`) |
@@ -572,7 +578,7 @@ Devices 8 and 9 each show a row of controls followed by a disk selector:
 [9] [Add] [Eject]  <disk name [v]>
 ```
 
-Each device maintains an ordered queue of D64 images. At most one image is mounted at a
+Each device maintains an ordered queue of D64/G64 images. At most one image is mounted at a
 time; the rest are queued for later use.
 
 **[8] / [9]** - Opens a file browser. Selecting an image replaces the entire queue with
@@ -1489,11 +1495,19 @@ Example - multi-disk queue for a multi-part game:
 The first image in the list is mounted at startup. The current position within the queue
 is not saved; launching the emulator always starts from the first image.
 
-Example - writable scratch disk:
+Example - writable scratch disk (D64 or G64):
 
 ```
 [disk]
 8=./disks/scratch.d64
+8_writable=1
+```
+
+```
+[disk]
+emulate_1541=1
+media_1541=1
+8=./disks/blank.g64
 8_writable=1
 ```
 
@@ -2272,8 +2286,8 @@ not-connected policy. The model is not bit-perfect analog 6581.
 
 ### Disk
 
-Device 8 and device 9 each hold an independent D64 image, read-only by default and
-optionally marked writable. In the default
+Device 8 and device 9 each hold an independent D64 or G64 image, read-only by default
+and optionally marked writable. In the default
 compatibility mode, the KERNAL LOAD trap intercepts $FFD5 for devices 8/9 only; all
 other devices fall through to ROM. `LOAD "NAME",8` loads at the BASIC start pointer and
 updates end-of-program pointers. `LOAD "NAME",8,1` loads at the embedded PRG load
@@ -2295,15 +2309,18 @@ validate, initialize, FORMT-job-intercepted format) and `OPEN 15,8,15` work thro
 real ROM.
 
 With `[disk] media_1541=1` as well, the emulator synthesises GCR tracks from D64 (or
-attaches read-only G64 track dumps), models motor/stepper/SYNC/BYTE READY, and lets
-stock DOS physical READ run against the flux path. D64 WRITE/FORMT still use a hybrid
-job intercept plus GCR track poke/rebuild. G64 mounts are read-only. Multi-stage
-commercial loaders and pure media-level write fidelity are not broadly claimed; see
-`md-files/c64m1541media.md` for the compatibility matrix.
+attaches G64 track dumps), models motor/stepper/SYNC/BYTE READY, and lets stock DOS
+physical READ run against the flux path. D64 WRITE/FORMT still use a hybrid job
+intercept plus GCR track poke/rebuild. Writable G64 uses physical Port-A flux
+write-back (live track ring exported to the host image on leave-write, seek-off-dirty,
+unmount, and media disable); G64 mounts stay read-only unless marked writable. Stock
+BASIC SAVE/LOAD on a writable blank G64 is supported; empty-track grow/format rebuild
+and broad pure-write fidelity are not claimed. Multi-stage commercial loaders are not
+broadly claimed; see `agents/disk-iec1541.md` for the media notes.
 
-When the 1541 ROM is absent, SAVE falls back to the compatibility KERNAL trap.
-Cross-drive copy, block/memory-execute edge cases, and devices beyond 8/9 remain out of
-scope.
+When the 1541 ROM is absent, D64 SAVE falls back to the compatibility KERNAL trap
+(G64 has no trap path). Cross-drive copy, block/memory-execute edge cases, and devices
+beyond 8/9 remain out of scope.
 
 ### Joystick
 
