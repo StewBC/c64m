@@ -32,9 +32,12 @@ Phi2 schedule; frontend frames are copies.
   `C64_FRAME_WIDTH` or `stride_bytes`.
 
   The whole line is composed, HBLANK included - there is no paint window any
-  more. VIC X 496..503, the left 8 columns of VICE's 32/32 PAL viewport, are
-  therefore real painted content. The PAL frontend crop is still X 0..383
-  (24/40 borders); moving it to 32/32 is a frontend change.
+  more. The PAL viewport is VICE's 32/320/32: it starts at **VIC X 496**, runs
+  through the wrap to X 375, and its left 8 columns are the real painted
+  X 496..503 rather than any invented pad. `frontend_submit_frame` rotates each
+  frame by that origin so every downstream consumer still sees a plain rectangle
+  at `CROP_X` 0 - the rotation is display-only and never reaches `get-frame` or a
+  snapshot. NTSC is unchanged at 16/320/16 from X 8.
 
   Verified dot-for-dot against VICE 6569 on the EoD checker snapshot: raster 245
   (the bottom black frame line) is `X408..491=2 X492..503=0` in both. Getting

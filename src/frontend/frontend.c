@@ -39,13 +39,26 @@ enum {
        it - notably Deus Ex Machina's parked pillar, whose sprite-7 lower-border
        retract at raster 288 sits just past line 287 and so is not shown (a wider
        viewport exposed a grey->black "dropout" that VICE crops away). The full
-       384-column crop preserves the near-4:3 PAR-corrected presentation. The
-       machine buffer is wider (a full raster line); this window selects VIC X
-       0..383, which is why crop_x is 0 and framebuffer x = VIC X. */
+       384-column crop preserves the near-4:3 PAR-corrected presentation.
+       Horizontally the window is 32/320/32, matching VICE: it starts at VIC X
+       496 (see WINDOW_X below), so crop_x is 0 only because submit rotates the
+       frame - buffer column 0 is the window origin, not VIC X 0. */
     FRONTEND_DISPLAY_PAL_CROP_X = 0,
     FRONTEND_DISPLAY_PAL_CROP_Y = 16,
     FRONTEND_DISPLAY_PAL_CROP_W = 384,
     FRONTEND_DISPLAY_PAL_CROP_H = 272,
+    /* VIC X of display-window column 0, i.e. where the viewport starts on the
+       raster line. VICE's PAL "normal" viewport is 32/320/32
+       (VICII_SCREEN_PAL_NORMAL_*BORDERWIDTH = 0x20), and the display window
+       opens at VIC X 24, so the viewport opens 32 dots earlier at X 496 - eight
+       dots before the line wraps to 0. That band is chronologically the start of
+       the same raster line, not the previous one, and since the VIC-II paints
+       the whole line it is ordinary content (see agents/vicii.md).
+       frontend_submit_frame rotates each frame by this origin so the window
+       becomes a plain rectangle at CROP_X 0; nothing downstream has to know the
+       viewport wraps. NTSC keeps its non-wrapping origin at X 8. */
+    FRONTEND_DISPLAY_PAL_WINDOW_X = 496,
+    FRONTEND_DISPLAY_NTSC_WINDOW_X = 8,
     /* NTSC has only 263 rasters (0..262). The display window is 51..250 on both
        standards (see vicii_get_border_geometry), so NTSC has just 12 border
        lines below it against PAL's 25. Rows 39..262 give 12 border lines above
@@ -53,7 +66,7 @@ enum {
        would run 13 rows past the frame and show uninitialised fill. */
     FRONTEND_DISPLAY_NTSC_CROP_Y = 39,
     FRONTEND_DISPLAY_NTSC_CROP_H = 224,
-    FRONTEND_DISPLAY_NTSC_CROP_X = 8,
+    FRONTEND_DISPLAY_NTSC_CROP_X = 0,
     FRONTEND_DISPLAY_NTSC_CROP_W = 352,
     /* Fixed-point scale for the fractional pixel aspect ratio. 256 keeps the
        PAR exact to ~1e-5 while leaving frontend_fit_rect()'s int multiply far
@@ -783,6 +796,15 @@ static int frontend_display_crop_x_for_frame(const c64_frame *frame)
         return FRONTEND_DISPLAY_NTSC_CROP_X;
     }
     return FRONTEND_DISPLAY_PAL_CROP_X;
+}
+
+/* VIC X that display-window column 0 maps to, before the submit-time rotation. */
+static uint32_t frontend_display_window_x_for_frame(const c64_frame *frame)
+{
+    if (frame != NULL && frame->height == C64_FRAME_NTSC_HEIGHT) {
+        return (uint32_t)FRONTEND_DISPLAY_NTSC_WINDOW_X;
+    }
+    return (uint32_t)FRONTEND_DISPLAY_PAL_WINDOW_X;
 }
 
 static int frontend_display_crop_w_for_frame(const c64_frame *frame)
@@ -8174,21 +8196,47 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         frontend_apply_display_filter(ui);
     }
 
+    /* Rotate the line so display-window column 0 lands at buffer column 0. The
+       PAL viewport starts at VIC X 496 and wraps through 0, which is not a
+       rectangle; doing the wrap once here keeps every consumer downstream - the
+       CRT processor, the texture upload, and the Nuklear/SDL source rects - on a
+       plain CROP_X-based rectangle. Machine frames stay in VIC-X order: this
+       rotation is display-only and never reaches get-frame or a snapshot. */
+    {
+        uint32_t window_x = frontend_display_window_x_for_frame(frame);
+        uint32_t line = frame->width;
+        uint32_t y;
+
+        ui->current_frame = *frame;
+        if (window_x != 0u && line != 0u) {
+            for (y = 0; y < frame->height; ++y) {
+                const uint32_t *src = frame->pixels + (size_t)y * C64_FRAME_WIDTH;
+                uint32_t *dst = ui->current_frame.pixels + (size_t)y * C64_FRAME_WIDTH;
+                uint32_t i;
+
+                for (i = 0; i < line; ++i) {
+                    dst[i] = src[(window_x + i) % line];
+                }
+            }
+        }
+    }
+
     {
         SDL_Rect frame_rect = { 0, 0, (int)frame->width, (int)frame->height };
 
         /* Only rows the VIC-II painted are uploaded. The texture is allocated at
            PAL height as a ceiling so it survives a standard switch, but each
            standard's crop stays inside its own frame->height, so rows past an
-           NTSC frame are never sampled and need no padding fill. */
-        if (SDL_UpdateTexture(ui->display_texture, &frame_rect, frame->pixels,
-                (int)frame->stride_bytes) != 0) {
+           NTSC frame are never sampled and need no padding fill. Uploaded from
+           current_frame, which carries the rotation applied above. */
+        if (SDL_UpdateTexture(ui->display_texture, &frame_rect,
+                ui->current_frame.pixels,
+                (int)ui->current_frame.stride_bytes) != 0) {
             SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
             return false;
         }
     }
 
-    ui->current_frame = *frame;
     ui->has_frame = true;
     /* The crop height, and so the display aspect, follows the video standard.
        Refresh here as well as on option changes: switching PAL<->NTSC arrives as
