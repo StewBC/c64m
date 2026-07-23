@@ -79,8 +79,11 @@ not part of the format. Versions 9 and earlier are **sunset**: v10 widened the
 VIC-II framebuffer to the full raster line, so an older file's frame cannot be
 reconstructed without inventing columns it never captured. `VERSION_MIN` moved up
 with `VERSION` and the header check rejects them, leaving the machine untouched
-(`test_legacy_versions_rejected`). The v8 deferred-drive-state flag path is still
-in the reader but is now unreachable.
+(`test_legacy_versions_rejected`). The reader carries no pre-v10 branches: every
+accepted file is at the current version, so the legacy version comparisons are
+gone. The `1541_STATE_DEFERRED` flag path itself stays live - a current-version
+snapshot saved without full drive state still hard-resets the drives on load
+(`test_synthetic_v9_deferred_resets_drives`).
 
 Stored VIC-II frames carry their own geometry header (width, height, stride,
 format) and the reader validates it against this build's `c64_frame` before

@@ -339,8 +339,11 @@ static uint32_t snapshot_flags_for_machine(const c64_t *m) {
     return flags;
 }
 
-static bool snapshot_includes_1541_core(uint32_t version, uint32_t flags) {
-    return version >= 9u && (flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0u;
+/* The DEFERRED path (flag clear) is still live: a current-version snapshot saved
+   without full drive state hard-resets the drives on load. Only the old version
+   test is gone - every accepted file is >= C64_SNAPSHOT_VERSION_MIN. */
+static bool snapshot_includes_1541_core(uint32_t flags) {
+    return (flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0u;
 }
 
 static void write_meta(snapshot_writer *w, const c64_t *m, uint32_t flags) {
@@ -1013,7 +1016,7 @@ static void read_sid(snapshot_reader *r, c64_t *m) {
     s->voice3_env_read = r_u8(r);
 }
 
-static void read_mach(snapshot_reader *r, c64_t *m, uint32_t version) {
+static void read_mach(snapshot_reader *r, c64_t *m) {
     size_t i;
 
     for (i = 0; i < 8; ++i) {
@@ -1029,13 +1032,8 @@ static void read_mach(snapshot_reader *r, c64_t *m, uint32_t version) {
     m->clock.cpu_cycles = r_u64(r);
     m->clock.vic_cycles = r_u64(r);
     m->clock.cia_cycles = r_u64(r);
-    if (version >= 9u) {
-        m->clock.drive_accum = r_u64(r);
-        m->clock.drive_synced_cycle = r_u64(r);
-    } else {
-        m->clock.drive_accum = 0;
-        m->clock.drive_synced_cycle = 0;
-    }
+    m->clock.drive_accum = r_u64(r);
+    m->clock.drive_synced_cycle = r_u64(r);
     m->keyboard_events = r_u64(r);
     m->restore_requests = r_u64(r);
     m->restore_pending = r_bool(r);
@@ -1045,11 +1043,7 @@ static void read_mach(snapshot_reader *r, c64_t *m, uint32_t version) {
     m->config.video_standard = (c64_video_standard)r_u8(r);
     m->config.emulate_1541 = r_u8(r) != 0;
     m->instruction_complete = r_bool(r);
-    if (version >= 9u) {
-        m->config.media_1541 = r_u8(r) != 0;
-    } else {
-        m->config.media_1541 = 0;
-    }
+    m->config.media_1541 = r_u8(r) != 0;
 }
 
 static void read_cart(snapshot_reader *r, c64_t *m) {
@@ -1518,7 +1512,7 @@ static bool read_snapshot_into_temp(
         return false;
     }
     top.pos = header_size;
-    restore_1541_core = snapshot_includes_1541_core(version, flags);
+    restore_1541_core = snapshot_includes_1541_core(flags);
 
     c64_init(temp);
     memcpy(temp->bus.basic_rom, current->bus.basic_rom, sizeof(temp->bus.basic_rom));
@@ -1583,7 +1577,7 @@ static bool read_snapshot_into_temp(
             seen.sid = chunk.ok;
             break;
         case TAG_MACH:
-            read_mach(&chunk, temp, version);
+            read_mach(&chunk, temp);
             seen.mach = chunk.ok;
             break;
         case TAG_CART:
