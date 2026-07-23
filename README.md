@@ -48,22 +48,12 @@ Press **F9** to toggle the debugger layout.
 The emulation is a work in progress. Many games from single-load collections run
 correctly, but accuracy gaps remain.
 
-- D64 and G64 images mount read-only by default; marking an image writable enables
-  saving. On D64, SAVE works through the compatibility KERNAL trap, and with 1541
-  emulation enabled (`[disk] emulate_1541=1` plus a 1541 DOS ROM) the real 1541 DOS
-  write path also handles SAVE, sequential/relative file writes, and the
-  scratch/rename/validate/format command and error channels. Optional media path
-  (`[disk] media_1541=1`) adds GCR track rotation/SYNC/head/motor, hybrid WRITE/FORMT
-  on D64, and G64 mounts. Writable G64 with media + 1541 uses physical Port-A flux
-  write-back (e.g. BASIC `SAVE` / `LOAD"$",8` round-trips and remount). Stock media
-  LOAD/SAVE and some multi-stage/fast-loader paths (e.g. Robocop G64 load-to-game via
-  dual-bit ILOAD and protection self-checks) work; this is not a claim that every
-  commercial title or full playthrough is covered. Still missing: pure media-level
-  write fidelity polish, G64 empty-track grow/format rebuild, cross-drive copy,
-  block/memory-execute commands, devices beyond 8 and 9, and exhaustive fast-loader
-  coverage.
-- Some lower-level bus details are approximate: exact RDY/AEC sub-cycle CPU pin timing,
-  last-byte-on-bus open-bus behavior and VIC idle-state fetches.
+- G64: Still missing: pure media-level write fidelity polish, G64 empty-track
+  grow/format rebuild, cross-drive copy, block/memory-execute commands, devices
+  beyond 8 and 9, and exhaustive fast-loader coverage.
+- RDY/AEC are modeled at cycle granularity only (not half-cycle/analog pin timing).
+  General last-byte-on-bus open-bus is not modeled; the BA-lead cbuf case
+  (`ram[PC] & 0x0f`) is.
 
 Testing has not been exhaustive — the project is still in active development.
 
