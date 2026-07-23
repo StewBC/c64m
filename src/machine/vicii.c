@@ -1267,13 +1267,18 @@ static uint32_t vicii_compose_pixel(
     uint32_t border_color,
     vicii_bg_pixel bg,
     const vicii_sprite_pixel sprites[8],
+    bool note_collisions,
     bool *out_color_is_d021)
 {
     int n;
     if (out_color_is_d021 != NULL) {
         *out_color_is_d021 = false;
     }
-    vicii_note_sprite_collisions(v, bg, sprites);
+    /* The finish_cycle MCM re-decode recomposes an already-painted span; it must
+       not re-run collision detection (the paint pass already latched it). */
+    if (note_collisions) {
+        vicii_note_sprite_collisions(v, bg, sprites);
+    }
 
     if (main_border) {
         return border_color;
@@ -1320,6 +1325,7 @@ static uint32_t vicii_live_pixel(
     uint32_t y,
     bool main_border,
     bool vertical_border,
+    bool note_collisions,
     bool *out_color_is_d021)
 {
     uint32_t border_color = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
@@ -1376,7 +1382,7 @@ static uint32_t vicii_live_pixel(
     }
 
     return vicii_compose_pixel(v, main_border, vertical_border, border_color,
-        bg, sprites, out_color_is_d021);
+        bg, sprites, note_collisions, out_color_is_d021);
 }
 
 /* VICE check_vborder_top: top compare + DEN clears both the latch and the
@@ -1418,6 +1424,41 @@ static void vicii_hborder_flush(vicii *v, bool main_border) {
     }
 }
 
+/* Build the cycle-constant paint prep from the current register/latch state.
+   Shared by the live render (begin_cycle) and the finish_cycle MCM resolution so
+   both decode with an identical model. prep.mode reflects whatever $D016/$D011
+   currently hold, so calling this after the CPU Phi2 store yields the post-write
+   mode used to resolve a same-cycle $D016 MCM change. */
+static inline void vicii_build_paint_prep(vicii *v, const c64_bus_t *bus,
+                                          vicii_paint_prep *prep) {
+    uint16_t idle_bank;
+    uint16_t idle_addr;
+    int      n;
+
+    prep->lc = vicii_live_line_ctx(v);
+    prep->xscroll = (uint8_t)(v->xscroll_pipe & 0x07u);
+    prep->mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                           ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                           ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+    prep->b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
+    prep->b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
+    prep->b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
+    prep->idle_ecm = (v->registers[0x11] & 0x40u) != 0u;
+    prep->idle_bmm = (v->registers[0x11] & 0x20u) != 0u;
+    prep->idle_mcm = (v->registers[0x16] & 0x10u) != 0u;
+    prep->idle_invalid = prep->idle_ecm && (prep->idle_bmm || prep->idle_mcm);
+    idle_bank = c64_bus_vic_bank_base(bus);
+    idle_addr = (uint16_t)(idle_bank + (prep->idle_ecm ? 0x39ffu : 0x3fffu));
+    prep->idle_g = c64_bus_vic_read_ram(bus, idle_addr);
+    prep->any_sprite = false;
+    for (n = 0; n < 8; n++) {
+        if (v->sprite_visible[n]) {
+            prep->any_sprite = true;
+            break;
+        }
+    }
+}
+
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_border_geometry g;
     vicii_paint_prep prep;
@@ -1426,13 +1467,14 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     uint32_t cyc;
     bool     check_csel;
     bool     check_prev_csel;
-    int      n;
-    uint16_t idle_bank;
-    uint16_t idle_addr;
 
     if (!bus) {
         return;
     }
+
+    /* Stash the bus so finish_cycle can rebuild the paint prep to resolve a
+       same-cycle Phi2 $D016 MCM write into this cycle's span. */
+    v->paint_bus = bus;
 
     y = v->timing.raster_line;
     if (y >= v->working_frame.height) {
@@ -1442,28 +1484,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     /* Geometry is unused by background decode (border is the main flip-flop);
        only kept for the shared API with the snapshot path. */
     g = vicii_get_border_geometry(v);
-    prep.lc = vicii_live_line_ctx(v);
-    prep.xscroll = (uint8_t)(v->xscroll_pipe & 0x07u);
-    prep.mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
-                          ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
-                          ((v->registers[0x16] & 0x10u) ? 1u : 0u));
-    prep.b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
-    prep.b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
-    prep.b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
-    prep.idle_ecm = (v->registers[0x11] & 0x40u) != 0u;
-    prep.idle_bmm = (v->registers[0x11] & 0x20u) != 0u;
-    prep.idle_mcm = (v->registers[0x16] & 0x10u) != 0u;
-    prep.idle_invalid = prep.idle_ecm && (prep.idle_bmm || prep.idle_mcm);
-    idle_bank = c64_bus_vic_bank_base(bus);
-    idle_addr = (uint16_t)(idle_bank + (prep.idle_ecm ? 0x39ffu : 0x3fffu));
-    prep.idle_g = c64_bus_vic_read_ram(bus, idle_addr);
-    prep.any_sprite = false;
-    for (n = 0; n < 8; n++) {
-        if (v->sprite_visible[n]) {
-            prep.any_sprite = true;
-            break;
-        }
-    }
+    vicii_build_paint_prep(v, bus, &prep);
 
     cyc = v->timing.cycle_in_line;
 
@@ -1523,6 +1544,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
            vertical-border pixel with main_border=false; the border colour is
            captured at paint time so its own colour_latency is unchanged. */
         v->hborder_pipe[1].n = 0;
+        v->hborder_pipe[1].mode = prep.mode;
         for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
             int32_t x_i = raw_xs + i;
 
@@ -1532,7 +1554,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 v->hborder_pipe[1].idx[k]     = y * C64_FRAME_WIDTH + x;
                 v->hborder_pipe[1].content[k] =
                     vicii_live_pixel(v, bus, &g, &prep, x, y, false,
-                        v->vertical_border_active,
+                        v->vertical_border_active, true,
                         &v->hborder_pipe[1].content_d021[k]);
 #ifdef C64M_VIC_TRACE
                 if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
@@ -2237,6 +2259,52 @@ void vicii_finish_cycle(vicii *v) {
         }
     }
 
+    /* Same-cycle Phi2 $D016 MCM (mode) resolution. c64m paints a cycle's whole
+       8-dot span in begin_cycle, before the CPU-owned Phi2 store, so a $D016
+       write that flips the graphics mode during this cycle is missed by that
+       span -- the first affected display column is left one paint behind (Deus
+       Ex Machina toggles MCM on at cycle 15 every line, which left column 0 in
+       hires text/colour-8 while the rest of the line went multicolor/black).
+       VICE resamples the $D016 MCM bit mid-cycle (viciisc draw_graphics
+       vmode16_pipe), so the write reaches the same column. Re-decode the
+       just-painted span (hborder_pipe[1]) with the post-store mode to match.
+       Guarded to g-access cycles 15..54 with the vertical border inactive, the
+       same window as the xscroll_pipe sample below, so EoD's cycle-56 $D016
+       dodge, closed-border screens (the main border flip-flop overrides content
+       at flush) and lft-nine are untouched. The re-decode passes
+       note_collisions=false: the paint pass already latched this cycle's
+       collisions. */
+    cyc = v->timing.cycle_in_line;
+    if (v->pixel_output_enabled &&
+        v->paint_bus != NULL &&
+        !v->vertical_border_active &&
+        cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+        cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
+        uint8_t new_mode =
+            (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
+                      ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+                      ((v->registers[0x16] & 0x10u) ? 1u : 0u));
+        /* Only a same-cycle $D016 MCM flip is resolved here. $D011 (ECM/BMM)
+           mode changes keep their existing reg11_delay/fetch model, which the
+           border and FLI regressions depend on -- do not re-decode on those. */
+        if (((new_mode ^ v->hborder_pipe[1].mode) & 0x01u) != 0u) {
+            vicii_border_geometry g = vicii_get_border_geometry(v);
+            vicii_paint_prep prep;
+            uint32_t y = v->timing.raster_line;
+            uint8_t k;
+            vicii_build_paint_prep(v, v->paint_bus, &prep); /* prep.mode == new_mode */
+            for (k = 0; k < v->hborder_pipe[1].n; ++k) {
+                uint32_t x =
+                    v->hborder_pipe[1].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                v->hborder_pipe[1].content[k] =
+                    vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
+                        v->vertical_border_active, false,
+                        &v->hborder_pipe[1].content_d021[k]);
+            }
+            v->hborder_pipe[1].mode = new_mode;
+        }
+    }
+
     /* XSCROLL pipe sample runs *after* this cycle's CPU Phi2 store (begin_cycle
        paints first, then the CPU, then finish_cycle).
        Only g-access cycles 15..54: never 0..14 (would pick up a still-live
@@ -2749,7 +2817,7 @@ static bool vicii_make_frame_snapshot_internal(
 
             /* Snapshot path: hborder stands in for main_border_ff. */
             pixel = vicii_compose_pixel(v, hborder, vborder, border_color, bg,
-                sprites, NULL);
+                sprites, true, NULL);
             out_frame->pixels[y * C64_FRAME_WIDTH + x] = pixel;
         }
     }

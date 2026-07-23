@@ -1676,6 +1676,71 @@ static void test_live_open_border_right_edge_xscroll_delayed(void) {
                frame1.pixels[row * C64_FRAME_WIDTH + 345]);
 }
 
+/* A same-cycle Phi2 $D016 MCM write must reach the display column painted on
+   that same cycle. c64m paints a cycle's 8-dot span in begin_cycle, before the
+   CPU's Phi2 store, so without the finish_cycle MCM resolution the first display
+   column (x=24, drawn at cycle 15) is left one paint behind: it keeps the
+   pre-write mode while columns 1+ get the new one. Deus Ex Machina toggles MCM
+   on at cycle 15 every line, which painted column 0 in hires (colour 8) over a
+   VICE-black centre. VICE resamples the MCM bit mid-cycle (viciisc
+   vmode16_pipe), so the write reaches column 0. Standard bitmap (mode 2, hires)
+   vs multicolor bitmap (mode 3): bitmap byte $80, VM cell $2A → x=24 is the VM
+   high nibble (palette 2) in hires, the VM low nibble (palette 10) in MC. */
+static void test_live_mcm_toggle_reaches_column0_same_cycle(void) {
+    c64_t    machine;
+    c64_frame frame;
+    uint64_t abs;
+    /* Row 100, YSCROLL=3: column 0 maps to cell 240, RC=1 (see the xscroll test
+       above), so its bitmap byte is $2000 + 240*8 + 1 = $2781. */
+    const uint16_t col0_gbyte = 0x2781u;
+    const uint16_t col0_cell  = 240u;
+    const uint32_t row = 100u;
+
+    /* Control: MCM stays 0 for the whole row → x=24 is hires bitmap fg (VM
+       high nibble = palette 2). */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18); /* screen $0400, bitmap $2000 */
+    c64_bus_write(&machine.bus, 0xd011, 0x3b); /* BMM=1, DEN=1, RSEL=1, YSCROLL=3 */
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
+    machine.bus.ram[col0_gbyte]        = 0x80u; /* bit7 set; pair(7,6)=10 */
+    machine.bus.ram[0x0400u + col0_cell] = 0x2Au; /* VM high=2, low=A */
+    abs = 0;
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("control frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("MCM=0 col0 x=24 is hires fg (VM high, palette 2)",
+               TEST_PALETTE_2, frame.pixels[row * C64_FRAME_WIDTH + 24]);
+
+    /* Fix: MCM=0 through begin_cycle(15) (column 0 paints hires), then the CPU
+       sets MCM=1 during that same cycle's Phi2, before finish_cycle(15). Column
+       0 must be resolved to MC bitmap (VM low nibble = palette 10), matching
+       columns 1+ and VICE -- not left as hires palette 2. */
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd018, 0x18);
+    c64_bus_write(&machine.bus, 0xd011, 0x3b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08); /* start MCM=0 */
+    machine.bus.ram[col0_gbyte]        = 0x80u;
+    machine.bus.ram[0x0400u + col0_cell] = 0x2Au;
+    abs = 0;
+    while (!(machine.vic.timing.raster_line == row &&
+             machine.vic.timing.cycle_in_line == 15u)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    /* Split cycle 15: begin paints column 0 with MCM=0, the Phi2 store flips
+       MCM=1, finish resolves the span. */
+    vicii_begin_cycle(&machine.vic, &machine.bus, abs);
+    c64_bus_write(&machine.bus, 0xd016, 0x18); /* CSEL=1, MCM=1, XSCROLL=0 */
+    vicii_finish_cycle(&machine.vic);
+    abs++;
+    while (!vicii_consume_frame_complete(&machine.vic)) {
+        vicii_step_cycle(&machine.vic, &machine.bus, abs++);
+    }
+    expect_true("mcm-toggle frame", vicii_copy_completed_frame(&machine.vic, &frame, abs));
+    expect_u32("same-cycle MCM write reaches col0 x=24 (MC, VM low, palette 10)",
+               TEST_PALETTE_10, frame.pixels[row * C64_FRAME_WIDTH + 24]);
+}
+
 /* VICE draw_graphics: MCM text only uses 2-bit pairs when cbuf bit 3 is set.
    Idle forces cbuf=0, so MCM=1 + BMM=0 idle is still hires (ghost $F0 → four
    solid fg dots, four bg). Decoding idle as multicolor pairs broke open-border
@@ -3820,6 +3885,7 @@ int main(void) {
     test_den_clear_main_border_keeps_d020_full_height();
     test_live_side_border_shows_zero_graphics();
     test_live_open_border_right_edge_xscroll_delayed();
+    test_live_mcm_toggle_reaches_column0_same_cycle();
     test_live_mcm_idle_ghost_is_hires();
     test_allow_bad_lines_latched_at_line_30();
     test_set_vborder_latch_sticky_until_top();

@@ -190,6 +190,23 @@ sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
   open-border dodge `$D016=$62` / XSCROLL=2 at the right compare). Either
   mistake pads x=24 with B0C — the solid vertical fine-checker line. Snapshot
   path uses live `$D016`.
+- The `$D016` **MCM bit** for paint is resolved in `vicii_finish_cycle`, not just
+  read at `begin_cycle`. Live spans are painted in `begin_cycle` before the CPU's
+  Phi2 store, so a mid-line `$D016` MCM flip would otherwise miss the display
+  column drawn on that same cycle — the first affected column (x=24, cycle 15) is
+  left one paint behind. VICE resamples the MCM bit mid-cycle (`viciisc`
+  `draw_graphics` `vmode16_pipe`), so the write reaches that column. After the
+  Phi2 store, if the mode's **MCM bit** changed on a g-access cycle (**15..54**,
+  vertical border inactive — same window as `xscroll_pipe`), the just-painted span
+  (`hborder_pipe[1]`) is re-decoded with the post-store mode via `vicii_live_pixel`
+  (`note_collisions=false`; the paint pass already latched them). The trigger is
+  the MCM bit only — `$D011` ECM/BMM changes keep the existing `reg11_delay`/fetch
+  model. Deus Ex Machina toggles MCM on at cycle 15 every line of its band
+  transition; without this, column 0 painted hires text (colour 8, an orange bar)
+  over a VICE-black centre. EoD's `$D016=$62` dodge is at cycle 56 (excluded) and
+  never flips MCM inside 15..54, so it never triggers a re-decode; lft-nine's
+  closed side border is overridden by the main flip-flop at flush. See
+  `test_live_mcm_toggle_reaches_column0_same_cycle` and `dem-handoff.md`.
 - Live paint advances `color_pipe_d020` / `color_pipe_d021` once per VIC **dot**
   of every cycle, including HBLANK dots that are not written into the 384-px
   frame (VICE `draw_colors` runs for every cycle). Sampling only on painted

@@ -113,6 +113,48 @@ screens and closed-border demos are untouched.
   in the credits/digits scene, so the opened-over-border path is overridden by the
   border colour there regardless of the boundary — visually clean at ~33 s.
 
+## Column-0 orange bar: mid-line `$D016` MCM one-cycle paint skew (CONCRETE, fixed)
+
+A second, unrelated defect in the same title's **band/eye transition** (the scene
+between the credits scroller and the water-woman effect). Reachable directly from
+snapshot `assets/screenshots/DEM/deus-s1-20260722-142842.c64state` (post-bug), or
+watched being drawn from `assets/snapshots/deus-s1-20260722-191023.c64state` at
+`--turbo=1`: ~1.5s of fade to an all-black centre, then at ~3.8s wall / frame
+10506 an **8px-wide vertical bar** grows top-down in **character column 0**
+(x=24..31) over the black centre. Colour is **8 (orange)**, not the D021
+background. Absent in VICE.
+
+**Root cause (CONCRETE).** The transition runs a per-line `$D016` toggle:
+`$D016←MCM=1` at **cycle 15** (start of display) and `$D016←MCM=0`+XSCROLL-ramp at
+**cycle 55** every raster line. The centre is drawn in an invalid/MC mode that
+resolves to black. c64m paints a cycle's whole 8-dot span in `begin_cycle`, before
+the CPU's cycle-15 Phi2 store, so **column 0 (cycle 15) used the pre-write MCM=0**
+(hires text → the character's colour-8 foreground) while columns 1+ (cycle 16+)
+saw MCM=1 (→ black). VICE resamples the `$D016` MCM bit mid-cycle
+(`viciisc/vicii-draw-cycle.c draw_graphics` `vmode16_pipe`, updated at pixel 4),
+so column 0 gets the write and is black. Located with an env-gated `SEAM`/`WREG`
+probe (frame/x/y branch, colour, mode; `$D016` write cycle) — removed after
+diagnosis.
+
+**Fix (CONCRETE).** `src/machine/vicii.c` `vicii_finish_cycle`: after the existing
+`$D020`/`$D021` same-cycle resolution, if the mode's **MCM bit** changed from the
+just-painted span's mode on a g-access cycle (15..54, vertical border inactive),
+re-decode that span (`hborder_pipe[1]`) with the post-store mode via
+`vicii_live_pixel` (new `note_collisions=false` arg so collisions aren't
+double-latched). Paint-time mode is stored per span (`hborder_pipe[].mode`); the
+bus is stashed (`v->paint_bus`) so finish can rebuild the prep. Trigger is the MCM
+bit only, so `$D011` FLI mode changes are untouched. No hack: it mirrors VICE
+resolving mode-dependent colours after the CPU Phi2 store, and is a no-op unless
+MCM actually flips inside the display window.
+
+**Verification (CONCRETE).** Birth frame 10506 and the eye/water effect frame:
+column-0 orange count 245→**0**, centre fully black like VICE; effect left edge
+continuous. `ctest` **52/52** plus new guard
+`test_live_mcm_toggle_reaches_column0_same_cycle` (fails with the fix reverted:
+x=24 = hires palette 2 instead of MC palette 10). lft-nine digits scene unchanged;
+EoD unaffected by construction (its `$D016=$62` is at cycle 56, outside 15..54,
+and never flips MCM there). See `vicii.md`.
+
 ## Still open / not investigated
 
 - **HYPOTHESIS** the "clean" parity relies on sprite 6 covering x=344; that path

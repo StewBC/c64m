@@ -189,11 +189,16 @@ struct vicii {
     bool     hborder_prev2_csel;
     struct {
         uint8_t  n;
+        uint8_t  mode;               /* graphics mode used to paint this span */
         uint32_t idx[8];
         uint32_t content[8];
         bool     content_d021[8];
         uint32_t border[8];
     } hborder_pipe[2];
+    /* Transient bus pointer stashed each begin_cycle so finish_cycle can resolve
+       a same-cycle Phi2 $D016 MCM write into the current span (see the mode
+       resolution in vicii_finish_cycle). Not snapshotted; re-set every cycle. */
+    const c64_bus_t *paint_bus;
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
