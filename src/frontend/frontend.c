@@ -33,12 +33,15 @@ enum {
     FRONTEND_DISK_LED_SIZE = 16,
     /* Host-time LED hold after each activity event (ms). Independent of pause. */
     FRONTEND_DISK_LED_HOLD_MS = 300,
-    /* PAL's normal-border viewport is 384x272. Rows 20..291 retain the complete
-       upper and lower border effects (including EoD's FLIP/DISK labels), while
-       the full 384-pixel paint width preserves the same near-4:3 PAR-corrected
-       presentation as the former, overly tight 352x248 crop. */
+    /* PAL's normal-border viewport is 384x272, matching VICE's canonical PAL
+       geometry: rasters 16..287 (VICII_PAL_NORMAL_FIRST/LAST_DISPLAYED_LINE).
+       Aligning to VICE keeps every PAL title cropped exactly as the oracle shows
+       it - notably Deus Ex Machina's parked pillar, whose sprite-7 lower-border
+       retract at raster 288 sits just past line 287 and so is not shown (a wider
+       viewport exposed a grey->black "dropout" that VICE crops away). The full
+       384-pixel paint width preserves the near-4:3 PAR-corrected presentation. */
     FRONTEND_DISPLAY_PAL_CROP_X = 0,
-    FRONTEND_DISPLAY_PAL_CROP_Y = 20,
+    FRONTEND_DISPLAY_PAL_CROP_Y = 16,
     FRONTEND_DISPLAY_PAL_CROP_W = 384,
     FRONTEND_DISPLAY_PAL_CROP_H = 272,
     /* NTSC has only 263 rasters (0..262). The display window is 51..250 on both

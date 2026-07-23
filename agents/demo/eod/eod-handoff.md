@@ -34,9 +34,13 @@ from this session are `c64m-checker-live16.png`,
 `eod-late-sheet.png`, and `eod-far-sheet.png`.
 
 The eye scene's complete `FLIP` and `DISK` labels were present in the raw
-384x312 frame; the frontend's tight 352x248 crop clipped them. PAL now uses the
-normal-border 384x272 viewport (rows 20..291), which displays both labels fully
-and keeps the same near-4:3 PAR-corrected shape. NTSC retains its prior crop.
+384x312 frame; the frontend's tight 352x248 crop clipped them. PAL uses the
+normal-border 384x272 viewport (rows 16..287, matching VICE's canonical PAL
+geometry), which displays both labels fully and keeps the same near-4:3
+PAR-corrected shape. NTSC retains its prior crop. (The crop was rows 20..291 for
+a time; that extended 4 rasters lower than VICE and exposed lower-border content
+VICE crops away - see Deus Ex Machina's pillar - so it was aligned to VICE's
+16..287. The EoD labels sit inside 16..287 and are unaffected.)
 
 The VICE NTSC sprite fetch slots were also corrected to zero-based cycles
 `58,60,62,64,1,3,5,7`. PAL EoD output is unaffected. Sprite BA tests now assert

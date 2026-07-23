@@ -17,9 +17,14 @@ Phi2 schedule; frontend frames are copies.
 - PAL 6569 and NTSC 6567R8 timing are selected per machine configuration.
 - Full PAL/NTSC frame heights are published: PAL 312 lines, NTSC 263. The
   frontend crop is per-standard and always stays inside the published frame:
-  PAL uses the normal-border 384x272 viewport from X=0, Y=20 (rows 20..291),
-  which retains complete upper/lower border effects such as EoD's `FLIP`/`DISK`
-  labels; NTSC uses 352x224 from X=8, Y=39 (rows 39..262). The display window is
+  PAL uses the normal-border 384x272 viewport from X=0, Y=16 (rows 16..287),
+  matching VICE's canonical PAL geometry
+  (`VICII_PAL_NORMAL_FIRST/LAST_DISPLAYED_LINE` = 16/287) so every PAL title is
+  cropped exactly as the oracle shows it. This still retains upper/lower border
+  effects such as EoD's `FLIP`/`DISK` labels (they sit inside 16..287); a wider
+  crop (the former rows 20..291) exposed lower-border content VICE hides - e.g.
+  Deus Ex Machina's parked-pillar sprite-7 retract at raster 288 read as a
+  grey->black "dropout". NTSC uses 352x224 from X=8, Y=39 (rows 39..262). The display window is
   51..250 on both standards, so NTSC has only 12 border lines below it; the
   224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
   it runs past raster 262 and exposes the frame's fill colour as a band under
