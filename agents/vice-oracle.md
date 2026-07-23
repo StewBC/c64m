@@ -97,7 +97,15 @@ The VICE source tree is located at:
 
     /Users/swessels/Develop/svm/vice-emu-code/vice
 
-It is already configured and can be built with:
+It is already configured (how is shown here for completeness only)
+```# Generate the configure files
+./autogen.sh
+
+# Configure the build system layout
+./configure --disable-pdf-docs
+```
+
+It can be built with:
 
     cd /Users/swessels/Develop/svm/vice-emu-code/vice
     make -j"$(sysctl -n hw.ncpu)"
@@ -121,7 +129,7 @@ After the build, the executable is located at:
 
 Run it from the VICE source directory with:
 
-    ./src/x64sc [optional command line switches]
+    src/x64sc -directory data [optional command line switches]
 
 Use this locally built version of VICE when additional instrumentation,
 logging, tracing, or internal state inspection is required. Source changes can
