@@ -191,7 +191,9 @@ struct vicii {
     struct {
         uint8_t  n;
         uint8_t  mode;               /* graphics mode used to paint this span */
+        uint8_t  reg11;              /* $D011 as sampled when this span was painted */
         bool     csel;               /* CSEL used when this span was checked/painted */
+        uint8_t  dot[8];             /* dot position 0..7 within the cycle */
         uint32_t idx[8];
         uint32_t content[8];
         bool     content_d021[8];

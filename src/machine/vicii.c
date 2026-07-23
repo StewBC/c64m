@@ -1530,22 +1530,26 @@ static void vicii_hborder_flush(vicii *v, bool main_border) {
    both decode with an identical model. prep.mode reflects whatever $D016/$D011
    currently hold, so calling this after the CPU Phi2 store yields the post-write
    mode used to resolve a same-cycle $D016 MCM change. */
-static inline void vicii_build_paint_prep(vicii *v, const c64_bus_t *bus,
-                                          vicii_paint_prep *prep) {
+/* reg11 is passed explicitly so finish_cycle can re-decode a span under the
+   $D011 value that a same-cycle CPU Phi2 store established (see the ECM/BMM
+   resolution there). Every other caller passes the live register. */
+static inline void vicii_build_paint_prep_reg11(vicii *v, const c64_bus_t *bus,
+                                                vicii_paint_prep *prep,
+                                                uint8_t reg11) {
     uint16_t idle_bank;
     uint16_t idle_addr;
     int      n;
 
     prep->lc = vicii_live_line_ctx(v);
     prep->xscroll = (uint8_t)(v->xscroll_pipe & 0x07u);
-    prep->mode = (uint8_t)(((v->registers[0x11] & 0x40u) ? 4u : 0u) |
-                           ((v->registers[0x11] & 0x20u) ? 2u : 0u) |
+    prep->mode = (uint8_t)(((reg11 & 0x40u) ? 4u : 0u) |
+                           ((reg11 & 0x20u) ? 2u : 0u) |
                            ((v->registers[0x16] & 0x10u) ? 1u : 0u));
     prep->b1c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_1] & 0x0fu];
     prep->b2c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_2] & 0x0fu];
     prep->b3c = vicii_palette_argb[v->registers[VICII_REG_BACKGROUND_COLOR_3] & 0x0fu];
-    prep->idle_ecm = (v->registers[0x11] & 0x40u) != 0u;
-    prep->idle_bmm = (v->registers[0x11] & 0x20u) != 0u;
+    prep->idle_ecm = (reg11 & 0x40u) != 0u;
+    prep->idle_bmm = (reg11 & 0x20u) != 0u;
     prep->idle_mcm = (v->registers[0x16] & 0x10u) != 0u;
     prep->idle_invalid = prep->idle_ecm && (prep->idle_bmm || prep->idle_mcm);
     idle_bank = c64_bus_vic_bank_base(bus);
@@ -1558,6 +1562,11 @@ static inline void vicii_build_paint_prep(vicii *v, const c64_bus_t *bus,
             break;
         }
     }
+}
+
+static inline void vicii_build_paint_prep(vicii *v, const c64_bus_t *bus,
+                                          vicii_paint_prep *prep) {
+    vicii_build_paint_prep_reg11(v, bus, prep, v->registers[0x11]);
 }
 
 static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
@@ -1639,6 +1648,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
            captured at paint time so its own colour_latency is unchanged. */
         v->hborder_pipe[1].n = 0;
         v->hborder_pipe[1].mode = prep.mode;
+        v->hborder_pipe[1].reg11 = v->registers[0x11];
         v->hborder_pipe[1].csel = check_csel;
         for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
             int32_t raw_x = raw_xs + i;
@@ -1647,6 +1657,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
             if (fb_x >= 0) {
                 uint8_t k = v->hborder_pipe[1].n;
                 x = (uint32_t)raw_x;
+                v->hborder_pipe[1].dot[k] = (uint8_t)i;
                 v->hborder_pipe[1].idx[k] =
                     y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                 v->hborder_pipe[1].content[k] =
@@ -2400,6 +2411,91 @@ void vicii_finish_cycle(vicii *v) {
                         &v->hborder_pipe[1].content_d021[k]);
             }
             v->hborder_pipe[1].mode = new_mode;
+        }
+    }
+
+    /* Same-cycle $D011 ECM/BMM resolution (VICE viciisc draw_graphics8).
+       begin_cycle composes a cycle's 8 dots before the CPU-owned Phi2 store, so
+       a $D011 mode change during the cycle was not visible until the *next*
+       cycle - the EoD checker's invalid-mode black bar started 12 dots late
+       against VICE (X504 instead of X492 on the bottom frame line).
+
+       VICE does not switch a whole cycle at once: on a 6569 (color_latency) it
+       samples the two bits mid-cycle and asymmetrically, from vmode11_pipe:
+           pixel 4:  vmode11_pipe |= regs[0x11] & 0x60   (rising edge)
+           pixel 6:  vmode11_pipe &= regs[0x11] & 0x60   (falling edge)
+       so within that cycle dots 0..3 keep the old bits, dots 4..5 see old|new
+       and dots 6..7 see new.
+
+       Two spans are in flight under c64m's 2-cycle paint delay, and both need
+       repair - the same split the $D020 colour resolution above performs:
+         - hborder_pipe[0] (composed one cycle ago) is the span VICE is emitting
+           when it takes the pixel-4 sample, so it takes the edge rule;
+         - hborder_pipe[1] (composed this cycle, before the store) is entirely
+           stale and takes the new value on every dot.
+       Repairing only one of them leaves a 4-dot island of the old mode.
+
+       Unlike the $D016 case above this is NOT restricted to g-access cycles:
+       the store that matters here lands at cycle 11, in HBLANK. $D016 keeps its
+       whole-span re-decode - VICE moves MCM at pixel 4 too, but the existing
+       model is what the DEM column-0 regression pins, so it is left alone. */
+    if (v->pixel_output_enabled && v->paint_bus != NULL) {
+        uint8_t old11 = v->hborder_pipe[0].reg11;
+        uint8_t new11 = v->registers[0x11];
+
+        if (v->hborder_pipe[0].n != 0u && ((old11 ^ new11) & 0x60u) != 0u) {
+            uint8_t keep    = (uint8_t)(old11 & (uint8_t)~0x60u);
+            uint8_t reg_45  = (uint8_t)(keep | ((old11 | new11) & 0x60u));
+            uint8_t reg_67  = (uint8_t)(keep | (new11 & 0x60u));
+            vicii_border_geometry g = vicii_get_border_geometry(v);
+            vicii_paint_prep prep45;
+            vicii_paint_prep prep67;
+            uint32_t y = v->timing.raster_line;
+            uint8_t k;
+
+            vicii_build_paint_prep_reg11(v, v->paint_bus, &prep45, reg_45);
+            vicii_build_paint_prep_reg11(v, v->paint_bus, &prep67, reg_67);
+            for (k = 0; k < v->hborder_pipe[0].n; ++k) {
+                uint8_t dot = v->hborder_pipe[0].dot[k];
+                const vicii_paint_prep *use;
+                uint32_t fb_x;
+                uint32_t x;
+
+                if (dot < 4u) {
+                    continue;               /* old bits still stand */
+                }
+                use = (dot < 6u) ? &prep45 : &prep67;
+                fb_x = v->hborder_pipe[0].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                x = vicii_frame_x_to_vic_x(v, fb_x);
+                /* note_collisions=false: the paint pass already latched them. */
+                v->hborder_pipe[0].content[k] =
+                    vicii_live_pixel(v, v->paint_bus, &g, use, x, y, false,
+                        v->vertical_border_active, false,
+                        &v->hborder_pipe[0].content_d021[k]);
+            }
+            v->hborder_pipe[0].mode = prep67.mode;
+            v->hborder_pipe[0].reg11 = new11;
+        }
+
+        if (v->hborder_pipe[1].n != 0u &&
+            ((v->hborder_pipe[1].reg11 ^ new11) & 0x60u) != 0u) {
+            vicii_border_geometry g = vicii_get_border_geometry(v);
+            vicii_paint_prep prep;
+            uint32_t y = v->timing.raster_line;
+            uint8_t k;
+
+            vicii_build_paint_prep_reg11(v, v->paint_bus, &prep, new11);
+            for (k = 0; k < v->hborder_pipe[1].n; ++k) {
+                uint32_t fb_x =
+                    v->hborder_pipe[1].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
+                v->hborder_pipe[1].content[k] =
+                    vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
+                        v->vertical_border_active, false,
+                        &v->hborder_pipe[1].content_d021[k]);
+            }
+            v->hborder_pipe[1].mode = prep.mode;
+            v->hborder_pipe[1].reg11 = new11;
         }
     }
 
