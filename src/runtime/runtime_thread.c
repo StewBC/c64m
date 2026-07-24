@@ -116,10 +116,16 @@ static void runtime_pace_after_frame(runtime *rt) {
 
 static void runtime_update_sid_sample_output(runtime *rt) {
     bool enabled;
+    /* Free-run turbo (max/warp) skips host audio emission; only keep SID sample
+       generation when recording so capture still hears the model. Envelope/phase
+       still advance regardless of sample_output_enabled. */
+    bool free_run_mute =
+        runtime_turbo_is_free_run(rt) && rt->audio_record_path == NULL;
 
     enabled = (rt->audio_out != NULL || rt->audio_record_path != NULL) &&
         rt->audio_sample_rate > 0 &&
         rt->speed_mode != RUNTIME_SPEED_MODE_FAST &&
+        !free_run_mute &&
         rt->audio_smoke == 0;
     c64_set_audio_output_enabled(&rt->machine, enabled);
 }
@@ -316,8 +322,11 @@ static void runtime_audio_advance_cycle(runtime *rt) {
         return;
     }
 
-    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST) {
-        /* Turbo: mute and discard pending timing so normal speed resumes cleanly. */
+    if (rt->speed_mode == RUNTIME_SPEED_MODE_FAST ||
+        (runtime_turbo_is_free_run(rt) && rt->audio_record_path == NULL)) {
+        /* Free-run / FAST: mute host path and discard pending timing so normal
+           speed resumes cleanly. Machine SID still clocks; sample mix is gated
+           by runtime_update_sid_sample_output. */
         rt->audio_cycle_accum = 0.0;
         rt->audio_sample_accum = 0.0;
         rt->audio_sample_count = 0;
@@ -1474,6 +1483,7 @@ static void runtime_cycle_turbo_speed(runtime *rt) {
 
     rt->active_turbo_multiplier = rt->turbo_speeds[next_index];
     rt->pace_initialized = false;
+    runtime_update_sid_sample_output(rt);
     runtime_update_video_output(rt);
     runtime_publish_machine_state(rt);
 }
@@ -1487,6 +1497,7 @@ static void runtime_set_turbo_multiplier(runtime *rt, uint32_t multiplier) {
 
     rt->active_turbo_multiplier = multiplier;
     rt->pace_initialized = false;
+    runtime_update_sid_sample_output(rt);
     runtime_update_video_output(rt);
     runtime_publish_machine_state(rt);
 }
@@ -1932,6 +1943,37 @@ static bool runtime_step_cycle(runtime *rt) {
     runtime_audio_advance_cycle(rt);
     runtime_flush_dirty_disks(rt);
     return true;
+}
+
+/* Free-run step: same machine clock as runtime_step_cycle, but defer disk flush
+   to frame complete in the simple free-run batch. Audio still advances (cheap
+   early-out under free-run turbo / FAST when not recording). */
+static bool runtime_step_cycle_free_run(runtime *rt) {
+    char error[256];
+
+    if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        runtime_publish_error(rt, error);
+        return false;
+    }
+
+    runtime_audio_advance_cycle(rt);
+    return true;
+}
+
+/* True when free-run can omit rare-path checks (BP/paste/history/pending loads).
+   BRK auto-pause still runs — it is a product free-run feature. */
+static bool runtime_free_run_is_simple(const runtime *rt) {
+    return rt->breakpoint_count == 0 &&
+        !rt->paste_active &&
+        !rt->cpu_history_enabled &&
+        !rt->trace_enabled &&
+        !rt->temp_bp_active &&
+        !rt->suppress_execute_bp &&
+        rt->pending_prg_path == NULL &&
+        rt->pending_asm_path == NULL &&
+        rt->pending_bin_path == NULL &&
+        rt->autorun_d64_phase == 0;
 }
 
 static void runtime_cpu_history_record(runtime *rt)
@@ -4607,85 +4649,107 @@ int runtime_thread_main(void *userdata) {
                 }
             }
 
-            for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING && i < RUNTIME_RUN_BATCH_CYCLES; i++) {
-                if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
-                    runtime_pause_for_breakpoint(rt);
-                    break;
-                }
-                if (runtime_brk_pending(rt)) {
-                    runtime_pause_for_brk(rt);
-                    break;
-                }
-                if (rt->temp_bp_active && runtime_at_instruction_boundary(rt)) {
-                    if (rt->temp_bp_skip_current &&
-                        rt->machine.cpu.cpu.pc != rt->temp_bp_address) {
-                        rt->temp_bp_skip_current = false;
-                    }
-                    if (!rt->temp_bp_skip_current &&
-                        rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
-                        rt->temp_bp_active = false;
-                        rt->temp_bp_skip_current = false;
-                        rt->suppress_execute_bp = false;
-                        rt->exec_state = RUNTIME_EXEC_PAUSED;
-                        runtime_publish_step_complete(rt);
+            if (runtime_free_run_is_simple(rt)) {
+                /* Slim free-run: no BP/paste/history/pending loads. Still
+                   auto-pause on BRK and publish frames. */
+                for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
+                     i < RUNTIME_RUN_BATCH_CYCLES; i++) {
+                    if (runtime_brk_pending(rt)) {
+                        runtime_pause_for_brk(rt);
                         break;
                     }
-                }
-                if (rt->pending_prg_path != NULL &&
-                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
-                    char *path = rt->pending_prg_path;
-                    rt->pending_prg_path = NULL;
-                    runtime_complete_pending_prg_load(rt, path);
-                }
-                if (rt->pending_asm_path != NULL &&
-                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
-                    char *path = rt->pending_asm_path;
-                    rt->pending_asm_path = NULL;
-                    runtime_complete_pending_asm(rt, path);
-                }
-                if (rt->pending_bin_path != NULL &&
-                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
-                    char *path = rt->pending_bin_path;
-                    rt->pending_bin_path = NULL;
-                    runtime_complete_pending_bin_load(rt, path);
-                }
-                if (rt->autorun_d64_phase > 0 &&
-                    rt->machine.cpu.cpu.pc == 0xE38Bu) {
-                    if (rt->autorun_d64_phase == 1) {
-                        rt->autorun_d64_phase = 2;
-                        runtime_autorun_paste(rt, "LOAD\"*\",8\r");
-                    } else if (rt->autorun_d64_phase == 2) {
-                        rt->autorun_d64_phase = 0;
-                        runtime_autorun_paste(rt, "RUN\r");
+                    if (!runtime_step_cycle_free_run(rt)) {
+                        break;
+                    }
+                    if (c64_consume_frame_complete(&rt->machine)) {
+                        runtime_flush_dirty_disks(rt);
+                        runtime_publish_completed_frame(rt);
+                        rt->next_frame_cycle = rt->machine.clock.cycle;
+                        runtime_pace_after_frame(rt);
                     }
                 }
-                if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
-                    runtime_cpu_history_record(rt);
-                }
-                if (!runtime_step_cycle(rt)) {
-                    break;
-                }
-                {
-                    bool instr_done = c64_consume_instruction_complete(&rt->machine);
-                    if (rt->trace_enabled && instr_done) {
-                        runtime_write_trace_line(rt);
+            } else {
+                for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
+                     i < RUNTIME_RUN_BATCH_CYCLES; i++) {
+                    if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+                        runtime_pause_for_breakpoint(rt);
+                        break;
                     }
-                    if (rt->suppress_execute_bp && instr_done) {
-                        rt->suppress_execute_bp = false;
+                    if (runtime_brk_pending(rt)) {
+                        runtime_pause_for_brk(rt);
+                        break;
                     }
-                }
-                if (rt->paste_active) {
-                    runtime_advance_paste(rt);
-                }
-                if (runtime_pause_if_breakpoint_pending(rt)) {
-                    break;
-                }
-                if (c64_consume_frame_complete(&rt->machine)) {
-                    runtime_publish_completed_frame(rt);
-                    rt->next_frame_cycle = rt->machine.clock.cycle;
-                    runtime_pace_after_frame(rt);
-                    if (rt->trace_file != NULL) {
-                        fflush(rt->trace_file);
+                    if (rt->temp_bp_active && runtime_at_instruction_boundary(rt)) {
+                        if (rt->temp_bp_skip_current &&
+                            rt->machine.cpu.cpu.pc != rt->temp_bp_address) {
+                            rt->temp_bp_skip_current = false;
+                        }
+                        if (!rt->temp_bp_skip_current &&
+                            rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
+                            rt->temp_bp_active = false;
+                            rt->temp_bp_skip_current = false;
+                            rt->suppress_execute_bp = false;
+                            rt->exec_state = RUNTIME_EXEC_PAUSED;
+                            runtime_publish_step_complete(rt);
+                            break;
+                        }
+                    }
+                    if (rt->pending_prg_path != NULL &&
+                        rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                        char *path = rt->pending_prg_path;
+                        rt->pending_prg_path = NULL;
+                        runtime_complete_pending_prg_load(rt, path);
+                    }
+                    if (rt->pending_asm_path != NULL &&
+                        rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                        char *path = rt->pending_asm_path;
+                        rt->pending_asm_path = NULL;
+                        runtime_complete_pending_asm(rt, path);
+                    }
+                    if (rt->pending_bin_path != NULL &&
+                        rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                        char *path = rt->pending_bin_path;
+                        rt->pending_bin_path = NULL;
+                        runtime_complete_pending_bin_load(rt, path);
+                    }
+                    if (rt->autorun_d64_phase > 0 &&
+                        rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                        if (rt->autorun_d64_phase == 1) {
+                            rt->autorun_d64_phase = 2;
+                            runtime_autorun_paste(rt, "LOAD\"*\",8\r");
+                        } else if (rt->autorun_d64_phase == 2) {
+                            rt->autorun_d64_phase = 0;
+                            runtime_autorun_paste(rt, "RUN\r");
+                        }
+                    }
+                    if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
+                        runtime_cpu_history_record(rt);
+                    }
+                    if (!runtime_step_cycle(rt)) {
+                        break;
+                    }
+                    {
+                        bool instr_done = c64_consume_instruction_complete(&rt->machine);
+                        if (rt->trace_enabled && instr_done) {
+                            runtime_write_trace_line(rt);
+                        }
+                        if (rt->suppress_execute_bp && instr_done) {
+                            rt->suppress_execute_bp = false;
+                        }
+                    }
+                    if (rt->paste_active) {
+                        runtime_advance_paste(rt);
+                    }
+                    if (runtime_pause_if_breakpoint_pending(rt)) {
+                        break;
+                    }
+                    if (c64_consume_frame_complete(&rt->machine)) {
+                        runtime_publish_completed_frame(rt);
+                        rt->next_frame_cycle = rt->machine.clock.cycle;
+                        runtime_pace_after_frame(rt);
+                        if (rt->trace_file != NULL) {
+                            fflush(rt->trace_file);
+                        }
                     }
                 }
             }
