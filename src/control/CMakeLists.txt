@@ -1,6 +1,8 @@
 # src/control/CMakeLists.txt
 
 add_library(control STATIC
+    control_deferred.c
+    control_deferred.h
     control_protocol.c
     control_protocol.h
     control_server.c

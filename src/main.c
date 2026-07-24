@@ -2,6 +2,7 @@
 #include "audio_buffer.h"
 #include "c64_snapshot.h"
 #include "control_server.h"
+#include "control_deferred.h"
 #include "frontend.h"
 #include "frontend_input.h"
 #include "frontend_joystick_input.h"
@@ -60,34 +61,45 @@ typedef struct sdl_c64_controller_state {
     const frontend_joystick_input *kbd_joystick;
 } sdl_c64_controller_state;
 
-typedef struct deferred_control_response {
-    bool active;
-    uint32_t request_id;
-    control_command_type command_type;
-    uint64_t deadline_ms;
-    /* Non-zero: complete only on matching runtime_event.request_token. */
-    uint64_t request_token;
-    /* Session generation at arm time; stale epochs are cancelled on disconnect. */
-    uint64_t connection_epoch;
-    uint16_t memory_address;
-    uint32_t memory_length;
-    runtime_memory_mode memory_mode;
-    uint16_t expected_breakpoint_count;
-    uint32_t expected_breakpoint_id;
-    bool expected_breakpoint_enabled;
-    uint16_t expected_breakpoint_start;
-    bool has_expected_breakpoint_count;
-    bool has_expected_breakpoint_enabled;
-    bool has_expected_breakpoint_start;
-    bool expect_breakpoint_absent;
-    bool include_write_history;
-    uint8_t frame_format;
-    uint8_t cia_index;
-    uint64_t start_frame_number;
-    uint64_t frame_delta;
-    uint64_t wait_after_seq; /* wait-event: only match events with seq > this */
-    char wait_event_name[32];
-} deferred_control_response;
+/* deferred_control_response / table: control_deferred.h */
+
+static bool deferred_table_any_active(const deferred_control_table *table)
+{
+    size_t i;
+    if (table == NULL) {
+        return false;
+    }
+    for (i = 0; i < CONTROL_DEFERRED_CAPACITY; ++i) {
+        if (table->entries[i].active) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Exclusive deferred (breakpoints, waits, most commands): one at a time.
+   Multi deferred (get-cpu, get-memory): concurrent token-matched slots. */
+static deferred_control_response *deferred_begin(
+    deferred_control_table *table,
+    control_command_type type,
+    const char **out_busy_msg)
+{
+    bool multi = (type == CONTROL_COMMAND_GET_CPU ||
+                  type == CONTROL_COMMAND_GET_MEMORY);
+    bool is_wait = control_deferred_is_wait(type);
+
+    if (table == NULL) {
+        return NULL;
+    }
+    if (!multi && deferred_table_any_active(table)) {
+        if (out_busy_msg != NULL) {
+            *out_busy_msg = is_wait ? "wait already active" : "deferred-response-active";
+        }
+        return NULL;
+    }
+    return control_deferred_reserve(table, is_wait, out_busy_msg);
+}
+
 
 typedef struct control_cached_state {
     bool has_frame;
@@ -2311,7 +2323,7 @@ static void cancel_deferred_control_response(
     }
 }
 
-static void check_deferred_control_session(
+static void check_deferred_control_session_one(
     control_server *control,
     deferred_control_response *deferred)
 {
@@ -2323,28 +2335,46 @@ static void check_deferred_control_session(
     }
     if (!control_server_has_client(control) ||
         control_server_connection_epoch(control) != deferred->connection_epoch) {
-        /* Silent cancel: no client to receive error, or a newer session started. */
         deferred->active = false;
         deferred->request_token = 0u;
     }
 }
 
+static void check_deferred_control_session(
+    control_server *control,
+    deferred_control_table *table)
+{
+    size_t i;
+    if (control == NULL || table == NULL) {
+        return;
+    }
+    for (i = 0; i < CONTROL_DEFERRED_CAPACITY; ++i) {
+        check_deferred_control_session_one(control, &table->entries[i]);
+    }
+}
+
 static void check_deferred_control_timeout(
     control_server *control,
-    deferred_control_response *deferred)
+    deferred_control_table *table)
 {
-    if (control == NULL || deferred == NULL || !deferred->active) {
+    size_t i;
+    if (control == NULL || table == NULL) {
         return;
     }
-    if (SDL_GetTicks64() < deferred->deadline_ms) {
-        return;
+    for (i = 0; i < CONTROL_DEFERRED_CAPACITY; ++i) {
+        deferred_control_response *deferred = &table->entries[i];
+        if (!deferred->active) {
+            continue;
+        }
+        if (SDL_GetTicks64() < deferred->deadline_ms) {
+            continue;
+        }
+        cancel_deferred_control_response(
+            control,
+            deferred,
+            "timeout",
+            "deferred response timed out");
     }
-
-    cancel_deferred_control_response(
-        control,
-        deferred,
-        "timeout",
-        "deferred response timed out");
 }
 
 static bool control_parse_and_send_paste_events(
@@ -2401,7 +2431,7 @@ static void poll_runtime_events(
     sdl_c64_controller_state *controller_state,
     frontend_joystick_input *kbd_joystick,
     control_server *control,
-    deferred_control_response *deferred,
+    deferred_control_table *deferred_table,
     control_cached_state *control_cache,
     control_event_latch *event_latch) {
     runtime_event event;
@@ -2411,11 +2441,20 @@ static void poll_runtime_events(
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
         control_event_latch_note(event_latch, event.type);
-        complete_deferred_control_response(control, client, deferred, &event);
-        check_deferred_event_wait(control, deferred, &event, event_latch);
-        check_deferred_state_wait(control, deferred, debug_state, &event);
-        if (debug_state != NULL && debug_state->has_frame) {
-            check_deferred_frame_wait(control, deferred, debug_state->frame_number);
+        if (deferred_table != NULL) {
+            size_t di;
+            for (di = 0; di < CONTROL_DEFERRED_CAPACITY; ++di) {
+                deferred_control_response *deferred = &deferred_table->entries[di];
+                if (!deferred->active) {
+                    continue;
+                }
+                complete_deferred_control_response(control, client, deferred, &event);
+                check_deferred_event_wait(control, deferred, &event, event_latch);
+                check_deferred_state_wait(control, deferred, debug_state, &event);
+                if (debug_state != NULL && debug_state->has_frame) {
+                    check_deferred_frame_wait(control, deferred, debug_state->frame_number);
+                }
+            }
         }
         if (event.type == RUNTIME_EVENT_RESET_COMPLETE) {
             if (ui != NULL) {
@@ -2490,10 +2529,16 @@ static void poll_runtime_events(
                    debug_state != NULL) {
             if (runtime_client_poll_debug_memory(client, &debug_state->debug_memory)) {
                 debug_state->has_debug_memory = true;
-                complete_deferred_debug_memory_response(
-                    control,
-                    deferred,
-                    &debug_state->debug_memory);
+                if (deferred_table != NULL) {
+                    size_t di;
+                    for (di = 0; di < CONTROL_DEFERRED_CAPACITY; ++di) {
+                        deferred_control_response *d = &deferred_table->entries[di];
+                        if (d->active) {
+                            complete_deferred_debug_memory_response(
+                                control, d, &debug_state->debug_memory);
+                        }
+                    }
+                }
             }
         }
     }
@@ -2516,8 +2561,16 @@ static void poll_runtime_events(
         if (control_cache != NULL) {
             control_cache->frame = frame;
             control_cache->has_frame = true;
-            complete_deferred_frame_response(control, deferred, &control_cache->frame);
-            check_deferred_frame_wait(control, deferred, frame.frame_number);
+            if (deferred_table != NULL) {
+                size_t di;
+                for (di = 0; di < CONTROL_DEFERRED_CAPACITY; ++di) {
+                    deferred_control_response *d = &deferred_table->entries[di];
+                    if (d->active) {
+                        complete_deferred_frame_response(control, d, &control_cache->frame);
+                        check_deferred_frame_wait(control, d, frame.frame_number);
+                    }
+                }
+            }
         }
     }
 
@@ -3543,32 +3596,20 @@ static void dispatch_control_request(
     runtime_client *client,
     const frontend_debug_state *debug_state,
     const control_cached_state *control_cache,
-    deferred_control_response *deferred,
+    deferred_control_table *deferred_table,
     control_event_latch *event_latch,
     const control_request *request)
 {
     control_response response;
     bool accepted = false;
+    deferred_control_response *deferred = NULL;
+    const char *deferred_busy_msg = "deferred-response-active";
 
     if (control == NULL || client == NULL || request == NULL) {
         return;
     }
 
     memset(&response, 0, sizeof(response));
-    if (deferred != NULL && !deferred->active) {
-        deferred->has_expected_breakpoint_count = false;
-        deferred->expected_breakpoint_count = 0;
-        deferred->has_expected_breakpoint_enabled = false;
-        deferred->has_expected_breakpoint_start = false;
-        deferred->expect_breakpoint_absent = false;
-        deferred->expected_breakpoint_id = 0;
-        deferred->start_frame_number = 0;
-        deferred->frame_delta = 0;
-        deferred->wait_after_seq = 0;
-        deferred->frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
-        deferred->cia_index = 1u;
-        deferred->wait_event_name[0] = '\0';
-    }
 
     switch (request->type) {
         case CONTROL_COMMAND_HELLO:
@@ -3706,12 +3747,13 @@ static void dispatch_control_request(
         }
 
         case CONTROL_COMMAND_GET_CPU:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else {
                 uint64_t token = runtime_client_alloc_request_token(client);
@@ -3750,12 +3792,13 @@ static void dispatch_control_request(
                     request->id,
                     &control_cache->frame,
                     request->args.frame_format);
-            } else if (deferred != NULL && deferred->active) {
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_frame(client)) {
                 if (deferred != NULL) {
@@ -3783,12 +3826,13 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_VIC:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_machine_state(client)) {
                 if (deferred != NULL) {
@@ -3822,12 +3866,13 @@ static void dispatch_control_request(
                     "bad-args",
                     "expected CIA index 1 or 2",
                     false);
-            } else if (deferred != NULL && deferred->active) {
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_machine_state(client)) {
                 if (deferred != NULL) {
@@ -3855,12 +3900,13 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_MEMORY:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else {
                 uint64_t token = runtime_client_alloc_request_token(client);
@@ -3920,12 +3966,13 @@ static void dispatch_control_request(
                     "bad-args",
                     "expected writable memory mode map or ram",
                     false);
-            } else if (deferred != NULL && deferred->active) {
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else {
                 runtime_client_pause(client);
@@ -3966,12 +4013,13 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_GET_DEBUG_MEMORY:
             /* Always request a fresh snapshot. Serving a cached generation
                silently reported 0 bytes changed while RAM was moving. */
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_debug_memory(
                            client,
@@ -4001,12 +4049,13 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_CALL_STACK:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_call_stack(client)) {
                 if (deferred != NULL) {
@@ -4124,12 +4173,13 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_DISK_STATUS:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_disk_status(client, request->args.device)) {
                 if (deferred != NULL) {
@@ -4164,12 +4214,13 @@ static void dispatch_control_request(
                     "bad-args",
                     "expected device 8 or 9",
                     false);
-            } else if (deferred != NULL && deferred->active) {
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_request_machine_state(client)) {
                 if (deferred != NULL) {
@@ -4197,12 +4248,13 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_BREAK_EXEC:
-            if (deferred != NULL && deferred->active) {
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
                     request->id,
                     "busy",
-                    "deferred-response-active",
+                    deferred_busy_msg,
                     false);
             } else if (runtime_client_set_execute_breakpoint(client, request->args.address)) {
                 if (deferred != NULL) {
@@ -4224,8 +4276,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_BREAK_CLEAR:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_clear_breakpoint(client, request->args.id)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4243,8 +4296,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_BREAK_ENABLE:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_set_breakpoint_enabled(
                            client,
                            request->args.id,
@@ -4266,8 +4320,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_BREAK_LIST:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_request_breakpoints(client)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4283,8 +4338,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_BREAK_CLEAR_ALL:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_clear_all_breakpoints(client)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4303,8 +4359,9 @@ static void dispatch_control_request(
             runtime_breakpoint_definition definition;
             if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
                 control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
-            } else if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_create_breakpoint(client, &definition)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4329,8 +4386,9 @@ static void dispatch_control_request(
             runtime_breakpoint_definition definition;
             if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
                 control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
-            } else if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_update_breakpoint(client, request->args.id, &definition)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4350,8 +4408,9 @@ static void dispatch_control_request(
         }
 
         case CONTROL_COMMAND_REARM_ONESHOTS:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (runtime_client_rearm_oneshot_breakpoints(client)) {
                 if (deferred != NULL) {
                     deferred->active = true;
@@ -4377,8 +4436,9 @@ static void dispatch_control_request(
                     (unsigned long long)debug_state->frame_number,
                     control_stop_reason_name(debug_state->stop_reason));
                 control_protocol_format_ok(&response, request->id, text, false);
-            } else if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (deferred != NULL) {
                 deferred->active = true;
                 deferred->request_id = request->id;
@@ -4401,8 +4461,9 @@ static void dispatch_control_request(
                     "state=running frame=%llu",
                     (unsigned long long)debug_state->frame_number);
                 control_protocol_format_ok(&response, request->id, text, false);
-            } else if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (deferred != NULL) {
                 deferred->active = true;
                 deferred->request_id = request->id;
@@ -4416,8 +4477,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_WAIT_FRAME:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (deferred != NULL) {
                 deferred->active = true;
                 deferred->request_id = request->id;
@@ -4434,8 +4496,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_WAIT_EVENT:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (deferred != NULL) {
                 deferred->active = true;
                 deferred->request_id = request->id;
@@ -4474,8 +4537,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_ASSEMBLE:
-            if (deferred != NULL && deferred->active) {
-                control_protocol_format_error(&response, request->id, "busy", "deferred-response-active", false);
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
             } else if (request->args.text[0] == '\0') {
                 control_protocol_format_error(&response, request->id, "bad-args", "expected source path", false);
             } else {
@@ -4627,7 +4691,7 @@ static void dispatch_control_requests(
     runtime_client *client,
     const frontend_debug_state *debug_state,
     const control_cached_state *control_cache,
-    deferred_control_response *deferred,
+    deferred_control_table *deferred_table,
     control_event_latch *event_latch)
 {
     control_request request;
@@ -4642,7 +4706,7 @@ static void dispatch_control_requests(
             client,
             debug_state,
             control_cache,
-            deferred,
+            deferred_table,
             event_latch,
             &request);
         control_request_release(&request);
@@ -4683,7 +4747,7 @@ static bool run_main_loop(
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
     frontend_joystick_input kbd_joystick;
-    deferred_control_response deferred_control = {0};
+    deferred_control_table deferred_control = {0};
     control_cached_state control_cache = {0};
     control_event_latch event_latch = {0};
     frontend_debug_state debug_state = {
@@ -4968,7 +5032,7 @@ static bool run_headless_loop(
     control_server *control)
 {
     bool running = true;
-    deferred_control_response deferred_control = {0};
+    deferred_control_table deferred_control = {0};
     control_cached_state control_cache = {0};
     control_event_latch event_latch = {0};
     frontend_debug_state debug_state = {

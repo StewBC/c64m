@@ -86,20 +86,25 @@ Internal runtime correlation uses `request_token` (not the wire id). See
 | Wire request id | Echoed on the matching response; client-chosen |
 | Duplicate outstanding id | Reject with `bad-id` while a prior request with the same id is still outstanding for this connection |
 | Connection epoch | Bumped on accept; disconnect cancels all outstanding deferred work for that session; next client never receives the previous session's responses or payloads |
-| Deferred capacity (today) | One deferred response active; second deferred → `busy deferred-response-active` |
-| Deferred capacity (Phase 2a+) | Multi-entry table; table full → `busy`; still token-matched |
+| Deferred capacity | Multi-entry table (16). **Token-matched multi-outstanding** for `get-cpu` and `get-memory`. Other deferred commands (waits, breakpoints, assemble, …) are still exclusive (second → `busy deferred-response-active`). Wait commands: at most one outstanding wait → `busy wait already active`. Table full → `busy deferred-table-full`. |
 | Socket in-flight (today) | One request at a time on the wire (socket waits for response before reading the next line) |
 | Socket in-flight (Phase 2b+) | Pipelined requests allowed up to deferred/request high-water mark; responses may complete out of request order — correlate by id |
 | Wait concurrency | At most one outstanding wait command; second → `busy` |
 | UI vs control | Main-thread UI telemetry must not complete a control deferred wait |
 
 The server queues requests from the socket thread and dispatches them on the SDL
-main loop. Until multi-deferred ships, only one deferred response can be active
-at a time. A second deferred request receives:
+main loop. Multiple token-matched `get-cpu` / `get-memory` deferreds may be
+outstanding (up to the table capacity). Exclusive deferred commands still
+serialize:
 
 ```text
 <id> error busy deferred-response-active
+<id> error busy wait already active
+<id> error busy deferred-table-full
 ```
+
+Wire pipelining (socket reading the next request before the previous response)
+is still Phase 2b; until then the socket remains one-in-flight.
 
 The standard deferred timeout is 2000 ms. Assembly uses 10000 ms. Wait commands
 accept 1..600000 ms and default to 2000 ms.
