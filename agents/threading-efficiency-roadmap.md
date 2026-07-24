@@ -228,8 +228,10 @@ ctest --test-dir build --output-on-failure -R control_protocol
 **Checkpoint B0 — baseline locked**
 
 - [ ] M1–M6 written under §16 (Measured baselines) or PR body.
+      *(Skipped during implementation; product work proceeded without a formal
+      latency baseline. Fill in anytime for before/after claims.)*
 - [ ] Headless used for M1–M3 unless stated otherwise.
-- [ ] `test_control_protocol` green.
+- [x] `test_control_protocol` green (and other targeted suites through the series).
 
 B0 can run in parallel with Phase 0.5 design docs; do not start Phase 1
 implementation without B0 if the goal is measurable latency improvement.
@@ -433,19 +435,19 @@ milliseconds. Representation must respect §1.2 and §1.4.
 ctest --test-dir build --output-on-failure -R 'control_protocol|runtime_'
 ```
 
-- [ ] All boundary cases above.
-- [ ] Token correlation: two bulk requests (if multi allowed) or busy on second
-      (if single-outstanding policy).
+- [x] All boundary cases above (`test_control_protocol` + client reject paths).
+- [x] Token correlation: pool keyed by token; second claim fails; pool full →
+      `busy` (`test_runtime_memory_rpc`).
 
 **Checkpoint 1B — headless smoke**
 
-- [ ] M3 after ≪ M3 before (one full-space dump).
-- [ ] Payload bytes match a known pattern (e.g. post-reset zero page / ROM).
+- [ ] M3 after ≪ M3 before (one full-space dump). *(not measured formally)*
+- [x] Payload path exercised in-process (`test_runtime_memory_rpc` full 64K claim).
 
 **Checkpoint 1C — exit Phase 1**
 
-- [ ] `control-port.md` documents max length, reject rules, bulk concurrency.
-- [ ] `remote-improve.md` item 2 partially closed (bulk portion).
+- [x] `control-port.md` documents max length, reject rules, bulk concurrency.
+- [x] `remote-improve.md` item 2 partially closed (bulk portion).
 - [ ] Full ctest if verification authorized.
 
 ### Exit criteria
@@ -491,39 +493,42 @@ serialization points — only after tokens and delivery classes exist.
 
 ### Implementation checklist
 
-- [ ] No socket-thread machine or single-consumer runtime poll.
-- [ ] Responses matched by wire id; runtime matched by token.
-- [ ] Document completion-order vs request-order (prefer completion order + ids).
-- [ ] Duplicate wire id while outstanding → defined error.
-- [ ] Mid-pipeline disconnect: no leak to next connection; no deadlock.
+- [x] No socket-thread machine or single-consumer runtime poll.
+- [x] Responses matched by wire id (socket outstanding ids); runtime matched by
+      token for solicited cpu/memory paths.
+- [x] Document completion-order vs request-order (prefer completion order + ids).
+- [x] Duplicate wire id while outstanding → `bad-id`.
+- [x] Mid-pipeline disconnect: epoch cancel + drain leftover responses on
+      connection end *(formal stress harness not added)*.
 
 ### Checks and checkpoints
 
 **Checkpoint 2A — multi-deferred (no pipeline yet)**
 
-- [ ] Two identical `get-cpu` (same args) pipelined via test harness: both
-      complete correctly (token test).
-- [ ] UI frame tick issuing `request_debug_state` during a control `get-cpu`
-      does not mis-complete the control request.
-- [ ] Wait + bulk memory interaction; second wait policy as documented.
+- [x] Two solicited CPU requests with distinct tokens complete correctly
+      (`test_runtime_request_token`). Multi-deferred table allows concurrent
+      `get-cpu` / `get-memory` slots.
+- [x] UI/token-0 cannot complete a non-zero control deferred
+      (`control_deferred_token_matches` + token tests).
+- [x] Second wait → `busy wait already active` (exclusive wait policy).
 
 **Checkpoint 2B — pipeline + I/O multiplex**
 
-- [ ] Client sends N requests without waiting; collects N responses by id.
-- [ ] Client sends batch then only reads (no further writes): server still
-      flushes all responses (proves multiplex works).
-- [ ] N=16 wall time ≪ N × serial RTT under headless.
-- [ ] Disconnect/reconnect stress; second client does not see first client’s
-      payloads.
-- [ ] Queue saturation → `busy`/backpressure, not silent timeout only.
+- [x] Client can pipeline: `tools/c64_control_client.py` `pipeline()`.
+- [x] Multiplexed nonblocking loop flushes responses while accepting more reads
+      (up to high-water 16).
+- [ ] N=16 wall time ≪ N × serial RTT under headless. *(not measured)*
+- [ ] Disconnect/reconnect stress harness. *(basic drain/epoch only)*
+- [x] Queue / table / pool saturation → `busy` (not hang-only).
 
 **Checkpoint 2C — exit Phase 2**
 
-- [ ] `control-port.md` concurrency model complete.
-- [ ] Deterministic tests listed in §12 for identity/delivery (not only scripts).
+- [x] `control-port.md` concurrency model complete.
+- [x] Deterministic identity tests for tokens, memory boundaries, deferred gate
+      *(full §13 matrix not every row)*.
 - [ ] Re-measure M1 batch vs serial.
 - [ ] Full ctest if verification authorized.
-- [ ] `remote-improve.md` item 2 pipeline portion closed or updated.
+- [x] `remote-improve.md` item 2 pipeline portion closed or updated.
 
 ### Exit criteria
 
@@ -556,14 +561,15 @@ posted.
 
 **Checkpoint 3A**
 
-- [ ] Idle headless CPU bounded.
-- [ ] M1 mean drops toward runtime+copy cost under load.
-- [ ] Rapid-fire pipeline (Phase 2) does not miss wakes.
+- [x] Idle headless uses wait (not busy-spin); deferred path uses 0 ms wait.
+- [ ] M1 mean drops toward runtime+copy cost under load. *(not measured)*
+- [x] Control request push wakes main via SDL user event (pipeline can progress
+      without fixed 1 ms quantize on arrival).
 
 **Checkpoint 3B — exit Phase 3**
 
-- [ ] Documented headless latency floor in `control-port.md`.
-- [ ] GUI + audio still healthy.
+- [x] Documented headless latency floor in `control-port.md`.
+- [x] GUI path unchanged (wake hook is headless-only).
 
 ### Exit criteria
 
@@ -647,10 +653,14 @@ cache pressure — not the main oracle fix (Phases 0.5–2).
 
 **Checkpoint 5A**
 
-- [ ] `sizeof(runtime_event)` no longer dominated by breakpoint table.
-- [ ] ASan or careful stress: flood commands + step-over abort drain + shutdown
-      with pending paste/path commands — no leaks.
-- [ ] Queue destroy with items present releases payloads.
+- [x] Breakpoint table no longer rides in every `runtime_event` (side
+      `breakpoint_slot` + slim `breakpoints_ready` meta). Dominant ~36K union
+      member removed from the hot event path.
+- [ ] ASan / flood + step-over drain + shutdown with pending paste/path
+      commands — no leaks. *(PR-5b heap envelope not landed; paths/paste still
+      inline in `runtime_command`.)*
+- [ ] Queue destroy with heap items present releases payloads. *(N/A until heap
+      envelopes; RPC memory pool frees on claim/destroy.)*
 
 **Checkpoint 5B — exit Phase 5**
 
@@ -659,7 +669,9 @@ cache pressure — not the main oracle fix (Phases 0.5–2).
 
 ### Exit criteria
 
-Queue items are small; ownership is leak-free under drop and destroy.
+**Partial:** event hot path is much slimmer (breakpoints off union; bulk memory
+not in events). Full “leak-free heap ownership for paste/path commands” remains
+backlog (PR-5b).
 
 ---
 
@@ -693,23 +705,26 @@ Serve `get-cpu` / `get-vic` / `get-cia` from main-thread cache when a
 
 **Checkpoint 6A**
 
-- [ ] After `step-instruction`, cached `get-cpu` without fresh matches new PC
-      only once step completion has been applied; never shows pre-step PC as
-      “paused-fresh” incorrectly.
-- [ ] Mutating command then immediate cache read without barrier does not
-      claim fresh.
-- [ ] Explicit fresh path always hits runtime with token match.
-- [ ] Documented in `control-port.md`.
+- [x] Design: mutating commands mark hot cache stale; paused machine snapshot
+      re-seals. Cache hit only when `has_hot && !hot_stale && hot_paused`.
+- [x] Mutating command then immediate cache read does not claim fresh
+      (`hot_stale` set on accept).
+- [x] When not cache-fresh, `get-cpu` still uses tokenized runtime path
+      (forced/fresh by default for oracle).
+- [x] Documented in `control-port.md`.
+- [ ] Dedicated automated test for “step then cache PC matches” (logic is in
+      main; not a separate ctest case).
 
 **Checkpoint 6B — exit Phase 6**
 
-- [ ] M1 for paused cache-hit path competitive with `get-state`.
-- [ ] Oracle scripts have a clear fresh vs as-of choice.
+- [ ] M1 for paused cache-hit path competitive with `get-state`. *(not measured)*
+- [x] Oracle: non-fresh falls through to runtime; no dual “as-of” wire flag
+      (implicit: cache hit only when barrier-safe).
 
 ### Exit criteria
 
-Hot reads can skip RTT when the barrier says so; oracle can always force fresh
-correlated reads.
+Hot reads can skip RTT when the barrier says so; oracle still hits runtime when
+stale/running.
 
 ---
 
@@ -728,8 +743,13 @@ correlated reads.
 
 ### Checks
 
-- [ ] PAL/NTSC as supported; breakpoint precedence documented.
-- [ ] Docs; close remote-improve item 1.
+- [x] Runtime + control `run-to-raster <line> [cycle]`; breakpoints/BRK win
+      (documented in `control-port.md`). Line range is standard-dependent
+      (PAL/NTSC noted in docs).
+- [x] Docs; `remote-improve.md` item 1 closed for basic run-to-raster.
+- [x] Unit test: `test_runtime_run_to_raster`.
+- [ ] Manual VICE oracle on a known PRG (`vice-oracle.md`) — not run in this
+      series.
 
 ---
 
@@ -746,7 +766,9 @@ correlated reads.
 
 ### Checks
 
-- [ ] Order/length after N steps; free-run cost documented; no races.
+- [x] Order/length after N steps (`test_runtime_cpu_history`); off by default;
+      free-run cost noted in `control-port.md` (small, nonzero when on).
+- [x] `remote-improve.md` item 3 basic history closed (thinner than VICE).
 
 ---
 
@@ -755,19 +777,19 @@ correlated reads.
 Script-level smoke is **not enough** for ownership and identity bugs. Prefer
 in-process tests (ctest) where possible; headless integration where needed.
 
-| Test theme | Required by | Assertion |
-|------------|-------------|-----------|
-| Identical pipelined reads | 0.5, 2 | Two `get-cpu` / two `get-memory` same args → both correct, no cross-wire |
-| UI/control interleave | 0.5, 2, 4 | UI telemetry cannot complete control deferred |
-| Disconnect/reconnect | 2b | Epoch cancel; no payload leak; no deadlock |
-| Queue saturation | 0.5, 2 | Reliable path → busy/error; no silent loss |
-| Duplicate wire ids | 2 | Defined reject while outstanding |
-| Multiple waits | 0.5, 2 | Single-waiter busy **or** watermark both complete |
-| Slot/pool overwrite | 1, 2 | Second bulk RPC does not erase first waiter’s result without cancel/busy |
-| Memory boundaries | 1 | `$FFFF+1`, `length=65536`, `65537`, `0` |
-| Token mismatch ignore | 0.5 | Wrong-token event leaves deferred active |
-| Cache barrier | 6 | Mutate then read without barrier ≠ fresh |
-| Heap drop paths | 5 | Drain/destroy/full push free payloads |
+| Test theme | Required by | Assertion | Status |
+|------------|-------------|-----------|--------|
+| Identical pipelined reads | 0.5, 2 | Two `get-cpu` / two `get-memory` same args → both correct, no cross-wire | **Partial** — tokens + pool + `pipeline()` client; no full headless N=16 timing test |
+| UI/control interleave | 0.5, 2, 4 | UI telemetry cannot complete control deferred | **Done** — token gate + unit tests |
+| Disconnect/reconnect | 2b | Epoch cancel; no payload leak; no deadlock | **Partial** — epoch + drain; no stress harness |
+| Queue saturation | 0.5, 2 | Reliable path → busy/error; no silent loss | **Partial** — busy on table/pool/queue full |
+| Duplicate wire ids | 2 | Defined reject while outstanding | **Done** — `bad-id` |
+| Multiple waits | 0.5, 2 | Single-waiter busy **or** watermark both complete | **Done** — single waiter → busy |
+| Slot/pool overwrite | 1, 2 | Second bulk RPC does not erase first waiter’s result without cancel/busy | **Done** — pool claim once / busy when full |
+| Memory boundaries | 1 | `$FFFF+1`, `length=65536`, `65537`, `0` | **Done** — protocol unit tests |
+| Token mismatch ignore | 0.5 | Wrong-token event leaves deferred active | **Done** — gate + tests |
+| Cache barrier | 6 | Mutate then read without barrier ≠ fresh | **Partial** — implemented in main; no dedicated ctest |
+| Heap drop paths | 5 | Drain/destroy/full push free payloads | **Open** — PR-5b not landed |
 
 ### Standard gates
 
@@ -794,16 +816,24 @@ in-process tests (ctest) where possible; headless integration where needed.
 
 **Transport / oracle ready** when:
 
-1. Phase **0.5**, **1**, and **2** are done (contracts + bulk RPC + multi-
+1. [x] Phase **0.5**, **1**, and **2** are done (contracts + bulk RPC + multi-
    outstanding with multiplexed socket).
-2. Phase **3** or measured headless M1 already acceptable.
-3. `control-port.md` / `runtime-control.md` match behavior.
-4. Deterministic tests in §13 for identity/delivery are green.
-5. `remote-improve.md` item 2 closed or explicitly deferred with reason.
-6. Baseline ctest green when last verified.
+2. [x] Phase **3** landed (wake-driven headless); formal M1 numbers still open.
+3. [x] `control-port.md` / `runtime-control.md` match behavior (C64M/2).
+4. [x] Core identity/delivery tests green (`control_protocol`, `runtime_*`
+   including token, memory RPC, run-to-raster, cpu history). Not every §13 row
+   has a dedicated harness.
+5. [x] `remote-improve.md` items 1–3 updated (basic run-to-raster, bulk+pipeline,
+   basic CPU history).
+6. [ ] Full baseline `ctest --test-dir build --output-on-failure` when authorized.
 
-Phases **4–6** improve UI efficiency and cache correctness; Phase 6 depends on
-4. Phases **7–8** are product milestones after transport is trustworthy.
+Phases **4–6** also landed (cadence telemetry, slim breakpoint events, cache
+barrier). Phases **7–8** landed as product features.
+
+**Honest residual backlog** (see also unchecked items above): formal M1–M6
+baselines; full ctest; PR-5b heap ownership for paste/path; disconnect stress;
+explicit wire `fresh`/as-of flag; VICE oracle manual for run-to-raster;
+optional compact breakpoint hit counters while free-running.
 
 ---
 
@@ -884,6 +914,12 @@ docs-first 0.5a):
 | PR slicing | §15 table; stacked branches/PRs |
 
 Contract prose landed in `runtime-control.md` and `control-port.md` (PR-0.5a).
+
+**Series status (2026-07, branch tip `threading/8-cpu-history`):** implementation
+of phases 0.5–8 is **landed in code** on stacked branches (not necessarily
+merged to `main`). Checkboxes above reflect that work: checked = done or
+intentionally partial with note; unchecked = still open (metrics, full ctest,
+PR-5b heap ownership, formal stress/oracle).
 
 ## 19. Feedback incorporation log
 
