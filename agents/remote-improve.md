@@ -23,19 +23,32 @@ Still missing: expression-guarded checkpoints (VICE `CONDITION_SET`).
 
 ## 2. Main-loop tick latency and bulk memory
 
-Every command is dispatched on the SDL main loop, so latency is up to one ~16.7 ms
-tick regardless of payload size (measured ~16–18 ms for `get-frame` paused or
-running). Consequences while free-running:
+**Mostly closed by the threading/control efficiency series (C64M/2, on `main`).**
+Details and phase checklist: `threading-efficiency-roadmap.md` §16 measured
+baselines.
 
-- `wait-frame 1` → `get-frame` can sample every other PAL frame (frame deltas of 2)
-  when one iteration exceeds the ~20 ms period — silent aliasing of double-buffered
-  effects. Prefer `step-frame` when you need consecutive frames.
-- `run` → `wait-frame 1` → `pause` overshoots by one frame (pause processed a tick
-  after the wait returns).
-- ~~Reading 64K via `get-memory` is 64 calls (1024-byte cap)~~ **Done (C64M/2):**
-  `get-memory` length is 1..65536 with `address+length <= 65536` in one RPC
-  (token-keyed result pool). Remaining: pipeline / multi-deferred (roadmap
-  Phase 2) and headless wake (Phase 3).
+### Done
+
+| Pain (pre-series) | Fix |
+|-------------------|-----|
+| 64×1K `get-memory` for a 64K dump (~165 ms headless) | Bulk `get-memory` 1..65536, one RPC (~1.6 ms) |
+| One-in-flight socket + single deferred | Multi-deferred (cpu/memory) + multiplexed pipeline (high-water 16); `pipeline()` in `c64_control_client.py` |
+| Headless `SDL_Delay(1)` quantize | Wake on control request; poll hard while deferred is active (~1.3 ms mean `get-cpu` paused) |
+| UI-paced feeling for automation | Prefer **headless** for oracle; windowed present is still ~16 ms by design |
+| Chatty five-way debug poll every frame | Cadence-split telemetry (machine only while free-running) |
+| Hot reads always RTT | `get-cpu` / `get-vic` / `get-cia` cache when paused barrier is sealed |
+
+### Still open (oracle UX, not transport)
+
+These were never purely “memcpy / RTT” bugs; they remain product timing races:
+
+- `wait-frame 1` → `get-frame` while **free-running** can still alias frames if one
+  main-loop turn exceeds a frame period. Prefer `step-frame` for consecutive frames.
+- `run` → `wait-frame 1` → `pause` can still overshoot by a frame (pause accepted
+  after the wait completes). Not fixed by pipelining alone.
+
+If those bite a script, fix the wait/pause sequencing (or add a dedicated
+“pause-after-N-frames” / barrier), not another bulk-memory pass.
 
 ---
 
