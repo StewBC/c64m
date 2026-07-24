@@ -1486,6 +1486,10 @@ static void vicii_apply_vborder_latch(vicii *v) {
 static void vicii_hborder_flush(vicii *v, bool main_border) {
     uint8_t i;
     uint8_t n = v->hborder_pipe[0].n;
+    uint32_t *pixels = v->working_frame.pixels;
+    const uint32_t *idx = v->hborder_pipe[0].idx;
+    const uint32_t *border = v->hborder_pipe[0].border;
+    const uint32_t *content = v->hborder_pipe[0].content;
 
     if (n == 0u) {
         v->hborder_out_state = main_border;
@@ -1493,10 +1497,15 @@ static void vicii_hborder_flush(vicii *v, bool main_border) {
     }
 
     if (v->hborder_pipe[0].csel) {
-        for (i = 0; i < n; i++) {
-            v->working_frame.pixels[v->hborder_pipe[0].idx[i]] =
-                main_border ? v->hborder_pipe[0].border[i]
-                            : v->hborder_pipe[0].content[i];
+        /* Common CSEL=1 path: one border decision for the whole span. */
+        if (main_border) {
+            for (i = 0; i < n; i++) {
+                pixels[idx[i]] = border[i];
+            }
+        } else {
+            for (i = 0; i < n; i++) {
+                pixels[idx[i]] = content[i];
+            }
         }
         v->hborder_out_state = main_border;
         return;
@@ -1504,15 +1513,13 @@ static void vicii_hborder_flush(vicii *v, bool main_border) {
 
     /* CSEL=0: 7 dots previous state, then sample main_border for the last. */
     for (i = 0; i < n && i < 7u; i++) {
-        v->working_frame.pixels[v->hborder_pipe[0].idx[i]] =
-            v->hborder_out_state ? v->hborder_pipe[0].border[i]
-                                 : v->hborder_pipe[0].content[i];
+        pixels[idx[i]] =
+            v->hborder_out_state ? border[i] : content[i];
     }
     v->hborder_out_state = main_border;
     if (n > 7u) {
-        v->working_frame.pixels[v->hborder_pipe[0].idx[7]] =
-            v->hborder_out_state ? v->hborder_pipe[0].border[7]
-                                 : v->hborder_pipe[0].content[7];
+        pixels[idx[7]] =
+            v->hborder_out_state ? border[7] : content[7];
     }
 }
 
@@ -1597,9 +1604,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     /* VICE check_hborder under c64m's 2-cycle paint delay: left compare is always
        cycle 17 (CSEL selects 40 vs 38 via draw_border8's 7+1 split, not the check
-       cycle). Right compare is cycle 57 (CSEL=1) or 55 (CSEL=0). A CSEL 1→0 that
+       cycle). Right compare is cycle 57 (CSEL=1) or 55 (CSEL=0). A CSEL 1->0 that
        is still in flight (prev sample high, current low) must not count as a
-       stable 38-col right compare — that is the side-border open window. */
+       stable 38-col right compare - that is the side-border open window. */
     if (cyc == (check_csel ? 57u : 55u) &&
         !(!check_csel && check_prev_csel)) {
         v->main_border_ff = true;
@@ -1618,69 +1625,128 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     vicii_hborder_flush(v, v->main_border_ff);
     v->hborder_pipe[0] = v->hborder_pipe[1];
 
-    /* Anchored VIC-X mapping (C64MVICII_SIDEBORDER.md §2.2): each cycle owns its
-       true 8 VIC dots. Display column 0 (VIC X=24) is drawn at the first
-       g-access cycle (15); each cycle advances X by 8. With
-       VICII_PAL_FRAME_X_OFFSET=0, buffer_x == VIC X. Dots outside the 384 crop
-       are not written, but still advance the 6569 color pipes — VICE's
-       draw_colors ring runs every cycle including HBLANK. Advancing only on
-       painted pixels left a 1px $D020/$D021 delay stuck across the line edge
-       (EoD top/bottom black bar). Every frame column 0..383 is painted exactly
-       once per line (PAL/NTSC cycles 12..59 with offset 0). */
+    /* Anchored VIC-X mapping: each cycle owns its true 8 VIC dots. */
     {
         int32_t raw_xs = (int32_t)VICII_HBORDER_LEFT_40 +
             ((int32_t)cyc - (int32_t)VICII_GACCESS_FIRST_CYCLE) *
             (int32_t)VICII_CHARACTER_WIDTH;
         int      i;
+        uint32_t bord = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+        uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
 
-        /* Compute this cycle's content pixels (border decision applied later, at
-           flush) and buffer them. Content is the composed graphics/sprites/
-           vertical-border pixel with main_border=false; the border colour is
-           captured at paint time so its own colour_latency is unchanged. */
         v->hborder_pipe[1].n = 0;
         v->hborder_pipe[1].mode = prep.mode;
         v->hborder_pipe[1].reg11 = v->registers[0x11];
         v->hborder_pipe[1].csel = check_csel;
-        for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
-            int32_t raw_x = raw_xs + i;
-            int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
 
-            if (fb_x >= 0) {
-                uint8_t k = v->hborder_pipe[1].n;
-                x = (uint32_t)raw_x;
-                v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                v->hborder_pipe[1].idx[k] =
-                    y * C64_FRAME_WIDTH + (uint32_t)fb_x;
-                v->hborder_pipe[1].content[k] =
-                    vicii_live_pixel(v, bus, &g, &prep, x, y, false,
-                        v->vertical_border_active, true,
-                        &v->hborder_pipe[1].content_d021[k]);
-#ifdef C64M_VIC_TRACE
-                if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
-                    y >= 40u && y <= 250u) {
-                    uint32_t pixel = v->hborder_pipe[1].content[k];
-                    unsigned palette = 16u;
-                    for (unsigned pi = 0; pi < 16u; ++pi) {
-                        if (pixel == vicii_palette_argb[pi]) {
-                            palette = pi;
-                            break;
-                        }
-                    }
-                    vicii_trace_graphics_access(v, "p", cyc, x, 0,
-                        (uint8_t)palette);
+        /*
+         * Fast path A: vertical border, no sprites. Content is forced to B0C
+         * (same as vicii_live_pixel); skip per-dot background/sprite work.
+         */
+        if (v->vertical_border_active && !prep.any_sprite) {
+            for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                int32_t raw_x = raw_xs + i;
+                int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+                if (fb_x >= 0) {
+                    uint8_t k = v->hborder_pipe[1].n;
+                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[1].idx[k] =
+                        y * C64_FRAME_WIDTH + (uint32_t)fb_x;
+                    v->hborder_pipe[1].content[k] = b0c;
+                    v->hborder_pipe[1].content_d021[k] = true;
+                    v->hborder_pipe[1].border[k] = bord;
+                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
                 }
-#endif
-                v->hborder_pipe[1].border[k] =
-                    vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
-                v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                v->color_pipe_d020 =
+                    (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+                v->color_pipe_d021 =
+                    (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+                bord = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+                b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
             }
-            /* VICE 6569: advance color pipes after each dot (visible or not) so
-               a mid-line $D020/$D021 write is visible one pixel later, and a
-               write during HBLANK is fully drained before frame x=0. */
-            v->color_pipe_d020 =
-                (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
-            v->color_pipe_d021 =
-                (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+        } else if (!prep.any_sprite &&
+                   prep.mode == 0u &&
+                   prep.xscroll == 0u &&
+                   prep.lc.display_active &&
+                   prep.lc.vm_latch != NULL &&
+                   prep.lc.color_latch != NULL &&
+                   prep.lc.g_latch != NULL &&
+                   cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+                   cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE &&
+                   !v->vertical_border_active) {
+            /*
+             * Fast path B: standard hires text (mode 0), XSCROLL=0, no sprites,
+             * g-access column. One glyph byte expands to 8 dots - matches the
+             * per-dot path with sx = 0..7 in a single column.
+             */
+            uint32_t col = cyc - (uint32_t)VICII_GACCESS_FIRST_CYCLE;
+            uint8_t gdata = prep.lc.g_latch[col];
+            uint8_t fg = (uint8_t)(prep.lc.color_latch[col] & 0x0fu);
+            uint32_t fg_argb = vicii_palette_argb[fg];
+
+            for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                int32_t raw_x = raw_xs + i;
+                int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+                if (fb_x >= 0) {
+                    uint8_t k = v->hborder_pipe[1].n;
+                    uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
+                    bool fg_set = (gdata & bit) != 0u;
+                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[1].idx[k] =
+                        y * C64_FRAME_WIDTH + (uint32_t)fb_x;
+                    v->hborder_pipe[1].content[k] = fg_set ? fg_argb : b0c;
+                    v->hborder_pipe[1].content_d021[k] = !fg_set;
+                    v->hborder_pipe[1].border[k] = bord;
+                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                }
+                v->color_pipe_d020 =
+                    (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+                v->color_pipe_d021 =
+                    (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+                bord = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+                b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
+            }
+        } else {
+            /* General path: full per-dot live_pixel (sprites, MCM, xscroll, …). */
+            for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                int32_t raw_x = raw_xs + i;
+                int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+
+                if (fb_x >= 0) {
+                    uint8_t k = v->hborder_pipe[1].n;
+                    x = (uint32_t)raw_x;
+                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[1].idx[k] =
+                        y * C64_FRAME_WIDTH + (uint32_t)fb_x;
+                    v->hborder_pipe[1].content[k] =
+                        vicii_live_pixel(v, bus, &g, &prep, x, y, false,
+                            v->vertical_border_active, true,
+                            &v->hborder_pipe[1].content_d021[k]);
+#ifdef C64M_VIC_TRACE
+                    if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
+                        y >= 40u && y <= 250u) {
+                        uint32_t pixel = v->hborder_pipe[1].content[k];
+                        unsigned palette = 16u;
+                        for (unsigned pi = 0; pi < 16u; ++pi) {
+                            if (pixel == vicii_palette_argb[pi]) {
+                                palette = pi;
+                                break;
+                            }
+                        }
+                        vicii_trace_graphics_access(v, "p", cyc, x, 0,
+                            (uint8_t)palette);
+                    }
+#endif
+                    v->hborder_pipe[1].border[k] =
+                        vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
+                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                }
+                /* VICE 6569: advance color pipes after each dot (visible or not). */
+                v->color_pipe_d020 =
+                    (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
+                v->color_pipe_d021 =
+                    (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
+            }
         }
     }
 

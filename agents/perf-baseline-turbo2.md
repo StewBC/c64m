@@ -238,3 +238,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 |------|------|
 | 2026-07-24 | Initial baseline (M2). Extended `profile_c64_hotloop` flags: `1541`, `1541-one`, `media`, `no-video`. |
 | 2026-07-24 | Soft power: product free-run no longer steps unpowered 1541s (default cold). Re-measure primary rows after this change; host-only product path should rise toward pure host. |
+| 2026-07-24 | After soft power + paint fast paths (M2): pure host paint-on ~**9.85 MHz**; product headless drives-off ~**8.2 MHz**. See `perf-roadmap-100mhz.md`. |
