@@ -651,12 +651,35 @@ bool control_protocol_parse_request(
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }
-        if (!parse_u64_token(cursor, &cursor, &length) ||
-            length == 0 || length > 1024) {
-            set_parse_error(out_error, id, "bad-args", "expected length 1..1024");
+        if (!parse_u64_token(cursor, &cursor, &length)) {
+            set_parse_error(out_error, id, "bad-args", "expected length");
             return false;
         }
-        args.length = (uint16_t)length;
+        if (type == CONTROL_COMMAND_SET_MEMORY) {
+            if (length == 0 || length > 1024) {
+                set_parse_error(out_error, id, "bad-args", "expected length 1..1024");
+                return false;
+            }
+        } else {
+            /* get-memory: full space allowed; reject wrap past 65536. */
+            if (length == 0 || length > 65536) {
+                set_parse_error(
+                    out_error,
+                    id,
+                    "bad-args",
+                    "expected length 1..65536");
+                return false;
+            }
+            if ((uint64_t)args.address + length > 65536ull) {
+                set_parse_error(
+                    out_error,
+                    id,
+                    "bad-args",
+                    "address+length exceeds 65536");
+                return false;
+            }
+        }
+        args.length = (uint32_t)length;
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }

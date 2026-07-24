@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal c64m control-port client (C64M/1 line protocol).
+"""Minimal c64m control-port client (C64M/2 line protocol).
 
 Debug/introspection helper for driving a headless c64m over its localhost
 control port. Written for the lft-nine VIC-II investigation
@@ -24,7 +24,8 @@ GOTCHAS (learned the hard way, see lft-nine.md):
     snapshot (closed border, border-region sprites MASKED). Use turbo 1 or 2 for
     real frames. Register/memory reads are unaffected by turbo.
   * Addresses parse base-0: prefix hex with '$' (mem() does this for you).
-  * get-memory length must be DECIMAL (mem() handles it); max 1024 bytes/call.
+  * get-memory length must be DECIMAL (mem() handles it); max 65536 bytes/call
+    with address+length <= 65536 (full dump: mem(0, 65536)).
   * break-create only supports 'exec' breakpoints via the control port
     (control_parse_breakpoint_definition in src/main.c hard-requires "exec");
     read/write watchpoints would need a protocol extension.

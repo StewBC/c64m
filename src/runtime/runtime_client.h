@@ -53,11 +53,27 @@ bool runtime_client_request_cpu_state(runtime_client *client);
 /* Solicited CPU read; runtime echoes request_token on CPU_STATE_RESPONSE. */
 bool runtime_client_request_cpu_state_token(runtime_client *client, uint64_t request_token);
 bool runtime_client_request_machine_state(runtime_client *client);
+/* UI/legacy: token 0, inline snapshot up to RUNTIME_MEMORY_SNAPSHOT_MAX. */
 bool runtime_client_request_memory(
     runtime_client *client,
     uint16_t address,
     uint16_t length,
     runtime_memory_mode mode);
+/* Solicited bulk/control get-memory (token non-zero). length 1..65536. */
+bool runtime_client_request_memory_token(
+    runtime_client *client,
+    uint16_t address,
+    uint32_t length,
+    runtime_memory_mode mode,
+    uint64_t request_token);
+/* Claim pool payload for token; caller owns *out_bytes (malloc). */
+bool runtime_client_claim_memory_rpc(
+    runtime_client *client,
+    uint64_t request_token,
+    uint8_t **out_bytes,
+    uint32_t *out_length,
+    uint16_t *out_address,
+    runtime_memory_mode *out_mode);
 bool runtime_client_request_memory_view(
     runtime_client *client,
     uint16_t address,

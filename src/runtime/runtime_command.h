@@ -115,7 +115,7 @@ typedef struct runtime_command {
 
         struct {
             uint16_t address;
-            uint16_t length;
+            uint32_t length; /* 1..RUNTIME_MEMORY_RPC_MAX_LENGTH for get-memory RPC */
             uint8_t mode;
         } request_memory;
 

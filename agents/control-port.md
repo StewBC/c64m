@@ -41,11 +41,8 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. Planned: **C64M/2** when the first wire-visible
-efficiency/contract change lands (token-matched deferred behavior is internal
-until bulk length / pipeline / multi-deferred change client-visible rules).
-Until that bump ships, responses still advertise the version in the fixed
-responses section below.
+code and this document. **Current: C64M/2** (bulk `get-memory` length up to
+65536; token-matched deferred for `get-cpu` / `get-memory`).
 
 ## Wire format
 
@@ -224,8 +221,8 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/1
-version      -> ok protocol=C64M/1 app=0.1.0
+hello        -> ok name=c64m protocol=C64M/2
+version      -> ok protocol=C64M/2 app=0.1.0
 capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia
 ping         -> ok
 ```
@@ -281,7 +278,7 @@ N get-cpu
 N get-vic
 N get-cia <1|2>
 N get-frame [format=argb8888|indexed8]
-N get-memory <address> <length 1..1024> <map|ram|rom|drive8|drive9>
+N get-memory <address> <length 1..65536> <map|ram|rom|drive8|drive9>
 N set-memory <address> <length 1..1024> <map|ram>\n<raw length bytes>\n
 N get-debug-memory [write-history=0|1]
 N get-call-stack
@@ -312,10 +309,18 @@ N ok cia=1 pra=FF prb=FF ddra=00 ddrb=00 ta=FFFF/FFFF cra=01 tb=FFFF/FFFF crb=08
 ```
 
 `get-memory` returns `data memory` with metadata `addr=... length=... mode=...`.
-The payload is exactly the requested bytes. Modes are CPU-visible map (`0`), raw
-RAM (`1`), raw ROM (`2`), drive 8 map (`3`), and drive 9 map (`4`). Drive maps
-contain holes; the machine-side debug API marks invalid bytes, but the control
-payload contains the returned byte values only.
+The payload is exactly the requested bytes. **Length may be 1..65536** provided
+`address + length <= 65536` (32-bit arithmetic; wrap is rejected with
+`bad-args`). A full 16-bit space dump is `get-memory $0000 65536 <mode>` in
+**one** request (no 1K chunking). Write-history is **not** included on this path
+(use `get-debug-memory` when history is required).
+
+Internally the result is a token-keyed RPC pool entry (not a fat event-queue
+union). Concurrent bulk reads are limited by the pool capacity (16); a full
+pool returns `busy`. Modes are CPU-visible map (`0`), raw RAM (`1`), raw ROM
+(`2`), drive 8 map (`3`), and drive 9 map (`4`). Drive maps contain holes; the
+machine-side debug API marks invalid bytes, but the control payload contains
+the returned byte values only.
 
 `set-memory` is the poke counterpart of `get-memory`, using the same
 paste-style framing as `paste-text-data` / `paste-events-data`:
@@ -335,7 +340,9 @@ always applies. Completion is deferred until the write finishes:
 N ok addr=0400 length=4 mode=1
 ```
 
-Address wrap is 16-bit modular (same as `get-memory`).
+`set-memory` length remains 1..1024. Address+length for set-memory uses the
+write path's 16-bit modular addressing for the poke itself; parse still
+rejects oversize length.
 
 `get-frame` returns `data frame` with metadata:
 

@@ -121,12 +121,14 @@ runtime *runtime_create(const runtime_config *config) {
     rt->frame_slot.mutex = mutex_create();
     rt->debug_memory_slot.mutex = mutex_create();
     rt->symbol_slot.mutex = mutex_create();
+    rt->rpc_memory_pool.mutex = mutex_create();
 
     if (!rt->command_queue ||
         !rt->event_queue ||
         !rt->frame_slot.mutex ||
         !rt->debug_memory_slot.mutex ||
-        !rt->symbol_slot.mutex) {
+        !rt->symbol_slot.mutex ||
+        !rt->rpc_memory_pool.mutex) {
         runtime_destroy(rt);
         return NULL;
     }
@@ -136,6 +138,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.frame_slot = &rt->frame_slot;
     rt->client.debug_memory_slot = &rt->debug_memory_slot;
     rt->client.symbol_slot = &rt->symbol_slot;
+    rt->client.rpc_memory_pool = &rt->rpc_memory_pool;
 
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
@@ -197,9 +200,20 @@ void runtime_destroy(runtime *rt) {
     free(rt->ini_path);
     free(rt->symbol_files);
     free(rt->audio_record_path);
+    if (rt->rpc_memory_pool.mutex != NULL) {
+        size_t i;
+        mutex_lock(rt->rpc_memory_pool.mutex);
+        for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
+            free(rt->rpc_memory_pool.slots[i].bytes);
+            rt->rpc_memory_pool.slots[i].bytes = NULL;
+            rt->rpc_memory_pool.slots[i].in_use = 0;
+        }
+        mutex_unlock(rt->rpc_memory_pool.mutex);
+    }
     mutex_destroy(rt->frame_slot.mutex);
     mutex_destroy(rt->debug_memory_slot.mutex);
     mutex_destroy(rt->symbol_slot.mutex);
+    mutex_destroy(rt->rpc_memory_pool.mutex);
     message_queue_destroy(rt->event_queue);
     message_queue_destroy(rt->command_queue);
     free(rt);

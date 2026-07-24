@@ -801,3 +801,15 @@ target_link_libraries(test_runtime_request_token PRIVATE
 )
 
 add_test(NAME runtime_request_token COMMAND test_runtime_request_token)
+
+add_executable(test_runtime_memory_rpc
+    tests/runtime/test_runtime_memory_rpc.c
+)
+
+target_compile_features(test_runtime_memory_rpc PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_memory_rpc PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_memory_rpc COMMAND test_runtime_memory_rpc)

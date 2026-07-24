@@ -562,6 +562,103 @@ static void runtime_publish_memory(
     runtime_publish_event(rt, &event);
 }
 
+/* Store bulk get-memory payload in the token-keyed RPC pool and publish a slim
+   completion event. Never puts 64K into the event queue union. */
+static void runtime_publish_memory_rpc(
+    runtime *rt,
+    uint64_t request_token,
+    uint16_t address,
+    uint32_t length,
+    runtime_memory_mode mode) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_MEMORY_RPC_COMPLETE,
+        .request_token = request_token,
+    };
+    runtime_rpc_memory_pool *pool;
+    uint8_t *bytes = NULL;
+    size_t slot_index = RUNTIME_RPC_MEMORY_POOL_CAPACITY;
+    size_t i;
+    uint32_t end;
+
+    event.data.memory_rpc.address = address;
+    event.data.memory_rpc.length = length;
+    event.data.memory_rpc.mode = mode;
+    event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_OK;
+
+    if (length == 0u ||
+        length > (uint32_t)RUNTIME_MEMORY_RPC_MAX_LENGTH ||
+        (uint32_t)address + length > (uint32_t)RUNTIME_MEMORY_RPC_MAX_LENGTH) {
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BAD_ARGS;
+        runtime_publish_event(rt, &event);
+        return;
+    }
+
+    if (request_token == 0u) {
+        /* Bulk path requires a token so waiters can claim the pool entry. */
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_ERROR;
+        runtime_publish_event(rt, &event);
+        return;
+    }
+
+    pool = &rt->rpc_memory_pool;
+    if (pool->mutex == NULL) {
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_ERROR;
+        runtime_publish_event(rt, &event);
+        return;
+    }
+
+    bytes = (uint8_t *)malloc((size_t)length);
+    if (bytes == NULL) {
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_ERROR;
+        runtime_publish_event(rt, &event);
+        return;
+    }
+
+    end = (uint32_t)address + length;
+    for (i = 0; i < length; ++i) {
+        uint16_t current = (uint16_t)(address + (uint32_t)i);
+        (void)end;
+        bytes[i] = runtime_debug_read_memory_mode(rt, mode, current, NULL);
+    }
+
+    mutex_lock(pool->mutex);
+    for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
+        if (!pool->slots[i].in_use) {
+            slot_index = i;
+            break;
+        }
+    }
+    if (slot_index >= RUNTIME_RPC_MEMORY_POOL_CAPACITY) {
+        mutex_unlock(pool->mutex);
+        free(bytes);
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BUSY;
+        runtime_publish_event(rt, &event);
+        return;
+    }
+    pool->slots[slot_index].request_token = request_token;
+    pool->slots[slot_index].address = address;
+    pool->slots[slot_index].length = length;
+    pool->slots[slot_index].mode = mode;
+    pool->slots[slot_index].bytes = bytes;
+    pool->slots[slot_index].in_use = 1u;
+    mutex_unlock(pool->mutex);
+
+    if (!runtime_publish_event(rt, &event)) {
+        /* Reliable completion must not vanish: free slot and surface busy. */
+        mutex_lock(pool->mutex);
+        if (pool->slots[slot_index].in_use &&
+            pool->slots[slot_index].request_token == request_token) {
+            free(pool->slots[slot_index].bytes);
+            pool->slots[slot_index].bytes = NULL;
+            pool->slots[slot_index].in_use = 0u;
+        }
+        mutex_unlock(pool->mutex);
+        event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BUSY;
+        /* Best-effort notify; if this also fails the deferred times out. */
+        runtime_publish_event(rt, &event);
+    }
+}
+
 static void runtime_publish_debug_memory(runtime *rt, bool include_write_history) {
     runtime_event event = {
         .type = RUNTIME_EVENT_DEBUG_MEMORY_READY,
@@ -3494,14 +3591,40 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_REQUEST_MEMORY:
-            if (runtime_memory_mode_is_valid(command->data.request_memory.mode)) {
-                runtime_publish_memory(
+            if (!runtime_memory_mode_is_valid(command->data.request_memory.mode)) {
+                if (command->request_token != 0u) {
+                    runtime_event bad = {
+                        .type = RUNTIME_EVENT_MEMORY_RPC_COMPLETE,
+                        .request_token = command->request_token,
+                    };
+                    bad.data.memory_rpc.address = command->data.request_memory.address;
+                    bad.data.memory_rpc.length = command->data.request_memory.length;
+                    bad.data.memory_rpc.mode =
+                        (runtime_memory_mode)command->data.request_memory.mode;
+                    bad.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BAD_ARGS;
+                    runtime_publish_event(rt, &bad);
+                } else {
+                    runtime_publish_error(rt, "unsupported memory request mode");
+                }
+            } else if (command->request_token != 0u) {
+                /* Control / solicited bulk path: pool + slim event. */
+                runtime_publish_memory_rpc(
                     rt,
+                    command->request_token,
                     command->data.request_memory.address,
                     command->data.request_memory.length,
                     (runtime_memory_mode)command->data.request_memory.mode);
             } else {
-                runtime_publish_error(rt, "unsupported memory request mode");
+                /* UI / legacy small snapshot (cap 1024, includes write-history). */
+                uint32_t len = command->data.request_memory.length;
+                if (len > RUNTIME_MEMORY_SNAPSHOT_MAX) {
+                    len = RUNTIME_MEMORY_SNAPSHOT_MAX;
+                }
+                runtime_publish_memory(
+                    rt,
+                    command->data.request_memory.address,
+                    (uint16_t)len,
+                    (runtime_memory_mode)command->data.request_memory.mode);
             }
             break;
 

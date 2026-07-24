@@ -154,11 +154,27 @@ bool runtime_client_request_memory(
     uint16_t address,
     uint16_t length,
     runtime_memory_mode mode) {
+    return runtime_client_request_memory_token(client, address, length, mode, 0u);
+}
+
+bool runtime_client_request_memory_token(
+    runtime_client *client,
+    uint16_t address,
+    uint32_t length,
+    runtime_memory_mode mode,
+    uint64_t request_token) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_REQUEST_MEMORY,
+        .request_token = request_token,
     };
 
     if (!client) {
+        return false;
+    }
+    if (length == 0u || length > (uint32_t)RUNTIME_MEMORY_RPC_MAX_LENGTH) {
+        return false;
+    }
+    if ((uint32_t)address + length > (uint32_t)RUNTIME_MEMORY_RPC_MAX_LENGTH) {
         return false;
     }
 
@@ -166,6 +182,52 @@ bool runtime_client_request_memory(
     command.data.request_memory.length = length;
     command.data.request_memory.mode = (uint8_t)mode;
     return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_claim_memory_rpc(
+    runtime_client *client,
+    uint64_t request_token,
+    uint8_t **out_bytes,
+    uint32_t *out_length,
+    uint16_t *out_address,
+    runtime_memory_mode *out_mode) {
+    runtime_rpc_memory_pool *pool;
+    size_t i;
+
+    if (client == NULL ||
+        client->rpc_memory_pool == NULL ||
+        request_token == 0u ||
+        out_bytes == NULL) {
+        return false;
+    }
+    pool = client->rpc_memory_pool;
+    if (pool->mutex == NULL) {
+        return false;
+    }
+
+    mutex_lock(pool->mutex);
+    for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
+        if (pool->slots[i].in_use &&
+            pool->slots[i].request_token == request_token) {
+            *out_bytes = pool->slots[i].bytes;
+            if (out_length != NULL) {
+                *out_length = pool->slots[i].length;
+            }
+            if (out_address != NULL) {
+                *out_address = pool->slots[i].address;
+            }
+            if (out_mode != NULL) {
+                *out_mode = pool->slots[i].mode;
+            }
+            pool->slots[i].bytes = NULL;
+            pool->slots[i].in_use = 0u;
+            pool->slots[i].request_token = 0u;
+            mutex_unlock(pool->mutex);
+            return true;
+        }
+    }
+    mutex_unlock(pool->mutex);
+    return false;
 }
 
 bool runtime_client_request_memory_view(

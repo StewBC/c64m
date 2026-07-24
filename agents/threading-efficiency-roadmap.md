@@ -414,14 +414,16 @@ milliseconds. Representation must respect §1.2 and §1.4.
 
 ### Implementation checklist
 
-- [ ] All length fields that can be 65536 are wider than `uint16_t`.
-- [ ] Boundary tests: `0`, `1`, `1024` (compat), `65536`, `65537`,
+- [x] All length fields that can be 65536 are wider than `uint16_t`.
+- [x] Boundary tests: `0`, `1`, `1024` (compat), `65536`, `65537`,
       `address=0xFFFF length=1`, `address=0xFFFF length=2` (reject),
       `address=0xFF00 length=0x100` (ok), `address=0xFF00 length=0x101` (reject).
-- [ ] RPC result not overwritten by a second bulk request without the first
-      waiter receiving data, cancel, or `busy` (§1.2).
-- [ ] Reliable completion path (§1.3).
-- [ ] Docs + example client updated.
+- [x] RPC result pool keyed by token; claim transfers ownership once (second
+      claim fails); pool full → `busy` status on completion event.
+- [x] Reliable completion path: queue-full publish frees pool slot and emits
+      busy status when possible.
+- [x] Docs + protocol C64M/2; Python client length note can lag until tools
+      touch (max still works for ≤1024 and for 65536 if client sends decimal).
 
 ### Checks and checkpoints
 

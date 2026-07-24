@@ -33,11 +33,10 @@ running). Consequences while free-running:
   effects. Prefer `step-frame` when you need consecutive frames.
 - `run` → `wait-frame 1` → `pause` overshoots by one frame (pause processed a tick
   after the wait returns).
-- Reading 64K via `get-memory` is 64 calls (1024-byte cap) ≈ 1.1 s. VICE `MEM_GET`
-  does 8KB in one call.
-
-Worth considering: service several queued requests per tick; raise or remove the
-`get-memory` length cap; or add a batch/pipeline form.
+- ~~Reading 64K via `get-memory` is 64 calls (1024-byte cap)~~ **Done (C64M/2):**
+  `get-memory` length is 1..65536 with `address+length <= 65536` in one RPC
+  (token-keyed result pool). Remaining: pipeline / multi-deferred (roadmap
+  Phase 2) and headless wake (Phase 3).
 
 ---
 

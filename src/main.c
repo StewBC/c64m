@@ -70,7 +70,7 @@ typedef struct deferred_control_response {
     /* Session generation at arm time; stale epochs are cancelled on disconnect. */
     uint64_t connection_epoch;
     uint16_t memory_address;
-    uint16_t memory_length;
+    uint32_t memory_length;
     runtime_memory_mode memory_mode;
     uint16_t expected_breakpoint_count;
     uint32_t expected_breakpoint_id;
@@ -1077,6 +1077,37 @@ static void control_format_memory_response(
         false);
 }
 
+static void control_format_memory_rpc_response(
+    control_response *response,
+    uint32_t request_id,
+    uint16_t address,
+    uint32_t length,
+    runtime_memory_mode mode,
+    uint8_t *payload_owned)
+{
+    char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || payload_owned == NULL || length == 0u) {
+        free(payload_owned);
+        return;
+    }
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "addr=%04X length=%u mode=%u",
+        address,
+        (unsigned)length,
+        (unsigned)mode);
+    control_protocol_format_data(
+        response,
+        request_id,
+        "memory",
+        payload_owned,
+        (size_t)length,
+        metadata,
+        false);
+}
+
 /* Pepto palette matching vicii.c; used only for ARGB→index reverse lookup. */
 static const uint32_t control_palette_argb[16] = {
     0xff000000u, 0xffffffffu, 0xff813338u, 0xff75cec8u,
@@ -1672,6 +1703,7 @@ static bool control_parse_breakpoint_definition(
 
 static void complete_deferred_control_response(
     control_server *control,
+    runtime_client *client,
     deferred_control_response *deferred,
     const runtime_event *event)
 {
@@ -1728,25 +1760,88 @@ static void complete_deferred_control_response(
             control_response_release(&response);
             SDL_Log("control: response queue full");
         }
-    } else if ((deferred->command_type == CONTROL_COMMAND_GET_MEMORY ||
-                deferred->command_type == CONTROL_COMMAND_SET_MEMORY) &&
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_MEMORY &&
+               event->type == RUNTIME_EVENT_MEMORY_RPC_COMPLETE) {
+        if (event->data.memory_rpc.status != RUNTIME_MEMORY_RPC_OK) {
+            const char *code = "runtime";
+            const char *msg = "memory request failed";
+            if (event->data.memory_rpc.status == RUNTIME_MEMORY_RPC_BUSY) {
+                code = "busy";
+                msg = "memory rpc pool full";
+            } else if (event->data.memory_rpc.status == RUNTIME_MEMORY_RPC_BAD_ARGS) {
+                code = "bad-args";
+                msg = "invalid memory range";
+            }
+            control_protocol_format_error(
+                &response,
+                deferred->request_id,
+                code,
+                msg,
+                false);
+            if (control_server_post_response(control, &response)) {
+                deferred->active = false;
+                deferred->request_token = 0u;
+            } else {
+                control_response_release(&response);
+                SDL_Log("control: response queue full");
+            }
+        } else {
+            uint8_t *payload = NULL;
+            uint32_t length = 0;
+            uint16_t address = 0;
+            runtime_memory_mode mode = RUNTIME_MEMORY_MODE_CPU_MAP;
+            if (client == NULL ||
+                !runtime_client_claim_memory_rpc(
+                    client,
+                    deferred->request_token,
+                    &payload,
+                    &length,
+                    &address,
+                    &mode)) {
+                control_protocol_format_error(
+                    &response,
+                    deferred->request_id,
+                    "runtime",
+                    "memory rpc payload missing",
+                    false);
+                if (control_server_post_response(control, &response)) {
+                    deferred->active = false;
+                    deferred->request_token = 0u;
+                } else {
+                    control_response_release(&response);
+                    SDL_Log("control: response queue full");
+                }
+            } else {
+                control_format_memory_rpc_response(
+                    &response,
+                    deferred->request_id,
+                    address,
+                    length,
+                    mode,
+                    payload);
+                if (control_server_post_response(control, &response)) {
+                    deferred->active = false;
+                    deferred->request_token = 0u;
+                } else {
+                    control_response_release(&response);
+                    SDL_Log("control: response queue full");
+                }
+            }
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_SET_MEMORY &&
                event->type == RUNTIME_EVENT_MEMORY_RESPONSE &&
                event->data.memory.address == deferred->memory_address &&
                event->data.memory.length == deferred->memory_length &&
                event->data.memory.mode == deferred->memory_mode) {
-        if (deferred->command_type == CONTROL_COMMAND_SET_MEMORY) {
-            char text[CONTROL_RESPONSE_TEXT_MAX];
-            snprintf(
-                text,
-                sizeof(text),
-                "addr=%04X length=%u mode=%u",
-                event->data.memory.address,
-                (unsigned)event->data.memory.length,
-                (unsigned)event->data.memory.mode);
-            control_protocol_format_ok(&response, deferred->request_id, text, false);
-        } else {
-            control_format_memory_response(&response, deferred->request_id, &event->data.memory);
-        }
+        char text[CONTROL_RESPONSE_TEXT_MAX];
+        snprintf(
+            text,
+            sizeof(text),
+            "addr=%04X length=%u mode=%u",
+            event->data.memory.address,
+            (unsigned)event->data.memory.length,
+            (unsigned)event->data.memory.mode);
+        control_protocol_format_ok(&response, deferred->request_id, text, false);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
         } else {
@@ -2316,7 +2411,7 @@ static void poll_runtime_events(
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
         control_event_latch_note(event_latch, event.type);
-        complete_deferred_control_response(control, deferred, &event);
+        complete_deferred_control_response(control, client, deferred, &event);
         check_deferred_event_wait(control, deferred, &event, event_latch);
         check_deferred_state_wait(control, deferred, debug_state, &event);
         if (debug_state != NULL && debug_state->has_frame) {
@@ -3480,7 +3575,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/1",
+                "name=c64m protocol=C64M/2",
                 false);
             break;
 
@@ -3488,7 +3583,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/1 app=0.1.0",
+                "protocol=C64M/2 app=0.1.0",
                 false);
             break;
 
@@ -3767,34 +3862,42 @@ static void dispatch_control_request(
                     "busy",
                     "deferred-response-active",
                     false);
-            } else if (runtime_client_request_memory(
-                           client,
-                           request->args.address,
-                           request->args.length,
-                           (runtime_memory_mode)request->args.memory_mode)) {
-                if (deferred != NULL) {
+            } else {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                if (token == 0u ||
+                    !runtime_client_request_memory_token(
+                        client,
+                        request->args.address,
+                        request->args.length,
+                        (runtime_memory_mode)request->args.memory_mode,
+                        token)) {
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "runtime",
+                        "command rejected",
+                        false);
+                } else if (deferred != NULL) {
                     deferred->active = true;
                     deferred->request_id = request->id;
                     deferred->command_type = request->type;
+                    deferred->request_token = token;
+                    deferred->connection_epoch =
+                        control_server_connection_epoch(control);
                     deferred->deadline_ms = SDL_GetTicks64() + 2000u;
                     deferred->memory_address = request->args.address;
                     deferred->memory_length = request->args.length;
-                    deferred->memory_mode = (runtime_memory_mode)request->args.memory_mode;
+                    deferred->memory_mode =
+                        (runtime_memory_mode)request->args.memory_mode;
                     return;
+                } else {
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "internal",
+                        "deferred state unavailable",
+                        false);
                 }
-                control_protocol_format_error(
-                    &response,
-                    request->id,
-                    "internal",
-                    "deferred state unavailable",
-                    false);
-            } else {
-                control_protocol_format_error(
-                    &response,
-                    request->id,
-                    "runtime",
-                    "command rejected",
-                    false);
             }
             break;
 

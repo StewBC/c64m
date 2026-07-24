@@ -37,6 +37,7 @@ struct runtime_client {
     struct runtime_frame_slot *frame_slot;
     struct runtime_debug_memory_slot *debug_memory_slot;
     struct runtime_symbol_slot *symbol_slot;
+    struct runtime_rpc_memory_pool *rpc_memory_pool;
     /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
     uint64_t next_request_token;
 };
@@ -87,6 +88,21 @@ typedef struct runtime_symbol_slot {
     bool has_symbols;
 } runtime_symbol_slot;
 
+/* Token-keyed bulk get-memory results (not in event queue unions). */
+typedef struct runtime_rpc_memory_slot {
+    uint64_t request_token;
+    uint16_t address;
+    uint32_t length;
+    runtime_memory_mode mode;
+    uint8_t in_use;
+    uint8_t *bytes; /* owned heap buffer of `length` when in_use */
+} runtime_rpc_memory_slot;
+
+typedef struct runtime_rpc_memory_pool {
+    mutex *mutex;
+    runtime_rpc_memory_slot slots[RUNTIME_RPC_MEMORY_POOL_CAPACITY];
+} runtime_rpc_memory_pool;
+
 typedef struct runtime_breakpoint {
     uint32_t id;
     bool enabled;
@@ -114,6 +130,7 @@ struct runtime {
     runtime_client client;
     runtime_frame_slot frame_slot;
     runtime_debug_memory_slot debug_memory_slot;
+    runtime_rpc_memory_pool rpc_memory_pool;
     c64_frame publish_frame;
     runtime_symbol_slot symbol_slot;
     symbol_table *symbols;

@@ -18,6 +18,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_CPU_STATE_RESPONSE,
     RUNTIME_EVENT_MACHINE_STATE_RESPONSE,
     RUNTIME_EVENT_MEMORY_RESPONSE,
+    /* Solicited bulk/control get-memory: meta only; payload in RPC pool by token. */
+    RUNTIME_EVENT_MEMORY_RPC_COMPLETE,
     RUNTIME_EVENT_MEMORY_VIEW_RESPONSE,
     RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
     RUNTIME_EVENT_DISK_STATUS_RESPONSE,
@@ -52,11 +54,21 @@ typedef enum runtime_stop_reason {
 
 enum {
     RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
+    /* Full 16-bit address space dump in one get-memory RPC. */
+    RUNTIME_MEMORY_RPC_MAX_LENGTH = 65536,
+    RUNTIME_RPC_MEMORY_POOL_CAPACITY = 16,
     RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64,
     RUNTIME_CALL_STACK_MAX = 16,
     RUNTIME_BREAKPOINT_TRON_PATH_MAX = 256,
     RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256
 };
+
+typedef enum runtime_memory_rpc_status {
+    RUNTIME_MEMORY_RPC_OK = 0,
+    RUNTIME_MEMORY_RPC_BUSY = 1,
+    RUNTIME_MEMORY_RPC_BAD_ARGS = 2,
+    RUNTIME_MEMORY_RPC_ERROR = 3
+} runtime_memory_rpc_status;
 
 typedef enum runtime_breakpoint_access {
     RUNTIME_BREAKPOINT_ACCESS_EXECUTE = 1u << 0,
@@ -177,6 +189,14 @@ typedef struct runtime_memory_snapshot {
     uint64_t write_history[RUNTIME_MEMORY_SNAPSHOT_MAX];
 } runtime_memory_snapshot;
 
+/* Slim completion for bulk RPC memory; bytes live in the token-keyed pool. */
+typedef struct runtime_memory_rpc_meta {
+    uint16_t address;
+    uint32_t length;
+    runtime_memory_mode mode;
+    runtime_memory_rpc_status status;
+} runtime_memory_rpc_meta;
+
 typedef struct runtime_debug_memory_snapshot {
     uint64_t generation;
     uint8_t has_write_history;
@@ -265,6 +285,7 @@ typedef struct runtime_event {
         runtime_cpu_snapshot cpu_state;
         runtime_machine_snapshot machine_state;
         runtime_memory_snapshot memory;
+        runtime_memory_rpc_meta memory_rpc;
         runtime_breakpoint_snapshot breakpoints;
         runtime_disk_status_snapshot disk_status;
         runtime_call_stack_snapshot call_stack;

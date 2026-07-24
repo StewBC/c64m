@@ -80,7 +80,7 @@ typedef struct control_args {
     uint32_t id;
     uint32_t timeout_ms;
     uint16_t address;
-    uint16_t length;
+    uint32_t length; /* get-memory: 1..65536; set-memory still 1..1024 */
     uint16_t start_address;
     uint16_t end_address;
     uint16_t run_address;

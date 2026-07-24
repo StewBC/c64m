@@ -440,8 +440,47 @@ static void test_parse_rejects_invalid_input(void)
     expect_false("reject missing turbo", control_protocol_parse_request("11 set-turbo\n", &request, &error));
     expect_u32("missing turbo response id", 11, error.id);
 
-    expect_false("reject memory length", control_protocol_parse_request("12 get-memory $0400 0 map\n", &request, &error));
-    expect_u32("memory length response id", 12, error.id);
+    expect_false("reject memory length 0", control_protocol_parse_request("12 get-memory $0400 0 map\n", &request, &error));
+    expect_u32("memory length 0 response id", 12, error.id);
+
+    expect_true(
+        "accept get-memory 1024",
+        control_protocol_parse_request("200 get-memory $0000 1024 map\n", &request, &error));
+    expect_u32("get-memory 1024 length", 1024u, request.args.length);
+
+    expect_true(
+        "accept get-memory 65536",
+        control_protocol_parse_request("201 get-memory $0000 65536 ram\n", &request, &error));
+    expect_u32("get-memory 65536 length", 65536u, request.args.length);
+    expect_u32("get-memory 65536 mode", 1u, request.args.memory_mode);
+
+    expect_true(
+        "accept get-memory FFFF len 1",
+        control_protocol_parse_request("202 get-memory $FFFF 1 map\n", &request, &error));
+    expect_u32("FFFF+1 address", 0xFFFFu, request.args.address);
+    expect_u32("FFFF+1 length", 1u, request.args.length);
+
+    expect_false(
+        "reject get-memory 65537",
+        control_protocol_parse_request("203 get-memory $0000 65537 map\n", &request, &error));
+    expect_u32("65537 response id", 203, error.id);
+    expect_false(
+        "reject get-memory FFFF len 2",
+        control_protocol_parse_request("204 get-memory $FFFF 2 map\n", &request, &error));
+    expect_u32("FFFF+2 response id", 204, error.id);
+    expect_false(
+        "reject get-memory FF00 len 0x101",
+        control_protocol_parse_request("205 get-memory $FF00 257 map\n", &request, &error));
+    expect_u32("FF00+257 response id", 205, error.id);
+    expect_true(
+        "accept get-memory FF00 len 0x100",
+        control_protocol_parse_request("206 get-memory $FF00 256 map\n", &request, &error));
+    expect_u32("FF00+256 length", 256u, request.args.length);
+
+    expect_false(
+        "reject set-memory 1025",
+        control_protocol_parse_request("207 set-memory $0400 1025 ram\n", &request, &error));
+    expect_u32("set-memory 1025 response id", 207, error.id);
 
     expect_false("reject memory mode", control_protocol_parse_request("13 get-memory $0400 8 io\n", &request, &error));
     expect_u32("memory mode response id", 13, error.id);
