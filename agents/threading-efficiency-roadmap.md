@@ -335,14 +335,16 @@ performance win.
 
 ### Implementation checklist
 
-- [ ] Written contract (§1) accepted in review / documented in tree.
+- [x] Written contract (§1) accepted in review / documented in tree.
+      (`runtime-control.md` § Message contracts; `control-port.md` identity
+      section; locked defaults §18). Code enforcement is PR-0.5b.
 - [ ] Token on solicited command → completion path for at least one command
       used by control (`get-cpu` or equivalent) end-to-end.
 - [ ] Control deferred **cannot** complete from UI token-0 / other-token
       CPU_STATE (test).
 - [ ] Connection epoch field exists (even if pipeline not yet enabled).
-- [ ] Wait rule chosen and documented (§1.6); `wait_after_seq` either used or
-      removed intentionally.
+- [x] Wait rule chosen and documented (§1.6): single outstanding wait → `busy`.
+      (`wait_after_seq` cleanup deferred to 0.5b/2a with the wait path.)
 
 ### Checks and checkpoints
 
@@ -850,7 +852,32 @@ Do not combine 0.5 + 2b + 7 in one PR. Do not ship 2b without 0.5 tokens.
 
 ---
 
-## 18. Feedback incorporation log
+## 18. Locked implementation defaults (2026-07)
+
+Decisions for the full roadmap execution (no dual-path compat; stacked PRs;
+docs-first 0.5a):
+
+| Topic | Locked default |
+|-------|----------------|
+| Scope | Phases 0.5 through 8 |
+| Compat | No backward-compat shims; explicit protocol version bump when wire/client rules change |
+| Wait concurrency (§1.6) | **Restrict:** one outstanding wait; second → `busy` |
+| Bulk RPC storage | Token-keyed result pool; not fat `runtime_event` |
+| Bulk length | `uint32_t`, max 65536; reject wrap / oversize |
+| Bulk write-history | Omit on bulk `get-memory` |
+| Bulk concurrency | Pool capacity (aligned with deferred); full → `busy` |
+| Duplicate wire id | `bad-id` while outstanding |
+| Phase 2b I/O | Nonblocking + poll/select (revisit only if platform forces R/W split) |
+| Response order | Completion order + wire ids |
+| UI tokens in 0.5 | Control uses non-zero tokens; UI free-run/poll may stay token 0 |
+| Connection epoch | Field + cancel stubs in 0.5; full drain with 2b |
+| Python pipeline client | Only when 2b lands |
+| Verification | Targeted ctest suites per phase; full baseline when authorized |
+| PR slicing | §15 table; stacked branches/PRs |
+
+Contract prose landed in `runtime-control.md` and `control-port.md` (PR-0.5a).
+
+## 19. Feedback incorporation log
 
 This revision responds to design review of the first roadmap draft:
 

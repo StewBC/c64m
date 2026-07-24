@@ -97,7 +97,8 @@ Component handoffs:
   Phase 0.5 message contracts (tokens, lossy vs reliable, RPC vs telemetry
   slots) before bulk memory / pipeline; then multiplexed socket, cadence-split
   UI telemetry, slim IPC, cache barriers, run-to-raster, CPU history.
-  Checkpoints, deterministic identity tests, PR slicing.
+  Checkpoints, deterministic identity tests, PR slicing. Locked defaults in
+  §18; contract prose also lives in `runtime-control.md` and `control-port.md`.
 - `pal-border.md` - **resolved case study**, not an open problem. How the PAL
   32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
   for months. Read it before any c64m-vs-VICE pixel comparison: it carries the

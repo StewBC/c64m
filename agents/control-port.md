@@ -34,6 +34,19 @@ process after its final command.
 
 Run from the repository root so default ROM lookup finds `roms/`.
 
+## Protocol version
+
+Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
+
+**Versioning policy (this work series):** there is no dual-path compatibility
+layer for older clients. When wire behavior or control concurrency semantics
+change in a way that scripts must learn, bump `N` in the same change as the
+code and this document. Planned: **C64M/2** when the first wire-visible
+efficiency/contract change lands (token-matched deferred behavior is internal
+until bulk length / pipeline / multi-deferred change client-visible rules).
+Until that bump ships, responses still advertise the version in the fixed
+responses section below.
+
 ## Wire format
 
 Every request begins with an ASCII line terminated by `\n`:
@@ -66,9 +79,26 @@ Do not use `readline()` for a data payload. Read the header line, parse the byte
 count, then call `recv()` until that many bytes have arrived, then consume exactly
 one newline. A payload may contain arbitrary zero bytes and newlines.
 
+### Identity and concurrency model
+
+Internal runtime correlation uses `request_token` (not the wire id). See
+`runtime-control.md` § Message contracts. Client-visible rules:
+
+| Rule | Behavior |
+|------|----------|
+| Wire request id | Echoed on the matching response; client-chosen |
+| Duplicate outstanding id | Reject with `bad-id` while a prior request with the same id is still outstanding for this connection |
+| Connection epoch | Bumped on accept; disconnect cancels all outstanding deferred work for that session; next client never receives the previous session's responses or payloads |
+| Deferred capacity (today) | One deferred response active; second deferred → `busy deferred-response-active` |
+| Deferred capacity (Phase 2a+) | Multi-entry table; table full → `busy`; still token-matched |
+| Socket in-flight (today) | One request at a time on the wire (socket waits for response before reading the next line) |
+| Socket in-flight (Phase 2b+) | Pipelined requests allowed up to deferred/request high-water mark; responses may complete out of request order — correlate by id |
+| Wait concurrency | At most one outstanding wait command; second → `busy` |
+| UI vs control | Main-thread UI telemetry must not complete a control deferred wait |
+
 The server queues requests from the socket thread and dispatches them on the SDL
-main loop. Only one deferred response can be active at a time. A second deferred
-request receives:
+main loop. Until multi-deferred ships, only one deferred response can be active
+at a time. A second deferred request receives:
 
 ```text
 <id> error busy deferred-response-active
@@ -76,6 +106,21 @@ request receives:
 
 The standard deferred timeout is 2000 ms. Assembly uses 10000 ms. Wait commands
 accept 1..600000 ms and default to 2000 ms.
+
+### Delivery classes (control-facing summary)
+
+- **Immediate** responses (parser errors, `get-state` from cache, `get-frame`
+  when cache warm, `hello`, etc.) do not need a runtime round-trip.
+- **Deferred RPC** waits for a token-matched runtime completion (or timeout /
+  cancel / `busy`). Completions are reliable: queue saturation yields `busy` or
+  error, not a silent hang until timeout only.
+- **Waits** use sticky latches for completion events (`load-state-complete`,
+  `step-complete`, …) and non-sticky matching for continuous events (`frame`).
+  Only one wait may be outstanding.
+
+Bulk memory and multi-outstanding RPC use a result pool keyed by internal token;
+payloads are not stuffed into fat event-queue unions. Details land with Phase 1+
+in this document's memory section when code ships.
 
 ## Minimal Python client
 
@@ -148,8 +193,10 @@ print(memory["metadata"], len(memory["payload"]))
 c64m.close()
 ```
 
-The code assumes one outstanding request at a time. If a client pipelines
-requests, it must correlate IDs and still consume responses in wire order.
+Until Phase 2b multiplexed socket I/O lands, the server is strictly one
+in-flight request on the wire (it does not read the next line until the previous
+response is sent). After Phase 2b, clients may pipeline; correlate by request id
+and consume every response (completion order may differ from send order).
 
 ## Introspection and execution
 
@@ -447,6 +494,9 @@ the real stop reason (breakpoint, step, pause-command, …), not a stale `none`
 from the preceding PAUSED pulse.
 
 Timeout returns `error timeout deferred response timed out`.
+
+A second wait while one is already deferred returns `error busy` (single-waiter
+policy). Sticky latches remain one-consumer.
 
 ## Assembler and symbols
 
