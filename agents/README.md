@@ -89,6 +89,15 @@ Component handoffs:
   Verified capabilities are in `control-port.md`. Read before oracle automation
   so remaining rough edges (one-tick-per-command latency, no raster run-to) are
   not mistaken for emulator bugs.
+- `threading-efficiency.md` - **evaluate-only review, not a handoff.** Two-thread
+  ownership, what data crosses UI/runtime/control, mutex vs copy vs RTT costs,
+  bundling, and control-port recommendations. Complements `remote-improve.md`
+  (why the API feels 60 fps, what is already fine, what to change first).
+- `threading-efficiency-roadmap.md` - **implementation roadmap** for the above:
+  Phase 0.5 message contracts (tokens, lossy vs reliable, RPC vs telemetry
+  slots) before bulk memory / pipeline; then multiplexed socket, cadence-split
+  UI telemetry, slim IPC, cache barriers, run-to-raster, CPU history.
+  Checkpoints, deterministic identity tests, PR slicing.
 - `pal-border.md` - **resolved case study**, not an open problem. How the PAL
   32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
   for months. Read it before any c64m-vs-VICE pixel comparison: it carries the

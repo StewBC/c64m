@@ -5,6 +5,10 @@ verified capabilities live in `control-port.md`; this file lists only open work.
 Items came from using the control port as the measuring instrument against VICE
 (binary monitor: VICE `src/monitor/monitor_binary.c`; see `vice-oracle.md`).
 
+For analysis see `threading-efficiency.md`. For a **phased plan** (message
+contracts → bulk memory RPC → multi-deferred + multiplexed socket → …, then
+functional items below) see `threading-efficiency-roadmap.md`.
+
 Ordered by how much time they still cost in oracle sessions.
 
 ---
