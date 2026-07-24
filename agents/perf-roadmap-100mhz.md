@@ -307,3 +307,4 @@ Each step: measure pure on/off + product both-off; run accuracy suite; write res
 |------|------|
 | 2026-07-24 | Initial roadmap from pure-core profiling + locked brief (phase 1 core / phase 2 product; turbo<=2 no shortcuts; turbo 3 free with clean handoff; drives-off for 100 MHz; Win/Linux/mac, ARM+x64, Apple first). |
 | 2026-07-24 | Tier 0: `tools/bench_core_mhz.sh`. Tier 1 start: VIC live paint fast paths (vertical-border bulk B0C; mode-0 XSCROLL=0 text span expand; tighter hborder flush). M2 pure paint-on ~**9.85 MHz** (was ~8.0); product headless drives-off ~**8.2 MHz** (was ~6.9). ctest 56/56. |
+| 2026-07-24 | Continue: O(1) sprite-slot LUT (Phi1); span expand modes 1-3 (MCM/bitmap) at XSCROLL=0. M2 pure paint-on ~**10.5 MHz**, paint-off ~**15.4 MHz**, product drives-off ~**8.6 MHz**. ctest 56/56. |

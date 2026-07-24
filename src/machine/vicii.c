@@ -106,6 +106,46 @@ static const uint32_t vicii_ntsc_sprite_fetch_cycle[8] = {
     58, 60, 62, 64, 1, 3, 5, 7
 };
 
+/* O(1) Phi1 sprite slot LUT: 0xFF = none; else sprite in bits 0-2, bit 3 =
+   second cycle of the pair. Filled once from the fetch-cycle tables. */
+enum { VICII_SPRITE_SLOT_NONE = 0xFFu };
+static uint8_t vicii_pal_sprite_slot_lut[63];
+static uint8_t vicii_ntsc_sprite_slot_lut[65];
+static int vicii_sprite_slot_lut_ready;
+
+static void vicii_init_sprite_slot_luts(void) {
+    int n;
+    uint32_t c;
+    if (vicii_sprite_slot_lut_ready) {
+        return;
+    }
+    for (c = 0; c < 63u; ++c) {
+        vicii_pal_sprite_slot_lut[c] = VICII_SPRITE_SLOT_NONE;
+    }
+    for (c = 0; c < 65u; ++c) {
+        vicii_ntsc_sprite_slot_lut[c] = VICII_SPRITE_SLOT_NONE;
+    }
+    for (n = 0; n < 8; ++n) {
+        uint32_t a = vicii_pal_sprite_fetch_cycle[n];
+        uint32_t b = a + 1u;
+        if (a < 63u) {
+            vicii_pal_sprite_slot_lut[a] = (uint8_t)n;
+        }
+        if (b < 63u) {
+            vicii_pal_sprite_slot_lut[b] = (uint8_t)(n | 8u);
+        }
+        a = vicii_ntsc_sprite_fetch_cycle[n];
+        b = a + 1u;
+        if (a < 65u) {
+            vicii_ntsc_sprite_slot_lut[a] = (uint8_t)n;
+        }
+        if (b < 65u) {
+            vicii_ntsc_sprite_slot_lut[b] = (uint8_t)(n | 8u);
+        }
+    }
+    vicii_sprite_slot_lut_ready = 1;
+}
+
 /* VICE viciisc cycle_tab_{pal,ntsc}: sprite bits whose DMA makes BA low in
    each zero-based raster cycle.  These masks are deliberately explicit.  A
    generic look-ahead interval gets both the cross-line start and, critically,
@@ -1665,7 +1705,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
             }
         } else if (!prep.any_sprite &&
-                   prep.mode == 0u &&
                    prep.xscroll == 0u &&
                    prep.lc.display_active &&
                    prep.lc.vm_latch != NULL &&
@@ -1673,29 +1712,102 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                    prep.lc.g_latch != NULL &&
                    cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
                    cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE &&
-                   !v->vertical_border_active) {
+                   !v->vertical_border_active &&
+                   prep.mode <= 3u) {
             /*
-             * Fast path B: standard hires text (mode 0), XSCROLL=0, no sprites,
-             * g-access column. One glyph byte expands to 8 dots - matches the
-             * per-dot path with sx = 0..7 in a single column.
+             * Fast path B: XSCROLL=0, no sprites, g-access column. Expand one
+             * g-data byte to 8 dots for modes 0-3 (text/MCM/bitmap).
              */
             uint32_t col = cyc - (uint32_t)VICII_GACCESS_FIRST_CYCLE;
             uint8_t gdata = prep.lc.g_latch[col];
-            uint8_t fg = (uint8_t)(prep.lc.color_latch[col] & 0x0fu);
-            uint32_t fg_argb = vicii_palette_argb[fg];
+            uint8_t vm_byte = prep.lc.vm_latch[col];
+            uint8_t color_reg = prep.lc.color_latch[col];
+            uint32_t b1c = prep.b1c;
+            uint32_t b2c = prep.b2c;
 
             for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                 int32_t raw_x = raw_xs + i;
                 int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
                 if (fb_x >= 0) {
                     uint8_t k = v->hborder_pipe[1].n;
-                    uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
-                    bool fg_set = (gdata & bit) != 0u;
+                    uint32_t pix;
+                    bool is_d021 = false;
                     v->hborder_pipe[1].dot[k] = (uint8_t)i;
                     v->hborder_pipe[1].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
-                    v->hborder_pipe[1].content[k] = fg_set ? fg_argb : b0c;
-                    v->hborder_pipe[1].content_d021[k] = !fg_set;
+                    switch (prep.mode) {
+                    case 0u: {
+                        uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
+                        if (gdata & bit) {
+                            pix = vicii_palette_argb[color_reg & 0x0fu];
+                        } else {
+                            pix = b0c;
+                            is_d021 = true;
+                        }
+                        break;
+                    }
+                    case 1u: {
+                        if ((color_reg & 0x08u) == 0u) {
+                            uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
+                            if (gdata & bit) {
+                                pix = vicii_palette_argb[color_reg & 0x0fu];
+                            } else {
+                                pix = b0c;
+                                is_d021 = true;
+                            }
+                        } else {
+                            uint8_t pair =
+                                (uint8_t)((gdata >> (6u - ((unsigned)i & 6u))) & 3u);
+                            switch (pair) {
+                            case 0u:
+                                pix = b0c;
+                                is_d021 = true;
+                                break;
+                            case 1u:
+                                pix = b1c;
+                                break;
+                            case 2u:
+                                pix = b2c;
+                                break;
+                            default:
+                                pix = vicii_palette_argb[color_reg & 0x07u];
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    case 2u: {
+                        uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
+                        if (gdata & bit) {
+                            pix = vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
+                        } else {
+                            pix = vicii_palette_argb[vm_byte & 0x0fu];
+                        }
+                        break;
+                    }
+                    default: { /* mode 3 multicolor bitmap */
+                        uint8_t pair =
+                            (uint8_t)((gdata >> (6u - ((unsigned)i & 6u))) & 3u);
+                        switch (pair) {
+                        case 0u:
+                            pix = b0c;
+                            is_d021 = true;
+                            break;
+                        case 1u:
+                            pix = vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
+                            break;
+                        case 2u:
+                            pix = vicii_palette_argb[vm_byte & 0x0fu];
+                            break;
+                        default:
+                            pix = vicii_palette_argb[color_reg & 0x0fu];
+                            break;
+                        }
+                        break;
+                    }
+                    }
+                    v->hborder_pipe[1].content[k] = pix;
+                    v->hborder_pipe[1].content_d021[k] = is_d021;
                     v->hborder_pipe[1].border[k] = bord;
                     v->hborder_pipe[1].n = (uint8_t)(k + 1u);
                 }
@@ -1810,22 +1922,28 @@ static const uint32_t *vicii_sprite_fetch_cycle_table(const vicii *v) {
 }
 
 static bool vicii_sprite_slot(const vicii *v, uint32_t cycle, int *out_sprite, bool *out_second_cycle) {
-    const uint32_t *fetch_cycle = vicii_sprite_fetch_cycle_table(v);
-    int n;
+    uint8_t enc;
+    const uint8_t *lut;
+    uint32_t limit;
 
-    for (n = 0; n < 8; n++) {
-        if (cycle == fetch_cycle[n]) {
-            *out_sprite = n;
-            *out_second_cycle = false;
-            return true;
-        }
-        if (cycle == fetch_cycle[n] + 1u) {
-            *out_sprite = n;
-            *out_second_cycle = true;
-            return true;
-        }
+    vicii_init_sprite_slot_luts();
+    if (v->timing.standard == VICII_VIDEO_STANDARD_PAL) {
+        lut = vicii_pal_sprite_slot_lut;
+        limit = 63u;
+    } else {
+        lut = vicii_ntsc_sprite_slot_lut;
+        limit = 65u;
     }
-    return false;
+    if (cycle >= limit) {
+        return false;
+    }
+    enc = lut[cycle];
+    if (enc == VICII_SPRITE_SLOT_NONE) {
+        return false;
+    }
+    *out_sprite = (int)(enc & 7u);
+    *out_second_cycle = (enc & 8u) != 0u;
+    return true;
 }
 
 static void vicii_prepare_phi1_bus_access(vicii *v, uint32_t cycle) {
