@@ -64,24 +64,53 @@ class Ctl:
         self.buf = self.buf[n+1:]  # drop trailing newline
         return data
 
+    def _parse_response_header(self, line, expect_id=None):
+        parts = line.split(" ")
+        rid = int(parts[0])
+        if expect_id is not None:
+            assert rid == expect_id, f"id mismatch: {line!r}"
+        kind = parts[1]
+        if kind == "ok":
+            return rid, ("ok", " ".join(parts[2:]))
+        if kind == "error":
+            return rid, ("error", " ".join(parts[2:]))
+        if kind == "data":
+            byte_count = int(parts[3])
+            meta = " ".join(parts[4:])
+            payload = self._readbytes(byte_count)
+            return rid, ("data", meta, payload)
+        raise ValueError(f"unknown response: {line!r}")
+
     def cmd(self, text):
         self.id += 1
         rid = self.id
         self.s.sendall(f"{rid} {text}\n".encode("latin1"))
         line = self._readline()
-        parts = line.split(" ")
-        assert int(parts[0]) == rid, f"id mismatch: {line!r} for {text!r}"
-        kind = parts[1]
-        if kind == "ok":
-            return ("ok", " ".join(parts[2:]))
-        if kind == "error":
-            return ("error", " ".join(parts[2:]))
-        if kind == "data":
-            byte_count = int(parts[3])
-            meta = " ".join(parts[4:])
-            payload = self._readbytes(byte_count)
-            return ("data", meta, payload)
-        raise ValueError(f"unknown response: {line!r}")
+        _, result = self._parse_response_header(line, expect_id=rid)
+        return result
+
+    def pipeline(self, commands):
+        """Send many requests without waiting, then collect responses by id.
+
+        Phase 2b: server may complete out of order; returns list of results in
+        the same order as `commands`.
+        """
+        ids = []
+        for text in commands:
+            self.id += 1
+            rid = self.id
+            ids.append(rid)
+            self.s.sendall(f"{rid} {text}\n".encode("latin1"))
+        by_id = {}
+        pending = set(ids)
+        while pending:
+            line = self._readline()
+            rid, result = self._parse_response_header(line)
+            if rid not in pending:
+                raise RuntimeError(f"unexpected response id {rid}: {line!r}")
+            by_id[rid] = result
+            pending.remove(rid)
+        return [by_id[i] for i in ids]
 
     def ok(self, text):
         r = self.cmd(text)

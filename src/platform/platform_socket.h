@@ -23,3 +23,10 @@ bool platform_socket_write_all(
 void platform_socket_connection_close(platform_socket_connection *connection);
 void platform_socket_connection_destroy(platform_socket_connection *connection);
 
+/* Nonblocking I/O helpers for control-port pipelining (Phase 2b). */
+bool platform_socket_set_nonblocking(platform_socket_connection *connection, bool enabled);
+/* Wait until readable, or timeout. Returns 1=readable, 0=timeout, -1=error/closed. */
+int platform_socket_wait_readable(
+    platform_socket_connection *connection,
+    uint32_t timeout_ms);
+

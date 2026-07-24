@@ -11,7 +11,9 @@ typedef SOCKET c64m_socket_handle;
 #define c64m_close_socket closesocket
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 typedef int c64m_socket_handle;
@@ -138,6 +140,16 @@ int platform_socket_read(platform_socket_connection *connection, void *buffer, s
         return 0;
     }
     if (received < 0) {
+#if defined(_WIN32)
+        int err = WSAGetLastError();
+        if (err == WSAEWOULDBLOCK) {
+            return -2; /* would block */
+        }
+#else
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return -2; /* would block */
+        }
+#endif
         return -1;
     }
     return received;
@@ -188,4 +200,74 @@ void platform_socket_connection_destroy(platform_socket_connection *connection)
     }
     platform_socket_connection_close(connection);
     free(connection);
+}
+
+bool platform_socket_set_nonblocking(platform_socket_connection *connection, bool enabled)
+{
+    if (connection == NULL || connection->handle == C64M_INVALID_SOCKET) {
+        return false;
+    }
+#if defined(_WIN32)
+    u_long mode = enabled ? 1ul : 0ul;
+    return ioctlsocket(connection->handle, FIONBIO, &mode) == 0;
+#else
+    int flags = fcntl(connection->handle, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    if (enabled) {
+        flags |= O_NONBLOCK;
+    } else {
+        flags &= ~O_NONBLOCK;
+    }
+    return fcntl(connection->handle, F_SETFL, flags) == 0;
+#endif
+}
+
+int platform_socket_wait_readable(
+    platform_socket_connection *connection,
+    uint32_t timeout_ms)
+{
+    if (connection == NULL || connection->handle == C64M_INVALID_SOCKET) {
+        return -1;
+    }
+#if defined(_WIN32)
+    fd_set read_fds;
+    struct timeval tv;
+    int result;
+
+    FD_ZERO(&read_fds);
+    FD_SET(connection->handle, &read_fds);
+    tv.tv_sec = (long)(timeout_ms / 1000u);
+    tv.tv_usec = (long)((timeout_ms % 1000u) * 1000u);
+    result = select(0, &read_fds, NULL, NULL, &tv);
+    if (result < 0) {
+        return -1;
+    }
+    if (result == 0) {
+        return 0;
+    }
+    return 1;
+#else
+    struct pollfd pfd;
+    int result;
+
+    pfd.fd = connection->handle;
+    pfd.events = POLLIN | POLLERR | POLLHUP;
+    pfd.revents = 0;
+    result = poll(&pfd, 1, (int)timeout_ms);
+    if (result < 0) {
+        return -1;
+    }
+    if (result == 0) {
+        return 0;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        return -1;
+    }
+    if (pfd.revents & POLLIN) {
+        return 1;
+    }
+    return 0;
+#endif
 }

@@ -87,8 +87,7 @@ Internal runtime correlation uses `request_token` (not the wire id). See
 | Duplicate outstanding id | Reject with `bad-id` while a prior request with the same id is still outstanding for this connection |
 | Connection epoch | Bumped on accept; disconnect cancels all outstanding deferred work for that session; next client never receives the previous session's responses or payloads |
 | Deferred capacity | Multi-entry table (16). **Token-matched multi-outstanding** for `get-cpu` and `get-memory`. Other deferred commands (waits, breakpoints, assemble, …) are still exclusive (second → `busy deferred-response-active`). Wait commands: at most one outstanding wait → `busy wait already active`. Table full → `busy deferred-table-full`. |
-| Socket in-flight (today) | One request at a time on the wire (socket waits for response before reading the next line) |
-| Socket in-flight (Phase 2b+) | Pipelined requests allowed up to deferred/request high-water mark; responses may complete out of request order — correlate by id |
+| Socket in-flight | Pipelined requests allowed up to deferred high-water mark (16); responses may complete out of request order — correlate by id. Duplicate outstanding wire ids → `bad-id`. |
 | Wait concurrency | At most one outstanding wait command; second → `busy` |
 | UI vs control | Main-thread UI telemetry must not complete a control deferred wait |
 
@@ -195,10 +194,9 @@ print(memory["metadata"], len(memory["payload"]))
 c64m.close()
 ```
 
-Until Phase 2b multiplexed socket I/O lands, the server is strictly one
-in-flight request on the wire (it does not read the next line until the previous
-response is sent). After Phase 2b, clients may pipeline; correlate by request id
-and consume every response (completion order may differ from send order).
+Clients may pipeline requests (send N without waiting) up to the outstanding
+high-water mark. Correlate by request id and consume every response; completion
+order may differ from send order. Sequential one-at-a-time clients remain valid.
 
 ## Introspection and execution
 

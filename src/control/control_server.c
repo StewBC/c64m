@@ -1,5 +1,6 @@
 #include "control_server.h"
 
+#include "control_deferred.h"
 #include "message_queue.h"
 #include "mutex.h"
 #include "platform_socket.h"
@@ -12,7 +13,9 @@
 
 enum {
     CONTROL_QUEUE_CAPACITY = 32,
-    CONTROL_RESPONSE_LINE_MAX = 512
+    CONTROL_RESPONSE_LINE_MAX = 512,
+    /* Match deferred table capacity: max outstanding pipelined requests. */
+    CONTROL_PIPELINE_HIGH_WATER = CONTROL_DEFERRED_CAPACITY
 };
 
 struct control_server {
@@ -76,32 +79,63 @@ static platform_socket_connection *control_server_get_connection(control_server 
     return connection;
 }
 
+/* Read one line. Returns 1=complete, 0=would-block (partial kept in *used),
+   -1=error/eof. *used is the partial length carried across calls. */
+static int control_server_read_line_nb(
+    platform_socket_connection *connection,
+    char *out,
+    size_t out_size,
+    size_t *used)
+{
+    if (connection == NULL || out == NULL || out_size == 0 || used == NULL) {
+        return -1;
+    }
+
+    while (*used + 1 < out_size) {
+        char ch;
+        int n = platform_socket_read(connection, &ch, 1);
+        if (n == -2) {
+            return 0; /* would block */
+        }
+        if (n <= 0) {
+            return -1;
+        }
+        out[(*used)++] = ch;
+        if (ch == '\n') {
+            out[*used] = '\0';
+            return 1;
+        }
+    }
+
+    out[*used] = '\0';
+    return -1; /* line too long */
+}
+
 static bool control_server_read_line(
     platform_socket_connection *connection,
     char *out,
     size_t out_size)
 {
     size_t used = 0;
+    int rc;
 
     if (connection == NULL || out == NULL || out_size == 0) {
         return false;
     }
-
-    while (used + 1 < out_size) {
-        char ch;
-        int n = platform_socket_read(connection, &ch, 1);
-        if (n <= 0) {
-            return false;
-        }
-        out[used++] = ch;
-        if (ch == '\n') {
-            out[used] = '\0';
+    /* Blocking-compatible: keep reading until complete (socket may be blocking). */
+    for (;;) {
+        rc = control_server_read_line_nb(connection, out, out_size, &used);
+        if (rc == 1) {
             return true;
         }
+        if (rc < 0) {
+            return false;
+        }
+        /* would-block on a blocking socket should not happen; treat as fail. */
+        if (platform_socket_wait_readable(connection, 1000) < 0) {
+            return false;
+        }
     }
-
-    out[used] = '\0';
-    return false;
 }
 
 static bool control_server_read_exact(
@@ -113,6 +147,12 @@ static bool control_server_read_exact(
 
     while (used < size) {
         int n = platform_socket_read(connection, out + used, size - used);
+        if (n == -2) {
+            if (platform_socket_wait_readable(connection, 2000u) <= 0) {
+                return false;
+            }
+            continue;
+        }
         if (n <= 0) {
             return false;
         }
@@ -141,9 +181,7 @@ static bool control_server_read_request_payload(
             false);
         return false;
     }
-    if (!control_server_read_exact(connection, request->payload, request->payload_size) ||
-        platform_socket_read(connection, &newline, 1) != 1 ||
-        newline != '\n') {
+    if (!control_server_read_exact(connection, request->payload, request->payload_size)) {
         control_request_release(request);
         control_protocol_format_error(
             response,
@@ -152,6 +190,30 @@ static bool control_server_read_request_payload(
             "payload framing error",
             true);
         return false;
+    }
+    {
+        int n;
+        for (;;) {
+            n = platform_socket_read(connection, &newline, 1);
+            if (n == -2) {
+                if (platform_socket_wait_readable(connection, 2000u) <= 0) {
+                    n = -1;
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        if (n != 1 || newline != '\n') {
+            control_request_release(request);
+            control_protocol_format_error(
+                response,
+                request->id,
+                "bad-payload",
+                "payload framing error",
+                true);
+            return false;
+        }
     }
     return true;
 }
@@ -180,59 +242,189 @@ static bool control_server_send_response(
     return true;
 }
 
+static bool control_server_ids_contains(const uint32_t *ids, size_t count, uint32_t id)
+{
+    size_t i;
+    for (i = 0; i < count; ++i) {
+        if (ids[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void control_server_ids_remove(uint32_t *ids, size_t *count, uint32_t id)
+{
+    size_t i;
+    for (i = 0; i < *count; ++i) {
+        if (ids[i] == id) {
+            ids[i] = ids[*count - 1u];
+            (*count)--;
+            return;
+        }
+    }
+}
+
+/* Multiplexed connection loop: accept further requests while responses are
+   pending (up to CONTROL_PIPELINE_HIGH_WATER). Completion order may differ
+   from request order; clients correlate by wire id. */
 static bool control_server_handle_connection(
     control_server *server,
     platform_socket_connection *connection)
 {
     bool keep_open = true;
+    char line[CONTROL_LINE_MAX];
+    size_t line_used = 0;
+    uint32_t outstanding_ids[CONTROL_PIPELINE_HIGH_WATER];
+    size_t outstanding = 0;
+    bool read_closed = false;
 
-    while (!control_server_is_stopping(server) && keep_open) {
-        char line[CONTROL_LINE_MAX];
-        control_request request;
-        control_response response;
-
-        if (!control_server_read_line(connection, line, sizeof(line))) {
-            break;
-        }
-
-        if (!control_protocol_parse_request(line, &request, &response)) {
-            if (!control_server_send_response(connection, &response)) {
+    if (!platform_socket_set_nonblocking(connection, true)) {
+        /* Fall back to legacy one-in-flight blocking loop. */
+        platform_socket_set_nonblocking(connection, false);
+        while (!control_server_is_stopping(server) && keep_open) {
+            control_request request;
+            control_response response;
+            line_used = 0;
+            if (control_server_read_line_nb(connection, line, sizeof(line), &line_used) != 1 &&
+                !control_server_read_line(connection, line, sizeof(line))) {
                 break;
             }
-            continue;
-        }
-
-        if (!control_server_read_request_payload(connection, &request, &response)) {
-            control_server_send_response(connection, &response);
-            keep_open = !response.close_client;
-            continue;
-        }
-
-        if (!message_queue_push(server->requests, &request)) {
-            control_request_release(&request);
-            control_protocol_format_error(
-                &response,
-                request.id,
-                "busy",
-                "request queue full",
-                false);
-            if (!control_server_send_response(connection, &response)) {
+            if (!control_protocol_parse_request(line, &request, &response)) {
+                if (!control_server_send_response(connection, &response)) {
+                    break;
+                }
+                continue;
+            }
+            if (!control_server_read_request_payload(connection, &request, &response)) {
+                control_server_send_response(connection, &response);
+                keep_open = !response.close_client;
+                continue;
+            }
+            if (!message_queue_push(server->requests, &request)) {
+                control_request_release(&request);
+                control_protocol_format_error(
+                    &response, request.id, "busy", "request queue full", false);
+                if (!control_server_send_response(connection, &response)) {
+                    break;
+                }
+                continue;
+            }
+            if (!message_queue_wait_pop(server->responses, &response)) {
                 break;
             }
-            continue;
-        }
-
-        if (!message_queue_wait_pop(server->responses, &response)) {
-            break;
-        }
-        if (!control_server_send_response(connection, &response)) {
+            if (!control_server_send_response(connection, &response)) {
+                control_response_release(&response);
+                break;
+            }
             control_response_release(&response);
-            break;
+            keep_open = !response.close_client;
         }
-        control_response_release(&response);
-        keep_open = !response.close_client;
+        return true;
     }
 
+    while (!control_server_is_stopping(server) && keep_open) {
+        control_response response;
+        bool did_work = false;
+
+        /* Flush any completed responses first. */
+        while (message_queue_try_pop(server->responses, &response)) {
+            did_work = true;
+            control_server_ids_remove(outstanding_ids, &outstanding, response.id);
+            if (!control_server_send_response(connection, &response)) {
+                control_response_release(&response);
+                keep_open = false;
+                break;
+            }
+            keep_open = !response.close_client;
+            control_response_release(&response);
+            if (!keep_open) {
+                break;
+            }
+        }
+        if (!keep_open) {
+            break;
+        }
+
+        /* Accept more requests while under the high-water mark. */
+        if (!read_closed && outstanding < CONTROL_PIPELINE_HIGH_WATER) {
+            int line_rc = control_server_read_line_nb(
+                connection, line, sizeof(line), &line_used);
+            if (line_rc == 1) {
+                control_request request;
+                control_response err;
+
+                did_work = true;
+                line_used = 0;
+                if (!control_protocol_parse_request(line, &request, &err)) {
+                    if (!control_server_send_response(connection, &err)) {
+                        keep_open = false;
+                        break;
+                    }
+                } else if (control_server_ids_contains(
+                               outstanding_ids, outstanding, request.id)) {
+                    control_request_release(&request);
+                    control_protocol_format_error(
+                        &err, request.id, "bad-id", "duplicate outstanding id", false);
+                    if (!control_server_send_response(connection, &err)) {
+                        keep_open = false;
+                        break;
+                    }
+                } else if (!control_server_read_request_payload(
+                               connection, &request, &err)) {
+                    control_server_send_response(connection, &err);
+                    keep_open = !err.close_client;
+                } else if (!message_queue_push(server->requests, &request)) {
+                    control_request_release(&request);
+                    control_protocol_format_error(
+                        &err, request.id, "busy", "request queue full", false);
+                    if (!control_server_send_response(connection, &err)) {
+                        keep_open = false;
+                        break;
+                    }
+                } else {
+                    outstanding_ids[outstanding++] = request.id;
+                }
+            } else if (line_rc < 0) {
+                read_closed = true;
+            }
+        }
+
+        if (read_closed && outstanding == 0) {
+            break;
+        }
+
+        if (!did_work) {
+            /* Wait for socket readability and/or a response. */
+            if (outstanding > 0) {
+                if (message_queue_wait_pop_timeout(server->responses, &response, 5u)) {
+                    control_server_ids_remove(outstanding_ids, &outstanding, response.id);
+                    if (!control_server_send_response(connection, &response)) {
+                        control_response_release(&response);
+                        break;
+                    }
+                    keep_open = !response.close_client;
+                    control_response_release(&response);
+                } else if (!read_closed && outstanding < CONTROL_PIPELINE_HIGH_WATER) {
+                    (void)platform_socket_wait_readable(connection, 5u);
+                }
+            } else if (!read_closed) {
+                if (platform_socket_wait_readable(connection, 100u) < 0) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /* Drain leftover responses for this connection so the next client is clean. */
+    {
+        control_response response;
+        while (message_queue_try_pop(server->responses, &response)) {
+            control_response_release(&response);
+        }
+    }
     return true;
 }
 
