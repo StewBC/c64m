@@ -1784,10 +1784,16 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint8_t vm_byte = vm_latch[col];
                 uint8_t color_reg = color_latch[col];
 
-                /* Mode 0 / XSCROLL=0: expand one g-data byte to 8 dots without
+                /* Mode 0/2 / XSCROLL=0: expand one g-data byte to 8 dots without
                    per-dot switch. G-access columns always map 1:1 to frame_x. */
-                if (mode == 0u) {
-                    uint32_t fg = vicii_palette_argb[color_reg & 0x0fu];
+                if (mode == 0u || mode == 2u) {
+                    uint32_t fg = (mode == 0u)
+                        ? vicii_palette_argb[color_reg & 0x0fu]
+                        : vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
+                    uint32_t bg = (mode == 0u)
+                        ? b0c
+                        : vicii_palette_argb[vm_byte & 0x0fu];
+                    bool bg_is_d021 = (mode == 0u);
                     uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
                     uint8_t g = gdata;
                     for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
@@ -1799,12 +1805,15 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                             v->hborder_pipe[1].content[k] = fg;
                             v->hborder_pipe[1].content_d021[k] = false;
                         } else {
-                            v->hborder_pipe[1].content[k] = b0c;
-                            v->hborder_pipe[1].content_d021[k] = true;
+                            v->hborder_pipe[1].content[k] = bg;
+                            v->hborder_pipe[1].content_d021[k] = bg_is_d021;
                         }
                         v->hborder_pipe[1].border[k] = bord;
                         if (i == 0) {
                             vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                            if (mode == 0u) {
+                                bg = b0c;
+                            }
                         }
                     }
                     v->hborder_pipe[1].n = 8u;
@@ -1850,15 +1859,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                                 pix = vicii_palette_argb[color_reg & 0x07u];
                                 break;
                             }
-                        }
-                        break;
-                    }
-                    case 2u: {
-                        uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
-                        if (gdata & bit) {
-                            pix = vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
-                        } else {
-                            pix = vicii_palette_argb[vm_byte & 0x0fu];
                         }
                         break;
                     }
@@ -2833,6 +2833,17 @@ void vicii_finish_cycle(vicii *v) {
 
     assert(v);
 
+    /* Warp / paint-off: no live spans. Still advance xscroll pipe + raster. */
+    if (!v->pixel_output_enabled) {
+        cyc = v->timing.cycle_in_line;
+        if (!v->vertical_border_active &&
+            cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+            cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
+            v->xscroll_pipe = (uint8_t)(v->registers[0x16] & 0x07u);
+        }
+        goto advance_raster;
+    }
+
     /* VICE resolves its eight buffered colour tokens after the CPU-owned Phi2
        store, in draw_colors8().  On a 6569 the oldest token was resolved by the
        preceding cycle, while the remaining tokens still observe a colour-register
@@ -3028,6 +3039,7 @@ void vicii_finish_cycle(vicii *v) {
         v->xscroll_pipe = (uint8_t)(v->registers[0x16] & 0x07u);
     }
 
+advance_raster:
     v->timing.cycle_in_line++;
     if (v->timing.cycle_in_line < v->timing.cycles_per_line) {
         return;

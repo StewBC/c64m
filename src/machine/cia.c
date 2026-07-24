@@ -377,16 +377,33 @@ static bool cia_timer_update_load_pipe(cia_timer *timer) {
     return false;
 }
 
+/* Timer fully stopped with no delayed pipelines: nothing to do this Phi2. */
+static inline bool cia_timer_step_idle(const cia_timer *timer, uint8_t control) {
+    return (control & CIA_CONTROL_START) == 0 &&
+        !timer->stop_pending &&
+        timer->load_delay == 0u &&
+        timer->load_hold == 0u &&
+        timer->start_delay == 0u &&
+        timer->oneshot_delay == 0u &&
+        !timer->oneshot_write_pending &&
+        !timer->skip_tick;
+}
+
 static void cia_step_timer(cia *c, cia_timer *timer, uint8_t control_reg, uint8_t interrupt_flag) {
     uint8_t control = c->registers[control_reg];
     bool oneshot_for_uf;
     bool loaded_now;
 
+    timer->underflow = false;
+
+    if (cia_timer_step_idle(timer, control)) {
+        return;
+    }
+
     /* Apply a pending force-load before this cycle's count so the reloaded value
      * becomes visible one Phi2 after the CR write, not on the write cycle. */
     loaded_now = cia_timer_update_load_pipe(timer);
 
-    timer->underflow = false;
     /*
      * Oneshot bit from a same-cycle CRA/CRB write is applied after this tick so
      * underflow sees the pre-write oneshot state (FLIPOS set-at-t does not stop).
@@ -585,14 +602,27 @@ void cia_step_cycle(cia *c) {
 
     assert(c);
 
-    cia_reset_timer_output_pulses(c);
+    if (c->timer_a.pulse_active || c->timer_b.pulse_active) {
+        cia_reset_timer_output_pulses(c);
+    }
     cia_step_timer(c, &c->timer_a, CIA_REG_CONTROL_A, CIA_INTERRUPT_TIMER_A);
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
-    cia_step_serial(c);
+    {
+        uint8_t cra = c->registers[CIA_REG_CONTROL_A];
+        if ((cra & CIA_CONTROL_A_SERIAL_OUT) != 0u) {
+            if (c->serial_out_bits != 0u && c->timer_a.underflow) {
+                cia_step_serial(c);
+            }
+        } else if (c->cnt_pulse) {
+            cia_step_serial(c);
+        }
+    }
     cia_step_tod(c);
     /* IR flip-flop (set when flags&mask) drives the interrupt pin one cycle
      * later. Clearing the mask does not clear the flip-flop — only ICR read. */
-    cia_update_interrupt_ff(c);
+    if ((c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0) {
+        c->interrupt_ff = true;
+    }
     pending_now = c->interrupt_ff;
     c->interrupt_line = c->interrupt_pending_latched;
     c->interrupt_pending_latched = pending_now;

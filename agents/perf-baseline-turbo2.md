@@ -244,3 +244,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | Idle/over-border paint spans + lazy prep (M2): pure paint-on ~**12.2 MHz**, product headless drives-off turbo=2 ~**11.0 MHz**. |
 | 2026-07-24 | Phi1 sprite-cycle gate + ECM-4 spans + color-pipe/flush tighten (M2): pure paint-on ~**12.4 MHz**, product drives-off turbo=2 ~**11.3 MHz**. |
 | 2026-07-24 | SID silent/env-idle + mode-0 bulk + idle Phi1 skip (M2): pure paint-on ~**13.0 MHz**, product drives-off turbo=2 ~**11.6 MHz**. |
+| 2026-07-24 | CIA idle-timer/serial gates + mode-2 bulk + paint-off finish skip (M2): pure paint-on ~**13.5 MHz**, product drives-off turbo=2 ~**12.1 MHz**. |
