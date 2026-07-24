@@ -84,21 +84,18 @@ Component handoffs:
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
 - `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
   (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
-- `remote-improve.md` - **backlog note, not a handoff.** Open control-port work
-  only (run-to-raster, main-loop tick throughput / bulk memory, CPU history).
-  Verified capabilities are in `control-port.md`. Read before oracle automation
-  so remaining rough edges (one-tick-per-command latency, no raster run-to) are
-  not mistaken for emulator bugs.
-- `threading-efficiency.md` - **evaluate-only review, not a handoff.** Two-thread
-  ownership, what data crosses UI/runtime/control, mutex vs copy vs RTT costs,
-  bundling, and control-port recommendations. Complements `remote-improve.md`
-  (why the API feels 60 fps, what is already fine, what to change first).
+- `remote-improve.md` - **backlog note, not a handoff.** Remaining open oracle
+  UX (free-run frame aliasing, pause-after-wait overshoot; expression-guarded
+  breakpoints). Transport items (bulk memory, pipeline, run-to-raster, basic
+  CPU history) are closed on C64M/2 — see that file. Verified wire protocol is
+  in `control-port.md`.
+- `threading-efficiency.md` - **historical evaluate-only review** of the pre-
+  series design (one-in-flight, 1K memory, fat events). Not current behavior.
+  Trust `control-port.md` / source for what ships; use the roadmap for status.
 - `threading-efficiency-roadmap.md` - **implementation roadmap** for the above:
-  Phase 0.5 message contracts (tokens, lossy vs reliable, RPC vs telemetry
-  slots) before bulk memory / pipeline; then multiplexed socket, cadence-split
-  UI telemetry, slim IPC, cache barriers, run-to-raster, CPU history.
-  Checkpoints, deterministic identity tests, PR slicing. Locked defaults in
-  §18; contract prose also lives in `runtime-control.md` and `control-port.md`.
+  phases 0.5–8 landed on `main` (contracts, bulk memory, pipeline, headless
+  wake, cadence UI, slim breakpoints, cache barriers, run-to-raster, CPU
+  history). Checkpoints, measured baselines §16, residual backlog notes.
 - `pal-border.md` - **resolved case study**, not an open problem. How the PAL
   32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
   for months. Read it before any c64m-vs-VICE pixel comparison: it carries the
@@ -106,9 +103,10 @@ Component handoffs:
   dots apart in the border region) that produced two confident wrong answers,
   plus the binary-monitor snapshot-load and frame-publishing recipes.
 
-Current baseline is 52/52 passing (includes `c64_snapshot_1541_midload`). That
-baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541
-drive-object snapshot paths.
+Current baseline is 56/56 passing (includes `c64_snapshot_1541_midload` and the
+control/runtime identity tests from the threading series). That baseline includes
+the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541 drive-object
+snapshot paths.
 
 The verification command is:
 

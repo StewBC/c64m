@@ -107,8 +107,9 @@ serialize:
 <id> error busy deferred-table-full
 ```
 
-Wire pipelining (socket reading the next request before the previous response)
-is still Phase 2b; until then the socket remains one-in-flight.
+Wire pipelining is supported: the socket may read further requests while responses
+are still outstanding (high-water mark 16). Responses may complete out of request
+order — correlate by wire id.
 
 The standard deferred timeout is 2000 ms. Assembly uses 10000 ms. Wait commands
 accept 1..600000 ms and default to 2000 ms.
@@ -116,7 +117,8 @@ accept 1..600000 ms and default to 2000 ms.
 ### Delivery classes (control-facing summary)
 
 - **Immediate** responses (parser errors, `get-state` from cache, `get-frame`
-  when cache warm, `hello`, etc.) do not need a runtime round-trip.
+  when cache warm, `hello`, paused hot-cache `get-cpu`/`get-vic`/`get-cia`, etc.)
+  do not need a runtime round-trip.
 - **Deferred RPC** waits for a token-matched runtime completion (or timeout /
   cancel / `busy`). Completions are reliable: queue saturation yields `busy` or
   error, not a silent hang until timeout only.
@@ -125,8 +127,7 @@ accept 1..600000 ms and default to 2000 ms.
   Only one wait may be outstanding.
 
 Bulk memory and multi-outstanding RPC use a result pool keyed by internal token;
-payloads are not stuffed into fat event-queue unions. Details land with Phase 1+
-in this document's memory section when code ships.
+payloads are not stuffed into fat event-queue unions (see memory section below).
 
 ## Minimal Python client
 

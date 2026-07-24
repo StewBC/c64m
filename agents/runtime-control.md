@@ -138,30 +138,31 @@ If commands or events carry heap payloads (Phase 5; bulk pool Phase 1):
 - Types: `src/runtime/runtime_command.h`, `runtime_event.h`
 - Publish / drain: `src/runtime/runtime_thread.c`, `runtime_client.c`
 - Deferred match / epoch: `src/main.c`
-- Wire concurrency / pipeline (later phases): `src/control/control_server.c`
-- Roadmap: `agents/threading-efficiency-roadmap.md`
+- Wire concurrency / pipeline: `src/control/control_server.c` (nonblocking
+  multiplex, high-water 16)
+- Roadmap / status: `agents/threading-efficiency-roadmap.md`
 
 ## Control port
 
 `src/control` implements an opt-in localhost-only server enabled by
 `--control-port PORT`. One socket client is accepted at a time. The socket thread
-owns blocking network I/O; the SDL/main loop drains requests and sends responses.
-`--headless` requires a control port and skips window, renderer, frontend, controller,
-and host audio setup while retaining runtime frames for control clients.
+owns network I/O (may pipeline requests); the SDL/main loop drains requests and
+sends responses. `--headless` requires a control port and skips window, renderer,
+frontend, controller, and host audio setup while retaining runtime frames for
+control clients; the headless loop wakes when a control request is queued.
 
-Implemented protocol areas include introspection, execution (including `step-frame`),
-state/CPU/VIC/CIA/frame/memory (`get-memory` / `set-memory`)/debug-memory/call-stack,
-keyboard/joystick/RESTORE,
+Implemented protocol areas include introspection, execution (`step-frame`,
+`run-to-raster`), state/CPU/VIC/CIA/frame/memory (`get-memory` up to 64K bulk /
+`set-memory`)/debug-memory/call-stack, CPU history, keyboard/joystick/RESTORE,
 paste, PRG/BIN/D64 operations, machine snapshot save/load (`save-state` /
 `load-state`), breakpoints (exec/read/write and count-only), waits with sticky
 completion events, assemble, find-symbol, and `set-turbo`. Binary responses carry a
-typed header and raw byte count. Deferred responses are serviced by the
-main-loop-owned cache and must follow the message contracts above
-(`request_token`, epoch, lossy vs reliable).
+typed header and raw byte count. Deferred responses use a multi-entry table and
+must follow the message contracts above (`request_token`, epoch, lossy vs reliable).
 `set-turbo` changes the active mode without altering the configured Opt+T list;
 mode 3 (warp) warns that the live ARGB framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
-load path used by `load-state`.
+load path used by `load-state`. Wire protocol is **C64M/2** — see `control-port.md`.
 
 ### Turbo semantics and host throughput
 

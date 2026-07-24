@@ -1,16 +1,17 @@
 # Threading, IPC, and control-port efficiency
 
-**Evaluate-only review** (no code changes implied by this document). Captures the
-two-thread ownership model, what data crosses threads, whether the design is
-efficient, and recommendations — especially for remote/control-port latency.
+**Historical evaluate-only review** of the *pre-series* control/IPC design (written
+before bulk memory, tokens, pipeline, and related work landed). It still explains
+the two-thread ownership model and why mutex/copy costs were not the oracle
+bottleneck. **Present-tense “what is inefficient” sections describe the old
+state** (1K `get-memory`, one-in-flight socket, single deferred, five-way UI
+poll). That work is largely implemented — see:
 
-For **phased implementation**, checkpoints, and exit criteria, see
-`threading-efficiency-roadmap.md` (starts with Phase 0.5 message contracts —
-request tokens, RPC vs telemetry delivery — before bulk memory or pipelining).
+- `threading-efficiency-roadmap.md` — status, checkpoints, measured baselines
+- `control-port.md` / `runtime-control.md` — **current** wire and IPC contracts
+- C source if anything disagrees
 
-Source of truth remains the C code. If this note and the implementation disagree,
-trust the source. Related docs: `architecture.md`, `runtime-control.md`,
-`control-port.md`, `remote-improve.md` (open backlog items).
+Do not use this file as the live capability list.
 
 ---
 

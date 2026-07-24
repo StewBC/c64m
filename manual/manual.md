@@ -1682,7 +1682,7 @@ combine headless mode with `--sna`:
 The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
 thread performs network I/O only; runtime commands and snapshot requests are dispatched
 by the main loop, so remote control follows the same thread-ownership rules as the GUI
-debugger. The current protocol name is `C64M/1`.
+debugger. The current protocol name is `C64M/2`.
 
 ### Quick Start
 
@@ -1744,7 +1744,8 @@ the request line (same framing as the paste-data commands):
 
 The payload may contain arbitrary bytes except that the framing still requires exactly
 one trailing newline after the payload. Paste payloads are limited to 4096 bytes;
-`set-memory` payloads are limited to 1..1024 bytes (same length cap as `get-memory`).
+`set-memory` payloads are limited to 1..1024 bytes. `get-memory` allows 1..65536
+bytes in one call (see **State and Snapshots**).
 
 ### Response Format
 
@@ -1768,25 +1769,37 @@ The client should parse the byte count from the `data` header and then read exac
 many bytes before consuming the trailing newline. Do not treat binary payloads as
 newline-delimited text.
 
-Only one deferred response can be active at a time. Commands that wait for a runtime
-event, fresh snapshot, breakpoint mutation, disk status, or wait condition may return:
+Deferred responses use a multi-entry table (capacity 16). **Token-matched**
+commands such as `get-cpu` and `get-memory` may be outstanding together. Other
+deferred work (waits, breakpoints, assemble, …) is still exclusive. A second
+conflicting deferred command may return:
 
 ```text
 <id> error busy deferred-response-active
+<id> error busy wait already active
+<id> error busy deferred-table-full
 ```
 
-when another deferred command is still pending. Deferred commands time out with:
+Clients may **pipeline** requests (send several without waiting) up to the
+outstanding high-water mark; responses may complete out of send order — correlate
+by request id. Duplicate outstanding ids are rejected with `bad-id`.
+
+Deferred commands time out with:
 
 ```text
 <id> error timeout deferred response timed out
 ```
 
+Headless mode wakes the main loop when a control request is queued (not only on a
+fixed 1 ms sleep). Prefer headless for low-latency automation; a windowed session
+is still paced by present/vsync (~16 ms class).
+
 ### Connection and Introspection
 
 | Command | Response |
 |---------|----------|
-| `hello` | `ok name=c64m protocol=C64M/1` |
-| `version` | `ok protocol=C64M/1 app=0.1.0` |
+| `hello` | `ok name=c64m protocol=C64M/2` |
+| `version` | `ok protocol=C64M/2 app=0.1.0` |
 | `capabilities` | Space-separated capability names |
 | `ping` | `ok` |
 | `quit-client` | `ok`, then the server closes the client connection |
@@ -1794,9 +1807,9 @@ when another deferred command is still pending. Deferred commands time out with:
 `capabilities` currently includes (among others) `connection`, `introspection`,
 `execution`, `state`, `step`, `turbo`, `frame`, `memory`, `debug-memory`, `call-stack`,
 `input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`,
-`drive-cpu`, `vic`, and `cia`. The `snapshot` token means machine save/load
-(`.c64state`) via `load-state` / `save-state`. The `state` token means runtime
-inspection (`get-state`), not file snapshots.
+`drive-cpu`, `vic`, `cia`, `run-to-raster`, and `cpu-history`. The `snapshot` token
+means machine save/load (`.c64state`) via `load-state` / `save-state`. The `state`
+token means runtime inspection (`get-state`), not file snapshots.
 
 ### Execution Control
 
@@ -1813,10 +1826,13 @@ machine reaches a new state. Use `wait-*` commands when a script needs to synchr
 | `step-over` | Step over a JSR |
 | `step-out` | Run until the current subroutine returns |
 | `step-frame` | Advance one VIC-II frame, publish it, and pause |
+| `run-to-raster <line> [cycle]` | Run until VIC raster line (optional cycle-in-line), then pause |
 | `run-cycles <count>` | Run for a positive cycle count |
 | `run-instructions <count>` | Run for a positive instruction count |
 | `run-to <addr>` | Run until the PC reaches a 16-bit address |
 | `set-turbo <1\|2\|3>` | Set turbo mode: 1=normal, 2=max, 3=warp |
+| `set-cpu-history <on\|off\|0\|1>` | Enable/disable instruction-history ring (off by default) |
+| `get-cpu-history [count]` | Last 1..64 instruction-start states (text) |
 
 Accepted execution commands respond:
 
@@ -1852,16 +1868,23 @@ For warp (mode 3), the response warns that live pixels are unavailable:
 | `get-call-stack` | Text call-stack summary |
 | `step-frame` | Advance one full VIC-II frame, publish it, and pause |
 
-`get-state` is answered from the main loop's cached frontend debug state. `get-cpu`,
-`get-vic`, `get-cia`, `get-memory`, `set-memory`, `get-debug-memory`, and
-`get-call-stack` request fresh runtime work and complete later (deferred).
+`get-state` is answered from the main loop's cached frontend debug state.
 `get-frame` uses the latest completed frame cached by the main loop, or requests one
 if no cached frame exists yet. In headless mode the main loop still polls frame
 snapshots for `get-frame` and `wait-frame`.
 
+When the machine is **paused** and no mutating command has been accepted since the
+last machine snapshot, `get-cpu`, `get-vic`, and `get-cia` may be answered from the
+main-thread hot cache (no runtime round-trip). Mutating commands mark that cache
+stale. While running, or after a mutation without a barrier, those commands still
+go through deferred runtime work. `get-memory`, `set-memory`, `get-debug-memory`,
+`get-call-stack`, and `get-cpu-history` are deferred when they need the runtime.
+
 `step-frame` is the preferred way to capture consecutive frames: it runs until the
 next completed VIC-II frame is published, then pauses. It honors breakpoints and BRK.
 Prefer it over free-run `wait-frame` loops when you need every frame without aliasing.
+`run-to-raster` stops on a VIC beam line (and optional cycle); breakpoints and BRK
+still win if they fire first.
 
 Memory modes:
 
@@ -1873,8 +1896,10 @@ Memory modes:
 | `drive8` | yes | **no** | Drive 8 CPU map (holes possible) |
 | `drive9` | yes | **no** | Drive 9 CPU map (holes possible) |
 
-`get-memory` length is limited to 1..1024 bytes. It returns a binary
-`data memory` response whose payload is exactly the requested bytes:
+`get-memory` length is **1..65536**, with `address + length <= 65536` (reject
+wrap). A full 16-bit dump is one call: `get-memory $0000 65536 <mode>`. It returns
+a binary `data memory` response whose payload is exactly the requested bytes
+(no write-history on this path; use `get-debug-memory` for history):
 
 ```text
 <id> data memory <byte_count> addr=<hex> length=<n> mode=<0..4>
@@ -1888,17 +1913,18 @@ Memory modes:
 <length raw bytes>\n
 ```
 
-Only **writable** modes `map` and `ram` are accepted; `rom`, `drive8`, and `drive9`
-are rejected with `error bad-args`. The command **auto-pauses** (like `assemble`) so
-the poke lands while the machine is stopped; the runtime also force-pauses if it was
-still running. Completion is deferred until the write finishes:
+`set-memory` length remains **1..1024**. Only **writable** modes `map` and `ram`
+are accepted; `rom`, `drive8`, and `drive9` are rejected with `error bad-args`.
+The command **auto-pauses** (like `assemble`) so the poke lands while the machine
+is stopped; the runtime also force-pauses if it was still running. Completion is
+deferred until the write finishes:
 
 ```text
 <id> ok addr=0400 length=4 mode=1
 ```
 
 `mode` in the response is the same numeric encoding as `get-memory` (`0` = map,
-`1` = ram). Address arithmetic wraps at 16 bits, as with `get-memory`.
+`1` = ram).
 
 Example: write four bytes at `$0400` in RAM, then read them back:
 
