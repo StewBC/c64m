@@ -827,6 +827,25 @@ bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_run_to_raster(
+    runtime_client *client,
+    uint16_t raster_line,
+    bool has_cycle,
+    uint16_t cycle_in_line) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_RUN_TO_RASTER,
+    };
+
+    if (!client) {
+        return false;
+    }
+
+    command.data.run_to_raster.raster_line = raster_line;
+    command.data.run_to_raster.has_cycle = has_cycle ? 1u : 0u;
+    command.data.run_to_raster.cycle_in_line = cycle_in_line;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_PASTE_TEXT,

@@ -2090,6 +2090,68 @@ static bool runtime_step_frame(runtime *rt) {
     return false;
 }
 
+/* Run until VIC raster_line matches target (and optional cycle_in_line).
+   Always advances at least one cycle so a second call reaches the next match.
+   Breakpoints and BRK still win (pause immediately). */
+static bool runtime_run_to_raster(
+    runtime *rt,
+    uint16_t target_line,
+    bool has_cycle,
+    uint16_t target_cycle)
+{
+    size_t guard = 0;
+    /* Two full PAL frames of cycles as a generous guard. */
+    const size_t max_cycles = 262144u;
+    bool advanced = false;
+
+    rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->suppress_execute_bp = false;
+
+    while (guard++ < max_cycles) {
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+        if (runtime_brk_pending(rt)) {
+            runtime_pause_for_brk(rt);
+            return true;
+        }
+
+        if (!runtime_step_cycle(rt)) {
+            return false;
+        }
+        advanced = true;
+
+        if (rt->suppress_execute_bp && c64_consume_instruction_complete(&rt->machine)) {
+            rt->suppress_execute_bp = false;
+        }
+        if (runtime_pause_if_breakpoint_pending(rt)) {
+            return true;
+        }
+        if (c64_consume_frame_complete(&rt->machine)) {
+            runtime_publish_completed_frame(rt);
+            rt->next_frame_cycle = rt->machine.clock.cycle;
+        }
+
+        {
+            uint32_t line = rt->machine.vic.timing.raster_line;
+            uint32_t cycle = rt->machine.vic.timing.cycle_in_line;
+            if (advanced &&
+                line == (uint32_t)target_line &&
+                (!has_cycle || cycle == (uint32_t)target_cycle)) {
+                rt->exec_state = RUNTIME_EXEC_PAUSED;
+                rt->last_stop_reason = RUNTIME_STOP_REASON_RUN_COMPLETE;
+                runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
+                runtime_publish_machine_state(rt);
+                return true;
+            }
+        }
+    }
+
+    runtime_publish_error(rt, "run-to-raster did not reach target");
+    return false;
+}
+
 static void runtime_set_execute_breakpoint(runtime *rt, const runtime_command *command) {
     runtime_breakpoint_definition definition;
     int index = runtime_find_execute_breakpoint_by_address(
@@ -3600,6 +3662,14 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_STEP_FRAME:
             runtime_step_frame(rt);
+            break;
+
+        case RUNTIME_COMMAND_RUN_TO_RASTER:
+            runtime_run_to_raster(
+                rt,
+                command->data.run_to_raster.raster_line,
+                command->data.run_to_raster.has_cycle != 0,
+                command->data.run_to_raster.cycle_in_line);
             break;
 
         case RUNTIME_COMMAND_RUN_INSTRUCTIONS:

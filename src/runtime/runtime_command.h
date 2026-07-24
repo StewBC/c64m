@@ -20,6 +20,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_RUN_CYCLES,
     RUNTIME_COMMAND_RUN_INSTRUCTIONS,
     RUNTIME_COMMAND_STEP_FRAME,
+    RUNTIME_COMMAND_RUN_TO_RASTER,
     RUNTIME_COMMAND_REQUEST_CPU_STATE,
     RUNTIME_COMMAND_REQUEST_MACHINE_STATE,
     RUNTIME_COMMAND_REQUEST_FRAME,
@@ -229,6 +230,12 @@ typedef struct runtime_command {
         struct {
             uint16_t address;
         } run_to_cursor;
+
+        struct {
+            uint16_t raster_line;
+            uint16_t cycle_in_line; /* valid when has_cycle != 0 */
+            uint8_t has_cycle;
+        } run_to_raster;
 
         struct {
             char path[RUNTIME_COMMAND_PATH_MAX];

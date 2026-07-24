@@ -563,6 +563,30 @@ static void test_response_formatting(void)
     control_response_release(&response);
 }
 
+static void test_parse_run_to_raster(void)
+{
+    control_request request;
+    control_response error;
+
+    expect_true(
+        "parse run-to-raster line",
+        control_protocol_parse_request("50 run-to-raster 100\n", &request, &error));
+    expect_int("run-to-raster type", CONTROL_COMMAND_RUN_TO_RASTER, request.type);
+    expect_u32("run-to-raster line", 100u, request.args.raster_line);
+    expect_false("run-to-raster no cycle", request.args.has_raster_cycle);
+
+    expect_true(
+        "parse run-to-raster line+cycle",
+        control_protocol_parse_request("51 run-to-raster 48 12\n", &request, &error));
+    expect_u32("run-to-raster line2", 48u, request.args.raster_line);
+    expect_true("run-to-raster has cycle", request.args.has_raster_cycle);
+    expect_u32("run-to-raster cycle", 12u, request.args.raster_cycle);
+
+    expect_false(
+        "reject run-to-raster missing",
+        control_protocol_parse_request("52 run-to-raster\n", &request, &error));
+}
+
 static void test_deferred_token_matches(void)
 {
     /* Legacy deferred (token 0): any event token is allowed at the gate;
@@ -584,5 +608,6 @@ int main(void)
     test_parse_rejects_invalid_input();
     test_response_formatting();
     test_deferred_token_matches();
+    test_parse_run_to_raster();
     return 0;
 }

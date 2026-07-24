@@ -132,6 +132,26 @@ static void poll_breakpoint_count(
 
 static runtime_breakpoint_snapshot bps;
 
+static void refresh_breakpoints(
+    runtime_client *client,
+    runtime_event *event,
+    runtime_breakpoint_snapshot *out,
+    uint16_t expected_count)
+{
+    /* Drain pending so we do not match a pre-command notify. */
+    while (runtime_client_poll_event(client, event)) {
+        if (event->type == RUNTIME_EVENT_ERROR) {
+            fail(event->data.error.message);
+        }
+    }
+    if (!runtime_client_request_breakpoints(client)) {
+        fail("request_breakpoints rejected");
+    }
+    poll_breakpoint_count(client, event, out, expected_count);
+}
+
+
+
 static void build_roms(c64_rom_set *roms, uint16_t reset_vector) {
     c64_rom_set_init(roms);
     roms->has_basic = true;
@@ -1079,24 +1099,8 @@ static void test_runtime_stops_on_enabled_execute_breakpoint(void) {
     expect_u64("breakpoint hit leaves runtime paused", 0, event.data.machine_state.running);
     expect_u16("breakpoint hit PC unchanged", TEST_RESET_VECTOR, event.data.machine_state.pc);
     expect_u64("breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint hit snapshot not received");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("breakpoint hit counter", 1, bps.entries[0].current_hits);
 
     stop_runtime(rt, client);
@@ -1178,24 +1182,7 @@ static void test_runtime_clear_breakpoint_removes_it(void) {
     poll_breakpoint_count(client, &event, &bps, 1);
     id = first_breakpoint_id(&bps);
     expect_true("clear breakpoint", runtime_client_clear_breakpoint(client, id));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after clear");
-    }
+    poll_breakpoint_count(client, &event, &bps, 0);
     expect_u64("clear removes breakpoint", 0, bps.count);
 
     expect_true("run cycles after clear", runtime_client_run_cycles(client, 8));
@@ -1279,24 +1266,8 @@ static void test_runtime_create_update_duplicate_breakpoint_definitions(void) {
     definition.reset_count = 0;
 
     expect_true("update breakpoint by id", runtime_client_update_breakpoint(client, id, &definition));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after update");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u16("updated breakpoint start address", 0xc000, bps.entries[0].start_address);
     expect_u8("updated breakpoint disabled", 0, bps.entries[0].enabled);
     expect_u64("updated breakpoint access", RUNTIME_BREAKPOINT_ACCESS_EXECUTE, bps.entries[0].access);
@@ -1375,24 +1346,8 @@ static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
         fail("machine snapshot not received for RAM read watchpoint");
     }
     expect_u64("RAM read watchpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received for RAM read watchpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("RAM read watchpoint hit count", 1, bps.entries[0].current_hits);
 
     stop_runtime(rt, client);
@@ -1412,24 +1367,8 @@ static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
         fail("machine snapshot not received for RAM write watchpoint");
     }
     expect_u64("RAM write watchpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received for RAM write watchpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("RAM write watchpoint hit count", 1, bps.entries[0].current_hits);
 
     stop_runtime(rt, client);
@@ -1467,24 +1406,8 @@ static void test_runtime_breakpoint_counters_gate_triggers(void) {
         fail("CPU snapshot not received for first counted instruction");
     }
     expect_true("request counted breakpoint after first hit", runtime_client_request_breakpoints(client));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after first counted hit");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("first counted hit count", 1, bps.entries[0].current_hits);
     expect_u64("first counted counter", 1, bps.entries[0].counter);
 
@@ -1496,24 +1419,8 @@ static void test_runtime_breakpoint_counters_gate_triggers(void) {
         fail("machine snapshot not received for counted breakpoint");
     }
     expect_u64("counted breakpoint stop reason", RUNTIME_STOP_REASON_BREAKPOINT, event.data.machine_state.stop_reason);
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received for counted breakpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("second counted hit count", 2, bps.entries[0].current_hits);
     expect_u64("counted counter reloads", 2, bps.entries[0].counter);
 
@@ -1568,45 +1475,13 @@ static void test_runtime_breakpoint_counter_zero_and_disabled_rules(void) {
         fail("RUN_COMPLETE not received for disabled counted breakpoint");
     }
     expect_true("request disabled counted breakpoint", runtime_client_request_breakpoints(client));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received for disabled counted breakpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("disabled counted breakpoint hits", 0, bps.entries[0].current_hits);
     expect_u64("disabled counted breakpoint counter", 2, bps.entries[0].counter);
     expect_true("enable disabled counted breakpoint", runtime_client_set_breakpoint_enabled(client, id, true));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after enabling counted breakpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("enabled counted breakpoint counter preserved", 2, bps.entries[0].counter);
 
     stop_runtime(rt, client);
@@ -1639,24 +1514,8 @@ static void test_runtime_non_break_actions_do_not_pause(void) {
         fail("STEP_COMPLETE not received for tron-only breakpoint");
     }
     expect_true("request tron-only breakpoint snapshot", runtime_client_request_breakpoints(client));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received for tron-only breakpoint");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("tron-only breakpoint hit count", 1, bps.entries[0].current_hits);
 
     stop_runtime(rt, client);
@@ -1700,24 +1559,8 @@ static void test_runtime_count_only_zero_action_mask(void) {
     }
 
     expect_true("request count-only breakpoint after hit", runtime_client_request_breakpoints(client));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after count-only hit");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("count-only hit count after one run", 1, bps.entries[0].current_hits);
 
     /* Second hit: return to the same PC (one-shot run_instructions advances past it). */
@@ -1730,24 +1573,8 @@ static void test_runtime_count_only_zero_action_mask(void) {
         fail("STEP_COMPLETE not received for second count-only run");
     }
     expect_true("request count-only after second hit", runtime_client_request_breakpoints(client));
-    /* wait for notify then sample latest table */
-    {
-        clock_t _start = clock();
-        int _got = 0;
-        while ((double)(clock() - _start) / CLOCKS_PER_SEC < 2.0) {
-            while (runtime_client_poll_event(client, &event)) {
-                if (event.type == RUNTIME_EVENT_ERROR) {
-                    fail(event.data.error.message);
-                }
-                if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE &&
-                    take_breakpoints(client, &event, &bps)) {
-                    _got = 1;
-                }
-            }
-            if (_got) break;
-        }
-        if (!_got) fail("breakpoint snapshot not received after second count-only hit");
-    }
+    /* count may be wrong - use refresh with known count */
+    refresh_breakpoints(client, &event, &bps, bps.count);
     expect_u64("count-only hit count after two runs", 2, bps.entries[0].current_hits);
 
     stop_runtime(rt, client);

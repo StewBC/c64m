@@ -15,10 +15,9 @@ Ordered by how much time they still cost in oracle sessions.
 
 ## 1. `run-to-raster` / conditional breakpoints
 
-There is no way to run to a raster position. Frame-accurate capture is covered by
-`step-frame`, but per-line run-to (and expression-guarded checkpoints, VICE
-`CONDITION_SET`) are still missing. Useful for raster-IRQ demos: stop when the
-beam hits a line without reverse-engineering a once-per-frame exec address.
+~~There is no way to run to a raster position.~~ **Done:** `run-to-raster <line>
+[cycle]` (runtime + control port). Frame-accurate capture remains `step-frame`.
+Still missing: expression-guarded checkpoints (VICE `CONDITION_SET`).
 
 ---
 

@@ -3710,6 +3710,7 @@ static bool control_command_mutates_machine(control_command_type type)
         case CONTROL_COMMAND_RUN_INSTRUCTIONS:
         case CONTROL_COMMAND_RUN_TO:
         case CONTROL_COMMAND_STEP_FRAME:
+        case CONTROL_COMMAND_RUN_TO_RASTER:
         case CONTROL_COMMAND_SET_MEMORY:
         case CONTROL_COMMAND_KEY_DOWN:
         case CONTROL_COMMAND_KEY_UP:
@@ -3779,7 +3780,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster",
                 false);
             break;
 
@@ -3851,6 +3852,14 @@ static void dispatch_control_request(
 
         case CONTROL_COMMAND_STEP_FRAME:
             accepted = runtime_client_step_frame(client);
+            break;
+
+        case CONTROL_COMMAND_RUN_TO_RASTER:
+            accepted = runtime_client_run_to_raster(
+                client,
+                request->args.raster_line,
+                request->args.has_raster_cycle,
+                request->args.raster_cycle);
             break;
 
         case CONTROL_COMMAND_SET_TURBO:

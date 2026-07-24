@@ -27,6 +27,7 @@ typedef enum control_command_type {
     CONTROL_COMMAND_RUN_INSTRUCTIONS,
     CONTROL_COMMAND_RUN_TO,
     CONTROL_COMMAND_STEP_FRAME,
+    CONTROL_COMMAND_RUN_TO_RASTER,
     CONTROL_COMMAND_SET_TURBO,
     CONTROL_COMMAND_GET_STATE,
     CONTROL_COMMAND_GET_CPU,
@@ -81,6 +82,9 @@ typedef struct control_args {
     uint32_t timeout_ms;
     uint16_t address;
     uint32_t length; /* get-memory: 1..65536; set-memory still 1..1024 */
+    uint16_t raster_line;
+    uint16_t raster_cycle;
+    bool has_raster_cycle;
     uint16_t start_address;
     uint16_t end_address;
     uint16_t run_address;

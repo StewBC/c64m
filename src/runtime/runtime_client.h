@@ -174,6 +174,12 @@ bool runtime_client_poll_breakpoints(
 bool runtime_client_step_out(runtime_client *client);
 bool runtime_client_step_over(runtime_client *client);
 bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address);
+/* Run until VIC raster_line matches (and optional cycle_in_line). */
+bool runtime_client_run_to_raster(
+    runtime_client *client,
+    uint16_t raster_line,
+    bool has_cycle,
+    uint16_t cycle_in_line);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

@@ -220,6 +220,7 @@ N step-instruction
 N step-over
 N step-out
 N step-frame
+N run-to-raster <line 0..65535> [cycle-in-line]
 N run-cycles <positive-count>
 N run-instructions <positive-count>
 N run-to <address>
@@ -249,6 +250,14 @@ VIC-II beam position, not the host frame counter.
 pauses with `run-complete` (or a breakpoint/BRK). It is the reliable way to capture
 consecutive frames without anchoring on target-program exec breakpoints.
 `run-cycles` also republishes completed frames when a frame boundary is crossed.
+
+`run-to-raster <line> [cycle]` advances at least one Φ2 cycle, then continues until
+the VIC-II beam is on `line` (and optionally exact `cycle` within the line). It
+pauses with `run-complete` and a machine snapshot. **Breakpoints and BRK still
+win** — if an exec/watchpoint or BRK fires first, that stop reason is used instead.
+Valid line ranges depend on video standard (PAL 0..311, NTSC 0..262); out-of-range
+targets time out with a runtime error. Use `get-vic` after completion to confirm
+`raster=` / `cycle=`.
 
 Run/step/load/input commands return `ok accepted=1` when the runtime command was
 queued, not when the operation has completed. Follow with `wait-event`,

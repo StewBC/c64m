@@ -813,3 +813,15 @@ target_link_libraries(test_runtime_memory_rpc PRIVATE
 )
 
 add_test(NAME runtime_memory_rpc COMMAND test_runtime_memory_rpc)
+
+add_executable(test_runtime_run_to_raster
+    tests/runtime/test_runtime_run_to_raster.c
+)
+
+target_compile_features(test_runtime_run_to_raster PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_run_to_raster PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_run_to_raster COMMAND test_runtime_run_to_raster)
