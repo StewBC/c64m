@@ -152,6 +152,7 @@ static void test_iec_drive_pulls_data(void) {
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
+    (void)c64_power_on_drive(&c64, 8); /* unit must be powered to sit on IEC */
 
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     drive.via1.orb  = 0x02u; /* bit 1 = 1 → pulls DATA low */
@@ -179,6 +180,7 @@ static void test_iec_drive_releases_data(void) {
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
+    (void)c64_power_on_drive(&c64, 8);
 
     drive.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     drive.via1.orb  = 0x00u; /* bit 1 = 0 → not driving DATA low */
@@ -280,6 +282,8 @@ static void test_iec_two_drive_pull_aggregation(void) {
     load_nop_rom(&d9);
     c1541_reset(&d8);
     c1541_reset(&d9);
+    (void)c64_power_on_drive(&c64, 8);
+    (void)c64_power_on_drive(&c64, 9);
 
     d8.via1.ddrb = 0x02u; /* bit 1 = DATA output */
     d8.via1.orb  = 0x02u; /* drive 8 pulls DATA low */
@@ -339,6 +343,7 @@ static void test_iec_atn_ack_pulls_data(void) {
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
+    (void)c64_power_on_drive(&c64, 8);
 
     /* CIA2 PA3 output high asserts ATN; serial VIA PB4 low acknowledges ATN by
        pulling DATA even if PB1 is not yet set by the firmware IRQ handler. */

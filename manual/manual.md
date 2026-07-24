@@ -32,7 +32,7 @@ Useful flags:
 | `--remember` / `-r`    | Force save-on-quit into the INI file                |
 | `--turbo <list>` / `-t`| Turbo mode list for Opt+T, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
 | `--video PAL|NTSC`, `-P`, `-N` | Override the configured video standard for this run |
-| `--disk <drive>=<image[,image...]>` | Mount a D64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue |
+| `--disk <drive>=<image[,image...]>` | Mount a D64/G64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue. Empty path (`--disk 8=`) soft-powers that unit without media |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
 | `--crt <file>`         | Attach a generic 8K/16K cartridge at startup        |
@@ -60,7 +60,10 @@ c64m supports D64 and G64 images on devices 8 and 9. Images mount read-only by d
 compatibility KERNAL trap by default for D64. When a D64 is marked writable,
 `SAVE "NAME",8` writes a PRG into the mounted image and flushes the host `.d64` file.
 If a 1541 ROM is available and `[disk] emulate_1541=1` is set, standard disk loads for
-devices 8 and 9 use the C64 KERNAL IEC routines and the emulated 1541 DOS ROM.
+devices 8 and 9 use the C64 KERNAL IEC routines and the emulated 1541 DOS ROM. Units are
+soft-powered (stepped and on the IEC bus) only after a mount, UI device button, empty
+`--disk N=`, or control `power-drive`. Plain eject leaves power on; power-off (green LED
+or `power-drive N off`) ejects media and powers the unit off.
 
 G64 needs `[disk] media_1541=1` (and `emulate_1541`) for the rotating GCR path. Mark a
 G64 writable to allow physical DOS writes (BASIC `SAVE`, sequential writes, and similar
@@ -93,7 +96,7 @@ You can also restore or write snapshots while the emulator is running:
 - Drag and drop a `.c64state` file onto the window
 - Quickload / quicksave: **Shift+Opt+<** / **Shift+Opt+>**
 - Control port: `load-state <path>` and `save-state <path>` (async; wait for
-  `load-state-complete` or `save-state-complete` — see **Remote**)
+  `load-state-complete` or `save-state-complete` - see **Remote**)
 
 Example:
 
@@ -237,12 +240,12 @@ SID timing, and drive sync stay in lock-step):
 
 | Mode | Title | Behaviour |
 |------|-------|-----------|
-| `1` | `Normal` | Real-time pace, live ARGB framebuffer (PAL about 0.985 MHz Φ2, NTSC about 1.023 MHz). |
+| `1` | `Normal` | Real-time pace, live ARGB framebuffer (PAL about 0.985 MHz Phi2, NTSC about 1.023 MHz). |
 | `2` | `Max` | Free-run as fast as the host allows, still full live paint and collisions. |
 | `3` | `Warp` | Free-run with live paint off; frames are geometric debug snapshots. |
 
-On an Apple M2 Mac Mini, max free-runs at about **5.2 MHz** emulated Φ2 — roughly
-5× real C64 speed — while keeping full correctness. Warp is only somewhat faster
+On an Apple M2 Mac Mini, max free-runs at about **5.2 MHz** emulated Phi2 - roughly
+5x real C64 speed - while keeping full correctness. Warp is only somewhat faster
 (paint-off) and is for skip-ahead to a breakpoint or load marker, not for judging
 pixels or collision-sensitive behaviour. Select mode `1` or `2` to restore live
 rendering for subsequent frames.
@@ -574,26 +577,48 @@ programs, and emulator management.
 Devices 8 and 9 each show a row of controls followed by a disk selector:
 
 ```
-[8] [Add] [Eject]  <disk name [v]>
-[9] [Add] [Eject]  <disk name [v]>
+[8] (LED) [Eject]  <disk name [v]>
+[9] (LED) [Eject]  <disk name [v]>
 ```
 
 Each device maintains an ordered queue of D64/G64 images. At most one image is mounted at a
 time; the rest are queued for later use.
 
-**[8] / [9]** - Opens a file browser. Selecting an image replaces the entire queue with
-that one disk and mounts it immediately.
+**Soft power.** Each unit starts **off** (not stepped, not on the IEC bus) until something
+powers it on. That keeps free-run fast for PRG/CRT/BASIC and avoids an idle second drive
+answering ATN. Ejecting media alone does **not** power off.
 
-**[Add]** - Opens a file browser. The selected image is inserted into the queue
-immediately after the currently mounted disk. If the drive is empty, the image is added
-and mounted.
+A unit turns **on** when you:
+
+- Mount a disk (any successful mount path)
+- Click **[8]** or **[9]** (opens the file browser and powers that unit even if you cancel)
+- Click the **red** power LED
+- Use CLI `--disk 8=` / `--disk 9=` (empty path)
+- Use control-port `power-drive 8` / `power-drive 8 on`
+
+A unit turns **off** when you:
+
+- Click the **green** power LED (ejects any media / clears the queue, then powers off)
+- Use control-port `power-drive 8 off`
+
+**[8] / [9]** - Soft power-on for that unit, then open a file browser. Selecting an image
+**replaces** the entire queue with that one disk and mounts it immediately.
+
+**Shift+[8] / Shift+[9]** - Soft power-on, then open a file browser to **add** an image
+into the queue immediately after the currently mounted disk (same as the former **[Add]**
+button). If the drive is empty, the image is added and mounted.
+
+**(LED)** - Power **switch** for that unit: **green** = powered (click to eject media and
+power off), **red** = off (click to power on). Separate from the corner activity LEDs
+(read/write).
 
 **[Eject]** - Removes the currently mounted disk from the queue and mounts the next one.
-If the last disk in the queue is ejected, the drive becomes empty. The queue wraps
-round-robin: ejecting the final entry mounts the first remaining entry, not nothing.
+If the last disk in the queue is ejected, the drive becomes empty (but stays powered). The
+queue wraps round-robin: ejecting the final entry mounts the first remaining entry, not
+nothing.
 
 **[Eject!]** (hold Shift while clicking **[Eject]**) - Ejects all disks from the queue
-and leaves the drive empty.
+and leaves the drive empty (still powered).
 
 The selector to the right of the buttons shows the basename of the currently mounted
 image. Clicking it opens a drop-down listing every image in the queue; selecting one
@@ -602,7 +627,7 @@ mounts it immediately and makes it current.
 The queue order and current index are not saved when the emulator quits. On the next
 launch the first image in the saved list is mounted.
 
-When **Show disk LEDs** is enabled in Configure (see **Configure**), shared activity
+When **Show disk LEDs** is enabled in Configure (see **Configure**), shared **activity**
 indicators appear in the bottom-right corner of the application window while either
 device 8 or 9 is reading or writing. The green LED is disk read activity; the red LED
 is write activity. Both drives share the same pair of LEDs. They appear only during
@@ -1771,7 +1796,7 @@ newline-delimited text.
 
 Deferred responses use a multi-entry table (capacity 16). **Token-matched**
 commands such as `get-cpu` and `get-memory` may be outstanding together. Other
-deferred work (waits, breakpoints, assemble, …) is still exclusive. A second
+deferred work (waits, breakpoints, assemble, ...) is still exclusive. A second
 conflicting deferred command may return:
 
 ```text
@@ -1781,7 +1806,7 @@ conflicting deferred command may return:
 ```
 
 Clients may **pipeline** requests (send several without waiting) up to the
-outstanding high-water mark; responses may complete out of send order — correlate
+outstanding high-water mark; responses may complete out of send order - correlate
 by request id. Duplicate outstanding ids are rejected with `bad-id`.
 
 Deferred commands time out with:
@@ -1859,7 +1884,7 @@ For warp (mode 3), the response warns that live pixels are unavailable:
 |---------|----------|
 | `get-state` | Text state summary: runtime state, CPU availability, frame, cycle, stop reason, turbo; when hardware is known also `raster=` and `vic_cycle=` |
 | `get-cpu` | Text CPU snapshot |
-| `get-vic` | Text VIC-II internal state (raster, cycle, compare latch, VC/RC, IRQ, BA/AEC/RDY, …) |
+| `get-vic` | Text VIC-II internal state (raster, cycle, compare latch, VC/RC, IRQ, BA/AEC/RDY, ...) |
 | `get-cia <1\|2>` | Text CIA internal state including ICR mask |
 | `get-frame [format=argb8888\|indexed8]` | Binary frame snapshot |
 | `get-memory <addr> <length> <mode>` | Binary memory snapshot |
@@ -1943,13 +1968,13 @@ Typical responses:
 ```
 
 Default frame format is ARGB8888. The buffer is a full VIC-II raster line (PAL
-504×312, NTSC 520×263) in VIC-X order with no frontend crop. Metadata:
+504x312, NTSC 520x263) in VIC-X order with no frontend crop. Metadata:
 
 ```text
 <id> data frame <bytes> width=<504|520> height=<312|263> stride=2080 format=argb8888 frame=<n> cycle=<cycle>
 ```
 
-`<bytes>` is `height * stride`. **`stride` is always 2080** (520 px × 4) for ARGB;
+`<bytes>` is `height * stride`. **`stride` is always 2080** (520 px x 4) for ARGB;
 index rows by `stride`, never by `width`.
 
 `format=indexed8` returns one palette index (0..15) per pixel, with `stride=width`
@@ -2139,7 +2164,7 @@ id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_co
 ```
 
 `access` is a bit mask: **1 = execute, 2 = read, 4 = write**. VICE checkpoint op masks
-use the reverse assignment (`load=1, store=2, exec=4`) — do not copy numeric masks
+use the reverse assignment (`load=1, store=2, exec=4`) - do not copy numeric masks
 from VICE scripts. The payload is text even though it uses `data` framing, so clients
 should still honor the byte count. If a breakpoint definition is rejected by the
 runtime, the control port returns `error runtime <message>` rather than hanging.

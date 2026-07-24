@@ -445,6 +445,9 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 12 && strncmp(name, "unmount-disk", length) == 0) {
         return CONTROL_COMMAND_UNMOUNT_DISK;
     }
+    if (length == 11 && strncmp(name, "power-drive", length) == 0) {
+        return CONTROL_COMMAND_POWER_DRIVE;
+    }
     if (length == 15 && strncmp(name, "get-disk-status", length) == 0) {
         return CONTROL_COMMAND_GET_DISK_STATUS;
     }
@@ -965,6 +968,32 @@ bool control_protocol_parse_request(
             return false;
         }
         skip_spaces(&cursor);
+    } else if (type == CONTROL_COMMAND_POWER_DRIVE) {
+        char mode[16];
+        if (!parse_u8_token(cursor, &cursor, &args.device)) {
+            set_parse_error(out_error, id, "bad-args", "expected disk device");
+            return false;
+        }
+        skip_spaces(&cursor);
+        args.power_drive_on = true; /* bare `power-drive 8` powers on */
+        if (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
+            size_t n = 0;
+            while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t' &&
+                   *cursor != '\r' && *cursor != '\n' && n + 1u < sizeof(mode)) {
+                mode[n++] = *cursor++;
+            }
+            mode[n] = '\0';
+            skip_spaces(&cursor);
+            if (strcmp(mode, "on") == 0 || strcmp(mode, "1") == 0) {
+                args.power_drive_on = true;
+            } else if (strcmp(mode, "off") == 0 || strcmp(mode, "0") == 0) {
+                args.power_drive_on = false;
+            } else {
+                set_parse_error(
+                    out_error, id, "bad-args", "expected optional on|off after device");
+                return false;
+            }
+        }
     } else if (type == CONTROL_COMMAND_BREAK_EXEC) {
         if (!parse_u16_token(cursor, &cursor, &args.address)) {
             set_parse_error(out_error, id, "bad-args", "expected 16-bit address");

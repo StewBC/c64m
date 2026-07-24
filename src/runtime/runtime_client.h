@@ -127,6 +127,10 @@ bool runtime_client_mount_d64_ex(
     bool writable);
 bool runtime_client_set_disk_writable(runtime_client *client, uint8_t device, bool writable);
 bool runtime_client_unmount_disk(runtime_client *client, uint8_t device);
+/* Soft power-on for device 8 or 9 (sticky; no-op if already powered). */
+bool runtime_client_power_on_drive(runtime_client *client, uint8_t device);
+/* Soft power-off: ejects media if present, then powers the unit off. */
+bool runtime_client_power_off_drive(runtime_client *client, uint8_t device);
 bool runtime_client_request_disk_status(runtime_client *client, uint8_t device);
 bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address);
 bool runtime_client_assemble_file_full(

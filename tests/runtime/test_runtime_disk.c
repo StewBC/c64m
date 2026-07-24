@@ -152,6 +152,7 @@ static void expect_disk_status(
     runtime_client *client,
     uint8_t device,
     uint8_t mounted,
+    uint8_t powered,
     c64_drive_status_result result,
     const char *display_name,
     const char *disk_title) {
@@ -162,6 +163,7 @@ static void expect_disk_status(
     }
     expect_u8("disk status device", device, event.data.disk_status.device);
     expect_u8("disk status mounted", mounted, event.data.disk_status.mounted);
+    expect_u8("disk status powered", powered, event.data.disk_status.powered);
     if (event.data.disk_status.last_result != result) {
         fprintf(stderr,
             "disk status result: expected %d, got %d\n",
@@ -181,6 +183,7 @@ static void expect_disk_status_writable(
     runtime_client *client,
     uint8_t device,
     uint8_t mounted,
+    uint8_t powered,
     uint8_t writable,
     c64_drive_status_result result,
     const char *display_name,
@@ -192,6 +195,7 @@ static void expect_disk_status_writable(
     }
     expect_u8("disk status device", device, event.data.disk_status.device);
     expect_u8("disk status mounted", mounted, event.data.disk_status.mounted);
+    expect_u8("disk status powered", powered, event.data.disk_status.powered);
     expect_u8("disk status writable", writable, event.data.disk_status.writable);
     if (event.data.disk_status.last_result != result) {
         fprintf(stderr,
@@ -222,31 +226,44 @@ static void test_mount_replace_unmount_and_failure(void) {
     rt = start_runtime(&client);
 
     expect_true("request initial disk status", runtime_client_request_disk_status(client, 8));
-    expect_disk_status(client, 8, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+    expect_disk_status(client, 8, 0, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+
+    expect_true("power on empty unit 8", runtime_client_power_on_drive(client, 8));
+    expect_disk_status(client, 8, 0, 1, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
 
     expect_true("mount blank d64", runtime_client_mount_d64(client, 8, blank_path));
-    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
 
     expect_true("mount blank d64 writable", runtime_client_mount_d64_ex(client, 8, blank_path, true));
-    expect_disk_status_writable(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_disk_status_writable(client, 8, 1, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
 
     expect_true("clear writable", runtime_client_set_disk_writable(client, 8, false));
-    expect_disk_status_writable(client, 8, 1, 0, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_disk_status_writable(client, 8, 1, 1, 0, C64_DRIVE_STATUS_OK, "blank.d64", "");
 
     expect_true("mount odell d64", runtime_client_mount_d64(client, 8, odell_path));
-    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
 
     expect_true("mount odell d64 device 9", runtime_client_mount_d64(client, 9, odell_path));
-    expect_disk_status(client, 9, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
+    expect_disk_status(client, 9, 1, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
 
     expect_true("mount missing d64", runtime_client_mount_d64(client, 8, missing_path));
-    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_IO_ERROR, "ODELLLAK.D64", "ASS PRESENTS:");
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_IO_ERROR, "ODELLLAK.D64", "ASS PRESENTS:");
 
     expect_true("unmount d64 device 9", runtime_client_unmount_disk(client, 9));
-    expect_disk_status(client, 9, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+    /* Eject clears media but soft power stays on. */
+    expect_disk_status(client, 9, 0, 1, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
 
     expect_true("unmount d64", runtime_client_unmount_disk(client, 8));
-    expect_disk_status(client, 8, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+    expect_disk_status(client, 8, 0, 1, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+
+    /* Power-off ejects if needed and clears soft power. */
+    expect_true("power off unit 8", runtime_client_power_off_drive(client, 8));
+    expect_disk_status(client, 8, 0, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
+
+    expect_true("remount after power off", runtime_client_mount_d64(client, 8, blank_path));
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_true("power off with media ejects", runtime_client_power_off_drive(client, 8));
+    expect_disk_status(client, 8, 0, 0, C64_DRIVE_STATUS_NOT_MOUNTED, "", "");
 
     stop_runtime(rt, client);
 }
@@ -263,7 +280,7 @@ static void test_autorun_does_not_rearm_on_disk_replacement(void) {
     rt = start_runtime_ex(&client, true);
 
     expect_true("autorun initial mount", runtime_client_mount_d64(client, 8, blank_path));
-    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "blank.d64", "");
     expect_int("empty drive mount arms autorun", 1, rt->autorun_d64_phase);
 
     /* The test runtime is paused, so clear the pending bootstrap without a
@@ -271,7 +288,7 @@ static void test_autorun_does_not_rearm_on_disk_replacement(void) {
        cleared instead of scheduling a host keyboard-buffer injection. */
     rt->autorun_d64_phase = 0;
     expect_true("autorun replacement mount", runtime_client_mount_d64(client, 8, odell_path));
-    expect_disk_status(client, 8, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
+    expect_disk_status(client, 8, 1, 1, C64_DRIVE_STATUS_OK, "ODELLLAK.D64", "ASS PRESENTS:");
     expect_int("replacement does not rearm autorun", 0, rt->autorun_d64_phase);
 
     stop_runtime(rt, client);

@@ -1391,9 +1391,10 @@ static void control_format_disk_status_response(
     snprintf(
         text,
         sizeof(text),
-        "device=%u mounted=%u writable=%u dirty=%u kind=%u result=%u name=%s title=%s",
+        "device=%u mounted=%u powered=%u writable=%u dirty=%u kind=%u result=%u name=%s title=%s",
         disk_status->device,
         disk_status->mounted,
+        disk_status->powered,
         disk_status->writable,
         disk_status->dirty,
         (unsigned)disk_status->image_kind,
@@ -1416,10 +1417,11 @@ static void control_format_drive_cpu_response(
     snprintf(
         text,
         sizeof(text),
-        "device=%d rom=%u media=%u tracks=%u g64=%u pc=%04X ht=%d dens=%d "
+        "device=%d rom=%u powered=%u media=%u tracks=%u g64=%u pc=%04X ht=%d dens=%d "
         "mot=%u/%u wr=%u sync=%u",
         drive->device_number,
         drive->rom_loaded ? 1u : 0u,
+        drive->powered ? 1u : 0u,
         drive->media_enabled ? 1u : 0u,
         drive->tracks_valid ? 1u : 0u,
         drive->from_g64 ? 1u : 0u,
@@ -3279,6 +3281,8 @@ static void dispatch_debugger_intents(
 
             case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    /* Device button = soft power switch + replace-mount flow. */
+                    (void)runtime_client_power_on_drive(client, intent.disk_device);
                     /* Empty filter: show .d64 and .g64 (and other files). */
                     frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
                         "Mount Disk Image", false, "", NULL, intent.disk_device);
@@ -3287,6 +3291,7 @@ static void dispatch_debugger_intents(
 
             case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    (void)runtime_client_power_on_drive(client, intent.disk_device);
                     frontend_open_file_browser(ui, FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG,
                         "Add Disk Image", false, "", NULL, intent.disk_device);
                 }
@@ -3312,6 +3317,24 @@ static void dispatch_debugger_intents(
             case FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL:
                 if (intent.disk_device == 8 || intent.disk_device == 9) {
                     sent = runtime_client_unmount_disk(client, intent.disk_device);
+                    if (sent) {
+                        app_disk_slot_clear(&options->disk_slots[intent.disk_device]);
+                        frontend_set_disk_queue(ui, intent.disk_device,
+                            &options->disk_slots[intent.disk_device]);
+                    }
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_POWER_ON:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    sent = runtime_client_power_on_drive(client, intent.disk_device);
+                }
+                break;
+
+            case FRONTEND_DEBUGGER_INTENT_DISK_POWER_OFF:
+                if (intent.disk_device == 8 || intent.disk_device == 9) {
+                    /* Machine ejects media then powers off; clear host queue too. */
+                    sent = runtime_client_power_off_drive(client, intent.disk_device);
                     if (sent) {
                         app_disk_slot_clear(&options->disk_slots[intent.disk_device]);
                         frontend_set_disk_queue(ui, intent.disk_device,
@@ -3819,7 +3842,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster cpu-history",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster cpu-history power-drive",
                 false);
             break;
 
@@ -4422,6 +4445,21 @@ static void dispatch_control_request(
             accepted = runtime_client_unmount_disk(client, request->args.device);
             break;
 
+        case CONTROL_COMMAND_POWER_DRIVE:
+            if (request->args.device != 8u && request->args.device != 9u) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "expected device 8 or 9",
+                    false);
+            } else if (request->args.power_drive_on) {
+                accepted = runtime_client_power_on_drive(client, request->args.device);
+            } else {
+                accepted = runtime_client_power_off_drive(client, request->args.device);
+            }
+            break;
+
         case CONTROL_COMMAND_GET_DISK_STATUS:
             if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
@@ -4887,6 +4925,7 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_SAVE_STATE:
         case CONTROL_COMMAND_MOUNT_D64:
         case CONTROL_COMMAND_UNMOUNT_DISK:
+        case CONTROL_COMMAND_POWER_DRIVE:
             if (accepted) {
                 control_protocol_format_ok(&response, request->id, "accepted=1", false);
                 request_debug_state(client);
@@ -5483,6 +5522,9 @@ int main(int argc, char **argv) {
                     (uint8_t)i,
                     options.disk_slots[i].paths[0],
                     app_disk_slot_current_writable(&options.disk_slots[i]));
+            } else if (options.disk_slots[i].power_on_only &&
+                       (i == 8 || i == 9)) {
+                runtime_client_power_on_drive(client, (uint8_t)i);
             }
         }
     }

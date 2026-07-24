@@ -174,13 +174,13 @@ are mode IDs:
 | 2    | max   | free-run | yes | Full correctness (collisions, paint) |
 | 3    | warp  | free-run | no  | Debug geometry only; collision latches skip |
 
-**Max (mode 2) is the performance bar for full correctness.** On an Apple M2 Mac
-Mini (headless PAL, measured 2026-07 after live-paint algorithmic opts), free-run
-full paint reaches about **~5.2 MHz** machine Φ2 (~5.3× real-time). Pure
-`c64_step_cycle` with video on is higher (~10 MHz); with video off (warp-like
-core path) about ~14 MHz. The full product still pays runtime/thread overhead
-and dual-1541 ROM stepping; 1541 cost is correctness-required and not an
-optimization target here. Do not disable pixel output except in warp (mode 3).
+**Max (mode 2) is the performance bar for full correctness.** Absolute free-run
+Φ2 rates and the pure-core vs product cost ladder live in
+**`perf-baseline-turbo2.md`** (host, recipes, and comparison rows). Do not
+disable pixel output except in warp (mode 3). 1541 units are soft-powered (see
+`disk-iec1541.md`); unpowered units are not stepped. When a unit is powered with
+ROM loaded, dual-drive cost can dominate free-run — re-measure against the
+baseline after changes.
 
 For the actual wire format, command grammar, response payload layouts, and a working
 Python client, read `control-port.md`.

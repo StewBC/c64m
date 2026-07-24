@@ -14,3 +14,6 @@ The emulator help renderer supports a small Markdown subset:
 Pipe tables are flattened into aligned text columns for the emulator. Avoid
 Markdown constructs such as HTML, images, blockquotes, and nested lists when the
 content must appear correctly in-emulator.
+
+Use only ASCII characters. Unicode characters such as '→' and Em dash '—' 
+(Unicode: U+2014) or En dash '–' (Unicode: U+2013), for example, are not allowed.

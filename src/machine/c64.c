@@ -50,17 +50,20 @@ static void c64_disk_activity_clear_all(c64_t *machine) {
     }
 }
 
-/* Device 9 only sits on the IEC bus once the user has actually attached a disk
-   to it. A 1541 ROM is loaded into both drive objects regardless, but a drive
-   the user never asked for must not drive the bus: an idle 1541 still answers
-   ATN by pulling DATA through the ATN acknowledge gate, which corrupts loaders
-   that use ATN as a transfer clock (Edge of Disgrace). VICE models the same
-   thing through the drive *type* — its default drive9type is none, so it
-   resolves to iecbus_cpu_write_conf1, "only unit 8 enabled". Drive 8 is always
-   present, matching VICE's default drive8type of 1541. */
-static uint8_t c64_drive9_bus_pull(const c64_t *machine) {
-    if (!machine->drives[1].mounted) {
+/* Soft power: a unit only sits on the IEC bus once powered (first mount or
+   explicit power-on). An unpowered 1541 must not drive the bus: an idle 1541
+   still answers ATN by pulling DATA through the ATN acknowledge gate, which
+   corrupts loaders that use ATN as a transfer clock (Edge of Disgrace). This
+   matches leaving the drive's power switch off until the user engages that unit. */
+static uint8_t c64_drive_bus_pull(const c64_t *machine, int slot_index) {
+    if (slot_index < 0 || slot_index >= C64_DRIVE_SLOT_COUNT) {
         return 0;
+    }
+    if (!machine->drives[slot_index].powered) {
+        return 0;
+    }
+    if (slot_index == 0) {
+        return machine->iec_external_pull_drive8;
     }
     return machine->iec_external_pull_drive9;
 }
@@ -68,8 +71,8 @@ static uint8_t c64_drive9_bus_pull(const c64_t *machine) {
 static void c64_refresh_iec_external_pull(c64_t *machine) {
     machine->iec_external_pull = c64_iec_line_mask(
         machine->iec_external_pull_other |
-        machine->iec_external_pull_drive8 |
-        c64_drive9_bus_pull(machine));
+        c64_drive_bus_pull(machine, 0) |
+        c64_drive_bus_pull(machine, 1));
     c64_bus_refresh_vic_bank_base(&machine->bus);
 }
 
@@ -196,8 +199,12 @@ static void c64_drive_sync_to(c64_t *machine, uint64_t target_cycle) {
         machine->clock.drive_accum += 1000000u;
         while (machine->clock.drive_accum >= c64_hz) {
             machine->clock.drive_accum -= c64_hz;
-            c1541_advance_one_cycle(&machine->drive8);
-            c1541_advance_one_cycle(&machine->drive9);
+            if (machine->drives[0].powered) {
+                c1541_advance_one_cycle(&machine->drive8);
+            }
+            if (machine->drives[1].powered) {
+                c1541_advance_one_cycle(&machine->drive9);
+            }
         }
     }
 }
@@ -1779,8 +1786,13 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     machine->iec_external_pull_drive9 = 0;
 
     c6510_reset(&machine->cpu);
-    c1541_reset(&machine->drive8);
-    c1541_reset(&machine->drive9);
+    /* Only reset powered 1541s; unpowered units stay cold until power-on. */
+    if (machine->drives[0].powered) {
+        c1541_reset(&machine->drive8);
+    }
+    if (machine->drives[1].powered) {
+        c1541_reset(&machine->drive9);
+    }
     c64_disk_activity_clear_all(machine);
     memset(&machine->clock, 0, sizeof(machine->clock));
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
@@ -1955,10 +1967,10 @@ uint8_t c64_get_iec_pull_excluding_drive(c64_t *machine, int device_number) {
     assert(machine);
     pull = machine->iec_external_pull_other;
     if (device_number != 8) {
-        pull = (uint8_t)(pull | machine->iec_external_pull_drive8);
+        pull = (uint8_t)(pull | c64_drive_bus_pull(machine, 0));
     }
     if (device_number != 9) {
-        pull = (uint8_t)(pull | c64_drive9_bus_pull(machine));
+        pull = (uint8_t)(pull | c64_drive_bus_pull(machine, 1));
     }
     return c64_iec_line_mask(pull);
 }
@@ -2086,6 +2098,9 @@ bool c64_drive_device_supported(uint8_t device) {
     return c64_drive_slot_index(device) >= 0;
 }
 
+/* Defined later; mounts call this after attaching media. */
+bool c64_power_on_drive(c64_t *machine, uint8_t device);
+
 c64_drive_status_result c64_mount_d64(
     c64_t *machine,
     uint8_t device,
@@ -2159,9 +2174,13 @@ c64_drive_status_result c64_mount_d64_ex(
     memcpy(copy, standard_image_bytes, standard_image_size);
 
     slot = &machine->drives[slot_index];
-    free(slot->image_bytes);
-    free(slot->entries);
-    memset(slot, 0, sizeof(*slot));
+    {
+        bool was_powered = slot->powered;
+        free(slot->image_bytes);
+        free(slot->entries);
+        memset(slot, 0, sizeof(*slot));
+        slot->powered = was_powered; /* remount must not cold-reset a live unit */
+    }
     slot->mounted = true;
     slot->writable = writable;
     slot->dirty = false;
@@ -2182,6 +2201,7 @@ c64_drive_status_result c64_mount_d64_ex(
     } else if (device == 9) {
         c1541_media_invalidate(&machine->drive9.media);
     }
+    (void)c64_power_on_drive(machine, device);
     return C64_DRIVE_STATUS_OK;
 }
 
@@ -2217,9 +2237,13 @@ c64_drive_status_result c64_mount_g64(
     memcpy(copy, image_bytes, image_size);
 
     slot = &machine->drives[slot_index];
-    free(slot->image_bytes);
-    free(slot->entries);
-    memset(slot, 0, sizeof(*slot));
+    {
+        bool was_powered = slot->powered;
+        free(slot->image_bytes);
+        free(slot->entries);
+        memset(slot, 0, sizeof(*slot));
+        slot->powered = was_powered;
+    }
     slot->mounted = true;
     slot->writable = false; /* RO by default; c64_set_drive_writable enables flux write-back */
     slot->dirty = false;
@@ -2240,6 +2264,7 @@ c64_drive_status_result c64_mount_g64(
     } else if (device == 9) {
         c1541_media_invalidate(&machine->drive9.media);
     }
+    (void)c64_power_on_drive(machine, device);
     return C64_DRIVE_STATUS_OK;
 }
 
@@ -2261,6 +2286,7 @@ bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable) {
 void c64_unmount_drive(c64_t *machine, uint8_t device) {
     int slot_index;
     c64_drive_slot *slot;
+    bool keep_powered;
 
     assert(machine);
 
@@ -2279,10 +2305,83 @@ void c64_unmount_drive(c64_t *machine, uint8_t device) {
     }
 
     slot = &machine->drives[slot_index];
+    keep_powered = slot->powered;
     free(slot->image_bytes);
     free(slot->entries);
     memset(slot, 0, sizeof(*slot));
     slot->last_result = C64_DRIVE_STATUS_NOT_MOUNTED;
+    slot->powered = keep_powered; /* eject is not power-off */
+}
+
+bool c64_power_on_drive(c64_t *machine, uint8_t device) {
+    int slot_index;
+
+    assert(machine);
+
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return false;
+    }
+    if (machine->drives[slot_index].powered) {
+        return true;
+    }
+
+    machine->drives[slot_index].powered = true;
+    if (device == 8) {
+        if (machine->drive8.rom_loaded) {
+            c1541_reset(&machine->drive8);
+        }
+        machine->iec_external_pull_drive8 = 0;
+    } else if (device == 9) {
+        if (machine->drive9.rom_loaded) {
+            c1541_reset(&machine->drive9);
+        }
+        machine->iec_external_pull_drive9 = 0;
+    }
+    c64_refresh_iec_external_pull(machine);
+    return true;
+}
+
+bool c64_power_off_drive(c64_t *machine, uint8_t device) {
+    int slot_index;
+
+    assert(machine);
+
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return false;
+    }
+
+    /* Eject media first (power-off with a disk in is allowed; media leaves). */
+    if (machine->drives[slot_index].mounted) {
+        c64_unmount_drive(machine, device);
+    }
+
+    if (!machine->drives[slot_index].powered) {
+        return true;
+    }
+
+    machine->drives[slot_index].powered = false;
+    if (device == 8) {
+        machine->iec_external_pull_drive8 = 0;
+    } else if (device == 9) {
+        machine->iec_external_pull_drive9 = 0;
+    }
+    c64_refresh_iec_external_pull(machine);
+    return true;
+}
+
+bool c64_drive_is_powered(const c64_t *machine, uint8_t device) {
+    int slot_index;
+
+    if (machine == NULL) {
+        return false;
+    }
+    slot_index = c64_drive_slot_index(device);
+    if (slot_index < 0) {
+        return false;
+    }
+    return machine->drives[slot_index].powered;
 }
 
 void c64_unmount_all_drives(c64_t *machine) {
@@ -2315,6 +2414,7 @@ bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_statu
 
     slot = &machine->drives[slot_index];
     out_status->mounted = slot->mounted;
+    out_status->powered = slot->powered;
     out_status->writable = slot->writable;
     out_status->dirty = slot->dirty;
     out_status->image_kind = slot->image_kind;
@@ -2607,6 +2707,13 @@ void c64_copy_1541_hardware_snapshot(
 
     out->device_number = device_number;
     out->rom_loaded = drive->rom_loaded;
+    {
+        const c64_drive_slot *power_slot =
+            (device_number == 8 || device_number == 9) ?
+            &machine->drives[device_number - C64_DRIVE_MIN_DEVICE] :
+            NULL;
+        out->powered = (power_slot != NULL && power_slot->powered) ? 1 : 0;
+    }
     out->media_enabled = drive->media.enabled;
     out->tracks_valid = drive->media.tracks_valid;
     out->from_g64 = drive->media.from_g64;

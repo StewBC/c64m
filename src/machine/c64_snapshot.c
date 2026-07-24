@@ -632,6 +632,8 @@ static void write_drive(snapshot_writer *w, uint32_t tag, const c64_drive_slot *
         w_size(w, e->filename_length);
         w_u16(w, e->block_count);
     }
+    /* Trailing field: soft power latch. Older files omit this; reader defaults. */
+    w_bool(w, slot->powered);
     end_chunk(w, chunk);
 }
 
@@ -1127,6 +1129,13 @@ static void read_drive(snapshot_reader *r, c64_drive_slot *slot) {
     slot->image_size = image_size;
     slot->entries = entries;
     slot->entry_count = entry_count;
+    /* Optional trailing powered flag (added with soft power). Legacy chunks
+       without it treat mounted-as-powered so disk midload snapshots stay live. */
+    if (r->pos < r->len) {
+        slot->powered = r_bool(r);
+    } else {
+        slot->powered = slot->mounted;
+    }
 }
 
 static void read_cpu_fields(snapshot_reader *r, CPU *cpu) {

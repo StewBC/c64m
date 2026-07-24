@@ -770,6 +770,7 @@ static void runtime_publish_drive_status(runtime *rt, uint8_t device) {
     c64_copy_drive_status(&rt->machine, device, &status);
     event.data.disk_status.device = status.device;
     event.data.disk_status.mounted = status.mounted ? 1u : 0u;
+    event.data.disk_status.powered = status.powered ? 1u : 0u;
     event.data.disk_status.writable = status.writable ? 1u : 0u;
     event.data.disk_status.dirty = status.dirty ? 1u : 0u;
     event.data.disk_status.image_kind = status.image_kind;
@@ -3924,6 +3925,23 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 break;
             }
             c64_unmount_drive(&rt->machine, command->data.disk_device.device);
+            if (c64_drive_device_supported(command->data.disk_device.device)) {
+                rt->mounted_disk_paths[
+                    command->data.disk_device.device - C64_DRIVE_MIN_DEVICE][0] = '\0';
+            }
+            runtime_publish_drive_status(rt, command->data.disk_device.device);
+            break;
+
+        case RUNTIME_COMMAND_POWER_ON_DRIVE:
+            (void)c64_power_on_drive(&rt->machine, command->data.disk_device.device);
+            runtime_publish_drive_status(rt, command->data.disk_device.device);
+            break;
+
+        case RUNTIME_COMMAND_POWER_OFF_DRIVE:
+            if (!runtime_flush_disk_slot(rt, command->data.disk_device.device, true)) {
+                break;
+            }
+            (void)c64_power_off_drive(&rt->machine, command->data.disk_device.device);
             if (c64_drive_device_supported(command->data.disk_device.device)) {
                 rt->mounted_disk_paths[
                     command->data.disk_device.device - C64_DRIVE_MIN_DEVICE][0] = '\0';

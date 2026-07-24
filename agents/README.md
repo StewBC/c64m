@@ -82,6 +82,8 @@ Component handoffs:
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
+- `perf-baseline-turbo2.md` - free-run throughput baseline (turbo=2 bar); re-measure
+  against this after performance work
 - `vice-oracle.md` - VICE as display/timing oracle: `assets/prg/` load flags
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.

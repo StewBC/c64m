@@ -572,6 +572,72 @@ static void frontend_update_disk_activity_leds(
     }
 }
 
+/* Small clickable power LED using the same PNG assets as corner activity LEDs.
+   Returns true when the LED was clicked. Draws green when powered, red when off. */
+static bool frontend_draw_power_led_button(frontend *ui, bool powered)
+{
+    struct nk_context *ctx;
+    struct nk_rect cell;
+    struct nk_rect led;
+    struct nk_command_buffer *canvas;
+    SDL_Texture *tex;
+    int tw = 0;
+    int th = 0;
+    float size;
+    enum nk_widget_layout_states state;
+    bool clicked = false;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return false;
+    }
+    ctx = ui->ctx;
+    state = nk_widget(&cell, ctx);
+    if (state == NK_WIDGET_INVALID) {
+        return false;
+    }
+
+    tex = powered ? ui->led_green_texture : ui->led_red_texture;
+    size = (float)FRONTEND_DISK_LED_SIZE;
+    if (size > cell.h - 2.0f) {
+        size = cell.h - 2.0f;
+    }
+    if (size > cell.w - 2.0f) {
+        size = cell.w - 2.0f;
+    }
+    if (size < 8.0f) {
+        size = 8.0f;
+    }
+    led = nk_rect(
+        cell.x + (cell.w - size) * 0.5f,
+        cell.y + (cell.h - size) * 0.5f,
+        size,
+        size);
+
+    canvas = nk_window_get_canvas(ctx);
+    if (canvas != NULL && tex != NULL &&
+        SDL_QueryTexture(tex, NULL, NULL, &tw, &th) == 0 && tw > 0 && th > 0) {
+        struct nk_image image = nk_subimage_handle(
+            nk_handle_ptr(tex),
+            (nk_ushort)tw,
+            (nk_ushort)th,
+            nk_rect(0.0f, 0.0f, (float)tw, (float)th));
+        nk_draw_image(canvas, led, &image, nk_rgba(255, 255, 255, 255));
+    } else if (canvas != NULL) {
+        /* Fallback if textures failed to load. */
+        nk_fill_circle(
+            canvas,
+            led,
+            powered ? nk_rgb(40, 200, 70) : nk_rgb(200, 45, 45));
+    }
+
+    if (state == NK_WIDGET_VALID &&
+        nk_input_has_mouse_click_in_rect(&ctx->input, NK_BUTTON_LEFT, cell) &&
+        nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT)) {
+        clicked = true;
+    }
+    return clicked;
+}
+
 static void frontend_draw_disk_activity_leds(
     frontend *ui,
     int width,
@@ -6396,23 +6462,41 @@ static void frontend_draw_misc_programs(frontend *ui, const frontend_debug_state
             uint8_t device = (uint8_t)(8 + drv);
             const app_disk_slot *slot = &ui->disk_queue[drv];
             bool shift_held = nk_input_is_key_down(&ctx->input, NK_KEY_SHIFT) != 0;
+            bool powered = false;
             char dev_label[4];
             int new_sel;
 
             snprintf(dev_label, sizeof(dev_label), "%d", (int)device);
 
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
-
-            /* [8]/[9] — replace queue with a freshly chosen disk */
-            nk_layout_row_push(ctx, 0.10f);
-            if (nk_button_label(ctx, dev_label)) {
-                frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG, device);
+            if (debug_state != NULL && debug_state->has_disk_status[drv]) {
+                powered = debug_state->disk_status[drv].powered != 0;
+            } else if (debug_state != NULL && debug_state->has_hardware) {
+                const c64_1541_hardware_snapshot *hw =
+                    (drv == 0) ? &debug_state->drive8_hardware
+                               : &debug_state->drive9_hardware;
+                powered = hw->powered != 0;
             }
 
-            /* [Add] — insert a disk after the current one */
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 5);
+
+            /* [8]/[9] - replace-mount (+ power on). Shift+[8]/[9] - add to queue. */
+            nk_layout_row_push(ctx, 0.10f);
+            if (nk_button_label(ctx, dev_label)) {
+                frontend_push_disk_intent(
+                    ui,
+                    shift_held ? FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG
+                               : FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG,
+                    device);
+            }
+
+            /* Power LED (same PNGs as activity lights): green=on, red=off; click toggles. */
             nk_layout_row_push(ctx, 0.14f);
-            if (nk_button_label(ctx, "Add")) {
-                frontend_push_disk_intent(ui, FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG, device);
+            if (frontend_draw_power_led_button(ui, powered)) {
+                frontend_push_disk_intent(
+                    ui,
+                    powered ? FRONTEND_DEBUGGER_INTENT_DISK_POWER_OFF
+                            : FRONTEND_DEBUGGER_INTENT_DISK_POWER_ON,
+                    device);
             }
 
             /* [Eject] / [Eject!] — eject current (Shift = eject all) */

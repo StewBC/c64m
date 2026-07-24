@@ -35,20 +35,34 @@ intercepted at the DOS job layer; writes honor read-only mounts and mark slots d
 The DOS command/error channel supports scratch, rename, validate, initialize,
 format, and status through the ROM plus the FORMT intercept.
 
-### Which drives sit on the IEC bus
+### Soft power (which drives sit on the IEC bus / get stepped)
 
-A 1541 ROM is loaded into both drive objects, but **device 9 only drives the IEC
-bus once a disk is mounted on it** (`c64_drive9_bus_pull()` in `c64.c` gates both
-`c64_refresh_iec_external_pull()` and `c64_get_iec_pull_excluding_drive()`).
-Device 8 is always present. This mirrors VICE, whose default `drive9type` is none,
-so it resolves to `iecbus_cpu_write_conf1` — "only unit 8 enabled".
+Each unit (8 and 9) has a sticky **soft power** latch (`c64_drive_slot.powered`):
 
-This is not cosmetic. An idle 1541 still answers ATN by pulling DATA through the
-ATN acknowledge gate (`DATA = PB1 | (ATN XOR ATNA)`, see `c1541_iec_pull_from_orb`).
-A drive the user never asked for therefore clamps DATA low on every ATN assert,
-which destroys loaders that use ATN as a transfer clock — it corrupted Edge of
-Disgrace's post-swap streaming depacker while leaving CLK and the delivered byte
-stream perfect, so only the depacked output was wrong.
+| Event | Effect |
+|-------|--------|
+| Cold start | Unit **off**: not stepped, does not pull IEC |
+| First successful disk mount (D64/G64) | Powers on (DOS reset if ROM loaded) |
+| Explicit power-on (UI device button / red LED, `power-drive`, CLI `-d N=`) | Powers on without media |
+| Eject / unmount only | Media cleared; **stays powered** |
+| Power-off (green LED, `power-drive N off`) | **Ejects media if present**, then powers off |
+
+`c64_power_on_drive()` / `c64_power_off_drive()` implement the transitions. Mount
+paths call power-on automatically. Power-off always ejects first so the unit is
+empty when cold. While unpowered, `c64_drive_sync_to` skips
+`c1541_advance_one_cycle` for that unit and bus aggregation ignores its IEC pull.
+
+This is not cosmetic. An idle powered 1541 still answers ATN by pulling DATA
+through the ATN acknowledge gate (`DATA = PB1 | (ATN XOR ATNA)`, see
+`c1541_iec_pull_from_orb`). A drive the user never asked for therefore clamps
+DATA low on every ATN assert, which destroys loaders that use ATN as a transfer
+clock — it corrupted Edge of Disgrace's post-swap streaming depacker. Soft power
+keeps never-used units (especially device 9) completely cold, matching leaving
+the real power switch off. It also avoids free-run 1541 cost for PRG/CRT/idle
+BASIC when no drive was engaged.
+
+A 1541 ROM may still be loaded into both drive objects at startup; loading ROM is
+not power-on.
 
 ## Optional media path
 

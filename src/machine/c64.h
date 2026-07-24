@@ -135,6 +135,7 @@ enum {
 typedef struct c64_drive_status {
     uint8_t device;
     bool mounted;
+    bool powered; /* sticky soft power; independent of mounted media */
     bool writable;
     bool dirty;
     c64_drive_image_kind image_kind;
@@ -164,6 +165,9 @@ typedef struct c64_drive_directory_entry {
 
 typedef struct c64_drive_slot {
     bool mounted;
+    /* Soft power switch: off until first mount / explicit power-on. Sticky across
+       eject. When false the unit is not stepped and does not pull the IEC bus. */
+    bool powered;
     bool writable;
     bool dirty;
     c64_drive_image_kind image_kind;
@@ -316,6 +320,7 @@ typedef struct c64_sid_voice_hardware_snapshot {
 typedef struct c64_1541_hardware_snapshot {
     int device_number;
     int rom_loaded;
+    int powered; /* soft power latch for this unit */
     int media_enabled;
     int tracks_valid;
     int from_g64;
@@ -501,6 +506,14 @@ c64_drive_status_result c64_mount_g64(
 bool c64_set_drive_writable(c64_t *machine, uint8_t device, bool writable);
 void c64_unmount_drive(c64_t *machine, uint8_t device);
 void c64_unmount_all_drives(c64_t *machine);
+/* Soft power: first transition to on resets the 1541 DOS ROM (if loaded) and
+   places the unit on the IEC bus. Mount paths call this automatically.
+   Returns false if device is not 8/9. No-op success if already powered. */
+bool c64_power_on_drive(c64_t *machine, uint8_t device);
+/* Power off: if media is mounted, ejects it first, then clears soft power and
+   removes the unit from the IEC bus. No-op success if already off. */
+bool c64_power_off_drive(c64_t *machine, uint8_t device);
+bool c64_drive_is_powered(const c64_t *machine, uint8_t device);
 bool c64_copy_drive_status(const c64_t *machine, uint8_t device, c64_drive_status *out_status);
 /* Pulse sticky disk activity LEDs (visible for ~0.35s after the last event). */
 void c64_disk_activity_read(c64_t *machine, int device_number);

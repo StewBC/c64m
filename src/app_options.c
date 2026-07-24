@@ -893,6 +893,7 @@ bool app_disk_slot_copy(app_disk_slot *dest, const app_disk_slot *src)
         dest->writable[i] = src->writable != NULL && src->writable[i];
     }
     dest->current = src->current;
+    dest->power_on_only = src->power_on_only;
     return true;
 }
 
@@ -1013,11 +1014,13 @@ static bool apply_disk_spec(app_options *options, const char *spec)
 
     images = end + 1;
     if (*images == '\0') {
-        fprintf(stderr, "invalid disk spec `%s`; image path is empty\n", spec);
-        return false;
+        /* `-d 8=` / `-d 9=`: soft power-on only (no image). */
+        options->disk_slots[drive].power_on_only = true;
+        return true;
     }
 
     /* Command-line paths stay as-is (relative to CWD). */
+    options->disk_slots[drive].power_on_only = false;
     return disk_slot_parse_list(&options->disk_slots[drive], NULL, images);
 }
 

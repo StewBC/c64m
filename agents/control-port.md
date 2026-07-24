@@ -437,8 +437,14 @@ N load-state <path>
 N save-state <path>
 N mount-d64 <8|9> <path>
 N unmount-disk <8|9>
+N power-drive <8|9> [on|off]
 N get-disk-status <8|9>
 ```
+
+`power-drive 8` / `power-drive 8 on` soft-powers that unit (no media required).
+`power-drive 8 off` ejects any mounted media then powers the unit off. Mount also
+powers on. `get-disk-status` includes `powered=0|1`. `get-drive-cpu` includes
+`powered=`.
 
 Boolean tokens are `0`, `1`, `false`, or `true`. `load-bin` and `save-bin` path
 arguments may contain spaces because the last four tokens are parsed from the end.

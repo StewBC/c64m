@@ -55,6 +55,7 @@ typedef enum control_command_type {
     CONTROL_COMMAND_SAVE_STATE,
     CONTROL_COMMAND_MOUNT_D64,
     CONTROL_COMMAND_UNMOUNT_DISK,
+    CONTROL_COMMAND_POWER_DRIVE,
     CONTROL_COMMAND_GET_DISK_STATUS,
     CONTROL_COMMAND_GET_DRIVE_CPU,
     CONTROL_COMMAND_BREAK_EXEC,
@@ -100,6 +101,7 @@ typedef struct control_args {
     uint8_t key;
     uint8_t frame_format;
     uint8_t cia_index; /* 1 or 2 for get-cia */
+    bool power_drive_on; /* power-drive: true=on (default), false=off */
     bool use_file_address;
     bool reset_first;
     bool is_basic;

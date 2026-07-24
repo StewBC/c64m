@@ -15,6 +15,8 @@ typedef struct {
     bool  *writable;
     int    count;
     int    current; /* index of the disk currently (or last) mounted; 0 by default */
+    /* CLI `-d N=` (empty path): power the unit on without mounting an image. */
+    bool   power_on_only;
 } app_disk_slot;
 
 typedef struct app_options {

@@ -580,6 +580,32 @@ bool runtime_client_unmount_disk(runtime_client *client, uint8_t device) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_power_on_drive(runtime_client *client, uint8_t device) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_POWER_ON_DRIVE,
+    };
+
+    if (!client || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.disk_device.device = device;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_power_off_drive(runtime_client *client, uint8_t device) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_POWER_OFF_DRIVE,
+    };
+
+    if (!client || !c64_drive_device_supported(device)) {
+        return false;
+    }
+
+    command.data.disk_device.device = device;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_request_disk_status(runtime_client *client, uint8_t device) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_REQUEST_DISK_STATUS,
