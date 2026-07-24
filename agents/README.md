@@ -84,11 +84,11 @@ Component handoffs:
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
 - `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
   (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
-- `remote-improve.md` - **backlog note, not a handoff.** Control-port bugs, missing
-  capabilities, and throughput rough edges found while using it as the measuring
-  instrument against VICE. Read it before doing control-port automation - the
-  `get-debug-memory` staleness bug and the one-tick-per-command latency each
-  produce silently wrong measurements.
+- `remote-improve.md` - **backlog note, not a handoff.** Open control-port work
+  only (run-to-raster, main-loop tick throughput / bulk memory, CPU history).
+  Verified capabilities are in `control-port.md`. Read before oracle automation
+  so remaining rough edges (one-tick-per-command latency, no raster run-to) are
+  not mistaken for emulator bugs.
 - `pal-border.md` - **resolved case study**, not an open problem. How the PAL
   32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
   for months. Read it before any c64m-vs-VICE pixel comparison: it carries the
