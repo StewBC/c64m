@@ -823,7 +823,8 @@ in-process tests (ctest) where possible; headless integration where needed.
    has a dedicated harness.
 5. [x] `remote-improve.md` items 1–3 updated (basic run-to-raster, bulk+pipeline,
    basic CPU history).
-6. [ ] Full baseline `ctest --test-dir build --output-on-failure` when authorized.
+6. [x] Full baseline `ctest --test-dir build --output-on-failure` green
+   (56/56, 2026-07-24, pre-merge on tip).
 
 Phases **4–6** also landed (cadence telemetry, slim breakpoint events, cache
 barrier). Phases **7–8** landed as product features.
