@@ -2628,9 +2628,13 @@ uint8_t vicii_read_register(vicii *v, uint16_t addr) {
         return v->sprite_background_collision;
     }
 
-    /* Phase G: $D016 — bits 7:5 are unused and read as 1 */
+    /* $D016 — only bits 7:6 are unused and read as 1. Bit 5 is RES, a real
+       readable/writable bit, and must read back what was written (VICE
+       `vicii_read`: `vicii.regs[0x16] | 0xc0`). Forcing bit 5 to 1 here made
+       Deus Ex Machina read $F8 where VICE reads $D8, and would corrupt any
+       read-modify-write or bit test on $D016. */
     if (reg == 0x16u) {
-        return (uint8_t)((v->registers[reg] & 0x1Fu) | 0xE0u);
+        return (uint8_t)((v->registers[reg] & 0x3Fu) | 0xC0u);
     }
 
     /* Phase G: $D020–$D02E (color registers) — bits 7:4 are unused and read as 1 */
@@ -2680,7 +2684,8 @@ uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr) {
         return v->sprite_background_collision;
     }
     if (reg == 0x16u) {
-        return (uint8_t)((v->registers[reg] & 0x1Fu) | 0xE0u);
+        /* Bit 5 (RES) reads back; only 7:6 are unused. See vicii_read_register. */
+        return (uint8_t)((v->registers[reg] & 0x3Fu) | 0xC0u);
     }
     if (reg >= 0x20u && reg <= 0x2Eu) {
         return (uint8_t)((v->registers[reg] & 0x0Fu) | 0xF0u);

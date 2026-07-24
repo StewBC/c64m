@@ -113,6 +113,15 @@ Phi2 schedule; frontend frames are copies.
   mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert
   IRQ (Arkanoid dual-zone soft-scroll chain). Writing `$D012` to the *current*
   line still triggers immediately (Galencia bottom-border chain).
+- Register read-back masks follow VICE: `$D016` returns `(reg & 0x3F) | 0xC0` —
+  only bits 7:6 are unused. **Bit 5 is RES, a real readable/writable bit**, and
+  must read back what was written; an earlier model forced it high
+  (`(reg & 0x1F) | 0xE0`), so c64m read `$F8` where VICE reads `$D8` on Deus Ex
+  Machina's spiral part. `$D01A` returns `| 0xF0`, `$D020–$D02E` return
+  `(reg & 0x0F) | 0xF0`, and `$D02F–$D03F` read `$FF`. `vicii_read_register` and
+  `vicii_debug_read_register` must agree — both are covered by
+  `test_d016_unused_high_bits_read_as_1` and
+  `test_vicii_debug_read_forced_high_bits`.
 - Sprite collision IRQs (IMMC/IMBC) edge-trigger only when `$D01E`/`$D01F` go from
   zero to non-zero (Bauer / VICE). Acking `$D019` while the collision latch is
   still set must not re-fire; a CPU read of `$D01E`/`$D01F` clears the latch so

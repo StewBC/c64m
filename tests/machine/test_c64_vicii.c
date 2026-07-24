@@ -2123,7 +2123,10 @@ static void test_den_clear_idle_has_no_sprite_background_collision(void) {
     expect_u8("den clear sprite-sprite collision", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
-/* Phase G: $D016 bits 7:5 always read as 1 regardless of writes */
+/* $D016: only bits 7:6 are unused and read as 1. Bit 5 is RES and reads back
+   what was written — VICE `vicii_read` returns `vicii.regs[0x16] | 0xc0`. An
+   earlier model forced bit 5 to 1 (`& 0x1F | 0xE0`), so c64m read $F8 on Deus
+   Ex Machina's spiral part where VICE reads $D8. */
 static void test_d016_unused_high_bits_read_as_1(void) {
     vicii v;
     char error[256];
@@ -2131,15 +2134,24 @@ static void test_d016_unused_high_bits_read_as_1(void) {
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
 
     vicii_write_register(&v, 0xd016, 0x00);
-    expect_u8("d016 high bits set when written 0x00", 0xE0, vicii_read_register(&v, 0xd016) & 0xE0u);
-    expect_u8("d016 low bits zero when written 0x00", 0x00, vicii_read_register(&v, 0xd016) & 0x1Fu);
+    expect_u8("d016 bits 7:6 set when written 0x00", 0xC0, vicii_read_register(&v, 0xd016) & 0xC0u);
+    expect_u8("d016 bits 5:0 zero when written 0x00", 0x00, vicii_read_register(&v, 0xd016) & 0x3Fu);
 
     vicii_write_register(&v, 0xd016, 0xFF);
-    expect_u8("d016 high bits set when written 0xFF", 0xE0, vicii_read_register(&v, 0xd016) & 0xE0u);
-    expect_u8("d016 low bits set when written 0xFF", 0x1F, vicii_read_register(&v, 0xd016) & 0x1Fu);
+    expect_u8("d016 bits 7:6 set when written 0xFF", 0xC0, vicii_read_register(&v, 0xd016) & 0xC0u);
+    expect_u8("d016 bits 5:0 set when written 0xFF", 0x3F, vicii_read_register(&v, 0xd016) & 0x3Fu);
 
-    vicii_write_register(&v, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0 */
-    expect_u8("d016 csel set reads correctly", 0xE8, vicii_read_register(&v, 0xd016));
+    vicii_write_register(&v, 0xd016, 0x08); /* CSEL=1, MCM=0, XSCROLL=0, RES=0 */
+    expect_u8("d016 csel set reads correctly", 0xC8, vicii_read_register(&v, 0xd016));
+
+    /* RES (bit 5) is readable/writable, not a forced-1 unused bit. */
+    vicii_write_register(&v, 0xd016, 0x28); /* RES=1, CSEL=1 */
+    expect_u8("d016 res bit reads back set", 0xE8, vicii_read_register(&v, 0xd016));
+    vicii_write_register(&v, 0xd016, 0x08); /* RES=0 */
+    expect_u8("d016 res bit reads back clear", 0x00,
+              vicii_read_register(&v, 0xd016) & 0x20u);
+    expect_u8("d016 debug read matches cpu read", vicii_read_register(&v, 0xd016),
+              vicii_debug_read_register(&v, 0xd016));
 }
 
 /* Phase G: $D020–$D02E color registers — bits 7:4 always read as 1 */
@@ -2996,8 +3008,11 @@ static void test_vicii_debug_read_forced_high_bits(void) {
 
     expect_true("vicii init", vicii_init(&v, error, sizeof(error)));
 
+    /* $D016: only bits 7:6 are forced high; bit 5 (RES) reads back. */
     vicii_write_register(&v, 0xd016, 0x08);
-    expect_u8("d016 debug bits 7:5 forced high", 0xe8, vicii_debug_read_register(&v, 0xd016));
+    expect_u8("d016 debug bits 7:6 forced high", 0xc8, vicii_debug_read_register(&v, 0xd016));
+    vicii_write_register(&v, 0xd016, 0x28);
+    expect_u8("d016 debug res bit reads back", 0xe8, vicii_debug_read_register(&v, 0xd016));
 
     vicii_write_register(&v, 0xd01a, 0x03);
     expect_u8("d01a debug bits 7:4 forced high", 0xf3, vicii_debug_read_register(&v, 0xd01a));

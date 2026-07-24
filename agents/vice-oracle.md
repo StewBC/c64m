@@ -91,6 +91,115 @@ Any agent task that:
 should follow this file. If VICE "doesn't start the game," check
 `-autostartprgmode 1` and `-autoload` first.
 
+## Binary monitor: the fast path for c64m-vs-VICE comparison
+
+The **text** monitor cannot load a snapshot (`load_snapshot` has no token in the
+parser and is silently ignored) and is fragile about reconnects. For any scripted
+comparison use the **binary** monitor instead. It is a different socket and a
+different protocol, and it is far better suited to this job.
+
+```sh
+./src/x64sc -directory /Applications/vice-arm64-gtk3-3.10/VICE.app/Contents/Resources/share/vice \
+  -pal -VICIImodel 6569 \
+  -binarymonitor -binarymonitoraddress ip4://127.0.0.1:6502
+```
+
+Note `-VICIImodel 6569` (see the model-matching trap below). Reference
+implementation: `src/monitor/monitor_binary.c`.
+
+**Wire format.** Request: `02 <api=02> <u32 body-len> <u32 request-id> <u8 cmd>
+<body>`. Response: `02 <api> <u32 body-len> <u8 type> <u8 error> <u32 request-id>
+<body>`. Responses can arrive out of order and unsolicited (checkpoint hits,
+`STOPPED` 0x62, `RESUMED` 0x63), so match on request id and queue the rest.
+
+Commands that matter here:
+
+| Cmd | Name | Use |
+|-----|------|-----|
+| 0x42 | UNDUMP | Load a `.vsf`. Body: `<u8 len><path><NUL>`. This is the only way to load a snapshot from a script. |
+| 0x84 | DISPLAY_GET | Raw framebuffer, indexed-8. Body: `<u8 use_vic><u8 format=0>`. See below — this is the single biggest win. |
+| 0x12 | CHECKPOINT_SET | Body: `<u16 start><u16 end><u8 stop><u8 enabled><u8 op><u8 temporary>`. `op`: load=1, store=2, exec=4. Ranges and store/load watchpoints both work. |
+| 0x31 | REGISTERS_GET | Includes the **`LIN` and `CYC` pseudo-registers** — raster line and cycle within the line. Get names via REGISTERS_AVAILABLE (0x83). |
+| 0x01 | MEM_GET | Body: `<u8 side_effects><u16 start><u16 end><u8 memspace><u16 bank>`. Reads 8KB+ per call. |
+| 0x82 | BANKS_AVAILABLE | Bank ids; `ram`=1, `rom`=2, `io`=3. Use `ram` to read under I/O and ROM without side effects. |
+| 0xaa | EXIT | Resume emulation. |
+
+**Sending any binary command while VICE is running breaks it into the monitor**
+(`monitor_check_binary` → `monitor_startup_trap`, called from the vsync hook), and
+**closing the socket resumes emulation**. So a script that connects, works, and
+exits leaves VICE free-running from wherever it stopped. Always `UNDUMP` at the
+start of every script run to get a deterministic starting state; do not assume the
+state left by the previous run. Unlike the text monitor, reconnecting the binary
+monitor between runs did not wedge VICE.
+
+### DISPLAY_GET is directly comparable to c64m's `get-frame`
+
+`DISPLAY_GET` returns the uncropped debug buffer, which for PAL is **504x312
+indexed-8** — the same geometry as c64m's `get-frame` payload, and only 157KB
+against c64m's 649KB of ARGB. It also reports `x_off`/`y_off` for the display
+window: PAL gives `x_off=136`, `y_off=51`, `inner 320x200`.
+
+Since buffer column 136 is VIC X 24 (`pal-border.md`), the mapping is:
+
+```text
+vice_buffer_x = (VIC_X + 112) % 504        vice_buffer_y = raster
+c64m framebuffer x = VIC X                 c64m row       = raster
+```
+
+So `numpy.roll(vice_frame, -112, axis=1)` puts VICE in c64m's VIC-X order and the
+two can be diffed directly. This avoids every trap in the `screenshot` route —
+no PNG/BMP format flag, no viewport crop mismatch, no palette RGB differences,
+no CRT-shader host capture. Prefer it for all pixel work.
+
+### Deterministic frame stepping
+
+There is no "step one frame" command. The reliable pattern is an **exec checkpoint
+on an address the target executes once per frame**, then `EXIT` and wait for
+`STOPPED`, filtering on `LIN` from REGISTERS_GET:
+
+```text
+checkpoint_set(handler_addr, op=exec)
+loop: EXIT; wait STOPPED; if registers()["LIN"] == 0: capture DISPLAY_GET
+```
+
+Emulation only advances when you say so, so no frames are dropped no matter how
+slow the transfer is. Anchoring at `LIN == 0` means the buffer holds the
+just-completed frame.
+
+### Traps specific to the binary monitor
+
+**The PC reported at a *store* checkpoint stop is not the storing instruction.**
+On a `$D000-$D02F` store watchpoint, stops reported PCs such as `$9FB5` — an
+address whose instruction is `ROL $5878,X`, not a VIC store at all. `LIN`, `CYC`
+and the register file were correct at those stops. Identify the target register by
+setting a checkpoint on a **single address** rather than a range, and read the
+stored value from `A` (valid for `STA`, meaningless for `INC`/`DEC`).
+
+**A read-modify-write instruction writes twice.** `INC $D012` and the classic
+`DEC $D019` acknowledge idiom perform the 6502 dummy write of the *original* value
+followed by the new one. c64m's `C64M_VICLOG` shows both writes; a VICE store
+checkpoint shows one stop. That is a difference in the *instrumentation*, not in
+the emulation — do not report it as a divergence.
+
+**`$D019` bit 7 tells you whether a VIC IRQ is actually pending.** When a demo
+shares the `$FFFE` vector between raster and CIA interrupts, reading `$D019` at
+the handler's first instruction is what distinguishes them: bit 7 set (e.g. `$F1`)
+means the VIC raised it, bit 7 clear (`$70`) means the source was a CIA. This is
+the cheapest way to tell "c64m missed a raster IRQ" from "c64m missed a CIA IRQ",
+and the two have completely different root causes.
+
+**CIA1 Timer A makes a good shared clock.** It counts phi2 continuously and is
+unaffected by BA stalls, so sampling `$DC04/$DC05` at the same anchor in both
+emulators gives comparable cycle deltas without needing a common cycle counter.
+
+### Reading a `.vsf` without loading it
+
+The module chain is walkable directly: after the file header, each module is
+`<16-byte name><u8 major><u8 minor><u32 size>` and `size` includes the header, so
+`offset += size` reaches the next one. Useful to confirm what a snapshot contains
+(`C64MEM`, `VIC-IISC`, `CIA1`, `CIA2`, `DRIVE8`, …) and which machine class it was
+taken on, before spending time on a load that will fail.
+
 ## Building VICE from Source
 
 The VICE source tree is located at:
@@ -253,6 +362,20 @@ and their configured palettes need not use identical RGB values. Align using
 visible raster boundaries and compare geometry or scene-color classes. Do not
 declare equality or divergence from a whole-image hash, exact RGB values, or a
 scaled host screenshot with CRT scanlines.
+
+**Match the VIC-II model, and pass it explicitly.** VICE's stock default is an
+**8565**; c64m models the **6569**, and they differ by ~8 dots in the border
+region. Always launch with `-VICIImodel 6569` rather than relying on `vicerc`
+(`VICIIModel=0` is 6569 — see `src/vicii.h`). A `.vsf` only loads when the model
+matches, so a snapshot that "loads" but leaves a blank or reset machine is a model
+mismatch, not a corrupt file. Full story in `pal-border.md`.
+
+**Pairing recipe on the c64m side.** Use `--turbo=1` or `2` (mode 3 disables live
+pixels), reload the snapshot at the start of *every* capture run so both sides
+start from a fixed state, and anchor frame capture on an **exec breakpoint**
+rather than `wait-frame` — see `agents/remote-improve.md` for why, and for the
+control-port rough edges that will otherwise cost you a wrong measurement
+(`get-debug-memory` in particular returns a stale cached snapshot).
 
 **The cycle-exact VIC-II core is `src/viciisc/`.** x64sc uses it, not the older
 `src/vicii/`. Border/timing ground truth lives in
