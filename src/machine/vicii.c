@@ -1721,21 +1721,40 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
          * (same as vicii_live_pixel); skip per-dot background/sprite work.
          */
         if (v->vertical_border_active && !any_sprite) {
-            for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
-                int32_t raw_x = raw_xs + i;
-                int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
-                if (fb_x >= 0) {
-                    uint8_t k = v->hborder_pipe[1].n;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
-                        y * C64_FRAME_WIDTH + (uint32_t)fb_x;
+            int32_t fb0 = vicii_vic_x_to_frame_x(v, raw_xs);
+            /* Common case: 8 consecutive frame columns (g-access / bulk border). */
+            if (fb0 >= 0 &&
+                vicii_vic_x_to_frame_x(v, raw_xs + 7) == fb0 + 7) {
+                uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)fb0;
+                for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                    uint8_t k = (uint8_t)i;
+                    v->hborder_pipe[1].dot[k] = k;
+                    v->hborder_pipe[1].idx[k] = base_idx + (uint32_t)i;
                     v->hborder_pipe[1].content[k] = b0c;
                     v->hborder_pipe[1].content_d021[k] = true;
                     v->hborder_pipe[1].border[k] = bord;
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    if (i == 0) {
+                        vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                    }
                 }
-                if (i == 0) {
-                    vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                v->hborder_pipe[1].n = 8u;
+            } else {
+                for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                    int32_t raw_x = raw_xs + i;
+                    int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
+                    if (fb_x >= 0) {
+                        uint8_t k = v->hborder_pipe[1].n;
+                        v->hborder_pipe[1].dot[k] = (uint8_t)i;
+                        v->hborder_pipe[1].idx[k] =
+                            y * C64_FRAME_WIDTH + (uint32_t)fb_x;
+                        v->hborder_pipe[1].content[k] = b0c;
+                        v->hborder_pipe[1].content_d021[k] = true;
+                        v->hborder_pipe[1].border[k] = bord;
+                        v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    }
+                    if (i == 0) {
+                        vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                    }
                 }
             }
         } else if (!any_sprite &&
@@ -1765,7 +1784,31 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint8_t vm_byte = vm_latch[col];
                 uint8_t color_reg = color_latch[col];
 
-                for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                /* Mode 0 / XSCROLL=0: expand one g-data byte to 8 dots without
+                   per-dot switch. G-access columns always map 1:1 to frame_x. */
+                if (mode == 0u) {
+                    uint32_t fg = vicii_palette_argb[color_reg & 0x0fu];
+                    uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
+                    uint8_t g = gdata;
+                    for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
+                        uint8_t k = (uint8_t)i;
+                        bool on = (g & (uint8_t)(0x80u >> (unsigned)i)) != 0u;
+                        v->hborder_pipe[1].dot[k] = k;
+                        v->hborder_pipe[1].idx[k] = base_idx + (uint32_t)i;
+                        if (on) {
+                            v->hborder_pipe[1].content[k] = fg;
+                            v->hborder_pipe[1].content_d021[k] = false;
+                        } else {
+                            v->hborder_pipe[1].content[k] = b0c;
+                            v->hborder_pipe[1].content_d021[k] = true;
+                        }
+                        v->hborder_pipe[1].border[k] = bord;
+                        if (i == 0) {
+                            vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                        }
+                    }
+                    v->hborder_pipe[1].n = 8u;
+                } else for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                     int32_t raw_x = raw_xs + i;
                     int32_t fb_x = raw_x;
                     uint32_t pix;
@@ -1780,16 +1823,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     v->hborder_pipe[1].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                     switch (mode) {
-                    case 0u: {
-                        uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
-                        if (gdata & bit) {
-                            pix = vicii_palette_argb[color_reg & 0x0fu];
-                        } else {
-                            pix = b0c;
-                            is_d021 = true;
-                        }
-                        break;
-                    }
                     case 1u: {
                         if ((color_reg & 0x08u) == 0u) {
                             uint8_t bit = (uint8_t)(0x80u >> (unsigned)i);
@@ -2389,6 +2422,10 @@ static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_
 
     if (!v->display_state || cycle < VICII_GACCESS_FIRST_CYCLE ||
         cycle > VICII_GACCESS_LAST_CYCLE) {
+        /* Idle Phi1 still owns the bus slot, but the ghost byte is only needed
+           for optional GFXLOG. Live paint re-fetches $3FFF/$39FF when decoding
+           idle spans (path C). Skip the RAM touch on the common hot path. */
+#ifdef C64M_VIC_TRACE
         if (bus) {
             vic_bank = c64_bus_vic_bank_base(bus);
             address = (uint16_t)(vic_bank + (ecm ? 0x39ffu : 0x3fffu));
@@ -2398,6 +2435,10 @@ static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_
                 vicii_trace_graphics_access(v, "i", cycle, 0, address, value);
             }
         }
+#else
+        (void)bus;
+        (void)ecm;
+#endif
         return;
     }
 

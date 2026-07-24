@@ -471,58 +471,81 @@ float sid_filter_cutoff_factor(uint16_t cutoff) {
 /* Cycle advance: oscillators + ADSR + mix + filter                   */
 /* ------------------------------------------------------------------ */
 
-void sid_advance_cycles(sid *s, uint32_t cycles) {
-    uint32_t c, i;
-    float    v1, v2, v3, voice_sum, filtered_in, bypass_out, vol_gain;
-    float    f, q;
-    float    raw_output;
-    uint8_t  res_nibble, route, mode;
-    uint32_t prev_phase[3];
-    bool     wrapped[3];
+/* Gate off and envelope already at 0: release/sustain leave it there. Gate-on
+   attack from 0 must still run. */
+static inline bool sid_voice_env_idle(const sid_voice *v) {
+    return v->envelope == 0u && (v->control & 0x01u) == 0u;
+}
+
+/* Phase + hard-sync + envelope (+ optional waveform). Shared by silent and full
+   sample paths so OSC3/ENV3 readback stays exact when sample mix is off. */
+static void sid_advance_voices_state(
+    sid *s,
+    uint32_t prev_phase[3],
+    bool compute_waveforms)
+{
+    uint32_t i;
+    bool wrapped[3];
     static const uint8_t source_voice[3] = { 2u, 0u, 1u };
+    bool any_sync =
+        ((s->voices[0].control | s->voices[1].control | s->voices[2].control) &
+         0x02u) != 0u;
 
-    if (!s || cycles == 0u) return;
-
-    for (c = 0u; c < cycles; c++) {
-        /* --- Advance each voice --- */
-        for (i = 0u; i < 3u; i++) {
-            sid_voice *v    = &s->voices[i];
-            prev_phase[i] = v->phase;
-            wrapped[i] = false;
-
-            if (!(v->control & 0x08u)) {   /* advance phase unless TEST bit */
-                v->phase = (v->phase + (uint32_t)v->freq) & 0x00FFFFFFu;
-                wrapped[i] = v->phase < prev_phase[i];
-            }
+    for (i = 0u; i < 3u; i++) {
+        sid_voice *v = &s->voices[i];
+        prev_phase[i] = v->phase;
+        wrapped[i] = false;
+        if ((v->control & 0x08u) == 0u) {
+            v->phase = (v->phase + (uint32_t)v->freq) & 0x00FFFFFFu;
+            wrapped[i] = v->phase < prev_phase[i];
         }
+    }
 
-        /* Hard sync: a voice resets when its previous/source voice wraps.
-         * Voice 1<-3, voice 2<-1, voice 3<-2. */
+    if (any_sync) {
         for (i = 0u; i < 3u; i++) {
             sid_voice *v = &s->voices[i];
             if ((v->control & 0x02u) != 0u && wrapped[source_voice[i]]) {
                 v->phase = 0;
             }
         }
+    }
 
-        for (i = 0u; i < 3u; i++) {
-            sid_voice *v = &s->voices[i];
-            if (s->sample_output_enabled) {
-                v->last_wave = sid_voice_waveform(
-                    v,
-                    prev_phase[i],
-                    s->voices[source_voice[i]].phase);
-            }
+    for (i = 0u; i < 3u; i++) {
+        sid_voice *v = &s->voices[i];
+        if (compute_waveforms) {
+            v->last_wave = sid_voice_waveform(
+                v, prev_phase[i], s->voices[source_voice[i]].phase);
+        }
+        if (!sid_voice_env_idle(v)) {
             sid_voice_advance_env(v, s->attack_cycles, s->decay_cycles);
         }
+    }
 
-        /* --- Voice 3 read-back registers --- */
-        s->voice3_osc_read = (uint8_t)(s->voices[2].phase >> 16);
-        s->voice3_env_read =  s->voices[2].envelope;
+    s->voice3_osc_read = (uint8_t)(s->voices[2].phase >> 16);
+    s->voice3_env_read = s->voices[2].envelope;
+}
 
-        if (!s->sample_output_enabled) {
-            continue;
+void sid_advance_cycles(sid *s, uint32_t cycles) {
+    uint32_t c;
+    float    v1, v2, v3, voice_sum, filtered_in, bypass_out, vol_gain;
+    float    f, q;
+    float    raw_output;
+    uint8_t  res_nibble, route, mode;
+    uint32_t prev_phase[3];
+
+    if (!s || cycles == 0u) return;
+
+    /* Free-run / warp: host sample path off. Still advance oscillators and
+       envelopes so $D41B/$D41C and later 1x audio resume stay correct. */
+    if (!s->sample_output_enabled) {
+        for (c = 0u; c < cycles; c++) {
+            sid_advance_voices_state(s, prev_phase, false);
         }
+        return;
+    }
+
+    for (c = 0u; c < cycles; c++) {
+        sid_advance_voices_state(s, prev_phase, true);
 
         /* --- Mixer ---
          * $D417 bits 0..2 route voices 1..3 through the filter. Unrouted
