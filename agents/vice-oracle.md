@@ -139,7 +139,7 @@ indexed-8** — the same geometry as c64m's `get-frame` payload, and only 157KB
 against c64m's 649KB of ARGB. It also reports `x_off`/`y_off` for the display
 window: PAL gives `x_off=136`, `y_off=51`, `inner 320x200`.
 
-Since buffer column 136 is VIC X 24 (`pal-border.md`), the mapping is:
+Since buffer column 136 is VIC X 24 (PAL display window left edge), the mapping is:
 
 ```text
 vice_buffer_x = (VIC_X + 112) % 504        vice_buffer_y = raster
@@ -413,17 +413,18 @@ scaled host screenshot with CRT scanlines.
 
 **Match the VIC-II model, and pass it explicitly.** VICE's stock default is an
 **8565**; c64m models the **6569**, and they differ by ~8 dots in the border
-region. Always launch with `-VICIImodel 6569` rather than relying on `vicerc`
-(`VICIIModel=0` is 6569 — see `src/vicii.h`). A `.vsf` only loads when the model
-matches, so a snapshot that "loads" but leaves a blank or reset machine is a model
-mismatch, not a corrupt file. Full story in `pal-border.md`.
+region — enough to invent confident wrong answers about store timing. Always
+launch with `-VICIImodel 6569` rather than relying on `vicerc` (`VICIIModel=0` is
+6569 — see `src/vicii.h`). A `.vsf` only loads when the model matches, so a
+snapshot that "loads" but leaves a blank or reset machine is a model mismatch, not
+a corrupt file. Tell: single colour-15 dots at transitions (8565 grey-dot artefact).
 
 **Pairing recipe on the c64m side.** Use `--turbo=1` or `2` (mode 3 disables live
 pixels), reload the snapshot at the start of *every* capture run so both sides
-start from a fixed state, and anchor frame capture on an **exec breakpoint**
-rather than `wait-frame` — see `agents/remote-improve.md` for why, and for the
-control-port rough edges that will otherwise cost you a wrong measurement
-(`get-debug-memory` in particular returns a stale cached snapshot).
+start from a fixed state, and prefer **`step-frame`** or **`run-to-raster`** for
+complete frames over free-run `wait-frame` (see oracle traps in
+`control-port.md`). Force a fresh debug dump with `get-debug-memory` (it always
+rebuilds; do not assume a stale main-thread cache).
 
 **The cycle-exact VIC-II core is `src/viciisc/`.** x64sc uses it, not the older
 `src/vicii/`. Border/timing ground truth lives in

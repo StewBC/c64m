@@ -317,14 +317,13 @@ N get-drive-cpu <8|9>
 N ok pc=E37B a=00 x=00 y=00 sp=F9 p=24 cycles=12345
 ```
 
-**Hot cache (C64M/2 Phase 6):** when the main thread holds a **paused** machine
-snapshot and no mutating command has been accepted since that snapshot, `get-cpu`,
-`get-vic`, and `get-cia` are answered immediately from the main-thread cache
-(no runtime round-trip). Mutating commands (`run`, `step-*`, `set-memory`, loads,
-input, etc.) mark the cache stale. A subsequent pause/step/machine snapshot
-re-seals the barrier. While running, or after a mutation without a barrier,
-these commands still go through the deferred runtime path (token-matched for
-`get-cpu`).
+**Hot cache:** when the main thread holds a **paused** machine snapshot and no
+mutating command has been accepted since that snapshot, `get-cpu`, `get-vic`, and
+`get-cia` are answered immediately from the main-thread cache (no runtime
+round-trip). Mutating commands (`run`, `step-*`, `set-memory`, loads, input, etc.)
+mark the cache stale. A subsequent pause/step/machine snapshot re-seals the
+barrier. While running, or after a mutation without a barrier, these commands
+still go through the deferred runtime path (token-matched for `get-cpu`).
 
 `get-vic` and `get-cia` use the same cache when fresh; otherwise they request a
 fresh machine hardware snapshot (deferred).
@@ -380,6 +379,12 @@ N ok addr=0400 length=4 mode=1
 write path's 16-bit modular addressing for the poke itself; parse still
 rejects oversize length.
 
+**One-shot pokes vs active demos.** Free-running code often re-stages registers
+every frame (e.g. `$D015` in the border). A single `set-memory` is overwritten
+before the next effect draw. For isolation against a live demo use a CPU stub,
+breakpoint+poke each frame, or a VIC line-log build — there is no register-freeze
+command.
+
 `get-frame` returns `data frame` with metadata:
 
 ```text
@@ -399,6 +404,10 @@ framebuffer; use `set-turbo 1` or `set-turbo 2` before inspecting live pixels.
 `stride=width` and payload size `height * width` (PAL 504×312 = 157248 bytes).
 Unknown ARGB values map to index 0. Indexed frames are the preferred oracle
 compare format because c64m and VICE RGB values differ.
+
+**Mid-frame pause:** `get-frame` while paused mid-raster returns the **partial
+working buffer**, not a completed frame. For a full frame use `step-frame`, or
+`run-to-raster` into the lower border (or a known stable line), then `get-frame`.
 
 `get-debug-memory` **always requests a fresh snapshot** (never serves a stale
 cache). It concatenates three 65536-byte arrays in this order: CPU map, raw RAM,
@@ -541,6 +550,18 @@ Timeout returns `error timeout deferred response timed out`.
 A second wait while one is already deferred returns `error busy` (single-waiter
 policy). Sticky latches remain one-consumer.
 
+### Oracle / automation traps
+
+- Prefer **`--headless`** for control-port latency; a windowed present is still
+  ~16 ms class by design.
+- Free-run `wait-frame 1` then `get-frame` can **alias frames** if one main-loop
+  turn exceeds a frame period. Prefer **`step-frame`** for consecutive frames.
+- `run` → `wait-frame` → `pause` can still **overshoot by a frame** (pause is
+  accepted after the wait). Not fixed by bulk memory or pipelining.
+- There is no expression-guarded breakpoint (VICE-style `CONDITION_SET`).
+- c64m vs VICE workflow: match VIC models and load flags in **`vice-oracle.md`**.
+  Comparison friction is often VICE-side; that note is the mitigation.
+
 ## Assembler and symbols
 
 ```text
@@ -562,8 +583,9 @@ or `bad-args`. Runtime rejection uses `runtime command rejected`. A full request
 queue returns `busy request queue full`. Malformed binary payload framing closes the
 client after returning `bad-payload` where possible.
 
-The socket thread owns blocking network I/O only. Do not poll runtime events from a
-Python client's perspective as if they were unsolicited events: responses are tied
-to requests, and event waits are the supported synchronization mechanism. Do not
-add commands by editing only this document; update `control_protocol`, main-loop
-dispatch, and the protocol tests together.
+The socket thread owns network I/O only (may pipeline; never touches the machine).
+Do not poll runtime events from a Python client's perspective as if they were
+unsolicited events: responses are tied to requests, and event waits are the
+supported synchronization mechanism. Do not add commands by editing only this
+document; update `control_protocol`, main-loop dispatch, and the protocol tests
+together.

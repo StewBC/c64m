@@ -53,7 +53,7 @@ Phi2 schedule; frontend frames are copies.
   X 0..375, so this band is never displayed; it only shows up in whole-line
   compares. 9f1ea9e tried to reach 32/32 by shifting the *origin* (modular +8),
   which both invented a left band and dropped X 376..383 - not the route to
-  retry (`pal-border.md`).
+  retry (resolved: use the real viewport crop, not a modular origin shift).
   NTSC crop is 352x224 from X=8, Y=39 (rows 39..262). The display window is
   51..250 on both standards, so NTSC has only 12 border lines below it; the
   224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -

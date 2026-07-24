@@ -82,31 +82,13 @@ Component handoffs:
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
-- `vice-oracle.md` - how to load `assets/prg/` one-load collection PRGs in VICE
-  (`-autostartprgmode 1`, `-autoload`); required for c64m vs VICE compares
-- `remote-improve.md` - **backlog note, not a handoff.** Remaining open oracle
-  UX (free-run frame aliasing, pause-after-wait overshoot; expression-guarded
-  breakpoints). Transport items (bulk memory, pipeline, run-to-raster, basic
-  CPU history) are closed on C64M/2 — see that file. Verified wire protocol is
-  in `control-port.md`.
-- `threading-efficiency.md` - **historical evaluate-only review** of the pre-
-  series design (one-in-flight, 1K memory, fat events). Not current behavior.
-  Trust `control-port.md` / source for what ships; use the roadmap for status.
-- `threading-efficiency-roadmap.md` - **implementation roadmap** for the above:
-  phases 0.5–8 landed on `main` (contracts, bulk memory, pipeline, headless
-  wake, cadence UI, slim breakpoints, cache barriers, run-to-raster, CPU
-  history). Checkpoints, measured baselines §16, residual backlog notes.
-- `pal-border.md` - **resolved case study**, not an open problem. How the PAL
-  32/320/32 viewport was reached, and why the earlier attempt was misdiagnosed
-  for months. Read it before any c64m-vs-VICE pixel comparison: it carries the
-  VIC-II **model-matching** trap (VICE defaults to 8565, c64m models 6569, ~8
-  dots apart in the border region) that produced two confident wrong answers,
-  plus the binary-monitor snapshot-load and frame-publishing recipes.
+- `vice-oracle.md` - VICE as display/timing oracle: `assets/prg/` load flags
+  (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
+  monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.
 
 Current baseline is 56/56 passing (includes `c64_snapshot_1541_midload` and the
-control/runtime identity tests from the threading series). That baseline includes
-the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541 drive-object
-snapshot paths.
+control/runtime identity tests). That baseline includes the real 1541 ROM/IEC,
+G64, Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
 
 The verification command is:
 

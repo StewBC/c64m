@@ -45,8 +45,7 @@ tables) for startup and after stop/step. Free-run frame path calls
 ## Message contracts (identity, delivery, ownership)
 
 These rules are the IPC contract for UI↔runtime and control-port deferred work.
-They are enforced in code starting with the Phase 0.5b landing (see
-`threading-efficiency-roadmap.md`). Source remains authoritative if prose drifts.
+They are enforced in code. Source remains authoritative if prose drifts.
 
 ### Request tokens
 
@@ -140,7 +139,6 @@ If commands or events carry heap payloads (Phase 5; bulk pool Phase 1):
 - Deferred match / epoch: `src/main.c`
 - Wire concurrency / pipeline: `src/control/control_server.c` (nonblocking
   multiplex, high-water 16)
-- Roadmap / status: `agents/threading-efficiency-roadmap.md`
 
 ## Control port
 
