@@ -212,6 +212,11 @@ struct runtime {
     int autorun_d64_phase;
     /* Incremented on each machine-state telemetry publish (Phase 4 stamps). */
     uint64_t runtime_seq;
+    /* Optional CPU instruction history (Phase 8); off by default. */
+    bool cpu_history_enabled;
+    runtime_cpu_history_entry cpu_history[RUNTIME_CPU_HISTORY_MAX];
+    uint16_t cpu_history_count;
+    uint16_t cpu_history_head; /* next write index */
 };
 
 int runtime_thread_main(void *userdata);

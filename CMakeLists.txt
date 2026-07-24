@@ -825,3 +825,15 @@ target_link_libraries(test_runtime_run_to_raster PRIVATE
 )
 
 add_test(NAME runtime_run_to_raster COMMAND test_runtime_run_to_raster)
+
+add_executable(test_runtime_cpu_history
+    tests/runtime/test_runtime_cpu_history.c
+)
+
+target_compile_features(test_runtime_cpu_history PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_cpu_history PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_cpu_history COMMAND test_runtime_cpu_history)

@@ -1933,6 +1933,72 @@ static bool runtime_step_cycle(runtime *rt) {
     return true;
 }
 
+static void runtime_cpu_history_record(runtime *rt)
+{
+    runtime_cpu_history_entry *entry;
+    c64_cpu_snapshot snap;
+    uint16_t pc;
+
+    if (rt == NULL || !rt->cpu_history_enabled) {
+        return;
+    }
+    c64_copy_cpu_snapshot(&rt->machine, &snap);
+    pc = snap.pc;
+    entry = &rt->cpu_history[rt->cpu_history_head];
+    entry->pc = pc;
+    entry->a = snap.a;
+    entry->x = snap.x;
+    entry->y = snap.y;
+    entry->sp = snap.sp;
+    entry->p = snap.p;
+    entry->cycles = snap.cycles;
+    entry->opcode = c64_debug_read_cpu_map(&rt->machine, pc);
+    rt->cpu_history_head =
+        (uint16_t)((rt->cpu_history_head + 1u) % RUNTIME_CPU_HISTORY_MAX);
+    if (rt->cpu_history_count < RUNTIME_CPU_HISTORY_MAX) {
+        rt->cpu_history_count += 1u;
+    }
+}
+
+static void runtime_publish_cpu_history(runtime *rt, uint16_t max_entries)
+{
+    runtime_event event = {
+        .type = RUNTIME_EVENT_CPU_HISTORY_RESPONSE,
+    };
+    uint16_t n;
+    uint16_t i;
+    uint16_t start;
+
+    if (max_entries == 0u || max_entries > RUNTIME_CPU_HISTORY_MAX) {
+        max_entries = RUNTIME_CPU_HISTORY_MAX;
+    }
+    n = rt->cpu_history_count;
+    if (n > max_entries) {
+        n = max_entries;
+    }
+    event.data.cpu_history.count = n;
+    event.data.cpu_history.enabled = rt->cpu_history_enabled ? 1u : 0u;
+    /* Oldest of the last n first. */
+    if (rt->cpu_history_count < RUNTIME_CPU_HISTORY_MAX) {
+        start = 0;
+        if (rt->cpu_history_count > n) {
+            start = (uint16_t)(rt->cpu_history_count - n);
+        }
+        for (i = 0; i < n; ++i) {
+            event.data.cpu_history.entries[i] = rt->cpu_history[start + i];
+        }
+    } else {
+        start = (uint16_t)((rt->cpu_history_head + RUNTIME_CPU_HISTORY_MAX - n) %
+                           RUNTIME_CPU_HISTORY_MAX);
+        for (i = 0; i < n; ++i) {
+            uint16_t idx =
+                (uint16_t)((start + i) % RUNTIME_CPU_HISTORY_MAX);
+            event.data.cpu_history.entries[i] = rt->cpu_history[idx];
+        }
+    }
+    runtime_publish_event(rt, &event);
+}
+
 static bool runtime_publish_step_complete(runtime *rt) {
     rt->last_stop_reason = RUNTIME_STOP_REASON_STEP;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
@@ -1957,6 +2023,9 @@ static bool runtime_step_instruction(runtime *rt) {
     c64_cpu_snapshot snapshot;
 
     rt->suppress_execute_bp = false;
+    if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
+        runtime_cpu_history_record(rt);
+    }
 
     if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
         runtime_publish_error(rt, error);
@@ -3672,6 +3741,19 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 command->data.run_to_raster.cycle_in_line);
             break;
 
+        case RUNTIME_COMMAND_SET_CPU_HISTORY:
+            rt->cpu_history_enabled = command->data.set_cpu_history.enabled != 0;
+            if (!rt->cpu_history_enabled) {
+                rt->cpu_history_count = 0;
+                rt->cpu_history_head = 0;
+            }
+            break;
+
+        case RUNTIME_COMMAND_REQUEST_CPU_HISTORY:
+            runtime_publish_cpu_history(
+                rt, command->data.request_cpu_history.max_entries);
+            break;
+
         case RUNTIME_COMMAND_RUN_INSTRUCTIONS:
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             runtime_run_instructions(rt, command->data.run_instructions.count);
@@ -4558,6 +4640,9 @@ int runtime_thread_main(void *userdata) {
                         rt->autorun_d64_phase = 0;
                         runtime_autorun_paste(rt, "RUN\r");
                     }
+                }
+                if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
+                    runtime_cpu_history_record(rt);
                 }
                 if (!runtime_step_cycle(rt)) {
                     break;

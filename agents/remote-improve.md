@@ -41,6 +41,7 @@ running). Consequences while free-running:
 
 ## 3. CPU instruction history
 
-VICE has `CPUHISTORY_GET` (0x86). c64m has `get-call-stack`, which does not answer
-"what path did we take into this handler?". Natural companion to load/store
-watchpoints; lower priority than raster run-to and tick throughput.
+~~VICE has `CPUHISTORY_GET` (0x86).~~ **Done (basic):** `set-cpu-history on|off`
+and `get-cpu-history [1..64]` with a 64-entry ring of instruction-start state.
+Still thinner than VICE (no full disasm stream); enough for “path into this
+handler?” with watchpoints.

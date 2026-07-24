@@ -180,6 +180,8 @@ bool runtime_client_run_to_raster(
     uint16_t raster_line,
     bool has_cycle,
     uint16_t cycle_in_line);
+bool runtime_client_set_cpu_history(runtime_client *client, bool enabled);
+bool runtime_client_request_cpu_history(runtime_client *client, uint16_t max_entries);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

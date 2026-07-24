@@ -364,6 +364,12 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 13 && strncmp(name, "run-to-raster", length) == 0) {
         return CONTROL_COMMAND_RUN_TO_RASTER;
     }
+    if (length == 15 && strncmp(name, "set-cpu-history", length) == 0) {
+        return CONTROL_COMMAND_SET_CPU_HISTORY;
+    }
+    if (length == 15 && strncmp(name, "get-cpu-history", length) == 0) {
+        return CONTROL_COMMAND_GET_CPU_HISTORY;
+    }
     if (length == 9 && strncmp(name, "set-turbo", length) == 0) {
         return CONTROL_COMMAND_SET_TURBO;
     }
@@ -644,6 +650,44 @@ bool control_protocol_parse_request(
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }
+    } else if (type == CONTROL_COMMAND_SET_CPU_HISTORY) {
+        if (strncmp(cursor, "on", 2) == 0 &&
+            (cursor[2] == '\0' || cursor[2] == ' ' || cursor[2] == '\t' ||
+             cursor[2] == '\r' || cursor[2] == '\n' || cursor[2] == '1')) {
+            args.cpu_history_enabled = true;
+            cursor += 2;
+        } else if (strncmp(cursor, "off", 3) == 0) {
+            args.cpu_history_enabled = false;
+            cursor += 3;
+        } else if (cursor[0] == '1' &&
+                   (cursor[1] == '\0' || cursor[1] == ' ' || cursor[1] == '\t' ||
+                    cursor[1] == '\r' || cursor[1] == '\n')) {
+            args.cpu_history_enabled = true;
+            cursor += 1;
+        } else if (cursor[0] == '0' &&
+                   (cursor[1] == '\0' || cursor[1] == ' ' || cursor[1] == '\t' ||
+                    cursor[1] == '\r' || cursor[1] == '\n')) {
+            args.cpu_history_enabled = false;
+            cursor += 1;
+        } else {
+            set_parse_error(out_error, id, "bad-args", "expected on|off|0|1");
+            return false;
+        }
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+    } else if (type == CONTROL_COMMAND_GET_CPU_HISTORY) {
+        uint64_t count = 64;
+        if (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
+            if (!parse_u64_token(cursor, &cursor, &count) || count == 0 || count > 64) {
+                set_parse_error(out_error, id, "bad-args", "expected count 1..64");
+                return false;
+            }
+            while (*cursor == ' ' || *cursor == '\t') {
+                cursor++;
+            }
+        }
+        args.cpu_history_count = (uint16_t)count;
     } else if (type == CONTROL_COMMAND_RUN_TO_RASTER) {
         uint64_t line = 0;
         uint64_t cycle = 0;

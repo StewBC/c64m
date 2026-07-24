@@ -846,6 +846,36 @@ bool runtime_client_run_to_raster(
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_set_cpu_history(runtime_client *client, bool enabled) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_SET_CPU_HISTORY,
+    };
+
+    if (!client) {
+        return false;
+    }
+    command.data.set_cpu_history.enabled = enabled ? 1u : 0u;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_request_cpu_history(runtime_client *client, uint16_t max_entries) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_REQUEST_CPU_HISTORY,
+    };
+
+    if (!client) {
+        return false;
+    }
+    if (max_entries == 0u) {
+        max_entries = RUNTIME_CPU_HISTORY_MAX;
+    }
+    if (max_entries > RUNTIME_CPU_HISTORY_MAX) {
+        max_entries = RUNTIME_CPU_HISTORY_MAX;
+    }
+    command.data.request_cpu_history.max_entries = max_entries;
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_PASTE_TEXT,

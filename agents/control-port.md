@@ -221,6 +221,8 @@ N step-over
 N step-out
 N step-frame
 N run-to-raster <line 0..65535> [cycle-in-line]
+N set-cpu-history <on|off|0|1>
+N get-cpu-history [count 1..64]
 N run-cycles <positive-count>
 N run-instructions <positive-count>
 N run-to <address>
@@ -258,6 +260,12 @@ win** — if an exec/watchpoint or BRK fires first, that stop reason is used ins
 Valid line ranges depend on video standard (PAL 0..311, NTSC 0..262); out-of-range
 targets time out with a runtime error. Use `get-vic` after completion to confirm
 `raster=` / `cycle=`.
+
+`set-cpu-history on` enables a ring buffer of the last up to 64 instruction-start
+states (PC, opcode byte, A/X/Y/SP/P, cycles). **Off by default** — free-run cost is
+small but nonzero while enabled. `set-cpu-history off` clears the buffer.
+`get-cpu-history [count]` returns a text ok line with `enabled=` / `count=` and
+entries `i:pc=… op=…` (oldest first among the returned window).
 
 Run/step/load/input commands return `ok accepted=1` when the runtime command was
 queued, not when the operation has completed. Follow with `wait-event`,

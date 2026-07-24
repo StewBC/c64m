@@ -30,7 +30,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_DISK_SWAP,
     RUNTIME_EVENT_DEBUG_MEMORY_READY,
     RUNTIME_EVENT_SAVE_STATE_COMPLETE,
-    RUNTIME_EVENT_LOAD_STATE_COMPLETE
+    RUNTIME_EVENT_LOAD_STATE_COMPLETE,
+    RUNTIME_EVENT_CPU_HISTORY_RESPONSE
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -60,8 +61,27 @@ enum {
     RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64,
     RUNTIME_CALL_STACK_MAX = 16,
     RUNTIME_BREAKPOINT_TRON_PATH_MAX = 256,
-    RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256
+    RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256,
+    /* Kept modest so the history response need not fatten the event queue. */
+    RUNTIME_CPU_HISTORY_MAX = 64
 };
+
+typedef struct runtime_cpu_history_entry {
+    uint16_t pc;
+    uint8_t a;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sp;
+    uint8_t p;
+    uint8_t opcode;
+    uint64_t cycles;
+} runtime_cpu_history_entry;
+
+typedef struct runtime_cpu_history_snapshot {
+    uint16_t count;
+    uint8_t enabled;
+    runtime_cpu_history_entry entries[RUNTIME_CPU_HISTORY_MAX];
+} runtime_cpu_history_snapshot;
 
 typedef enum runtime_memory_rpc_status {
     RUNTIME_MEMORY_RPC_OK = 0,
@@ -313,5 +333,7 @@ typedef struct runtime_event {
             uint64_t generation;
             uint8_t has_write_history;
         } debug_memory_ready;
+
+        runtime_cpu_history_snapshot cpu_history;
     } data;
 } runtime_event;

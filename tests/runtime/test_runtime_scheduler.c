@@ -1154,7 +1154,7 @@ static void test_runtime_ignores_disabled_execute_breakpoint(void) {
     poll_breakpoint_count(client, &event, &bps, 1);
     id = first_breakpoint_id(&bps);
     expect_true("disable breakpoint", runtime_client_set_breakpoint_enabled(client, id, false));
-    poll_breakpoint_count(client, &event, &bps, 1);
+    refresh_breakpoints(client, &event, &bps, 1);
     expect_u8("breakpoint disabled", 0, bps.entries[0].enabled);
 
     expect_true("run cycles past disabled breakpoint", runtime_client_run_cycles(client, 16));

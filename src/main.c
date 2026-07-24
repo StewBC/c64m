@@ -2057,6 +2057,45 @@ static void complete_deferred_control_response(
             control_response_release(&response);
             SDL_Log("control: response queue full");
         }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_CPU_HISTORY &&
+               event->type == RUNTIME_EVENT_CPU_HISTORY_RESPONSE) {
+        char text[CONTROL_RESPONSE_TEXT_MAX];
+        size_t used = 0;
+        uint16_t i;
+        const runtime_cpu_history_snapshot *hist = &event->data.cpu_history;
+        used = (size_t)snprintf(
+            text,
+            sizeof(text),
+            "enabled=%u count=%u",
+            hist->enabled ? 1u : 0u,
+            (unsigned)hist->count);
+        for (i = 0; i < hist->count && used + 40u < sizeof(text); ++i) {
+            const runtime_cpu_history_entry *e = &hist->entries[i];
+            int n = snprintf(
+                text + used,
+                sizeof(text) - used,
+                " |%u:pc=%04X op=%02X a=%02X x=%02X y=%02X sp=%02X p=%02X cyc=%llu",
+                (unsigned)i,
+                e->pc,
+                e->opcode,
+                e->a,
+                e->x,
+                e->y,
+                e->sp,
+                e->p,
+                (unsigned long long)e->cycles);
+            if (n < 0) {
+                break;
+            }
+            used += (size_t)n;
+        }
+        control_protocol_format_ok(&response, deferred->request_id, text, false);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
     } else if (deferred->command_type == CONTROL_COMMAND_ASSEMBLE &&
                (event->type == RUNTIME_EVENT_ASSEMBLE_COMPLETE ||
                 event->type == RUNTIME_EVENT_ASSEMBLE_ERROR)) {
@@ -3780,7 +3819,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster cpu-history",
                 false);
             break;
 
@@ -3860,6 +3899,45 @@ static void dispatch_control_request(
                 request->args.raster_line,
                 request->args.has_raster_cycle,
                 request->args.raster_cycle);
+            break;
+
+        case CONTROL_COMMAND_SET_CPU_HISTORY:
+            accepted = runtime_client_set_cpu_history(
+                client, request->args.cpu_history_enabled);
+            break;
+
+        case CONTROL_COMMAND_GET_CPU_HISTORY:
+            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+                 deferred_table != NULL && deferred == NULL)) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    deferred_busy_msg,
+                    false);
+            } else if (runtime_client_request_cpu_history(
+                           client, request->args.cpu_history_count)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
             break;
 
         case CONTROL_COMMAND_SET_TURBO:
