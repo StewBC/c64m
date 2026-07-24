@@ -75,6 +75,12 @@ Phi2 schedule; frontend frames are copies.
 - Text, bitmap, multicolor, ECM, invalid modes, border state, DEN/bad-line state,
   sprites, priority, expansion, multicolor, pointers/data fetches, collisions,
   raster IRQ, and timed register writes are implemented.
+- Sprite-sprite priority is resolved before sprite-background priority: the
+  lowest-numbered opaque sprite wins the sprite mux, then that winning sprite's
+  `$D01B` bit decides whether foreground graphics mask it. A higher-numbered
+  front sprite cannot leapfrog a lower-numbered behind sprite. The DEM spirals
+  effect depends on this ordering to let foreground graphics mask yellow
+  sprites 0-3 without revealing green sprites 4-7 underneath them.
 - The bus scheduler distinguishes Phi1 idle/graphics/sprite-pointer work from
   Phi2 bad-line character and sprite-data work. Bad-line BA is low on cycles
   11..53; sprite BA uses VICE's explicit live PAL/NTSC per-cycle DMA masks, not

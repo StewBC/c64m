@@ -1003,6 +1003,33 @@ static void test_sprite_sprite_collision_priority_and_irq(void) {
     expect_u8("d01e after new collision", 0x03, vicii_read_register(&machine.vic, 0xd01e));
 }
 
+static void test_sprite_sprite_priority_precedes_background_priority(void) {
+    c64_t     machine;
+    c64_frame frame;
+
+    reset_machine(&machine);
+    c64_bus_write(&machine.bus, 0xd011, 0x1b);
+    c64_bus_write(&machine.bus, 0xd016, 0x08);
+    c64_bus_write(&machine.bus, 0xd021, 0x06);
+    machine.bus.ram[0x0400] = 1;
+    machine.bus.color_ram[0] = 5;
+    setup_solid_sprite(&machine, 0, 0x0340, 24, 50, 7);
+    setup_solid_sprite(&machine, 1, 0x0380, 24, 50, 10);
+    c64_bus_write(&machine.bus, 0xd01b, 0x01); /* sprite 0 behind, sprite 1 in front */
+
+    make_live_frame(&machine, &frame, "sprite mux before background priority frame");
+
+    /* Sprite 0 wins the sprite-sprite mux and blocks sprite 1. Foreground
+       graphics then mask sprite 0 because its own $D01B bit is set. */
+    expect_u32("foreground masks winning behind sprite without revealing sprite 1",
+               TEST_PALETTE_5,
+               frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
+    expect_u8("both overlapping sprites still collide", 0x03,
+              vicii_read_register(&machine.vic, 0xd01e));
+    expect_u8("both sprites collide with foreground", 0x03,
+              vicii_read_register(&machine.vic, 0xd01f));
+}
+
 static void test_sprite_background_priority_and_collision(void) {
     c64_t     machine;
     c64_frame frame;
@@ -4043,6 +4070,7 @@ int main(void) {
     test_sprite_midline_x_write_affects_remaining_dots();
     test_sprite_y50_touches_top_border_fully_revealed();
     test_sprite_sprite_collision_priority_and_irq();
+    test_sprite_sprite_priority_precedes_background_priority();
     test_sprite_background_priority_and_collision();
     test_border_hides_sprites_but_collision_latches();
     test_sprite_bg_collision_in_top_border_idle();

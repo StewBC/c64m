@@ -1337,6 +1337,7 @@ static uint32_t vicii_compose_pixel(
     bool note_collisions,
     bool *out_color_is_d021)
 {
+    int winning_sprite = -1;
     int n;
     if (out_color_is_d021 != NULL) {
         *out_color_is_d021 = false;
@@ -1358,23 +1359,22 @@ static uint32_t vicii_compose_pixel(
         bg.color_is_d021 = true;
     }
 
+    /* Sprite-sprite priority is resolved before sprite-background priority.
+       The lowest-numbered opaque sprite wins the sprite mux; only that
+       sprite's $D01B bit then decides whether foreground graphics cover it.
+       A higher-numbered front sprite cannot leapfrog a lower-numbered sprite
+       merely because the latter is behind foreground graphics. */
     for (n = 0; n < 8; n++) {
-        if (sprites[n].opaque && ((v->sprite_priority & (uint8_t)(1u << n)) == 0)) {
-            return sprites[n].color;
+        if (sprites[n].opaque) {
+            winning_sprite = n;
+            break;
         }
     }
 
-    if (bg.foreground) {
-        if (out_color_is_d021 != NULL) {
-            *out_color_is_d021 = bg.color_is_d021;
-        }
-        return bg.color;
-    }
-
-    for (n = 0; n < 8; n++) {
-        if (sprites[n].opaque && ((v->sprite_priority & (uint8_t)(1u << n)) != 0)) {
-            return sprites[n].color;
-        }
+    if (winning_sprite >= 0
+        && (!bg.foreground
+            || (v->sprite_priority & (uint8_t)(1u << winning_sprite)) == 0)) {
+        return sprites[winning_sprite].color;
     }
 
     if (out_color_is_d021 != NULL) {
