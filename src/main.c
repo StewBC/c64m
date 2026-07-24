@@ -5026,6 +5026,21 @@ static bool run_main_loop(
     return true;
 }
 
+enum {
+    /* SDL_USEREVENT code: control request queued (socket → main wake). */
+    C64M_SDL_WAKE_CONTROL = 1
+};
+
+static void headless_control_wake(void)
+{
+    SDL_Event event;
+
+    SDL_zero(event);
+    event.type = SDL_USEREVENT;
+    event.user.code = C64M_SDL_WAKE_CONTROL;
+    SDL_PushEvent(&event);
+}
+
 static bool run_headless_loop(
     runtime_client *client,
     app_options *options,
@@ -5039,16 +5054,26 @@ static bool run_headless_loop(
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
 
+    if (control != NULL) {
+        control_server_set_wake_hook(control, headless_control_wake);
+    }
+
     request_debug_state(client);
     runtime_client_request_frame(client);
 
     while (running) {
         SDL_Event event;
+        /* When deferred work is outstanding, poll aggressively (0 ms wait) so
+           completions are runtime-bound rather than 1 ms quantized. When idle,
+           wait up to 1 ms or until a control wake event arrives. */
+        uint32_t wait_ms = deferred_table_any_active(&deferred_control) ? 0u : 1u;
 
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                running = false;
-            }
+        if (SDL_WaitEventTimeout(&event, (int)wait_ms)) {
+            do {
+                if (event.type == SDL_QUIT) {
+                    running = false;
+                }
+            } while (SDL_PollEvent(&event));
         }
 
         poll_runtime_events(
@@ -5071,7 +5096,10 @@ static bool run_headless_loop(
             &control_cache,
             &deferred_control,
             &event_latch);
-        SDL_Delay(1);
+    }
+
+    if (control != NULL) {
+        control_server_set_wake_hook(control, NULL);
     }
 
     return true;

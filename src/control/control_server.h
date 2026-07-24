@@ -20,3 +20,7 @@ bool control_server_post_response(control_server *server, const control_response
 uint64_t control_server_connection_epoch(control_server *server);
 bool control_server_has_client(control_server *server);
 
+/* Optional main-thread wake when a request is queued (headless latency). */
+typedef void (*control_server_wake_fn)(void);
+void control_server_set_wake_hook(control_server *server, control_server_wake_fn fn);
+

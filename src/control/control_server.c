@@ -29,6 +29,7 @@ struct control_server {
     message_queue *responses;
     thread *worker;
     uint64_t connection_epoch;
+    control_server_wake_fn wake_hook;
 };
 
 static bool control_server_is_stopping(control_server *server)
@@ -242,6 +243,43 @@ static bool control_server_send_response(
     return true;
 }
 
+static void control_server_notify_wake(control_server *server)
+{
+    control_server_wake_fn hook;
+
+    if (server == NULL || server->lock == NULL) {
+        return;
+    }
+    mutex_lock(server->lock);
+    hook = server->wake_hook;
+    mutex_unlock(server->lock);
+    if (hook != NULL) {
+        hook();
+    }
+}
+
+void control_server_set_wake_hook(control_server *server, control_server_wake_fn fn)
+{
+    if (server == NULL || server->lock == NULL) {
+        return;
+    }
+    mutex_lock(server->lock);
+    server->wake_hook = fn;
+    mutex_unlock(server->lock);
+}
+
+static bool control_server_push_request(control_server *server, control_request *request)
+{
+    if (server == NULL || request == NULL) {
+        return false;
+    }
+    if (!message_queue_push(server->requests, request)) {
+        return false;
+    }
+    control_server_notify_wake(server);
+    return true;
+}
+
 static bool control_server_ids_contains(const uint32_t *ids, size_t count, uint32_t id)
 {
     size_t i;
@@ -301,7 +339,7 @@ static bool control_server_handle_connection(
                 keep_open = !response.close_client;
                 continue;
             }
-            if (!message_queue_push(server->requests, &request)) {
+            if (!control_server_push_request(server, &request)) {
                 control_request_release(&request);
                 control_protocol_format_error(
                     &response, request.id, "busy", "request queue full", false);
@@ -374,7 +412,7 @@ static bool control_server_handle_connection(
                                connection, &request, &err)) {
                     control_server_send_response(connection, &err);
                     keep_open = !err.close_client;
-                } else if (!message_queue_push(server->requests, &request)) {
+                } else if (!control_server_push_request(server, &request)) {
                     control_request_release(&request);
                     control_protocol_format_error(
                         &err, request.id, "busy", "request queue full", false);

@@ -32,6 +32,11 @@ controller support, or host audio device. `quit-client` closes the socket; it do
 not terminate the emulator process, so an automation harness must terminate the
 process after its final command.
 
+**Headless latency floor:** the main loop waits with a short timeout and is woken
+when a control request is queued (SDL user event). While a deferred response is
+outstanding it polls without the 1 ms idle sleep so completion tracks the runtime
+rather than a fixed tick. Idle CPU stays bounded (wait, not a busy spin).
+
 Run from the repository root so default ROM lookup finds `roms/`.
 
 ## Protocol version
