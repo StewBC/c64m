@@ -267,6 +267,28 @@ bool runtime_client_write_memory_byte(
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_write_memory(
+    runtime_client *client,
+    uint16_t address,
+    uint16_t length,
+    runtime_memory_mode mode,
+    const uint8_t *bytes) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_WRITE_MEMORY,
+    };
+
+    if (!client || bytes == NULL || length == 0 ||
+        length > RUNTIME_MEMORY_SNAPSHOT_MAX) {
+        return false;
+    }
+
+    command.data.write_memory.address = address;
+    command.data.write_memory.length = length;
+    command.data.write_memory.mode = (uint8_t)mode;
+    memcpy(command.data.write_memory.bytes, bytes, length);
+    return message_queue_push(client->command_queue, &command);
+}
+
 bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t address) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT,

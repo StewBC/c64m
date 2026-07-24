@@ -382,6 +382,9 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 10 && strncmp(name, "get-memory", length) == 0) {
         return CONTROL_COMMAND_GET_MEMORY;
     }
+    if (length == 10 && strncmp(name, "set-memory", length) == 0) {
+        return CONTROL_COMMAND_SET_MEMORY;
+    }
     if (length == 16 && strncmp(name, "get-debug-memory", length) == 0) {
         return CONTROL_COMMAND_GET_DEBUG_MEMORY;
     }
@@ -638,7 +641,8 @@ bool control_protocol_parse_request(
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }
-    } else if (type == CONTROL_COMMAND_GET_MEMORY) {
+    } else if (type == CONTROL_COMMAND_GET_MEMORY ||
+               type == CONTROL_COMMAND_SET_MEMORY) {
         uint64_t length = 0;
         if (!parse_u16_token(cursor, &cursor, &args.address)) {
             set_parse_error(out_error, id, "bad-args", "expected 16-bit address");
@@ -656,7 +660,18 @@ bool control_protocol_parse_request(
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }
-        if (!parse_memory_mode_token(cursor, &cursor, &args.memory_mode)) {
+        if (type == CONTROL_COMMAND_SET_MEMORY) {
+            /* Writable modes only; rom/drive maps are rejected at parse time. */
+            if (!parse_memory_mode_token(cursor, &cursor, &args.memory_mode) ||
+                (args.memory_mode != 0u && args.memory_mode != 1u)) {
+                set_parse_error(
+                    out_error,
+                    id,
+                    "bad-args",
+                    "expected writable memory mode map or ram");
+                return false;
+            }
+        } else if (!parse_memory_mode_token(cursor, &cursor, &args.memory_mode)) {
             set_parse_error(
                 out_error,
                 id,
@@ -1001,6 +1016,8 @@ bool control_protocol_parse_request(
     if (type == CONTROL_COMMAND_PASTE_TEXT_DATA ||
         type == CONTROL_COMMAND_PASTE_EVENTS_DATA) {
         out_request->payload_size = (size_t)args.count;
+    } else if (type == CONTROL_COMMAND_SET_MEMORY) {
+        out_request->payload_size = (size_t)args.length;
     }
     return true;
 }

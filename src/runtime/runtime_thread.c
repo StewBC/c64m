@@ -2167,6 +2167,49 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
     runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
 }
 
+/* Bulk poke for control-port set-memory. Writable modes are map and ram only.
+   Auto-pauses if running so the write always applies (matches assemble's
+   "mutate in a defined state" habit). */
+static void runtime_write_memory(runtime *rt, const runtime_command *command) {
+    runtime_memory_mode mode;
+    uint16_t address;
+    uint16_t length;
+    uint16_t i;
+
+    mode = (runtime_memory_mode)command->data.write_memory.mode;
+    address = command->data.write_memory.address;
+    length = command->data.write_memory.length;
+
+    if (length == 0 || length > RUNTIME_MEMORY_SNAPSHOT_MAX) {
+        runtime_publish_error(rt, "invalid memory write length");
+        return;
+    }
+
+    if (mode != RUNTIME_MEMORY_MODE_CPU_MAP && mode != RUNTIME_MEMORY_MODE_RAM) {
+        runtime_publish_error(rt, "memory write mode not writable (use map or ram)");
+        return;
+    }
+
+    if (rt->exec_state == RUNTIME_EXEC_RUNNING) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+        runtime_publish_machine_state(rt);
+    }
+
+    for (i = 0; i < length; ++i) {
+        uint16_t current = (uint16_t)(address + i);
+        uint8_t value = command->data.write_memory.bytes[i];
+        if (mode == RUNTIME_MEMORY_MODE_RAM) {
+            c64_debug_write_ram(&rt->machine, current, value);
+        } else {
+            c64_debug_write_cpu_map(&rt->machine, current, value);
+        }
+    }
+
+    runtime_publish_memory(rt, address, length, mode);
+}
+
 static bool runtime_path_has_extension(const char *path, const char *extension) {
     const char *dot;
 
@@ -3517,6 +3560,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_WRITE_MEMORY_BYTE:
             runtime_write_memory_byte(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_WRITE_MEMORY:
+            runtime_write_memory(rt, command);
             break;
 
         case RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT:

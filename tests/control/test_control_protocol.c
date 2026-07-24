@@ -193,6 +193,13 @@ static void test_parse_command_arguments(void)
     expect_u32("get-memory length", 64u, request.args.length);
     expect_u32("get-memory mode", 0u, request.args.memory_mode);
 
+    expect_true("parse set-memory", control_protocol_parse_request("124 set-memory $0400 16 ram", &request, &error));
+    expect_int("set-memory type", CONTROL_COMMAND_SET_MEMORY, request.type);
+    expect_u32("set-memory address", 0x0400u, request.args.address);
+    expect_u32("set-memory length", 16u, request.args.length);
+    expect_u32("set-memory mode", 1u, request.args.memory_mode);
+    expect_u32("set-memory payload size", 16u, (uint32_t)request.payload_size);
+
     expect_true("parse get-memory ram", control_protocol_parse_request("25 get-memory 0x0801 16 ram", &request, &error));
     expect_u32("get-memory ram mode", 1u, request.args.memory_mode);
 
@@ -438,6 +445,12 @@ static void test_parse_rejects_invalid_input(void)
 
     expect_false("reject memory mode", control_protocol_parse_request("13 get-memory $0400 8 io\n", &request, &error));
     expect_u32("memory mode response id", 13, error.id);
+
+    expect_false("reject set-memory rom", control_protocol_parse_request("13 set-memory $0400 8 rom\n", &request, &error));
+    expect_u32("set-memory rom response id", 13, error.id);
+
+    expect_false("reject set-memory drive8", control_protocol_parse_request("13 set-memory $0400 8 drive8\n", &request, &error));
+    expect_u32("set-memory drive8 response id", 13, error.id);
 
     expect_false("reject frame format", control_protocol_parse_request("14 get-frame format=rgb\n", &request, &error));
     expect_u32("frame format response id", 14, error.id);

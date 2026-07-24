@@ -960,6 +960,80 @@ static void test_runtime_memory_snapshots_and_writes_are_paused_only(void) {
     stop_runtime(rt, client);
 }
 
+static void test_runtime_bulk_write_memory_and_auto_pause(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    uint8_t bytes[4] = { 0x11, 0x22, 0x33, 0x44 };
+    uint8_t rom_try[1] = { 0xaa };
+
+    rt = start_runtime(&client);
+
+    expect_true("bulk write while paused", runtime_client_write_memory(
+        client,
+        0x2000,
+        4,
+        RUNTIME_MEMORY_MODE_RAM,
+        bytes));
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("bulk write memory response not received");
+    }
+    expect_u16("bulk write address", 0x2000, event.data.memory.address);
+    expect_u16("bulk write length", 4, event.data.memory.length);
+    expect_u8("bulk write byte 0", 0x11, event.data.memory.bytes[0]);
+    expect_u8("bulk write byte 3", 0x44, event.data.memory.bytes[3]);
+
+    expect_true("reject bulk write rom mode", runtime_client_write_memory(
+        client,
+        0x2000,
+        1,
+        RUNTIME_MEMORY_MODE_ROM,
+        rom_try));
+    {
+        clock_t start = clock();
+        int saw_error = 0;
+        while ((double)(clock() - start) / CLOCKS_PER_SEC < 2.0) {
+            while (runtime_client_poll_event(client, &event)) {
+                if (event.type == RUNTIME_EVENT_ERROR) {
+                    saw_error = 1;
+                    break;
+                }
+            }
+            if (saw_error) {
+                break;
+            }
+        }
+        if (!saw_error) {
+            fail("ERROR not received for rom bulk write");
+        }
+    }
+
+    expect_true("run before bulk write auto-pause", runtime_client_run(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("RUNNING not received before bulk write auto-pause");
+    }
+
+    bytes[0] = 0x55;
+    expect_true("bulk write while running auto-pauses", runtime_client_write_memory(
+        client,
+        0x2010,
+        1,
+        RUNTIME_MEMORY_MODE_RAM,
+        bytes));
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("PAUSED not received from bulk write auto-pause");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine state not received after bulk write auto-pause");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("memory response not received after bulk write auto-pause");
+    }
+    expect_u8("auto-pause bulk write value", 0x55, event.data.memory.bytes[0]);
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_stops_on_enabled_execute_breakpoint(void) {
     runtime *rt;
     runtime_client *client;
@@ -1715,6 +1789,7 @@ int main(void) {
     test_runtime_step_instruction_from_running_pauses();
     test_runtime_cpu_register_setters_are_paused_only();
     test_runtime_memory_snapshots_and_writes_are_paused_only();
+    test_runtime_bulk_write_memory_and_auto_pause();
     test_runtime_stops_on_enabled_execute_breakpoint();
     test_runtime_brk_pauses_without_executing();
     test_runtime_ignores_disabled_execute_breakpoint();

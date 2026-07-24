@@ -235,6 +235,7 @@ N get-vic
 N get-cia <1|2>
 N get-frame [format=argb8888|indexed8]
 N get-memory <address> <length 1..1024> <map|ram|rom|drive8|drive9>
+N set-memory <address> <length 1..1024> <map|ram>\n<raw length bytes>\n
 N get-debug-memory [write-history=0|1]
 N get-call-stack
 N get-drive-cpu <8|9>
@@ -268,6 +269,26 @@ The payload is exactly the requested bytes. Modes are CPU-visible map (`0`), raw
 RAM (`1`), raw ROM (`2`), drive 8 map (`3`), and drive 9 map (`4`). Drive maps
 contain holes; the machine-side debug API marks invalid bytes, but the control
 payload contains the returned byte values only.
+
+`set-memory` is the poke counterpart of `get-memory`, using the same
+paste-style framing as `paste-text-data` / `paste-events-data`:
+
+```text
+N set-memory $0400 4 ram\n
+<4 raw bytes>
+\n
+```
+
+Only **writable** modes are accepted: `map` and `ram`. `rom`, `drive8`, and
+`drive9` are rejected at parse time with `bad-args`. The command auto-pauses
+(like `assemble`) and the runtime force-pauses if still running so the poke
+always applies. Completion is deferred until the write finishes:
+
+```text
+N ok addr=0400 length=4 mode=1
+```
+
+Address wrap is 16-bit modular (same as `get-memory`).
 
 `get-frame` returns `data frame` with metadata:
 

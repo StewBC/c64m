@@ -1694,7 +1694,9 @@ command, then command arguments:
 2 pause
 3 get-cpu
 4 get-memory $0400 64 map
-5 quit-client
+5 set-memory $0400 4 ram
+<4 raw bytes>
+6 quit-client
 ```
 
 Responses begin with the same id:
@@ -1705,7 +1707,8 @@ Responses begin with the same id:
 3 ok pc=FD84 a=00 x=00 y=2F sp=FD p=25 cycles=1712136
 4 data memory 64 addr=0400 length=64 mode=0
 <64 raw bytes>
-5 ok
+5 ok addr=0400 length=4 mode=1
+6 ok
 ```
 
 `quit-client` closes the TCP client connection. It does not quit the emulator process.
@@ -1725,7 +1728,8 @@ be sequential, but sequential ids make logs easier to read. Commands are lower-c
 words with hyphens. Hex addresses may be written as `0xC000` or `$C000`; decimal counts
 and timeouts are written without a prefix.
 
-Most commands are single-line. Two paste commands carry a length-prefixed payload:
+Most commands are single-line. A few commands carry a length-prefixed raw payload after
+the request line (same framing as the paste-data commands):
 
 ```text
 <id> paste-text-data <byte_count>\n
@@ -1733,10 +1737,14 @@ Most commands are single-line. Two paste commands carry a length-prefixed payloa
 
 <id> paste-events-data <byte_count>\n
 <byte_count raw bytes>\n
+
+<id> set-memory <addr> <length> <map|ram>\n
+<length raw bytes>\n
 ```
 
 The payload may contain arbitrary bytes except that the framing still requires exactly
-one trailing newline after the payload. Payload size is limited to 4096 bytes.
+one trailing newline after the payload. Paste payloads are limited to 4096 bytes;
+`set-memory` payloads are limited to 1..1024 bytes (same length cap as `get-memory`).
 
 ### Response Format
 
@@ -1839,16 +1847,17 @@ For warp (mode 3), the response warns that live pixels are unavailable:
 | `get-cia <1\|2>` | Text CIA internal state including ICR mask |
 | `get-frame [format=argb8888\|indexed8]` | Binary frame snapshot |
 | `get-memory <addr> <length> <mode>` | Binary memory snapshot |
+| `set-memory <addr> <length> <map\|ram>` | Poke bytes (paste-style raw payload; auto-pauses) |
 | `get-debug-memory [write-history=0\|1]` | Fresh binary debugger memory snapshot (map+ram+rom) |
 | `get-call-stack` | Text call-stack summary |
 | `step-frame` | Advance one full VIC-II frame, publish it, and pause |
 
 `get-state` is answered from the main loop's cached frontend debug state. `get-cpu`,
-`get-vic`, `get-cia`, `get-memory`, `get-debug-memory`, and `get-call-stack` request
-fresh runtime snapshots and complete later. `get-frame` uses the latest completed
-frame cached by the main loop, or requests one if no cached frame exists yet. In
-headless mode the main loop still polls frame snapshots for `get-frame` and
-`wait-frame`.
+`get-vic`, `get-cia`, `get-memory`, `set-memory`, `get-debug-memory`, and
+`get-call-stack` request fresh runtime work and complete later (deferred).
+`get-frame` uses the latest completed frame cached by the main loop, or requests one
+if no cached frame exists yet. In headless mode the main loop still polls frame
+snapshots for `get-frame` and `wait-frame`.
 
 `step-frame` is the preferred way to capture consecutive frames: it runs until the
 next completed VIC-II frame is published, then pauses. It honors breakpoints and BRK.
@@ -1856,13 +1865,56 @@ Prefer it over free-run `wait-frame` loops when you need every frame without ali
 
 Memory modes:
 
-| Mode | Meaning |
-|------|---------|
-| `map` | CPU-visible memory after current banking |
-| `ram` | Physical RAM |
-| `rom` | Physical ROM where available, RAM elsewhere |
+| Mode | `get-memory` | `set-memory` | Meaning |
+|------|--------------|--------------|---------|
+| `map` | yes | yes | CPU-visible memory after current banking |
+| `ram` | yes | yes | Physical RAM |
+| `rom` | yes | **no** | Physical ROM where available, RAM elsewhere |
+| `drive8` | yes | **no** | Drive 8 CPU map (holes possible) |
+| `drive9` | yes | **no** | Drive 9 CPU map (holes possible) |
 
-`get-memory` length is limited to 1..1024 bytes.
+`get-memory` length is limited to 1..1024 bytes. It returns a binary
+`data memory` response whose payload is exactly the requested bytes:
+
+```text
+<id> data memory <byte_count> addr=<hex> length=<n> mode=<0..4>
+<n raw bytes>
+```
+
+`set-memory` is the poke counterpart of `get-memory`. Wire form:
+
+```text
+<id> set-memory <addr> <length 1..1024> <map|ram>\n
+<length raw bytes>\n
+```
+
+Only **writable** modes `map` and `ram` are accepted; `rom`, `drive8`, and `drive9`
+are rejected with `error bad-args`. The command **auto-pauses** (like `assemble`) so
+the poke lands while the machine is stopped; the runtime also force-pauses if it was
+still running. Completion is deferred until the write finishes:
+
+```text
+<id> ok addr=0400 length=4 mode=1
+```
+
+`mode` in the response is the same numeric encoding as `get-memory` (`0` = map,
+`1` = ram). Address arithmetic wraps at 16 bits, as with `get-memory`.
+
+Example: write four bytes at `$0400` in RAM, then read them back:
+
+```text
+1 set-memory $0400 4 ram
+<4 raw payload bytes>
+2 get-memory $0400 4 ram
+```
+
+Typical responses:
+
+```text
+1 ok addr=0400 length=4 mode=1
+2 data memory 4 addr=0400 length=4 mode=1
+<4 raw bytes>
+```
 
 Default frame format is ARGB8888. The buffer is a full VIC-II raster line (PAL
 504×312, NTSC 520×263) in VIC-X order with no frontend crop. Metadata:

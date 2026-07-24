@@ -28,7 +28,8 @@ owns blocking network I/O; the SDL/main loop drains requests and sends responses
 and host audio setup while retaining runtime frames for control clients.
 
 Implemented protocol areas include introspection, execution (including `step-frame`),
-state/CPU/VIC/CIA/frame/memory/debug-memory/call-stack, keyboard/joystick/RESTORE,
+state/CPU/VIC/CIA/frame/memory (`get-memory` / `set-memory`)/debug-memory/call-stack,
+keyboard/joystick/RESTORE,
 paste, PRG/BIN/D64 operations, machine snapshot save/load (`save-state` /
 `load-state`), breakpoints (exec/read/write and count-only), waits with sticky
 completion events, assemble, find-symbol, and `set-turbo`. Binary responses carry a

@@ -29,6 +29,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_REQUEST_MEMORY,
     RUNTIME_COMMAND_REQUEST_MEMORY_VIEW,
     RUNTIME_COMMAND_WRITE_MEMORY_BYTE,
+    RUNTIME_COMMAND_WRITE_MEMORY,
     RUNTIME_COMMAND_SET_EXECUTE_BREAKPOINT,
     RUNTIME_COMMAND_CLEAR_BREAKPOINT,
     RUNTIME_COMMAND_CLEAR_ALL_BREAKPOINTS,
@@ -120,6 +121,13 @@ typedef struct runtime_command {
             uint8_t value;
             uint8_t mode;
         } write_memory_byte;
+
+        struct {
+            uint16_t address;
+            uint16_t length;
+            uint8_t mode;
+            uint8_t bytes[RUNTIME_MEMORY_SNAPSHOT_MAX];
+        } write_memory;
 
         struct {
             uint16_t address;

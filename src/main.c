@@ -1688,14 +1688,15 @@ static void complete_deferred_control_response(
          deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR_ALL ||
          deferred->command_type == CONTROL_COMMAND_BREAK_CREATE ||
          deferred->command_type == CONTROL_COMMAND_BREAK_UPDATE ||
-         deferred->command_type == CONTROL_COMMAND_REARM_ONESHOTS)) {
+         deferred->command_type == CONTROL_COMMAND_REARM_ONESHOTS ||
+         deferred->command_type == CONTROL_COMMAND_SET_MEMORY)) {
         control_protocol_format_error(
             &response,
             deferred->request_id,
             "runtime",
             event->data.error.message[0] != '\0' ?
                 event->data.error.message :
-                "breakpoint command failed",
+                "command failed",
             false);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
@@ -1715,12 +1716,25 @@ static void complete_deferred_control_response(
             control_response_release(&response);
             SDL_Log("control: response queue full");
         }
-    } else if (deferred->command_type == CONTROL_COMMAND_GET_MEMORY &&
+    } else if ((deferred->command_type == CONTROL_COMMAND_GET_MEMORY ||
+                deferred->command_type == CONTROL_COMMAND_SET_MEMORY) &&
                event->type == RUNTIME_EVENT_MEMORY_RESPONSE &&
                event->data.memory.address == deferred->memory_address &&
                event->data.memory.length == deferred->memory_length &&
                event->data.memory.mode == deferred->memory_mode) {
-        control_format_memory_response(&response, deferred->request_id, &event->data.memory);
+        if (deferred->command_type == CONTROL_COMMAND_SET_MEMORY) {
+            char text[CONTROL_RESPONSE_TEXT_MAX];
+            snprintf(
+                text,
+                sizeof(text),
+                "addr=%04X length=%u mode=%u",
+                event->data.memory.address,
+                (unsigned)event->data.memory.length,
+                (unsigned)event->data.memory.mode);
+            control_protocol_format_ok(&response, deferred->request_id, text, false);
+        } else {
+            control_format_memory_response(&response, deferred->request_id, &event->data.memory);
+        }
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
         } else {
@@ -3725,6 +3739,68 @@ static void dispatch_control_request(
                     "runtime",
                     "command rejected",
                     false);
+            }
+            break;
+
+        case CONTROL_COMMAND_SET_MEMORY:
+            /* Auto-pause like assemble so pokes land in a defined state. The
+               runtime write also force-pauses if still running. */
+            if (request->payload == NULL ||
+                request->payload_size != (size_t)request->args.length) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-payload",
+                    "set-memory payload length mismatch",
+                    false);
+            } else if (request->args.memory_mode != 0u &&
+                       request->args.memory_mode != 1u) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "expected writable memory mode map or ram",
+                    false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else {
+                runtime_client_pause(client);
+                if (runtime_client_write_memory(
+                        client,
+                        request->args.address,
+                        request->args.length,
+                        (runtime_memory_mode)request->args.memory_mode,
+                        request->payload)) {
+                    if (deferred != NULL) {
+                        deferred->active = true;
+                        deferred->request_id = request->id;
+                        deferred->command_type = request->type;
+                        deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                        deferred->memory_address = request->args.address;
+                        deferred->memory_length = request->args.length;
+                        deferred->memory_mode =
+                            (runtime_memory_mode)request->args.memory_mode;
+                        return;
+                    }
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "internal",
+                        "deferred state unavailable",
+                        false);
+                } else {
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "runtime",
+                        "command rejected",
+                        false);
+                }
             }
             break;
 
