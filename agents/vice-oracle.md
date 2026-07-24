@@ -181,12 +181,27 @@ followed by the new one. c64m's `C64M_VICLOG` shows both writes; a VICE store
 checkpoint shows one stop. That is a difference in the *instrumentation*, not in
 the emulation — do not report it as a divergence.
 
-**`$D019` bit 7 tells you whether a VIC IRQ is actually pending.** When a demo
-shares the `$FFFE` vector between raster and CIA interrupts, reading `$D019` at
-the handler's first instruction is what distinguishes them: bit 7 set (e.g. `$F1`)
-means the VIC raised it, bit 7 clear (`$70`) means the source was a CIA. This is
-the cheapest way to tell "c64m missed a raster IRQ" from "c64m missed a CIA IRQ",
-and the two have completely different root causes.
+**Check the stack frame before concluding anything about an interrupt source.**
+`$D019` bit 7 tells you whether the *VIC* is asserting: bit 7 set (e.g. `$F1`) means
+the VIC raised it, bit 7 clear (`$70`) means it did not. That is necessary but
+**not sufficient** — it does not establish that an interrupt happened at all, and
+reading it that way produced a confident wrong answer ("the missing interrupt is
+CIA-sourced") in the Deus Ex Machina spirals session. The decisive test is the
+pushed status byte: on a 6502, bit 5 of a status byte pushed by an IRQ/BRK is
+**always 1**. So at the handler's first instruction, read the three bytes at
+`SP+1`:
+
+- top byte has bit 5 set → genuine interrupt frame; bytes 2–3 are the interrupted
+  PC, and `$D019` bit 7 then tells you VIC vs CIA;
+- top byte has bit 5 clear → **not an interrupt** — you are looking at a `JSR`
+  return address, i.e. the handler was called from the main program.
+
+In that session the entry with `$D019=$70` had top-of-stack `89 3F 4D`; `$89` has
+bit 5 clear, and `$3F87: JSR $9C03` pushes exactly `$3F89`. It was a plain
+subroutine call, and both CIAs had `icr_mask=$00` (no CIA interrupt enabled at
+all). Confirm the CIA masks — c64m's `get-cia 1|2` reports `icr_mask` directly,
+and in a `.vsf` it is byte 13 of the `CIA1`/`CIA2` module payload (`c_cia[CIA_ICR]`;
+byte 20 is the peeked flags, bytes 16–17/18–19 the timer latches).
 
 **CIA1 Timer A makes a good shared clock.** It counts phi2 continuously and is
 unaffected by BA stalls, so sampling `$DC04/$DC05` at the same anchor in both
