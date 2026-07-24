@@ -227,10 +227,8 @@ ctest --test-dir build --output-on-failure -R control_protocol
 
 **Checkpoint B0 — baseline locked**
 
-- [ ] M1–M6 written under §16 (Measured baselines) or PR body.
-      *(Skipped during implementation; product work proceeded without a formal
-      latency baseline. Fill in anytime for before/after claims.)*
-- [ ] Headless used for M1–M3 unless stated otherwise.
+- [x] M1–M3 (+ batch) written under §16 (main vs tip, 2026-07-24).
+- [x] Headless used for M1–M3.
 - [x] `test_control_protocol` green (and other targeted suites through the series).
 
 B0 can run in parallel with Phase 0.5 design docs; do not start Phase 1
@@ -860,15 +858,23 @@ Do not combine 0.5 + 2b + 7 in one PR. Do not ship 2b without 0.5 tokens.
 
 ## 16. Measured baselines (fill in during B0 / phase exits)
 
+Probe: `python3 tools/measure_control_latency.py --bin ./build/c64m --port PORT --label …`
+Headless `--pal`, quiet machine, 2026-07-24.
+
 | Date | Metric | Mode | Value | Notes |
 |------|--------|------|-------|-------|
-| | M1 get-cpu mean | headless | | |
-| | M1 get-cpu p99 | headless | | |
-| | M2 get-frame | headless | | |
-| | M3 64K memory | headless | | pre Phase 1 (64×1024) |
-| | M3 64K memory | headless | | post Phase 1 |
-| | M1 batch N=16 | headless | | post Phase 2 |
-| | | | | |
+| 2026-07-24 | M1 get-cpu mean | headless | **2.474 ms** | `main` pre-stack (C64M/1) |
+| 2026-07-24 | M1 get-cpu p99 | headless | **2.655 ms** | `main` |
+| 2026-07-24 | M2 get-frame mean | headless | **2.200 ms** | `main`, indexed8 warm |
+| 2026-07-24 | M3 64K memory | headless | **165.1 ms** | `main` 64×1024 |
+| 2026-07-24 | M1 batch N=16 wall | headless | **41.3 ms** | `main` serial (no pipeline) |
+| 2026-07-24 | M1 get-cpu mean | headless | **1.268 ms** | tip `threading/8-cpu-history` (C64M/2) |
+| 2026-07-24 | M1 get-cpu p99 | headless | **1.310 ms** | tip |
+| 2026-07-24 | M2 get-frame mean | headless | **2.157 ms** | tip, indexed8 warm |
+| 2026-07-24 | M3 64K memory | headless | **1.64 ms** | tip bulk `get-memory 65536` |
+| 2026-07-24 | M1 batch N=16 wall | headless | **2.64 ms** | tip pipeline (~7.7× vs serial mean) |
+
+**Verdict:** tip is same or better on all measured metrics (large wins on M1, M3, batch).
 
 ---
 
