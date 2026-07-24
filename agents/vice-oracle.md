@@ -151,6 +151,39 @@ two can be diffed directly. This avoids every trap in the `screenshot` route —
 no PNG/BMP format flag, no viewport crop mismatch, no palette RGB differences,
 no CRT-shader host capture. Prefer it for all pixel work.
 
+### Read registers from the auto-emitted stop sequence, NOT a separate query
+
+This one silently corrupted an entire investigation. When a checkpoint hits, VICE
+**auto-emits an async sequence**, all with request-id `0xFFFFFFFF`:
+`RESUMED (0x63)` → `CHECKPOINT_INFO (0x11)` → `REGISTER_INFO (0x31)` →
+`STOPPED (0x62)`. The `0x31` in that sequence is the authoritative register state
+**at the stop**.
+
+The trap: after `wait_stopped()`, issuing a *separate* `REGISTERS_GET (0x31)`
+races the async stream. `EXIT (0xaa)` has already resumed VICE, so your
+`REGISTERS_GET` may be answered by the auto-emitted `0x31` of the *next* stop, or
+you consume a stale one — and on roughly every other iteration you get a **phantom
+read**: consistently `LIN=0`, a fixed ghost stack (`89 3f 4d` in the DEM demo),
+and a PC parked in whatever was running at resume. It looks like a real, regular
+signal (it fabricated a clean "handler runs twice per frame, once at line 0"), so
+it will not announce itself as noise.
+
+Correct client shape:
+- `cont()` = **send `EXIT` fire-and-forget**; do not wait for a matching-id reply
+  (EXIT emits no id-matched response before running).
+- `wait_stopped()` = read the async stream to `STOPPED (0x62)`, and along the way
+  **capture the `REGISTER_INFO (0x31)`** (and `CHECKPOINT_INFO`) it carries.
+- `registers()` = return that captured `0x31`, never a fresh `REGISTERS_GET` while
+  running. Fetch register *metadata* (`REGISTERS_AVAILABLE 0x83`) once **while
+  stopped**, before the first `cont` — doing it mid-run deadlocks.
+
+**Always validate a checkpoint finding** before building on it: single-step once
+and confirm the PC is really inside the expected routine, or cross-check against a
+phase-independent invariant. A cross-emulator **buffer hash match** is the gold
+standard — hashing the demo's `$5800` pattern buffer per frame in both emulators
+showed a byte-identical sequence offset by a constant 12 frames, which is what
+finally proved the "divergence" was just snapshot phase, not an emulator bug.
+
 ### Deterministic frame stepping
 
 There is no "step one frame" command. The reliable pattern is an **exec checkpoint
