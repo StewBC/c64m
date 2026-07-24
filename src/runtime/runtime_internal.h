@@ -37,6 +37,8 @@ struct runtime_client {
     struct runtime_frame_slot *frame_slot;
     struct runtime_debug_memory_slot *debug_memory_slot;
     struct runtime_symbol_slot *symbol_slot;
+    /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
+    uint64_t next_request_token;
 };
 
 typedef struct paste_state {

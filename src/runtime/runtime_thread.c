@@ -396,9 +396,10 @@ static void runtime_publish_error(
 
 static void runtime_publish_symbols(runtime *rt);
 
-static void runtime_publish_cpu_state(runtime *rt) {
+static void runtime_publish_cpu_state_token(runtime *rt, uint64_t request_token) {
     runtime_event event = {
         .type = RUNTIME_EVENT_CPU_STATE_RESPONSE,
+        .request_token = request_token,
     };
     c64_cpu_snapshot snapshot;
 
@@ -412,6 +413,10 @@ static void runtime_publish_cpu_state(runtime *rt) {
     event.data.cpu_state.cycles = snapshot.cycles;
 
     runtime_publish_event(rt, &event);
+}
+
+static void runtime_publish_cpu_state(runtime *rt) {
+    runtime_publish_cpu_state_token(rt, 0u);
 }
 
 static void runtime_publish_machine_state(runtime *rt) {
@@ -3481,7 +3486,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_REQUEST_CPU_STATE:
-            runtime_publish_cpu_state(rt);
+            runtime_publish_cpu_state_token(rt, command->request_token);
             break;
 
         case RUNTIME_COMMAND_REQUEST_MACHINE_STATE:

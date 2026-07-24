@@ -65,6 +65,10 @@ typedef struct deferred_control_response {
     uint32_t request_id;
     control_command_type command_type;
     uint64_t deadline_ms;
+    /* Non-zero: complete only on matching runtime_event.request_token. */
+    uint64_t request_token;
+    /* Session generation at arm time; stale epochs are cancelled on disconnect. */
+    uint64_t connection_epoch;
     uint16_t memory_address;
     uint16_t memory_length;
     runtime_memory_mode memory_mode;
@@ -1677,6 +1681,12 @@ static void complete_deferred_control_response(
         return;
     }
 
+    /* Token-bearing deferred work must not complete from UI/token-0 telemetry or
+       a different solicited response (see agents/runtime-control.md). */
+    if (!control_deferred_token_matches(deferred->request_token, event->request_token)) {
+        return;
+    }
+
     /* Breakpoint mutations wait for a snapshot that may never match when the
        runtime rejects the definition (expected count +1, but install failed).
        Surface RUNTIME_EVENT_ERROR as a clean protocol error instead of hanging. */
@@ -1700,6 +1710,7 @@ static void complete_deferred_control_response(
             false);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
+            deferred->request_token = 0u;
         } else {
             control_response_release(&response);
             SDL_Log("control: response queue full");
@@ -1712,6 +1723,7 @@ static void complete_deferred_control_response(
         control_format_cpu_response(&response, deferred->request_id, &event->data.cpu_state);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
+            deferred->request_token = 0u;
         } else {
             control_response_release(&response);
             SDL_Log("control: response queue full");
@@ -2175,12 +2187,57 @@ static void check_deferred_event_wait(
     complete_deferred_wait_response(control, deferred, metadata);
 }
 
+static void cancel_deferred_control_response(
+    control_server *control,
+    deferred_control_response *deferred,
+    const char *code,
+    const char *message)
+{
+    control_response response;
+
+    if (control == NULL || deferred == NULL || !deferred->active) {
+        return;
+    }
+    control_protocol_format_error(
+        &response,
+        deferred->request_id,
+        code != NULL ? code : "cancelled",
+        message != NULL ? message : "deferred response cancelled",
+        false);
+    if (control_server_post_response(control, &response)) {
+        deferred->active = false;
+        deferred->request_token = 0u;
+    } else {
+        /* Client may already be gone; drop local wait either way. */
+        control_response_release(&response);
+        deferred->active = false;
+        deferred->request_token = 0u;
+        SDL_Log("control: response queue full while cancelling deferred");
+    }
+}
+
+static void check_deferred_control_session(
+    control_server *control,
+    deferred_control_response *deferred)
+{
+    if (control == NULL || deferred == NULL || !deferred->active) {
+        return;
+    }
+    if (deferred->connection_epoch == 0u) {
+        return;
+    }
+    if (!control_server_has_client(control) ||
+        control_server_connection_epoch(control) != deferred->connection_epoch) {
+        /* Silent cancel: no client to receive error, or a newer session started. */
+        deferred->active = false;
+        deferred->request_token = 0u;
+    }
+}
+
 static void check_deferred_control_timeout(
     control_server *control,
     deferred_control_response *deferred)
 {
-    control_response response;
-
     if (control == NULL || deferred == NULL || !deferred->active) {
         return;
     }
@@ -2188,18 +2245,11 @@ static void check_deferred_control_timeout(
         return;
     }
 
-    control_protocol_format_error(
-        &response,
-        deferred->request_id,
+    cancel_deferred_control_response(
+        control,
+        deferred,
         "timeout",
-        "deferred response timed out",
-        false);
-    if (control_server_post_response(control, &response)) {
-        deferred->active = false;
-    } else {
-        control_response_release(&response);
-        SDL_Log("control: response queue full");
-    }
+        "deferred response timed out");
 }
 
 static bool control_parse_and_send_paste_events(
@@ -3568,27 +3618,33 @@ static void dispatch_control_request(
                     "busy",
                     "deferred-response-active",
                     false);
-            } else if (runtime_client_request_cpu_state(client)) {
-                if (deferred != NULL) {
+            } else {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                if (token == 0u ||
+                    !runtime_client_request_cpu_state_token(client, token)) {
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "runtime",
+                        "command rejected",
+                        false);
+                } else if (deferred != NULL) {
                     deferred->active = true;
                     deferred->request_id = request->id;
                     deferred->command_type = request->type;
+                    deferred->request_token = token;
+                    deferred->connection_epoch =
+                        control_server_connection_epoch(control);
                     deferred->deadline_ms = SDL_GetTicks64() + 2000u;
                     return;
+                } else {
+                    control_protocol_format_error(
+                        &response,
+                        request->id,
+                        "internal",
+                        "deferred state unavailable",
+                        false);
                 }
-                control_protocol_format_error(
-                    &response,
-                    request->id,
-                    "internal",
-                    "deferred state unavailable",
-                    false);
-            } else {
-                control_protocol_format_error(
-                    &response,
-                    request->id,
-                    "runtime",
-                    "command rejected",
-                    false);
             }
             break;
 
@@ -4741,6 +4797,7 @@ static bool run_main_loop(
             &deferred_control,
             &control_cache,
             &event_latch);
+        check_deferred_control_session(control, &deferred_control);
         check_deferred_control_timeout(control, &deferred_control);
         dispatch_control_requests(
             control,
@@ -4838,6 +4895,7 @@ static bool run_headless_loop(
             &deferred_control,
             &control_cache,
             &event_latch);
+        check_deferred_control_session(control, &deferred_control);
         check_deferred_control_timeout(control, &deferred_control);
         dispatch_control_requests(
             control,

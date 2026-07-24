@@ -8,18 +8,40 @@
 #include <stdio.h>
 #include <string.h>
 
-static bool runtime_client_send_command(
+static bool runtime_client_send_command_token(
     runtime_client *client,
-    runtime_command_type type) {
+    runtime_command_type type,
+    uint64_t request_token) {
     if (!client) {
         return false;
     }
 
     runtime_command command = {
         .type = type,
+        .request_token = request_token,
     };
 
     return message_queue_push(client->command_queue, &command);
+}
+
+static bool runtime_client_send_command(
+    runtime_client *client,
+    runtime_command_type type) {
+    return runtime_client_send_command_token(client, type, 0u);
+}
+
+uint64_t runtime_client_alloc_request_token(runtime_client *client) {
+    uint64_t token;
+
+    if (!client) {
+        return 0u;
+    }
+    /* Skip 0 forever; wrap-around to 1 is fine for process lifetime. */
+    token = ++client->next_request_token;
+    if (token == 0u) {
+        token = ++client->next_request_token;
+    }
+    return token;
 }
 
 bool runtime_client_ping(runtime_client *client) {
@@ -113,7 +135,14 @@ bool runtime_client_step_frame(runtime_client *client) {
 }
 
 bool runtime_client_request_cpu_state(runtime_client *client) {
-    return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_CPU_STATE);
+    return runtime_client_request_cpu_state_token(client, 0u);
+}
+
+bool runtime_client_request_cpu_state_token(runtime_client *client, uint64_t request_token) {
+    return runtime_client_send_command_token(
+        client,
+        RUNTIME_COMMAND_REQUEST_CPU_STATE,
+        request_token);
 }
 
 bool runtime_client_request_machine_state(runtime_client *client) {

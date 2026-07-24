@@ -243,6 +243,9 @@ typedef struct runtime_disk_status_snapshot {
 
 typedef struct runtime_event {
     runtime_event_type type;
+    /* Echo of runtime_command.request_token for solicited completions; 0 for
+       unsolicited notifications (frame ready, free-run pause/running, etc.). */
+    uint64_t request_token;
 
     union {
         struct {

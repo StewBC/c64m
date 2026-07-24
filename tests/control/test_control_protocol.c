@@ -524,6 +524,19 @@ static void test_response_formatting(void)
     control_response_release(&response);
 }
 
+static void test_deferred_token_matches(void)
+{
+    /* Legacy deferred (token 0): any event token is allowed at the gate;
+       type matching still applies in main. */
+    expect_true("legacy accepts token0", control_deferred_token_matches(0u, 0u));
+    expect_true("legacy accepts nonzero", control_deferred_token_matches(0u, 42u));
+
+    /* Solicited deferred: only exact token. */
+    expect_true("exact match", control_deferred_token_matches(7u, 7u));
+    expect_false("ui token0 steals", control_deferred_token_matches(7u, 0u));
+    expect_false("wrong token", control_deferred_token_matches(7u, 8u));
+}
+
 int main(void)
 {
     test_parse_known_commands();
@@ -531,5 +544,6 @@ int main(void)
     test_parse_assemble_and_symbol();
     test_parse_rejects_invalid_input();
     test_response_formatting();
+    test_deferred_token_matches();
     return 0;
 }

@@ -85,6 +85,9 @@ enum {
 
 typedef struct runtime_command {
     runtime_command_type type;
+    /* Opaque correlation id for solicited work. 0 = unsolicited / lossy telemetry.
+       Echoed on matching completion and error events. See agents/runtime-control.md. */
+    uint64_t request_token;
     union {
         struct {
             uint8_t detach_cartridge;

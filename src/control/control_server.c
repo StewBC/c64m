@@ -25,6 +25,7 @@ struct control_server {
     message_queue *requests;
     message_queue *responses;
     thread *worker;
+    uint64_t connection_epoch;
 };
 
 static bool control_server_is_stopping(control_server *server)
@@ -248,7 +249,13 @@ static int control_server_thread_main(void *userdata)
         if (connection == NULL) {
             break;
         }
-        control_server_set_connection(server, connection);
+        mutex_lock(server->lock);
+        server->connection_epoch += 1u;
+        if (server->connection_epoch == 0u) {
+            server->connection_epoch = 1u;
+        }
+        server->connection = connection;
+        mutex_unlock(server->lock);
         control_server_handle_connection(server, connection);
         control_server_set_connection(server, NULL);
         platform_socket_connection_destroy(connection);
@@ -347,6 +354,32 @@ bool control_server_poll_request(control_server *server, control_request *out_re
         return false;
     }
     return message_queue_try_pop(server->requests, out_request);
+}
+
+uint64_t control_server_connection_epoch(control_server *server)
+{
+    uint64_t epoch;
+
+    if (server == NULL || server->lock == NULL) {
+        return 0u;
+    }
+    mutex_lock(server->lock);
+    epoch = server->connection_epoch;
+    mutex_unlock(server->lock);
+    return epoch;
+}
+
+bool control_server_has_client(control_server *server)
+{
+    bool has;
+
+    if (server == NULL || server->lock == NULL) {
+        return false;
+    }
+    mutex_lock(server->lock);
+    has = server->connection != NULL;
+    mutex_unlock(server->lock);
+    return has;
 }
 
 bool control_server_post_response(control_server *server, const control_response *response)

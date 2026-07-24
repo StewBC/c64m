@@ -154,6 +154,19 @@ void control_protocol_format_data(
     const char *metadata,
     bool close_client);
 
+/* Deferred completion gate (Phase 0.5): non-zero deferred tokens only accept
+   events that echo the same token. Token 0 deferred keeps legacy type-only
+   matching for paths not yet tokenized. */
+static inline bool control_deferred_token_matches(
+    uint64_t deferred_request_token,
+    uint64_t event_request_token)
+{
+    if (deferred_request_token == 0u) {
+        return true;
+    }
+    return event_request_token == deferred_request_token;
+}
+
 bool control_protocol_write_response_line(
     const control_response *response,
     char *out,

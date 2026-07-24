@@ -789,3 +789,15 @@ target_link_libraries(test_runtime_stepping PRIVATE
 )
 
 add_test(NAME runtime_stepping COMMAND test_runtime_stepping)
+
+add_executable(test_runtime_request_token
+    tests/runtime/test_runtime_request_token.c
+)
+
+target_compile_features(test_runtime_request_token PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_request_token PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_request_token COMMAND test_runtime_request_token)

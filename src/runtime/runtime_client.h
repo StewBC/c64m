@@ -45,7 +45,13 @@ bool runtime_client_step_instruction(runtime_client *client);
 bool runtime_client_run_cycles(runtime_client *client, size_t count);
 bool runtime_client_run_instructions(runtime_client *client, size_t count);
 bool runtime_client_step_frame(runtime_client *client);
+/* Allocate a non-zero request_token for solicited control/UI RPC. */
+uint64_t runtime_client_alloc_request_token(runtime_client *client);
+
+/* Token 0: unsolicited / UI telemetry (must not complete control deferred). */
 bool runtime_client_request_cpu_state(runtime_client *client);
+/* Solicited CPU read; runtime echoes request_token on CPU_STATE_RESPONSE. */
+bool runtime_client_request_cpu_state_token(runtime_client *client, uint64_t request_token);
 bool runtime_client_request_machine_state(runtime_client *client);
 bool runtime_client_request_memory(
     runtime_client *client,

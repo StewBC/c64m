@@ -16,3 +16,7 @@ void control_server_stop(control_server *server);
 bool control_server_poll_request(control_server *server, control_request *out_request);
 bool control_server_post_response(control_server *server, const control_response *response);
 
+/* Session generation: bumped when a client is accepted. 0 means never connected. */
+uint64_t control_server_connection_epoch(control_server *server);
+bool control_server_has_client(control_server *server);
+

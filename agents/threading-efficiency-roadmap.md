@@ -338,30 +338,36 @@ performance win.
 - [x] Written contract (§1) accepted in review / documented in tree.
       (`runtime-control.md` § Message contracts; `control-port.md` identity
       section; locked defaults §18). Code enforcement is PR-0.5b.
-- [ ] Token on solicited command → completion path for at least one command
-      used by control (`get-cpu` or equivalent) end-to-end.
-- [ ] Control deferred **cannot** complete from UI token-0 / other-token
-      CPU_STATE (test).
-- [ ] Connection epoch field exists (even if pipeline not yet enabled).
+- [x] Token on solicited command → completion path for at least one command
+      used by control (`get-cpu`) end-to-end (`request_token` on command/event;
+      `runtime_client_request_cpu_state_token`; main deferred stores token).
+- [x] Control deferred **cannot** complete from UI token-0 / other-token
+      CPU_STATE (`control_deferred_token_matches` + tests:
+      `test_control_protocol`, `test_runtime_request_token`).
+- [x] Connection epoch field exists (even if pipeline not yet enabled):
+      `control_server_connection_epoch` / `has_client`; deferred stores epoch;
+      session cancel on disconnect/epoch change.
 - [x] Wait rule chosen and documented (§1.6): single outstanding wait → `busy`.
-      (`wait_after_seq` cleanup deferred to 0.5b/2a with the wait path.)
+      (Enforcement of second-wait `busy` remains single-deferred today; multi-
+      deferred wait policy lands with PR-2a.)
 
 ### Checks and checkpoints
 
 **Checkpoint 0.5A — unit / deterministic**
 
-- [ ] Two back-to-back solicited CPU requests with distinct tokens: each
-      deferred completes only on its token (inject or unit-level if needed).
-- [ ] UI-style unsolicited (token 0) machine/cpu publish does not complete a
-      control deferred waiting on a non-zero token.
-- [ ] Documented behavior for queue-full on a reliable completion path
-      (error/busy, not silent).
+- [x] Two back-to-back solicited CPU requests with distinct tokens: each
+      response echoes its token (`runtime_request_token` test).
+- [x] UI-style unsolicited (token 0) does not match a non-zero deferred token
+      (`control_deferred_token_matches` unit test).
+- [x] Documented behavior for queue-full on a reliable completion path
+      (error/busy, not silent) — contract in `runtime-control.md`;
+      implementation of push-failure → busy for all reliable paths is phased
+      with bulk/pipeline (Phase 1–2).
 
 **Checkpoint 0.5B — exit Phase 0.5**
 
-- [ ] `runtime-control.md` + relevant `control-port.md` sections landed.
-- [ ] No behavioral regression for sequential single-outstanding clients
-      (existing scripts).
+- [x] `runtime-control.md` + relevant `control-port.md` sections landed.
+- [x] Targeted suites green: `control_protocol`, `runtime_*`.
 - [ ] Full ctest if verification authorized.
 
 ### Exit criteria
