@@ -603,17 +603,17 @@ full breakpoint table every frame keeps the ~36K dominant payload.
 
 **Checkpoint 4A**
 
-- [ ] Debugger regs/VIC still update while running.
-- [ ] Editing a breakpoint still refreshes the full list.
-- [ ] Disk LED / mount labels update on mount and dirty without needing a
-      full five-way poll every frame.
-- [ ] Event rate and payload size under free-run + debugger open drop vs
-      baseline (measure or justify).
+- [x] Debugger regs/VIC still update while running (machine telemetry only).
+- [x] Editing a breakpoint still refreshes the full list (mutation publish).
+- [x] Disk LED via drive HW in machine telemetry; mount labels via status
+      publish on mount + full refresh — not five-way every frame.
+- [x] Free-run path drops from 5 queue ops/frame to 1 machine-state event
+      (no ~36K breakpoint table per present).
 
 **Checkpoint 4B — exit Phase 4**
 
-- [ ] `runtime-control.md` describes cadence model.
-- [ ] Coherent stamp fields available for Phase 6.
+- [x] `runtime-control.md` describes cadence model.
+- [x] Coherent stamp fields: `runtime_seq` + cycle/frame on machine snapshot.
 
 ### Exit criteria
 

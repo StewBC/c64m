@@ -201,6 +201,8 @@ struct runtime {
     bool autorun;
     /* 0 = inactive; 1 = inject LOAD"*",8 on next $E38B; 2 = inject RUN on next $E38B */
     int autorun_d64_phase;
+    /* Incremented on each machine-state telemetry publish (Phase 4 stamps). */
+    uint64_t runtime_seq;
 };
 
 int runtime_thread_main(void *userdata);

@@ -34,6 +34,7 @@ typedef struct frontend_debug_state {
     uint64_t frame_number;
     uint64_t frame_cycle;
     uint64_t dropped_frames;
+    uint64_t runtime_seq; /* telemetry stamp from machine snapshot */
     uint64_t machine_cycle;
     uint64_t vic_cycles;
     uint64_t cia_cycles;

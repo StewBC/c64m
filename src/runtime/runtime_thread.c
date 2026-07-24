@@ -432,7 +432,13 @@ static void runtime_publish_machine_state(runtime *rt) {
     c64_1541_hardware_snapshot drive8_hardware;
     c64_1541_hardware_snapshot drive9_hardware;
 
+    rt->runtime_seq += 1u;
+    if (rt->runtime_seq == 0u) {
+        rt->runtime_seq = 1u;
+    }
+
     c64_copy_machine_snapshot(&rt->machine, &snapshot);
+    event.data.machine_state.runtime_seq = rt->runtime_seq;
     event.data.machine_state.cycle = snapshot.cycle;
     event.data.machine_state.cpu_cycles = snapshot.cpu_cycles;
     event.data.machine_state.vic_cycles = snapshot.vic_cycles;

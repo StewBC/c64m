@@ -138,6 +138,8 @@ typedef struct runtime_memory_banking_snapshot {
 } runtime_memory_banking_snapshot;
 
 typedef struct runtime_machine_snapshot {
+    /* Monotonic runtime publish sequence (telemetry coherence for cache/barriers). */
+    uint64_t runtime_seq;
     uint64_t cycle;
     uint64_t cpu_cycles;
     uint64_t vic_cycles;

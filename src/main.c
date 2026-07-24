@@ -784,12 +784,31 @@ static runtime_config runtime_config_from_options(const app_options *options) {
     return config;
 }
 
-static void request_debug_state(runtime_client *client) {
-    runtime_client_request_cpu_state(client);
+/* Phase 4 cadence split:
+   - Telemetry (per UI refresh while free-running): machine snapshot only
+     (includes CPU regs, VIC/CIA/SID, drive HW). Not breakpoints/disk tables.
+   - Tables (breakpoints, disk metadata): mutation publishes + explicit refresh
+     after stop/step/startup. */
+static void request_debug_telemetry(runtime_client *client) {
+    if (client == NULL) {
+        return;
+    }
     runtime_client_request_machine_state(client);
+}
+
+static void request_debug_tables(runtime_client *client) {
+    if (client == NULL) {
+        return;
+    }
     runtime_client_request_breakpoints(client);
     runtime_client_request_disk_status(client, 8);
     runtime_client_request_disk_status(client, 9);
+}
+
+static void request_debug_state(runtime_client *client) {
+    /* Full refresh: telemetry + large tables (startup / after step-stop). */
+    request_debug_telemetry(client);
+    request_debug_tables(client);
 }
 
 static void update_debug_state_from_event(
@@ -821,6 +840,7 @@ static void update_debug_state_from_event(
             break;
 
         case RUNTIME_EVENT_MACHINE_STATE_RESPONSE:
+            debug_state->runtime_seq = event->data.machine_state.runtime_seq;
             debug_state->cpu.pc = event->data.machine_state.pc;
             debug_state->cpu.a = event->data.machine_state.a;
             debug_state->cpu.x = event->data.machine_state.x;
@@ -2576,7 +2596,8 @@ static void poll_runtime_events(
 
     if (consumed_frame && debug_state != NULL &&
         debug_state->runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
-        request_debug_state(client);
+        /* Free-run: telemetry only — not full breakpoint/disk table poll. */
+        request_debug_telemetry(client);
     }
 }
 

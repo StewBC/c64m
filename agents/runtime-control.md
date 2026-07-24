@@ -19,6 +19,29 @@ frame snapshot so debugger views reflect writes made by that step. Runtime audio
 production is cycle-driven and uses the shared audio buffer described in
 `sid-audio.md`.
 
+## UI telemetry cadence (Phase 4)
+
+While free-running, the main loop must **not** poll five fat snapshots every
+frame. Cadence:
+
+| Stream | When | Mechanism |
+|--------|------|-----------|
+| **Machine telemetry** | Once per UI present while running | `request_machine_state` / `RUNTIME_EVENT_MACHINE_STATE_RESPONSE` — includes CPU regs, VIC/CIA/SID, drive hardware, frame/cycle stamps |
+| **Breakpoint definitions** | On mutation (create/update/clear/enable/load/rearm) and on full debug refresh (startup, step, pause) | `runtime_publish_breakpoints` / `request_breakpoints` |
+| **Disk metadata** | On mount/unmount/writable/status request and full debug refresh | `runtime_publish_drive_status` / `request_disk_status` |
+
+Each machine telemetry event carries:
+
+- `runtime_seq` — monotonic publish sequence on the runtime thread
+- `cycle` / `cpu_cycles` / `frame_number` / `frame_cycle` — machine time stamps
+
+Use these for Phase 6 cache coherence barriers. Do not treat “looks paused” alone
+as freshness.
+
+`request_debug_state()` in `main.c` still does a **full** refresh (telemetry +
+tables) for startup and after stop/step. Free-run frame path calls
+`request_debug_telemetry()` only.
+
 ## Message contracts (identity, delivery, ownership)
 
 These rules are the IPC contract for UI↔runtime and control-port deferred work.
