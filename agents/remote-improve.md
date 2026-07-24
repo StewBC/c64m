@@ -83,10 +83,15 @@ frames when a boundary is crossed.
 Indexed-8 palette indices; ~4× smaller and easier to compare with VICE
 `DISPLAY_GET`.
 
-### Count-only / non-stopping breakpoints — done
+### Count-only / non-stopping breakpoints — done (and re-fixed)
 
 `actions=none` on `break-create` / `break-update`: hits accumulate while free-running;
 read via `break-list` `hits=`.
+
+Runtime validation originally rejected a zero action mask, so installs never
+happened and the control deferred wait hung (parser-only test passed). Fixed:
+zero mask is valid; runtime install/count regression covers it; failed installs
+return `error runtime …` instead of timing out.
 
 ### No CPU instruction history — still open
 

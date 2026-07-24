@@ -1677,6 +1677,35 @@ static void complete_deferred_control_response(
         return;
     }
 
+    /* Breakpoint mutations wait for a snapshot that may never match when the
+       runtime rejects the definition (expected count +1, but install failed).
+       Surface RUNTIME_EVENT_ERROR as a clean protocol error instead of hanging. */
+    if (event->type == RUNTIME_EVENT_ERROR &&
+        (deferred->command_type == CONTROL_COMMAND_BREAK_EXEC ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_ENABLE ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_LIST ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR_ALL ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_CREATE ||
+         deferred->command_type == CONTROL_COMMAND_BREAK_UPDATE ||
+         deferred->command_type == CONTROL_COMMAND_REARM_ONESHOTS)) {
+        control_protocol_format_error(
+            &response,
+            deferred->request_id,
+            "runtime",
+            event->data.error.message[0] != '\0' ?
+                event->data.error.message :
+                "breakpoint command failed",
+            false);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+        return;
+    }
+
     if (deferred->command_type == CONTROL_COMMAND_GET_CPU &&
         event->type == RUNTIME_EVENT_CPU_STATE_RESPONSE) {
         control_format_cpu_response(&response, deferred->request_id, &event->data.cpu_state);

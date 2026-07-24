@@ -1408,8 +1408,9 @@ static bool runtime_breakpoint_definition_is_valid(const runtime_breakpoint_defi
         return false;
     }
 
-    if ((definition->actions & supported_actions) == 0 ||
-        (definition->actions & ~supported_actions) != 0) {
+    /* actions=0 is valid: count-only / non-stopping watchpoints. Only reject
+       unknown action bits; do not require at least one action. */
+    if ((definition->actions & ~supported_actions) != 0) {
         return false;
     }
 

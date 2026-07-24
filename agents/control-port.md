@@ -391,9 +391,12 @@ Breakpoint data responses are newline-separated text records with metadata
 id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0
 ```
 
-`access` is a bit mask: 1=exec, 2=read, 4=write. Mutating breakpoint commands wait
-for the corresponding breakpoint snapshot and are therefore subject to the
-one-deferred-response rule.
+`access` is a bit mask: **1=exec, 2=read, 4=write**. Do not reuse VICE checkpoint
+op-mask numbers — VICE uses `load=1, store=2, exec=4` (the reverse assignment).
+Mutating breakpoint commands wait for the corresponding breakpoint snapshot and
+are therefore subject to the one-deferred-response rule. If the runtime rejects a
+definition (invalid access bits, table full, …), the client receives
+`error runtime <message>` instead of hanging until the deferred timeout.
 
 ## Waits and events
 

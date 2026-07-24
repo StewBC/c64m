@@ -2060,8 +2060,11 @@ is newline-separated ASCII text:
 id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0
 ```
 
-`access` is a bit mask: 1 = execute, 2 = read, 4 = write. The payload is text even
-though it uses `data` framing, so clients should still honor the byte count.
+`access` is a bit mask: **1 = execute, 2 = read, 4 = write**. VICE checkpoint op masks
+use the reverse assignment (`load=1, store=2, exec=4`) — do not copy numeric masks
+from VICE scripts. The payload is text even though it uses `data` framing, so clients
+should still honor the byte count. If a breakpoint definition is rejected by the
+runtime, the control port returns `error runtime <message>` rather than hanging.
 
 ### Assembler and Symbols
 

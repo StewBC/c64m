@@ -1423,6 +1423,67 @@ static void test_runtime_non_break_actions_do_not_pause(void) {
     stop_runtime(rt, client);
 }
 
+/* actions=0 (control-port actions=none): install, free-run hits, never pause. */
+static void test_runtime_count_only_zero_action_mask(void) {
+    runtime *rt;
+    runtime_client *client;
+    runtime_event event;
+    runtime_breakpoint_definition definition;
+
+    write_runtime_roms();
+    rt = start_runtime(&client);
+
+    memset(&definition, 0, sizeof(definition));
+    definition.enabled = 1;
+    definition.start_address = TEST_RESET_VECTOR;
+    definition.end_address = TEST_RESET_VECTOR;
+    definition.has_end_address = 0;
+    definition.access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+    definition.mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+    definition.actions = 0; /* count-only */
+    definition.use_counter = 0;
+    definition.initial_count = 0;
+    definition.reset_count = 0;
+
+    expect_true("create count-only breakpoint", runtime_client_create_breakpoint(client, &definition));
+    poll_breakpoint_count(client, &event, 1);
+    expect_u64("count-only actions mask", 0, event.data.breakpoints.entries[0].actions);
+
+    expect_true("run instruction over count-only breakpoint", runtime_client_run_instructions(client, 1));
+    if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
+        fail("STEP_COMPLETE not received for count-only breakpoint (must not pause)");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU snapshot not received for count-only run");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MACHINE_STATE_RESPONSE)) {
+        fail("machine snapshot not received for count-only run");
+    }
+
+    expect_true("request count-only breakpoint after hit", runtime_client_request_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after count-only hit");
+    }
+    expect_u64("count-only hit count after one run", 1, event.data.breakpoints.entries[0].current_hits);
+
+    /* Second hit: return to the same PC (one-shot run_instructions advances past it). */
+    expect_true("restore PC for second count-only hit", runtime_client_set_pc(client, TEST_RESET_VECTOR));
+    if (!poll_event(client, &event, RUNTIME_EVENT_CPU_STATE_RESPONSE)) {
+        fail("CPU snapshot not received after set_pc for count-only");
+    }
+    expect_true("second run-instructions over count-only", runtime_client_run_instructions(client, 1));
+    if (!poll_event(client, &event, RUNTIME_EVENT_STEP_COMPLETE)) {
+        fail("STEP_COMPLETE not received for second count-only run");
+    }
+    expect_true("request count-only after second hit", runtime_client_request_breakpoints(client));
+    if (!poll_event(client, &event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) {
+        fail("breakpoint snapshot not received after second count-only hit");
+    }
+    expect_u64("count-only hit count after two runs", 2, event.data.breakpoints.entries[0].current_hits);
+
+    stop_runtime(rt, client);
+}
+
 static void test_runtime_loads_breakpoints_from_ini(void) {
     FILE *file;
     runtime *rt;
@@ -1665,6 +1726,7 @@ int main(void) {
     test_runtime_breakpoint_counters_gate_triggers();
     test_runtime_breakpoint_counter_zero_and_disabled_rules();
     test_runtime_non_break_actions_do_not_pause();
+    test_runtime_count_only_zero_action_mask();
     test_runtime_loads_breakpoints_from_ini();
     test_runtime_saves_breakpoints_to_ini_with_suffixes();
     test_runtime_load_prg_writes_ram();
