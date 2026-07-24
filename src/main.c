@@ -77,8 +77,11 @@ typedef struct deferred_control_response {
     bool has_expected_breakpoint_start;
     bool expect_breakpoint_absent;
     bool include_write_history;
+    uint8_t frame_format;
+    uint8_t cia_index;
     uint64_t start_frame_number;
     uint64_t frame_delta;
+    uint64_t wait_after_seq; /* wait-event: only match events with seq > this */
     char wait_event_name[32];
 } deferred_control_response;
 
@@ -88,6 +91,28 @@ typedef struct control_cached_state {
     bool has_symbols;
     runtime_symbol_snapshot symbols;
 } control_cached_state;
+
+/* Sticky completion events: latched with a sequence number so wait-event can
+   observe an event that fired before the wait was registered (classic
+   load-state then wait-event race). Continuous events like frame are not
+   sticky. */
+typedef struct control_event_latch {
+    uint64_t seq;
+    uint64_t load_state_complete_seq;
+    uint64_t save_state_complete_seq;
+    uint64_t reset_complete_seq;
+    uint64_t assemble_complete_seq;
+    uint64_t assemble_error_seq;
+    uint64_t step_complete_seq;
+    uint64_t run_complete_seq;
+    bool has_load_state_complete;
+    bool has_save_state_complete;
+    bool has_reset_complete;
+    bool has_assemble_complete;
+    bool has_assemble_error;
+    bool has_step_complete;
+    bool has_run_complete;
+} control_event_latch;
 
 static void sdl_c64_controller_send_ports(
     const sdl_c64_controller_state *state,
@@ -1048,32 +1073,82 @@ static void control_format_memory_response(
         false);
 }
 
+/* Pepto palette matching vicii.c; used only for ARGB→index reverse lookup. */
+static const uint32_t control_palette_argb[16] = {
+    0xff000000u, 0xffffffffu, 0xff813338u, 0xff75cec8u,
+    0xff8e3c97u, 0xff56ac4du, 0xff2e2c9bu, 0xffedf171u,
+    0xff8e5029u, 0xff553800u, 0xffc46c71u, 0xff4a4a4au,
+    0xff7b7b7bu, 0xffa9ff9fu, 0xff706debu, 0xffb2b2b2u,
+};
+
+static uint8_t control_argb_to_index(uint32_t argb)
+{
+    unsigned i;
+    for (i = 0; i < 16u; i++) {
+        if (control_palette_argb[i] == argb) {
+            return (uint8_t)i;
+        }
+    }
+    return 0u;
+}
+
 static void control_format_frame_response(
     control_response *response,
     uint32_t request_id,
-    const c64_frame *frame)
+    const c64_frame *frame,
+    uint8_t frame_format)
 {
     uint8_t *payload;
     size_t payload_size;
     char metadata[CONTROL_RESPONSE_TEXT_MAX];
+    const char *format_name;
+    uint32_t stride;
 
     if (response == NULL || frame == NULL) {
         return;
     }
-    payload_size = (size_t)frame->height * (size_t)frame->stride_bytes;
-    payload = (uint8_t *)malloc(payload_size);
-    if (payload == NULL) {
-        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
-        return;
+
+    if (frame_format == CONTROL_FRAME_FORMAT_INDEXED8) {
+        uint32_t y;
+        uint32_t width = frame->width;
+        uint32_t height = frame->height;
+        uint32_t src_stride_px = frame->stride_bytes / 4u;
+        format_name = "indexed8";
+        stride = width; /* one byte per pixel; row pitch = width */
+        payload_size = (size_t)height * (size_t)stride;
+        payload = (uint8_t *)malloc(payload_size);
+        if (payload == NULL) {
+            control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+            return;
+        }
+        for (y = 0; y < height; y++) {
+            uint32_t x;
+            const uint32_t *src_row = frame->pixels + (size_t)y * (size_t)src_stride_px;
+            uint8_t *dst_row = payload + (size_t)y * (size_t)stride;
+            for (x = 0; x < width; x++) {
+                dst_row[x] = control_argb_to_index(src_row[x]);
+            }
+        }
+    } else {
+        format_name = "argb8888";
+        stride = frame->stride_bytes;
+        payload_size = (size_t)frame->height * (size_t)frame->stride_bytes;
+        payload = (uint8_t *)malloc(payload_size);
+        if (payload == NULL) {
+            control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+            return;
+        }
+        memcpy(payload, frame->pixels, payload_size);
     }
-    memcpy(payload, frame->pixels, payload_size);
+
     snprintf(
         metadata,
         sizeof(metadata),
-        "width=%u height=%u stride=%u format=argb8888 frame=%llu cycle=%llu",
+        "width=%u height=%u stride=%u format=%s frame=%llu cycle=%llu",
         frame->width,
         frame->height,
-        frame->stride_bytes,
+        stride,
+        format_name,
         (unsigned long long)frame->frame_number,
         (unsigned long long)frame->machine_cycle);
     control_protocol_format_data(
@@ -1228,6 +1303,90 @@ static void control_format_drive_cpu_response(
     control_protocol_format_ok(response, request_id, text, false);
 }
 
+static void control_format_vic_response(
+    control_response *response,
+    uint32_t request_id,
+    const c64_vicii_hardware_snapshot *vic)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || vic == NULL) {
+        return;
+    }
+    snprintf(
+        text,
+        sizeof(text),
+        "standard=%s raster=%u cycle=%u compare=%u d011=%02X d016=%02X "
+        "mem=%02X irq_st=%02X irq_en=%02X irq=%u display=%u badline=%u "
+        "ba=%u aec=%u rdy=%u vc=%04X vcbase=%04X rc=%u "
+        "frame=%llu border=%u bg0=%u",
+        vic->standard == C64_VIDEO_STANDARD_PAL ? "PAL" : "NTSC",
+        vic->raster_line,
+        vic->cycle_in_line,
+        (unsigned)vic->raster_compare,
+        vic->control_1,
+        vic->control_2,
+        vic->memory_pointer,
+        vic->irq_status,
+        vic->irq_enable,
+        vic->irq_pending ? 1u : 0u,
+        vic->display_state ? 1u : 0u,
+        vic->bad_line ? 1u : 0u,
+        vic->ba_active ? 1u : 0u,
+        vic->aec_active ? 1u : 0u,
+        vic->rdy_active ? 1u : 0u,
+        (unsigned)vic->vc,
+        (unsigned)vic->vc_base,
+        (unsigned)vic->rc,
+        (unsigned long long)vic->frame_number,
+        (unsigned)vic->border_color,
+        (unsigned)vic->background_color[0]);
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
+static void control_format_cia_response(
+    control_response *response,
+    uint32_t request_id,
+    uint8_t cia_index,
+    const c64_cia_hardware_snapshot *cia)
+{
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (response == NULL || cia == NULL) {
+        return;
+    }
+    snprintf(
+        text,
+        sizeof(text),
+        "cia=%u pra=%02X prb=%02X ddra=%02X ddrb=%02X "
+        "ta=%04X/%04X cra=%02X tb=%04X/%04X crb=%02X "
+        "icr_flags=%02X icr_mask=%02X irq=%u "
+        "tod=%02X:%02X:%02X.%02X alarm=%02X:%02X:%02X.%02X",
+        (unsigned)cia_index,
+        cia->port_a,
+        cia->port_b,
+        cia->ddra,
+        cia->ddrb,
+        (unsigned)cia->timer_a_counter,
+        (unsigned)cia->timer_a_latch,
+        cia->timer_a_control,
+        (unsigned)cia->timer_b_counter,
+        (unsigned)cia->timer_b_latch,
+        cia->timer_b_control,
+        cia->interrupt_flags,
+        cia->interrupt_mask,
+        cia->interrupt_pending ? 1u : 0u,
+        cia->tod_hours,
+        cia->tod_minutes,
+        cia->tod_seconds,
+        cia->tod_tenths,
+        cia->alarm_hours,
+        cia->alarm_minutes,
+        cia->alarm_seconds,
+        cia->alarm_tenths);
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
 static void control_format_breakpoints_response(
     control_response *response,
     uint32_t request_id,
@@ -1309,6 +1468,7 @@ static bool control_parse_breakpoint_actions(const char *value, uint32_t *out_ac
 {
     uint32_t actions = 0;
     const char *cursor = value;
+    bool saw_none = false;
 
     if (value == NULL || value[0] == '\0' || out_actions == NULL) {
         return false;
@@ -1320,7 +1480,10 @@ static bool control_parse_breakpoint_actions(const char *value, uint32_t *out_ac
             cursor++;
         }
         length = (size_t)(cursor - start);
-        if (length == 5 && strncmp(start, "break", length) == 0) {
+        if (length == 4 && strncmp(start, "none", length) == 0) {
+            /* Count-only / non-stopping: hits accumulate, machine free-runs. */
+            saw_none = true;
+        } else if (length == 5 && strncmp(start, "break", length) == 0) {
             actions |= RUNTIME_BREAKPOINT_ACTION_BREAK;
         } else if (length == 4 && strncmp(start, "fast", length) == 0) {
             actions |= RUNTIME_BREAKPOINT_ACTION_FAST;
@@ -1341,8 +1504,11 @@ static bool control_parse_breakpoint_actions(const char *value, uint32_t *out_ac
             cursor++;
         }
     }
+    if (saw_none && actions != 0) {
+        return false; /* none is exclusive */
+    }
     *out_actions = actions;
-    return actions != 0;
+    return saw_none || actions != 0;
 }
 
 static bool control_parse_u32_field(const char *value, uint32_t *out)
@@ -1398,6 +1564,31 @@ static bool control_parse_bool_field(const char *value, uint8_t *out)
     return false;
 }
 
+static bool control_parse_breakpoint_access(const char *token, uint32_t *out_access)
+{
+    if (token == NULL || out_access == NULL) {
+        return false;
+    }
+    if (strcmp(token, "exec") == 0 || strcmp(token, "execute") == 0) {
+        *out_access = RUNTIME_BREAKPOINT_ACCESS_EXECUTE;
+        return true;
+    }
+    if (strcmp(token, "read") == 0 || strcmp(token, "load") == 0) {
+        *out_access = RUNTIME_BREAKPOINT_ACCESS_READ;
+        return true;
+    }
+    if (strcmp(token, "write") == 0 || strcmp(token, "store") == 0) {
+        *out_access = RUNTIME_BREAKPOINT_ACCESS_WRITE;
+        return true;
+    }
+    /* Combined forms: load-store, read-write */
+    if (strcmp(token, "read-write") == 0 || strcmp(token, "load-store") == 0) {
+        *out_access = RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
+        return true;
+    }
+    return false;
+}
+
 static bool control_parse_breakpoint_definition(
     const char *text,
     runtime_breakpoint_definition *definition)
@@ -1417,7 +1608,7 @@ static bool control_parse_breakpoint_definition(
     definition->reset_count = 1u;
 
     token = strtok(buffer, " \t");
-    if (token == NULL || strcmp(token, "exec") != 0) {
+    if (token == NULL || !control_parse_breakpoint_access(token, &definition->access)) {
         return false;
     }
     token = strtok(NULL, " \t");
@@ -1456,6 +1647,16 @@ static bool control_parse_breakpoint_definition(
             definition->use_counter = 1u;
         } else if (strcmp(key, "reset") == 0) {
             if (!control_parse_u32_field(value, &definition->reset_count)) {
+                return false;
+            }
+        } else if (strcmp(key, "mapping") == 0) {
+            if (strcmp(value, "map") == 0) {
+                definition->mapping = RUNTIME_BREAKPOINT_MAPPING_MAP;
+            } else if (strcmp(value, "rom") == 0) {
+                definition->mapping = RUNTIME_BREAKPOINT_MAPPING_ROM;
+            } else if (strcmp(value, "ram") == 0) {
+                definition->mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;
+            } else {
                 return false;
             }
         } else {
@@ -1522,6 +1723,34 @@ static void complete_deferred_control_response(
             (deferred->memory_address == 9u) ? &event->data.machine_state.drive9_hardware
                                              : &event->data.machine_state.drive8_hardware;
         control_format_drive_cpu_response(&response, deferred->request_id, drive);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_VIC &&
+               event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
+        control_format_vic_response(
+            &response,
+            deferred->request_id,
+            &event->data.machine_state.vicii_hardware);
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if (deferred->command_type == CONTROL_COMMAND_GET_CIA &&
+               event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
+        const c64_cia_hardware_snapshot *cia =
+            (deferred->cia_index == 2u) ? &event->data.machine_state.cia2_hardware
+                                        : &event->data.machine_state.cia1_hardware;
+        control_format_cia_response(
+            &response,
+            deferred->request_id,
+            deferred->cia_index,
+            cia);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
         } else {
@@ -1644,7 +1873,11 @@ static void complete_deferred_frame_response(
         return;
     }
 
-    control_format_frame_response(&response, deferred->request_id, frame);
+    control_format_frame_response(
+        &response,
+        deferred->request_id,
+        frame,
+        deferred->frame_format);
     if (control_server_post_response(control, &response)) {
         deferred->active = false;
     } else {
@@ -1684,7 +1917,8 @@ static void complete_deferred_wait_response(
 static void check_deferred_state_wait(
     control_server *control,
     deferred_control_response *deferred,
-    const frontend_debug_state *debug_state)
+    const frontend_debug_state *debug_state,
+    const runtime_event *event)
 {
     char metadata[CONTROL_RESPONSE_TEXT_MAX];
 
@@ -1692,8 +1926,12 @@ static void check_deferred_state_wait(
         debug_state == NULL) {
         return;
     }
+    /* wait-paused: only complete on MACHINE_STATE_RESPONSE so stop_reason is
+       populated. PAUSED alone arrives first with a stale stop=none. */
     if (deferred->command_type == CONTROL_COMMAND_WAIT_PAUSED &&
-        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED &&
+        event != NULL &&
+        event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
         snprintf(
             metadata,
             sizeof(metadata),
@@ -1735,24 +1973,162 @@ static void check_deferred_frame_wait(
     complete_deferred_wait_response(control, deferred, metadata);
 }
 
+static void control_event_latch_note(
+    control_event_latch *latch,
+    runtime_event_type type)
+{
+    uint64_t seq;
+
+    if (latch == NULL) {
+        return;
+    }
+    latch->seq++;
+    seq = latch->seq;
+    switch (type) {
+        case RUNTIME_EVENT_LOAD_STATE_COMPLETE:
+            latch->load_state_complete_seq = seq;
+            latch->has_load_state_complete = true;
+            break;
+        case RUNTIME_EVENT_SAVE_STATE_COMPLETE:
+            latch->save_state_complete_seq = seq;
+            latch->has_save_state_complete = true;
+            break;
+        case RUNTIME_EVENT_RESET_COMPLETE:
+            latch->reset_complete_seq = seq;
+            latch->has_reset_complete = true;
+            break;
+        case RUNTIME_EVENT_ASSEMBLE_COMPLETE:
+            latch->assemble_complete_seq = seq;
+            latch->has_assemble_complete = true;
+            break;
+        case RUNTIME_EVENT_ASSEMBLE_ERROR:
+            latch->assemble_error_seq = seq;
+            latch->has_assemble_error = true;
+            break;
+        case RUNTIME_EVENT_STEP_COMPLETE:
+            latch->step_complete_seq = seq;
+            latch->has_step_complete = true;
+            break;
+        case RUNTIME_EVENT_RUN_COMPLETE:
+            latch->run_complete_seq = seq;
+            latch->has_run_complete = true;
+            break;
+        default:
+            break;
+    }
+}
+
+/* Consume a sticky latched completion event if one is pending for name.
+   Returns true and clears the latch so a second wait requires a new event. */
+static bool control_event_latch_consume(
+    control_event_latch *latch,
+    const char *event_name,
+    uint64_t *out_seq)
+{
+    if (latch == NULL || event_name == NULL) {
+        return false;
+    }
+    if (strcmp(event_name, "load-state-complete") == 0 &&
+        latch->has_load_state_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->load_state_complete_seq;
+        }
+        latch->has_load_state_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "save-state-complete") == 0 &&
+        latch->has_save_state_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->save_state_complete_seq;
+        }
+        latch->has_save_state_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "reset-complete") == 0 && latch->has_reset_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->reset_complete_seq;
+        }
+        latch->has_reset_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "assemble-complete") == 0 &&
+        latch->has_assemble_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->assemble_complete_seq;
+        }
+        latch->has_assemble_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "assemble-error") == 0 && latch->has_assemble_error) {
+        if (out_seq != NULL) {
+            *out_seq = latch->assemble_error_seq;
+        }
+        latch->has_assemble_error = false;
+        return true;
+    }
+    if (strcmp(event_name, "step-complete") == 0 && latch->has_step_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->step_complete_seq;
+        }
+        latch->has_step_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "run-complete") == 0 && latch->has_run_complete) {
+        if (out_seq != NULL) {
+            *out_seq = latch->run_complete_seq;
+        }
+        latch->has_run_complete = false;
+        return true;
+    }
+    return false;
+}
+
 static void check_deferred_event_wait(
     control_server *control,
     deferred_control_response *deferred,
-    const runtime_event *event)
+    const runtime_event *event,
+    control_event_latch *latch)
 {
     char metadata[CONTROL_RESPONSE_TEXT_MAX];
     const char *event_name;
+    uint64_t event_seq = 0;
 
     if (control == NULL || deferred == NULL || !deferred->active ||
-        deferred->command_type != CONTROL_COMMAND_WAIT_EVENT ||
-        event == NULL) {
+        deferred->command_type != CONTROL_COMMAND_WAIT_EVENT) {
+        return;
+    }
+
+    /* Sticky completion: if the event already fired and has not been
+       consumed, complete immediately (fixes load-state then wait-event race). */
+    if (control_event_latch_consume(latch, deferred->wait_event_name, &event_seq)) {
+        snprintf(
+            metadata,
+            sizeof(metadata),
+            "event=%s seq=%llu",
+            deferred->wait_event_name,
+            (unsigned long long)event_seq);
+        complete_deferred_wait_response(control, deferred, metadata);
+        return;
+    }
+
+    if (event == NULL) {
         return;
     }
     event_name = control_runtime_event_name(event->type);
     if (strcmp(event_name, deferred->wait_event_name) != 0) {
         return;
     }
-    snprintf(metadata, sizeof(metadata), "event=%s", event_name);
+    /* Live match. Sticky types were just latched in note(); consume so a
+       later wait does not re-fire. Sequence was already advanced by note(). */
+    if (!control_event_latch_consume(latch, event_name, &event_seq)) {
+        event_seq = latch != NULL ? latch->seq : 0u;
+    }
+    snprintf(
+        metadata,
+        sizeof(metadata),
+        "event=%s seq=%llu",
+        event_name,
+        (unsigned long long)event_seq);
     complete_deferred_wait_response(control, deferred, metadata);
 }
 
@@ -1838,16 +2214,18 @@ static void poll_runtime_events(
     frontend_joystick_input *kbd_joystick,
     control_server *control,
     deferred_control_response *deferred,
-    control_cached_state *control_cache) {
+    control_cached_state *control_cache,
+    control_event_latch *event_latch) {
     runtime_event event;
     c64_frame frame;
     bool consumed_frame = false;
 
     while (runtime_client_poll_event(client, &event)) {
         update_debug_state_from_event(debug_state, &event);
+        control_event_latch_note(event_latch, event.type);
         complete_deferred_control_response(control, deferred, &event);
-        check_deferred_event_wait(control, deferred, &event);
-        check_deferred_state_wait(control, deferred, debug_state);
+        check_deferred_event_wait(control, deferred, &event, event_latch);
+        check_deferred_state_wait(control, deferred, debug_state, &event);
         if (debug_state != NULL && debug_state->has_frame) {
             check_deferred_frame_wait(control, deferred, debug_state->frame_number);
         }
@@ -2978,6 +3356,7 @@ static void dispatch_control_request(
     const frontend_debug_state *debug_state,
     const control_cached_state *control_cache,
     deferred_control_response *deferred,
+    control_event_latch *event_latch,
     const control_request *request)
 {
     control_response response;
@@ -2997,6 +3376,9 @@ static void dispatch_control_request(
         deferred->expected_breakpoint_id = 0;
         deferred->start_frame_number = 0;
         deferred->frame_delta = 0;
+        deferred->wait_after_seq = 0;
+        deferred->frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
+        deferred->cia_index = 1u;
         deferred->wait_event_name[0] = '\0';
     }
 
@@ -3021,7 +3403,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia",
                 false);
             break;
 
@@ -3091,6 +3473,10 @@ static void dispatch_control_request(
             accepted = runtime_client_run_to_cursor(client, request->args.address);
             break;
 
+        case CONTROL_COMMAND_STEP_FRAME:
+            accepted = runtime_client_step_frame(client);
+            break;
+
         case CONTROL_COMMAND_SET_TURBO:
             accepted = runtime_client_set_turbo_multiplier(
                 client,
@@ -3100,16 +3486,33 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_GET_STATE: {
             char text[CONTROL_RESPONSE_TEXT_MAX];
             const bool has_state = debug_state != NULL;
-            snprintf(
-                text,
-                sizeof(text),
-                "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u",
-                has_state ? control_runtime_state_name(debug_state->runtime_state) : "unknown",
-                has_state && debug_state->has_cpu ? 1u : 0u,
-                has_state ? (unsigned long long)debug_state->frame_number : 0ull,
-                has_state ? (unsigned long long)debug_state->machine_cycle : 0ull,
-                has_state ? control_stop_reason_name(debug_state->stop_reason) : "none",
-                has_state ? debug_state->active_turbo_multiplier : 0u);
+            const bool has_hw = has_state && debug_state->has_hardware;
+            if (has_hw) {
+                snprintf(
+                    text,
+                    sizeof(text),
+                    "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u "
+                    "raster=%u vic_cycle=%u",
+                    control_runtime_state_name(debug_state->runtime_state),
+                    debug_state->has_cpu ? 1u : 0u,
+                    (unsigned long long)debug_state->frame_number,
+                    (unsigned long long)debug_state->machine_cycle,
+                    control_stop_reason_name(debug_state->stop_reason),
+                    debug_state->active_turbo_multiplier,
+                    debug_state->vicii_hardware.raster_line,
+                    debug_state->vicii_hardware.cycle_in_line);
+            } else {
+                snprintf(
+                    text,
+                    sizeof(text),
+                    "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u",
+                    has_state ? control_runtime_state_name(debug_state->runtime_state) : "unknown",
+                    has_state && debug_state->has_cpu ? 1u : 0u,
+                    has_state ? (unsigned long long)debug_state->frame_number : 0ull,
+                    has_state ? (unsigned long long)debug_state->machine_cycle : 0ull,
+                    has_state ? control_stop_reason_name(debug_state->stop_reason) : "none",
+                    has_state ? debug_state->active_turbo_multiplier : 0u);
+            }
             control_protocol_format_ok(&response, request->id, text, false);
             break;
         }
@@ -3148,7 +3551,11 @@ static void dispatch_control_request(
 
         case CONTROL_COMMAND_GET_FRAME:
             if (control_cache != NULL && control_cache->has_frame) {
-                control_format_frame_response(&response, request->id, &control_cache->frame);
+                control_format_frame_response(
+                    &response,
+                    request->id,
+                    &control_cache->frame,
+                    request->args.frame_format);
             } else if (deferred != NULL && deferred->active) {
                 control_protocol_format_error(
                     &response,
@@ -3162,6 +3569,79 @@ static void dispatch_control_request(
                     deferred->request_id = request->id;
                     deferred->command_type = request->type;
                     deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->frame_format = request->args.frame_format;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_VIC:
+            if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_machine_state(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    return;
+                }
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "internal",
+                    "deferred state unavailable",
+                    false);
+            } else {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "runtime",
+                    "command rejected",
+                    false);
+            }
+            break;
+
+        case CONTROL_COMMAND_GET_CIA:
+            if (request->args.cia_index != 1u && request->args.cia_index != 2u) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "bad-args",
+                    "expected CIA index 1 or 2",
+                    false);
+            } else if (deferred != NULL && deferred->active) {
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "busy",
+                    "deferred-response-active",
+                    false);
+            } else if (runtime_client_request_machine_state(client)) {
+                if (deferred != NULL) {
+                    deferred->active = true;
+                    deferred->request_id = request->id;
+                    deferred->command_type = request->type;
+                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->cia_index = request->args.cia_index;
                     return;
                 }
                 control_protocol_format_error(
@@ -3220,15 +3700,9 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_DEBUG_MEMORY:
-            if (debug_state != NULL && debug_state->has_debug_memory &&
-                (!request->args.include_write_history ||
-                 debug_state->debug_memory.has_write_history)) {
-                control_format_debug_memory_response(
-                    &response,
-                    request->id,
-                    &debug_state->debug_memory,
-                    request->args.include_write_history);
-            } else if (deferred != NULL && deferred->active) {
+            /* Always request a fresh snapshot. Serving a cached generation
+               silently reported 0 bytes changed while RAM was moving. */
+            if (deferred != NULL && deferred->active) {
                 control_protocol_format_error(
                     &response,
                     request->id,
@@ -3704,6 +4178,8 @@ static void dispatch_control_request(
                 deferred->command_type = request->type;
                 deferred->deadline_ms =
                     SDL_GetTicks64() + control_timeout_or_default(request->args.timeout_ms);
+                deferred->wait_after_seq =
+                    event_latch != NULL ? event_latch->seq : 0u;
                 /* wait_event_name only ever needs to hold short identifiers
                  * like "step-complete" (see control_runtime_event_name());
                  * an oversized client-supplied name is truncated and simply
@@ -3721,6 +4197,12 @@ static void dispatch_control_request(
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+                /* Complete immediately if a sticky completion event already
+                   fired (load-state then wait-event race). */
+                check_deferred_event_wait(control, deferred, NULL, event_latch);
+                if (!deferred->active) {
+                    return;
+                }
                 return;
             } else {
                 control_protocol_format_error(&response, request->id, "internal", "deferred state unavailable", false);
@@ -3811,6 +4293,7 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_RUN_CYCLES:
         case CONTROL_COMMAND_RUN_INSTRUCTIONS:
         case CONTROL_COMMAND_RUN_TO:
+        case CONTROL_COMMAND_STEP_FRAME:
         case CONTROL_COMMAND_KEY_DOWN:
         case CONTROL_COMMAND_KEY_UP:
         case CONTROL_COMMAND_RESTORE:
@@ -3880,7 +4363,8 @@ static void dispatch_control_requests(
     runtime_client *client,
     const frontend_debug_state *debug_state,
     const control_cached_state *control_cache,
-    deferred_control_response *deferred)
+    deferred_control_response *deferred,
+    control_event_latch *event_latch)
 {
     control_request request;
 
@@ -3889,7 +4373,14 @@ static void dispatch_control_requests(
     }
 
     while (control_server_poll_request(control, &request)) {
-        dispatch_control_request(control, client, debug_state, control_cache, deferred, &request);
+        dispatch_control_request(
+            control,
+            client,
+            debug_state,
+            control_cache,
+            deferred,
+            event_latch,
+            &request);
         control_request_release(&request);
     }
 }
@@ -3930,6 +4421,7 @@ static bool run_main_loop(
     frontend_joystick_input kbd_joystick;
     deferred_control_response deferred_control = {0};
     control_cached_state control_cache = {0};
+    control_event_latch event_latch = {0};
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
@@ -4142,14 +4634,16 @@ static bool run_main_loop(
             &kbd_joystick,
             control,
             &deferred_control,
-            &control_cache);
+            &control_cache,
+            &event_latch);
         check_deferred_control_timeout(control, &deferred_control);
         dispatch_control_requests(
             control,
             client,
             &debug_state,
             &control_cache,
-            &deferred_control);
+            &deferred_control,
+            &event_latch);
 
         if (!title_set ||
             debug_state.runtime_state != last_title_state ||
@@ -4211,6 +4705,7 @@ static bool run_headless_loop(
     bool running = true;
     deferred_control_response deferred_control = {0};
     control_cached_state control_cache = {0};
+    control_event_latch event_latch = {0};
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
@@ -4236,14 +4731,16 @@ static bool run_headless_loop(
             NULL,
             control,
             &deferred_control,
-            &control_cache);
+            &control_cache,
+            &event_latch);
         check_deferred_control_timeout(control, &deferred_control);
         dispatch_control_requests(
             control,
             client,
             &debug_state,
             &control_cache,
-            &deferred_control);
+            &deferred_control,
+            &event_latch);
         SDL_Delay(1);
     }
 
@@ -4416,7 +4913,7 @@ int main(int argc, char **argv) {
         control_server_stop(control);
         runtime_client_quit(client);
         runtime_stop(rt);
-        poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         if (!runtime_save_debug_ini(rt)) {
             SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
         }
@@ -4541,7 +5038,7 @@ int main(int argc, char **argv) {
     control_server_stop(control);
     runtime_client_quit(client);
     runtime_stop(rt);
-    poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (!runtime_save_debug_ini(rt)) {
         SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
     }

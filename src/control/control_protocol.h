@@ -26,10 +26,13 @@ typedef enum control_command_type {
     CONTROL_COMMAND_RUN_CYCLES,
     CONTROL_COMMAND_RUN_INSTRUCTIONS,
     CONTROL_COMMAND_RUN_TO,
+    CONTROL_COMMAND_STEP_FRAME,
     CONTROL_COMMAND_SET_TURBO,
     CONTROL_COMMAND_GET_STATE,
     CONTROL_COMMAND_GET_CPU,
     CONTROL_COMMAND_GET_FRAME,
+    CONTROL_COMMAND_GET_VIC,
+    CONTROL_COMMAND_GET_CIA,
     CONTROL_COMMAND_GET_MEMORY,
     CONTROL_COMMAND_GET_DEBUG_MEMORY,
     CONTROL_COMMAND_GET_CALL_STACK,
@@ -66,6 +69,11 @@ typedef enum control_command_type {
     CONTROL_COMMAND_FIND_SYMBOL
 } control_command_type;
 
+enum {
+    CONTROL_FRAME_FORMAT_ARGB8888 = 0,
+    CONTROL_FRAME_FORMAT_INDEXED8 = 1
+};
+
 typedef struct control_args {
     uint64_t count;
     uint32_t id;
@@ -81,6 +89,8 @@ typedef struct control_args {
     uint8_t port;
     uint8_t mask;
     uint8_t key;
+    uint8_t frame_format;
+    uint8_t cia_index; /* 1 or 2 for get-cia */
     bool use_file_address;
     bool reset_first;
     bool is_basic;

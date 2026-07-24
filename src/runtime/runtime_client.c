@@ -108,6 +108,10 @@ bool runtime_client_run_instructions(runtime_client *client, size_t count) {
     return message_queue_push(client->command_queue, &command);
 }
 
+bool runtime_client_step_frame(runtime_client *client) {
+    return runtime_client_send_command(client, RUNTIME_COMMAND_STEP_FRAME);
+}
+
 bool runtime_client_request_cpu_state(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_CPU_STATE);
 }

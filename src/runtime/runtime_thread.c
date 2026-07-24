@@ -1899,6 +1899,11 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
         if (runtime_pause_if_breakpoint_pending(rt)) {
             return true;
         }
+
+        if (c64_consume_frame_complete(&rt->machine)) {
+            runtime_publish_completed_frame(rt);
+            rt->next_frame_cycle = rt->machine.clock.cycle;
+        }
     }
 
     rt->exec_state = RUNTIME_EXEC_PAUSED;
@@ -1906,6 +1911,55 @@ static bool runtime_run_cycles(runtime *rt, size_t count) {
     runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
     runtime_publish_machine_state(rt);
     return true;
+}
+
+/* Advance until the next completed VIC-II frame is published, then pause.
+   Honors breakpoints and BRK. Used by control-port step-frame for deterministic
+   frame-accurate capture without depending on target-program exec breakpoints. */
+static bool runtime_step_frame(runtime *rt) {
+    size_t guard = 0;
+    /* One PAL frame is 63*312 = 19656 cycles; NTSC is 65*263 = 17095. Guard
+       well above that so a stuck machine still fails loudly. */
+    const size_t max_cycles = 262144u;
+
+    rt->exec_state = RUNTIME_EXEC_PAUSED;
+    rt->suppress_execute_bp = false;
+
+    while (guard++ < max_cycles) {
+        if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
+            runtime_pause_for_breakpoint(rt);
+            return true;
+        }
+        if (runtime_brk_pending(rt)) {
+            runtime_pause_for_brk(rt);
+            return true;
+        }
+
+        if (!runtime_step_cycle(rt)) {
+            return false;
+        }
+
+        if (rt->suppress_execute_bp && c64_consume_instruction_complete(&rt->machine)) {
+            rt->suppress_execute_bp = false;
+        }
+
+        if (runtime_pause_if_breakpoint_pending(rt)) {
+            return true;
+        }
+
+        if (c64_consume_frame_complete(&rt->machine)) {
+            runtime_publish_completed_frame(rt);
+            rt->next_frame_cycle = rt->machine.clock.cycle;
+            rt->exec_state = RUNTIME_EXEC_PAUSED;
+            rt->last_stop_reason = RUNTIME_STOP_REASON_RUN_COMPLETE;
+            runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
+            runtime_publish_machine_state(rt);
+            return true;
+        }
+    }
+
+    runtime_publish_error(rt, "step-frame did not complete a frame");
+    return false;
 }
 
 static void runtime_set_execute_breakpoint(runtime *rt, const runtime_command *command) {
@@ -3371,6 +3425,10 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_RUN_CYCLES:
             runtime_run_cycles(rt, command->data.run_cycles.count);
+            break;
+
+        case RUNTIME_COMMAND_STEP_FRAME:
+            runtime_step_frame(rt);
             break;
 
         case RUNTIME_COMMAND_RUN_INSTRUCTIONS:

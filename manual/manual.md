@@ -1785,10 +1785,10 @@ when another deferred command is still pending. Deferred commands time out with:
 
 `capabilities` currently includes (among others) `connection`, `introspection`,
 `execution`, `state`, `step`, `turbo`, `frame`, `memory`, `debug-memory`, `call-stack`,
-`input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`, and
-`drive-cpu`. The `snapshot` token means machine save/load (`.c64state`) via
-`load-state` / `save-state`. The `state` token means runtime inspection (`get-state`),
-not file snapshots.
+`input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`,
+`drive-cpu`, `vic`, and `cia`. The `snapshot` token means machine save/load
+(`.c64state`) via `load-state` / `save-state`. The `state` token means runtime
+inspection (`get-state`), not file snapshots.
 
 ### Execution Control
 
@@ -1804,6 +1804,7 @@ machine reaches a new state. Use `wait-*` commands when a script needs to synchr
 | `step-instruction` | Execute one CPU instruction |
 | `step-over` | Step over a JSR |
 | `step-out` | Run until the current subroutine returns |
+| `step-frame` | Advance one VIC-II frame, publish it, and pause |
 | `run-cycles <count>` | Run for a positive cycle count |
 | `run-instructions <count>` | Run for a positive instruction count |
 | `run-to <addr>` | Run until the PC reaches a 16-bit address |
@@ -1832,18 +1833,26 @@ For warp (mode 3), the response warns that live pixels are unavailable:
 
 | Command | Response |
 |---------|----------|
-| `get-state` | Text state summary: runtime state, CPU availability, frame, cycle, stop reason, turbo |
+| `get-state` | Text state summary: runtime state, CPU availability, frame, cycle, stop reason, turbo; when hardware is known also `raster=` and `vic_cycle=` |
 | `get-cpu` | Text CPU snapshot |
-| `get-frame [format=argb8888]` | Binary frame snapshot |
+| `get-vic` | Text VIC-II internal state (raster, cycle, compare latch, VC/RC, IRQ, BA/AEC/RDY, …) |
+| `get-cia <1\|2>` | Text CIA internal state including ICR mask |
+| `get-frame [format=argb8888\|indexed8]` | Binary frame snapshot |
 | `get-memory <addr> <length> <mode>` | Binary memory snapshot |
-| `get-debug-memory [write-history=0|1]` | Binary debugger memory snapshot |
+| `get-debug-memory [write-history=0\|1]` | Fresh binary debugger memory snapshot (map+ram+rom) |
 | `get-call-stack` | Text call-stack summary |
+| `step-frame` | Advance one full VIC-II frame, publish it, and pause |
 
 `get-state` is answered from the main loop's cached frontend debug state. `get-cpu`,
-`get-memory`, and `get-call-stack` request fresh runtime snapshots and complete later.
-`get-frame` uses the latest completed frame cached by the main loop, or requests one if
-no cached frame exists yet. In headless mode the main loop still polls frame snapshots
-for `get-frame` and `wait-frame`.
+`get-vic`, `get-cia`, `get-memory`, `get-debug-memory`, and `get-call-stack` request
+fresh runtime snapshots and complete later. `get-frame` uses the latest completed
+frame cached by the main loop, or requests one if no cached frame exists yet. In
+headless mode the main loop still polls frame snapshots for `get-frame` and
+`wait-frame`.
+
+`step-frame` is the preferred way to capture consecutive frames: it runs until the
+next completed VIC-II frame is published, then pauses. It honors breakpoints and BRK.
+Prefer it over free-run `wait-frame` loops when you need every frame without aliasing.
 
 Memory modes:
 
@@ -1855,28 +1864,38 @@ Memory modes:
 
 `get-memory` length is limited to 1..1024 bytes.
 
-Frame payloads are ARGB8888 pixels. PAL frames are 384x312; NTSC frames are 384x263.
-The frame metadata is:
+Default frame format is ARGB8888. The buffer is a full VIC-II raster line (PAL
+504×312, NTSC 520×263) in VIC-X order with no frontend crop. Metadata:
 
 ```text
-<id> data frame <bytes> width=384 height=<312|263> stride=1536 format=argb8888 frame=<n> cycle=<cycle>
+<id> data frame <bytes> width=<504|520> height=<312|263> stride=2080 format=argb8888 frame=<n> cycle=<cycle>
 ```
 
-`<bytes>` is `height * stride`. `stride` is bytes per row.
+`<bytes>` is `height * stride`. **`stride` is always 2080** (520 px × 4) for ARGB;
+index rows by `stride`, never by `width`.
+
+`format=indexed8` returns one palette index (0..15) per pixel, with `stride=width`
+and payload size `height * width` (about 157 KB for PAL). Prefer indexed frames when
+comparing against VICE, which uses different RGB values for the same indices.
 
 At turbo 3 (warp), `get-frame` returns a geometric debug snapshot instead of the
 live ARGB framebuffer. Use `set-turbo 1` or `set-turbo 2` and wait for a subsequent
 frame before inspecting live pixels.
 
-`get-debug-memory` returns concatenated 64 K buffers:
+`get-debug-memory` always refreshes from the runtime (it does not serve a stale
+cache). Payload order:
 
 ```text
 map bytes, then ram bytes, then rom bytes
 ```
 
 Without write history the payload is `196608` bytes. With `write-history=1`, an
-additional write-history payload may be included when available; the header metadata
-records whether write history is present.
+additional write-history payload is included; the header metadata records
+`generation=` and whether write history is present.
+
+`get-vic` exposes the raster **compare latch** (what line the VIC is armed for) and
+other internal state not recoverable from `$D0xx` alone. `get-cia` exposes the
+interrupt mask that real hardware cannot read back.
 
 ### Waiting
 
@@ -1885,7 +1904,7 @@ polling. They never block SDL rendering or event processing.
 
 | Command | Completes when |
 |---------|----------------|
-| `wait-paused [timeout_ms]` | Runtime state is paused |
+| `wait-paused [timeout_ms]` | Runtime state is paused (stop reason is current) |
 | `wait-running [timeout_ms]` | Runtime state is running |
 | `wait-frame <frame_delta> [timeout_ms]` | The frame counter advances by at least `frame_delta` |
 | `wait-event <event_name> [timeout_ms]` | A named runtime event is observed |
@@ -1897,7 +1916,26 @@ Useful event names include `running`, `paused`, `reset-complete`, `step-complete
 `assemble-complete`, `assemble-error`, `load-state-complete`, `save-state-complete`,
 `disk-swap`, `started`, `stopped`, and `error`.
 
-Example synchronization:
+Completion events (`load-state-complete`, `save-state-complete`, `reset-complete`,
+`assemble-complete`, `assemble-error`, `step-complete`, `run-complete`) are **sticky**:
+if the event fires before `wait-event` is registered, the wait still completes. A
+successful wait reports `event=<name> seq=<n>`. Continuous events such as `frame` are
+not sticky.
+
+Example synchronization (frame-accurate capture while paused):
+
+```text
+1 reset
+2 wait-paused 2000
+3 step-frame
+4 wait-event run-complete 5000
+5 get-frame format=indexed8
+6 step-frame
+7 wait-event run-complete 5000
+8 get-frame format=indexed8
+```
+
+Example free-run then pause:
 
 ```text
 1 reset
@@ -1917,6 +1955,7 @@ Example machine-snapshot load:
 2 wait-event load-state-complete 10000
 3 get-state
 4 get-cpu
+5 get-vic
 ```
 
 ### Input and Paste
@@ -1994,11 +2033,24 @@ machine unchanged.
 Definition syntax:
 
 ```text
-exec <addr> [enabled=0|1] [end=<addr>] [actions=<list>] [counter=N] [reset=N]
+<access> <addr> [enabled=0|1] [end=<addr>] [actions=<list>] [counter=N] [reset=N] [mapping=map|rom|ram]
 ```
 
-`actions` is a comma-separated list containing one or more of: `break`, `fast`, `slow`,
-`tron`, `troff`, `type`, and `swap`.
+`<access>` is `exec` / `execute`, `read` / `load`, `write` / `store`, or
+`read-write` / `load-store`. Use `end=` for an inclusive address range (for example
+`write $D000 end=$D02E`).
+
+`actions` is a comma-separated list of `break`, `fast`, `slow`, `tron`, `troff`,
+`type`, and `swap`, or the exclusive token `none` for a **count-only** breakpoint
+that never pauses. After a free run, read `hits=` from `break-list`.
+
+Examples:
+
+```text
+break-create write $D012 actions=break
+break-create exec $EA31 actions=none
+break-create read $0400 end=$07E7 mapping=ram actions=break
+```
 
 Breakpoint list responses are binary-framed `data breakpoints` responses whose payload
 is newline-separated ASCII text:
@@ -2008,8 +2060,8 @@ is newline-separated ASCII text:
 id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0
 ```
 
-The payload is text even though it uses `data` framing, so clients should still honor
-the byte count.
+`access` is a bit mask: 1 = execute, 2 = read, 4 = write. The payload is text even
+though it uses `data` framing, so clients should still honor the byte count.
 
 ### Assembler and Symbols
 

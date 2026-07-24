@@ -44,6 +44,7 @@ bool runtime_client_step_cycle(runtime_client *client);
 bool runtime_client_step_instruction(runtime_client *client);
 bool runtime_client_run_cycles(runtime_client *client, size_t count);
 bool runtime_client_run_instructions(runtime_client *client, size_t count);
+bool runtime_client_step_frame(runtime_client *client);
 bool runtime_client_request_cpu_state(runtime_client *client);
 bool runtime_client_request_machine_state(runtime_client *client);
 bool runtime_client_request_memory(

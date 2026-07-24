@@ -27,11 +27,13 @@ owns blocking network I/O; the SDL/main loop drains requests and sends responses
 `--headless` requires a control port and skips window, renderer, frontend, controller,
 and host audio setup while retaining runtime frames for control clients.
 
-Implemented protocol areas include introspection, execution, state/CPU/frame/memory/
-debug-memory/call-stack, keyboard/joystick/RESTORE, paste, PRG/BIN/D64 operations,
-machine snapshot save/load (`save-state` / `load-state`), breakpoints, waits,
-assemble, find-symbol, and `set-turbo`. Binary responses carry a typed header and
-raw byte count. Deferred responses are serviced by the main-loop-owned cache.
+Implemented protocol areas include introspection, execution (including `step-frame`),
+state/CPU/VIC/CIA/frame/memory/debug-memory/call-stack, keyboard/joystick/RESTORE,
+paste, PRG/BIN/D64 operations, machine snapshot save/load (`save-state` /
+`load-state`), breakpoints (exec/read/write and count-only), waits with sticky
+completion events, assemble, find-symbol, and `set-turbo`. Binary responses carry a
+typed header and raw byte count. Deferred responses are serviced by the
+main-loop-owned cache.
 `set-turbo` changes the active mode without altering the configured Opt+T list;
 mode 3 (warp) warns that the live ARGB framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot

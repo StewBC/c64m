@@ -358,6 +358,9 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 6 && strncmp(name, "run-to", length) == 0) {
         return CONTROL_COMMAND_RUN_TO;
     }
+    if (length == 10 && strncmp(name, "step-frame", length) == 0) {
+        return CONTROL_COMMAND_STEP_FRAME;
+    }
     if (length == 9 && strncmp(name, "set-turbo", length) == 0) {
         return CONTROL_COMMAND_SET_TURBO;
     }
@@ -369,6 +372,12 @@ static control_command_type command_from_name(const char *name, size_t length)
     }
     if (length == 9 && strncmp(name, "get-frame", length) == 0) {
         return CONTROL_COMMAND_GET_FRAME;
+    }
+    if (length == 7 && strncmp(name, "get-vic", length) == 0) {
+        return CONTROL_COMMAND_GET_VIC;
+    }
+    if (length == 7 && strncmp(name, "get-cia", length) == 0) {
+        return CONTROL_COMMAND_GET_CIA;
     }
     if (length == 10 && strncmp(name, "get-memory", length) == 0) {
         return CONTROL_COMMAND_GET_MEMORY;
@@ -659,12 +668,27 @@ bool control_protocol_parse_request(
             cursor++;
         }
     } else if (type == CONTROL_COMMAND_GET_FRAME) {
+        args.frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
         if (strncmp(cursor, "format=argb8888", 15) == 0) {
+            args.frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
+            cursor += 15;
+            while (*cursor == ' ' || *cursor == '\t') {
+                cursor++;
+            }
+        } else if (strncmp(cursor, "format=indexed8", 15) == 0) {
+            args.frame_format = CONTROL_FRAME_FORMAT_INDEXED8;
             cursor += 15;
             while (*cursor == ' ' || *cursor == '\t') {
                 cursor++;
             }
         }
+    } else if (type == CONTROL_COMMAND_GET_CIA) {
+        if (!parse_u8_token(cursor, &cursor, &args.cia_index) ||
+            (args.cia_index != 1u && args.cia_index != 2u)) {
+            set_parse_error(out_error, id, "bad-args", "expected CIA index 1 or 2");
+            return false;
+        }
+        skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_SET_TURBO) {
         uint64_t multiplier = 0;
         if (!parse_u64_token(cursor, &cursor, &multiplier) ||

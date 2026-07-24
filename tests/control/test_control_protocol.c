@@ -101,6 +101,11 @@ static void test_parse_known_commands(void)
 
     expect_true("parse get-frame format", control_protocol_parse_request("16 get-frame format=argb8888", &request, &error));
     expect_int("get-frame format type", CONTROL_COMMAND_GET_FRAME, request.type);
+    expect_u32("get-frame argb format", CONTROL_FRAME_FORMAT_ARGB8888, request.args.frame_format);
+
+    expect_true("parse get-frame indexed8", control_protocol_parse_request("16 get-frame format=indexed8", &request, &error));
+    expect_int("get-frame indexed type", CONTROL_COMMAND_GET_FRAME, request.type);
+    expect_u32("get-frame indexed format", CONTROL_FRAME_FORMAT_INDEXED8, request.args.frame_format);
 
     expect_true("parse get-debug-memory", control_protocol_parse_request("17 get-debug-memory", &request, &error));
     expect_int("get-debug-memory type", CONTROL_COMMAND_GET_DEBUG_MEMORY, request.type);
@@ -111,6 +116,19 @@ static void test_parse_known_commands(void)
 
     expect_true("parse get-call-stack", control_protocol_parse_request("19 get-call-stack", &request, &error));
     expect_int("get-call-stack type", CONTROL_COMMAND_GET_CALL_STACK, request.type);
+
+    expect_true("parse get-vic", control_protocol_parse_request("70 get-vic", &request, &error));
+    expect_int("get-vic type", CONTROL_COMMAND_GET_VIC, request.type);
+
+    expect_true("parse get-cia", control_protocol_parse_request("71 get-cia 1", &request, &error));
+    expect_int("get-cia type", CONTROL_COMMAND_GET_CIA, request.type);
+    expect_u32("get-cia index", 1u, request.args.cia_index);
+
+    expect_true("parse get-cia 2", control_protocol_parse_request("72 get-cia 2", &request, &error));
+    expect_u32("get-cia 2 index", 2u, request.args.cia_index);
+
+    expect_true("parse step-frame", control_protocol_parse_request("73 step-frame", &request, &error));
+    expect_int("step-frame type", CONTROL_COMMAND_STEP_FRAME, request.type);
 
     expect_true("parse restore", control_protocol_parse_request("30 restore", &request, &error));
     expect_int("restore type", CONTROL_COMMAND_RESTORE, request.type);
@@ -311,6 +329,15 @@ static void test_parse_command_arguments(void)
     expect_int("break-create type", CONTROL_COMMAND_BREAK_CREATE, request.type);
     expect_string("break-create definition", "exec $C000 actions=break counter=1 reset=0", request.args.text);
 
+    expect_true("parse break-create write", control_protocol_parse_request("53 break-create write $D012 end=$D012 actions=break", &request, &error));
+    expect_string("break-create write definition", "write $D012 end=$D012 actions=break", request.args.text);
+
+    expect_true("parse break-create read count", control_protocol_parse_request("53 break-create read $0400 actions=none", &request, &error));
+    expect_string("break-create read definition", "read $0400 actions=none", request.args.text);
+
+    expect_true("parse break-create store alias", control_protocol_parse_request("53 break-create store $D000 end=$D02E actions=break", &request, &error));
+    expect_string("break-create store definition", "store $D000 end=$D02E actions=break", request.args.text);
+
     expect_true("parse break-update", control_protocol_parse_request("54 break-update 7 exec $C001 enabled=1", &request, &error));
     expect_int("break-update type", CONTROL_COMMAND_BREAK_UPDATE, request.type);
     expect_u32("break-update id", 7u, request.args.id);
@@ -414,6 +441,9 @@ static void test_parse_rejects_invalid_input(void)
 
     expect_false("reject frame format", control_protocol_parse_request("14 get-frame format=rgb\n", &request, &error));
     expect_u32("frame format response id", 14, error.id);
+
+    expect_false("reject get-cia index", control_protocol_parse_request("14 get-cia 3\n", &request, &error));
+    expect_u32("bad get-cia response id", 14, error.id);
 
     expect_false("reject bad key", control_protocol_parse_request("15 key-down nope\n", &request, &error));
     expect_u32("bad key response id", 15, error.id);
