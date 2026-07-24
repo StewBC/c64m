@@ -225,12 +225,15 @@ static uint16_t step_once(runtime_client *client, runtime_event *event,
 static uint32_t set_execute_bp(runtime_client *client, runtime_event *event,
                                uint16_t addr, const char *tag) {
     char msg[128];
+    runtime_breakpoint_snapshot bps;
     snprintf(msg, sizeof(msg), "%s: set_execute_breakpoint", tag);
     expect_true(msg, runtime_client_set_execute_breakpoint(client, addr));
     snprintf(msg, sizeof(msg), "%s: BREAKPOINTS_RESPONSE", tag);
     if (!poll_event(client, event, RUNTIME_EVENT_BREAKPOINTS_RESPONSE)) { fail(msg); }
-    if (event->data.breakpoints.count == 0) { fail("set_execute_bp: empty response"); }
-    return event->data.breakpoints.entries[0].id;
+    if (!runtime_client_poll_breakpoints(client, &bps) || bps.count == 0) {
+        fail("set_execute_bp: empty response");
+    }
+    return bps.entries[0].id;
 }
 
 static void clear_bp(runtime_client *client, runtime_event *event,

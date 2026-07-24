@@ -773,6 +773,29 @@ bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memo
     return true;
 }
 
+bool runtime_client_poll_breakpoints(
+    runtime_client *client,
+    runtime_breakpoint_snapshot *out_snapshot) {
+    runtime_breakpoint_slot *slot;
+
+    if (!client || !out_snapshot || !client->breakpoint_slot) {
+        return false;
+    }
+
+    slot = client->breakpoint_slot;
+    mutex_lock(slot->mutex);
+    if (!slot->has_snapshot) {
+        mutex_unlock(slot->mutex);
+        return false;
+    }
+
+    /* Latest-wins copy; leave slot filled so multiple consumers (UI + control
+       deferred + tests) can read the same generation after one notify event. */
+    *out_snapshot = slot->snapshot;
+    mutex_unlock(slot->mutex);
+    return true;
+}
+
 bool runtime_client_poll_event(
     runtime_client *client,
     runtime_event *out_event) {

@@ -706,37 +706,56 @@ static void runtime_publish_breakpoints(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_BREAKPOINTS_RESPONSE,
     };
+    runtime_breakpoint_slot *slot = &rt->breakpoint_slot;
+    runtime_breakpoint_snapshot snap;
     size_t i;
 
-    event.data.breakpoints.count = (uint16_t)rt->breakpoint_count;
+    memset(&snap, 0, sizeof(snap));
+    snap.count = (uint16_t)rt->breakpoint_count;
     for (i = 0; i < rt->breakpoint_count && i < RUNTIME_BREAKPOINT_SNAPSHOT_MAX; ++i) {
-        event.data.breakpoints.entries[i].id = rt->breakpoints[i].id;
-        event.data.breakpoints.entries[i].start_address = rt->breakpoints[i].start_address;
-        event.data.breakpoints.entries[i].end_address = rt->breakpoints[i].end_address;
-        event.data.breakpoints.entries[i].has_end_address = rt->breakpoints[i].has_end_address ? 1u : 0u;
-        event.data.breakpoints.entries[i].access = (runtime_breakpoint_access)rt->breakpoints[i].access_mask;
-        event.data.breakpoints.entries[i].mapping = rt->breakpoints[i].mapping;
-        event.data.breakpoints.entries[i].actions = rt->breakpoints[i].action_mask;
-        event.data.breakpoints.entries[i].enabled = rt->breakpoints[i].enabled ? 1u : 0u;
-        event.data.breakpoints.entries[i].use_counter = rt->breakpoints[i].use_counter ? 1u : 0u;
-        event.data.breakpoints.entries[i].current_hits = rt->breakpoints[i].current_hits;
-        event.data.breakpoints.entries[i].initial_count = rt->breakpoints[i].initial_count;
-        event.data.breakpoints.entries[i].reset_count = rt->breakpoints[i].reset_count;
-        event.data.breakpoints.entries[i].counter = rt->breakpoints[i].counter;
-        event.data.breakpoints.entries[i].address = rt->breakpoints[i].start_address;
-        event.data.breakpoints.entries[i].target_hits = rt->breakpoints[i].initial_count;
-        event.data.breakpoints.entries[i].swap_param = rt->breakpoints[i].swap_param;
-        event.data.breakpoints.entries[i].swap_relative = rt->breakpoints[i].swap_relative;
+        snap.entries[i].id = rt->breakpoints[i].id;
+        snap.entries[i].start_address = rt->breakpoints[i].start_address;
+        snap.entries[i].end_address = rt->breakpoints[i].end_address;
+        snap.entries[i].has_end_address = rt->breakpoints[i].has_end_address ? 1u : 0u;
+        snap.entries[i].access = (runtime_breakpoint_access)rt->breakpoints[i].access_mask;
+        snap.entries[i].mapping = rt->breakpoints[i].mapping;
+        snap.entries[i].actions = rt->breakpoints[i].action_mask;
+        snap.entries[i].enabled = rt->breakpoints[i].enabled ? 1u : 0u;
+        snap.entries[i].use_counter = rt->breakpoints[i].use_counter ? 1u : 0u;
+        snap.entries[i].current_hits = rt->breakpoints[i].current_hits;
+        snap.entries[i].initial_count = rt->breakpoints[i].initial_count;
+        snap.entries[i].reset_count = rt->breakpoints[i].reset_count;
+        snap.entries[i].counter = rt->breakpoints[i].counter;
+        snap.entries[i].address = rt->breakpoints[i].start_address;
+        snap.entries[i].target_hits = rt->breakpoints[i].initial_count;
+        snap.entries[i].swap_param = rt->breakpoints[i].swap_param;
+        snap.entries[i].swap_relative = rt->breakpoints[i].swap_relative;
         snprintf(
-            event.data.breakpoints.entries[i].tron_path,
-            sizeof(event.data.breakpoints.entries[i].tron_path),
+            snap.entries[i].tron_path,
+            sizeof(snap.entries[i].tron_path),
             "%s",
             rt->breakpoints[i].tron_path);
         snprintf(
-            event.data.breakpoints.entries[i].type_text,
-            sizeof(event.data.breakpoints.entries[i].type_text),
+            snap.entries[i].type_text,
+            sizeof(snap.entries[i].type_text),
             "%s",
             rt->breakpoints[i].type_text);
+    }
+
+    if (slot->mutex != NULL) {
+        mutex_lock(slot->mutex);
+        slot->snapshot = snap;
+        slot->has_snapshot = true;
+        slot->generation += 1u;
+        if (slot->generation == 0u) {
+            slot->generation = 1u;
+        }
+        event.data.breakpoints_ready.count = snap.count;
+        event.data.breakpoints_ready.generation = slot->generation;
+        mutex_unlock(slot->mutex);
+    } else {
+        event.data.breakpoints_ready.count = snap.count;
+        event.data.breakpoints_ready.generation = 0u;
     }
 
     runtime_publish_event(rt, &event);

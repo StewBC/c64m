@@ -120,6 +120,7 @@ runtime *runtime_create(const runtime_config *config) {
 
     rt->frame_slot.mutex = mutex_create();
     rt->debug_memory_slot.mutex = mutex_create();
+    rt->breakpoint_slot.mutex = mutex_create();
     rt->symbol_slot.mutex = mutex_create();
     rt->rpc_memory_pool.mutex = mutex_create();
 
@@ -127,6 +128,7 @@ runtime *runtime_create(const runtime_config *config) {
         !rt->event_queue ||
         !rt->frame_slot.mutex ||
         !rt->debug_memory_slot.mutex ||
+        !rt->breakpoint_slot.mutex ||
         !rt->symbol_slot.mutex ||
         !rt->rpc_memory_pool.mutex) {
         runtime_destroy(rt);
@@ -137,6 +139,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.event_queue = rt->event_queue;
     rt->client.frame_slot = &rt->frame_slot;
     rt->client.debug_memory_slot = &rt->debug_memory_slot;
+    rt->client.breakpoint_slot = &rt->breakpoint_slot;
     rt->client.symbol_slot = &rt->symbol_slot;
     rt->client.rpc_memory_pool = &rt->rpc_memory_pool;
 
@@ -212,6 +215,7 @@ void runtime_destroy(runtime *rt) {
     }
     mutex_destroy(rt->frame_slot.mutex);
     mutex_destroy(rt->debug_memory_slot.mutex);
+    mutex_destroy(rt->breakpoint_slot.mutex);
     mutex_destroy(rt->symbol_slot.mutex);
     mutex_destroy(rt->rpc_memory_pool.mutex);
     message_queue_destroy(rt->event_queue);

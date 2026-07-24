@@ -913,8 +913,7 @@ static void update_debug_state_from_event(
         }
 
         case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
-            debug_state->breakpoints = event->data.breakpoints;
-            debug_state->has_breakpoints = true;
+            /* Table is in breakpoint_slot; main poll path fills debug_state. */
             break;
 
         case RUNTIME_EVENT_DISK_STATUS_RESPONSE:
@@ -1736,6 +1735,7 @@ static bool control_parse_breakpoint_definition(
 static void complete_deferred_control_response(
     control_server *control,
     runtime_client *client,
+    frontend_debug_state *debug_state,
     deferred_control_response *deferred,
     const runtime_event *event)
 {
@@ -1948,14 +1948,21 @@ static void complete_deferred_control_response(
                 deferred->command_type == CONTROL_COMMAND_BREAK_UPDATE ||
                 deferred->command_type == CONTROL_COMMAND_REARM_ONESHOTS) &&
                event->type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE) {
+        const runtime_breakpoint_snapshot *bps =
+            (debug_state != NULL && debug_state->has_breakpoints) ?
+                &debug_state->breakpoints :
+                NULL;
+        if (bps == NULL) {
+            return;
+        }
         if (deferred->has_expected_breakpoint_count &&
-            event->data.breakpoints.count < deferred->expected_breakpoint_count) {
+            bps->count < deferred->expected_breakpoint_count) {
             return;
         }
         if (deferred->has_expected_breakpoint_enabled) {
             const runtime_breakpoint_snapshot_entry *entry = NULL;
             if (!control_breakpoint_snapshot_find(
-                    &event->data.breakpoints,
+                    bps,
                     deferred->expected_breakpoint_id,
                     &entry) ||
                 ((entry->enabled != 0) != deferred->expected_breakpoint_enabled)) {
@@ -1965,7 +1972,7 @@ static void complete_deferred_control_response(
         if (deferred->has_expected_breakpoint_start) {
             const runtime_breakpoint_snapshot_entry *entry = NULL;
             if (!control_breakpoint_snapshot_find(
-                    &event->data.breakpoints,
+                    bps,
                     deferred->expected_breakpoint_id,
                     &entry) ||
                 entry->start_address != deferred->expected_breakpoint_start) {
@@ -1974,12 +1981,12 @@ static void complete_deferred_control_response(
         }
         if (deferred->expect_breakpoint_absent &&
             control_breakpoint_snapshot_find(
-                &event->data.breakpoints,
+                bps,
                 deferred->expected_breakpoint_id,
                 NULL)) {
             return;
         }
-        control_format_breakpoints_response(&response, deferred->request_id, &event->data.breakpoints);
+        control_format_breakpoints_response(&response, deferred->request_id, bps);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
         } else {
@@ -2459,6 +2466,11 @@ static void poll_runtime_events(
     bool consumed_frame = false;
 
     while (runtime_client_poll_event(client, &event)) {
+        if (event.type == RUNTIME_EVENT_BREAKPOINTS_RESPONSE && debug_state != NULL) {
+            if (runtime_client_poll_breakpoints(client, &debug_state->breakpoints)) {
+                debug_state->has_breakpoints = true;
+            }
+        }
         update_debug_state_from_event(debug_state, &event);
         control_event_latch_note(event_latch, event.type);
         if (deferred_table != NULL) {
@@ -2468,7 +2480,8 @@ static void poll_runtime_events(
                 if (!deferred->active) {
                     continue;
                 }
-                complete_deferred_control_response(control, client, deferred, &event);
+                complete_deferred_control_response(
+                    control, client, debug_state, deferred, &event);
                 check_deferred_event_wait(control, deferred, &event, event_latch);
                 check_deferred_state_wait(control, deferred, debug_state, &event);
                 if (debug_state != NULL && debug_state->has_frame) {

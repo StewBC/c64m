@@ -288,7 +288,11 @@ typedef struct runtime_event {
         runtime_machine_snapshot machine_state;
         runtime_memory_snapshot memory;
         runtime_memory_rpc_meta memory_rpc;
-        runtime_breakpoint_snapshot breakpoints;
+        /* Breakpoint table lives in breakpoint_slot; event carries meta only. */
+        struct {
+            uint16_t count;
+            uint64_t generation;
+        } breakpoints_ready;
         runtime_disk_status_snapshot disk_status;
         runtime_call_stack_snapshot call_stack;
         struct {

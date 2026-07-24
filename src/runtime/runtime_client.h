@@ -167,6 +167,9 @@ bool runtime_client_apply_machine_config(
     bool reload_roms);
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame);
 bool runtime_client_poll_debug_memory(runtime_client *client, runtime_debug_memory_snapshot *out_snapshot);
+bool runtime_client_poll_breakpoints(
+    runtime_client *client,
+    runtime_breakpoint_snapshot *out_snapshot);
 
 bool runtime_client_step_out(runtime_client *client);
 bool runtime_client_step_over(runtime_client *client);
