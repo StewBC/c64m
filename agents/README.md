@@ -70,6 +70,11 @@ as well to a CIA timer, a SID envelope, or a 1541 rotation bug.
    plus the known demos (lft-nine, EoD checker). If the change *cannot* touch the
    display window, show that. No "should be fine".
 
+
+Manual updates:
+- 'manual/HELP_MARKDOWN.md' contains the rules for updating the user manual
+  'manual/manual.md'
+  
 Component handoffs:
 
 - `machine.md` - C64 machine, CPU, bus, memory, interrupts, cartridges, snapshots
@@ -84,6 +89,8 @@ Component handoffs:
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
 - `perf-baseline-turbo2.md` - free-run throughput baseline (turbo=2 bar); re-measure
   against this after performance work
+- `perf-roadmap-100mhz.md` - aspirational path past the ~8 MHz paint-on core ceiling
+  (tiers, kill tests, turbo 3 policy); planning only
 - `vice-oracle.md` - VICE as display/timing oracle: `assets/prg/` load flags
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.

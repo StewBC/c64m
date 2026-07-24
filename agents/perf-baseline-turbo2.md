@@ -8,7 +8,8 @@ load, but **relative deltas** between rows should stay meaningful.
 **Bar for full correctness:** turbo mode 2 (max) — free-run with live ARGB paint.
 Warp (mode 3) is a diagnostic upper bound when paint is off, not the product bar.
 
-Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread ownership).
+Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread ownership),
+`perf-roadmap-100mhz.md` (aspirational path past the paint-on core ceiling).
 
 ---
 
