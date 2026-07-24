@@ -242,3 +242,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | Sprite-slot LUT + modes 1-3 span paint (M2): pure paint-on ~**10.5 MHz**, product drives-off ~**8.6 MHz**. |
 | 2026-07-24 | XSCROLL spans + free-run audio mute + slim free-run loop (M2): pure paint-on ~**10.5 MHz**, product headless drives-off turbo=2 ~**9.8 MHz** (was ~8.6). |
 | 2026-07-24 | Idle/over-border paint spans + lazy prep (M2): pure paint-on ~**12.2 MHz**, product headless drives-off turbo=2 ~**11.0 MHz**. |
+| 2026-07-24 | Phi1 sprite-cycle gate + ECM-4 spans + color-pipe/flush tighten (M2): pure paint-on ~**12.4 MHz**, product drives-off turbo=2 ~**11.3 MHz**. |
