@@ -106,7 +106,71 @@ typedef struct control_cached_state {
     c64_frame frame;
     bool has_symbols;
     runtime_symbol_snapshot symbols;
+    /* Phase 6 hot state for get-cpu / get-vic / get-cia (main-thread only). */
+    bool has_hot;
+    bool hot_stale;   /* true after a mutating command until a barrier snapshot */
+    bool hot_paused;  /* last snapshot reported paused */
+    uint64_t hot_runtime_seq;
+    uint64_t hot_machine_cycle;
+    uint64_t hot_frame_number;
+    runtime_cpu_snapshot hot_cpu;
+    c64_vicii_hardware_snapshot hot_vicii;
+    c64_cia_hardware_snapshot hot_cia1;
+    c64_cia_hardware_snapshot hot_cia2;
 } control_cached_state;
+
+static void control_cache_invalidate_hot(control_cached_state *cache)
+{
+    if (cache != NULL) {
+        cache->hot_stale = true;
+    }
+}
+
+static bool control_cache_hot_fresh(const control_cached_state *cache)
+{
+    return cache != NULL &&
+           cache->has_hot &&
+           !cache->hot_stale &&
+           cache->hot_paused;
+}
+
+static void control_cache_note_machine(
+    control_cached_state *cache,
+    const runtime_machine_snapshot *machine)
+{
+    if (cache == NULL || machine == NULL) {
+        return;
+    }
+    cache->has_hot = true;
+    cache->hot_stale = false;
+    cache->hot_paused = machine->running == 0;
+    cache->hot_runtime_seq = machine->runtime_seq;
+    cache->hot_machine_cycle = machine->cycle;
+    cache->hot_frame_number = machine->frame_number;
+    cache->hot_cpu.pc = machine->pc;
+    cache->hot_cpu.a = machine->a;
+    cache->hot_cpu.x = machine->x;
+    cache->hot_cpu.y = machine->y;
+    cache->hot_cpu.sp = machine->sp;
+    cache->hot_cpu.p = machine->p;
+    cache->hot_cpu.cycles = machine->cpu_cycles;
+    cache->hot_vicii = machine->vicii_hardware;
+    cache->hot_cia1 = machine->cia1_hardware;
+    cache->hot_cia2 = machine->cia2_hardware;
+}
+
+static void control_cache_note_cpu(
+    control_cached_state *cache,
+    const runtime_cpu_snapshot *cpu)
+{
+    if (cache == NULL || cpu == NULL) {
+        return;
+    }
+    /* CPU-only reply: keep stamps if present; do not claim paused without
+       a machine barrier snapshot. */
+    cache->has_hot = true;
+    cache->hot_cpu = *cpu;
+}
 
 /* Sticky completion events: latched with a sequence number so wait-event can
    observe an event that fired before the wait was registered (classic
@@ -2471,6 +2535,13 @@ static void poll_runtime_events(
                 debug_state->has_breakpoints = true;
             }
         }
+        if (control_cache != NULL) {
+            if (event.type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
+                control_cache_note_machine(control_cache, &event.data.machine_state);
+            } else if (event.type == RUNTIME_EVENT_CPU_STATE_RESPONSE) {
+                control_cache_note_cpu(control_cache, &event.data.cpu_state);
+            }
+        }
         update_debug_state_from_event(debug_state, &event);
         control_event_latch_note(event_latch, event.type);
         if (deferred_table != NULL) {
@@ -3625,11 +3696,47 @@ static void handle_drop_file(runtime_client *client, app_options *options, char 
     SDL_free(path);
 }
 
+static bool control_command_mutates_machine(control_command_type type)
+{
+    switch (type) {
+        case CONTROL_COMMAND_RESET:
+        case CONTROL_COMMAND_RUN:
+        case CONTROL_COMMAND_PAUSE:
+        case CONTROL_COMMAND_STEP_CYCLE:
+        case CONTROL_COMMAND_STEP_INSTRUCTION:
+        case CONTROL_COMMAND_STEP_OVER:
+        case CONTROL_COMMAND_STEP_OUT:
+        case CONTROL_COMMAND_RUN_CYCLES:
+        case CONTROL_COMMAND_RUN_INSTRUCTIONS:
+        case CONTROL_COMMAND_RUN_TO:
+        case CONTROL_COMMAND_STEP_FRAME:
+        case CONTROL_COMMAND_SET_MEMORY:
+        case CONTROL_COMMAND_KEY_DOWN:
+        case CONTROL_COMMAND_KEY_UP:
+        case CONTROL_COMMAND_RESTORE:
+        case CONTROL_COMMAND_JOYSTICK:
+        case CONTROL_COMMAND_PASTE_TEXT:
+        case CONTROL_COMMAND_PASTE_EVENTS:
+        case CONTROL_COMMAND_PASTE_TEXT_DATA:
+        case CONTROL_COMMAND_PASTE_EVENTS_DATA:
+        case CONTROL_COMMAND_LOAD_PRG:
+        case CONTROL_COMMAND_LOAD_BIN:
+        case CONTROL_COMMAND_LOAD_STATE:
+        case CONTROL_COMMAND_MOUNT_D64:
+        case CONTROL_COMMAND_UNMOUNT_DISK:
+        case CONTROL_COMMAND_ASSEMBLE:
+        case CONTROL_COMMAND_SET_TURBO:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void dispatch_control_request(
     control_server *control,
     runtime_client *client,
     const frontend_debug_state *debug_state,
-    const control_cached_state *control_cache,
+    control_cached_state *control_cache,
     deferred_control_table *deferred_table,
     control_event_latch *event_latch,
     const control_request *request)
@@ -3644,6 +3751,12 @@ static void dispatch_control_request(
     }
 
     memset(&response, 0, sizeof(response));
+
+    /* Mutating commands invalidate hot cache until a paused runtime snapshot
+       re-seals the barrier (Phase 6). */
+    if (control_command_mutates_machine(request->type)) {
+        control_cache_invalidate_hot(control_cache);
+    }
 
     switch (request->type) {
         case CONTROL_COMMAND_HELLO:
@@ -3781,7 +3894,12 @@ static void dispatch_control_request(
         }
 
         case CONTROL_COMMAND_GET_CPU:
-            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+            /* Cache hit only when a paused barrier snapshot is present and no
+               mutating command has been accepted since (Phase 6). */
+            if (control_cache_hot_fresh(control_cache)) {
+                control_format_cpu_response(
+                    &response, request->id, &control_cache->hot_cpu);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
@@ -3860,7 +3978,10 @@ static void dispatch_control_request(
             break;
 
         case CONTROL_COMMAND_GET_VIC:
-            if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
+            if (control_cache_hot_fresh(control_cache)) {
+                control_format_vic_response(
+                    &response, request->id, &control_cache->hot_vicii);
+            } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
                     &response,
@@ -3900,6 +4021,14 @@ static void dispatch_control_request(
                     "bad-args",
                     "expected CIA index 1 or 2",
                     false);
+            } else if (control_cache_hot_fresh(control_cache)) {
+                control_format_cia_response(
+                    &response,
+                    request->id,
+                    request->args.cia_index,
+                    (request->args.cia_index == 2u) ?
+                        &control_cache->hot_cia2 :
+                        &control_cache->hot_cia1);
             } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
@@ -4724,7 +4853,7 @@ static void dispatch_control_requests(
     control_server *control,
     runtime_client *client,
     const frontend_debug_state *debug_state,
-    const control_cached_state *control_cache,
+    control_cached_state *control_cache,
     deferred_control_table *deferred_table,
     control_event_latch *event_latch)
 {

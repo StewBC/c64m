@@ -299,7 +299,17 @@ N get-drive-cpu <8|9>
 N ok pc=E37B a=00 x=00 y=00 sp=F9 p=24 cycles=12345
 ```
 
-`get-vic` and `get-cia` request a fresh machine hardware snapshot (deferred).
+**Hot cache (C64M/2 Phase 6):** when the main thread holds a **paused** machine
+snapshot and no mutating command has been accepted since that snapshot, `get-cpu`,
+`get-vic`, and `get-cia` are answered immediately from the main-thread cache
+(no runtime round-trip). Mutating commands (`run`, `step-*`, `set-memory`, loads,
+input, etc.) mark the cache stale. A subsequent pause/step/machine snapshot
+re-seals the barrier. While running, or after a mutation without a barrier,
+these commands still go through the deferred runtime path (token-matched for
+`get-cpu`).
+
+`get-vic` and `get-cia` use the same cache when fresh; otherwise they request a
+fresh machine hardware snapshot (deferred).
 `get-vic` exposes internal VIC-II state that cannot be recovered from the
 registers alone, including the raster compare latch:
 
