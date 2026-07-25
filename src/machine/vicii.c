@@ -398,21 +398,19 @@ void vicii_set_video_standard(vicii *v, vicii_video_standard standard) {
 }
 
 static bool vicii_is_bad_line_at(const vicii *v, uint32_t y) {
-    uint8_t yscroll = v->registers[0x11] & 0x07u;
-
     /* Bad lines require the frame-level allow_bad_lines latch (DEN sampled on
        raster $30), not the live DEN bit. Live DEN still blanks graphics and
        gates vertical-border open at the top compare. */
     if (!v->allow_bad_lines) {
         return false;
     }
-    if (y < VICII_BADLINE_FIRST || y > VICII_BADLINE_LAST) {
+    if (y < (uint32_t)VICII_BADLINE_FIRST || y > (uint32_t)VICII_BADLINE_LAST) {
         return false;
     }
-    return (uint8_t)(y & 0x07u) == yscroll;
+    return (uint8_t)(y & 0x07u) == (uint8_t)(v->registers[0x11] & 0x07u);
 }
 
-static bool vicii_is_bad_line(const vicii *v) {
+static inline bool vicii_is_bad_line(const vicii *v) {
     return vicii_is_bad_line_at(v, v->timing.raster_line);
 }
 
@@ -1803,7 +1801,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 /* XSCROLL=0 bulk expand: g-access columns map 1:1 to frame_x. */
                 if (mode == 0u || mode == 2u || mode == 4u ||
                     (mode == 1u && (color_reg & 0x08u) == 0u)) {
-                    /* Hires text / hires MCM-text / hires bitmap / ECM text. */
+                    /* Hires text / hires MCM-text / hires bitmap / ECM text.
+                       Dot 0 uses pre-advance colour pipes; dots 1..7 use the
+                       drained pipe (registers are fixed until CPU Phi2). */
                     uint32_t fg = (mode == 2u)
                         ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
                         : vicii_palette_argb[color_reg & 0x0fu];
@@ -1811,6 +1811,14 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     bool bg_is_d021;
                     uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
                     uint8_t g = gdata;
+                    uint32_t *content = v->hborder_pipe[paint_i].content;
+                    uint32_t *border = v->hborder_pipe[paint_i].border;
+                    bool *is_d021 = v->hborder_pipe[paint_i].content_d021;
+                    uint8_t *dot = v->hborder_pipe[paint_i].dot;
+                    uint32_t *idx = v->hborder_pipe[paint_i].idx;
+                    uint32_t bord0 = bord;
+                    uint32_t bg0;
+
                     if (mode == 2u) {
                         bg = vicii_palette_argb[vm_byte & 0x0fu];
                         bg_is_d021 = false;
@@ -1837,26 +1845,48 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                         bg = b0c;
                         bg_is_d021 = true;
                     }
-                    for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
-                        uint8_t k = (uint8_t)i;
-                        bool on = (g & (uint8_t)(0x80u >> (unsigned)i)) != 0u;
-                        v->hborder_pipe[paint_i].dot[k] = k;
-                        v->hborder_pipe[paint_i].idx[k] = base_idx + (uint32_t)i;
-                        if (on) {
-                            v->hborder_pipe[paint_i].content[k] = fg;
-                            v->hborder_pipe[paint_i].content_d021[k] = false;
-                        } else {
-                            v->hborder_pipe[paint_i].content[k] = bg;
-                            v->hborder_pipe[paint_i].content_d021[k] = bg_is_d021;
-                        }
-                        v->hborder_pipe[paint_i].border[k] = bord;
-                        if (i == 0) {
-                            vicii_color_pipes_sample_regs(v, &bord, &b0c);
-                            if (bg_is_d021) {
-                                bg = b0c;
-                            }
-                        }
+                    bg0 = bg;
+
+                    /* Identity map for frame indices and dots. */
+                    for (i = 0; i < 8; i++) {
+                        dot[i] = (uint8_t)i;
+                        idx[i] = base_idx + (uint32_t)i;
                     }
+
+                    /* Dot 0: delayed colour pipe. */
+                    if ((g & 0x80u) != 0u) {
+                        content[0] = fg;
+                        is_d021[0] = false;
+                    } else {
+                        content[0] = bg0;
+                        is_d021[0] = bg_is_d021;
+                    }
+                    border[0] = bord0;
+                    vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                    if (bg_is_d021) {
+                        bg = b0c;
+                    }
+
+                    /* Dots 1..7: post-drain colours (unrolled). */
+#define VICII_HIRES_DOT(bit, ii)                                       \
+    do {                                                               \
+        if ((g & (uint8_t)(bit)) != 0u) {                              \
+            content[(ii)] = fg;                                        \
+            is_d021[(ii)] = false;                                     \
+        } else {                                                       \
+            content[(ii)] = bg;                                        \
+            is_d021[(ii)] = bg_is_d021;                                \
+        }                                                              \
+        border[(ii)] = bord;                                           \
+    } while (0)
+                    VICII_HIRES_DOT(0x40u, 1);
+                    VICII_HIRES_DOT(0x20u, 2);
+                    VICII_HIRES_DOT(0x10u, 3);
+                    VICII_HIRES_DOT(0x08u, 4);
+                    VICII_HIRES_DOT(0x04u, 5);
+                    VICII_HIRES_DOT(0x02u, 6);
+                    VICII_HIRES_DOT(0x01u, 7);
+#undef VICII_HIRES_DOT
                     v->hborder_pipe[paint_i].n = 8u;
                 } else if (mode == 1u || mode == 3u) {
                     /* Multicolor text (colour bit3) or multicolor bitmap. */
@@ -2368,8 +2398,9 @@ static void vicii_prepare_phi1_bus_access(vicii *v, uint32_t cycle) {
     v->timing.bus_access_phi1 = v->display_state ?
         VICII_BUS_ACCESS_G : VICII_BUS_ACCESS_IDLE;
 
-    /* Sprite p/s slots only exist on a sparse cycle set (LUT). */
-    if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
+    /* Sprite p/s only when some sprite has DMA (VICE does not p-fetch idle). */
+    if (v->sprite_active_mask != 0u &&
+        vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
         v->timing.bus_access_phi1 = second_cycle ?
             VICII_BUS_ACCESS_SPRITE_DATA : VICII_BUS_ACCESS_SPRITE_POINTER;
     }
@@ -2382,7 +2413,8 @@ static void vicii_schedule_phi2_bus_access(vicii *v, uint32_t cycle) {
     /* Phi2 is CPU-visible only for bad-line c-accesses and sprite data. */
     v->timing.bus_access = VICII_BUS_ACCESS_NONE;
 
-    if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
+    if (v->sprite_active_mask != 0u &&
+        vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
         if (vicii_sprite_dma_current_line(v, sprite)) {
             v->timing.bus_access = VICII_BUS_ACCESS_SPRITE_DATA;
         }
@@ -2404,6 +2436,9 @@ static bool vicii_phi2_access_scheduled_now(const vicii *v) {
     if (v->bad_line &&
         cycle >= VICII_CACCESS_FIRST_CYCLE && cycle <= VICII_CACCESS_LAST_CYCLE) {
         return true;
+    }
+    if (v->sprite_active_mask == 0u) {
+        return false;
     }
     return vicii_sprite_slot(v, cycle, &sprite, &second_cycle) &&
         vicii_sprite_dma_current_line(v, sprite);

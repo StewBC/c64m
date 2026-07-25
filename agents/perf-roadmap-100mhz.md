@@ -318,3 +318,4 @@ Each step: measure pure on/off + product both-off; run accuracy suite; write res
 | 2026-07-24 | Hot-path opcode peek for micro begin; sprite_active_mask for BA. Product drives-off ~**12.5 MHz**. ctest 56/56. |
 | 2026-07-24 | Confirmed pure plateau (user 3× serial): paint-on ~**13.75 MHz**, paint-off ~**17.0 MHz**. |
 | 2026-07-24 | sprite_visible_mask, cached c64_hz (refresh on snapshot load), KERNAL trap PC gate. Pure paint-on ~**14.0 MHz**, product drives-off ~**12.6 MHz**. ctest 56/56. |
+| 2026-07-24 | Unrolled hires bulk expand; skip sprite p/s schedule when DMA mask empty. Holds pure paint-on ~**13.7 MHz** plateau. ctest 56/56. |
