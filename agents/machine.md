@@ -68,30 +68,34 @@ reads use `c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, 
 ## Save states
 
 `c64_snapshot.{c,h}` provides a versioned, chunked, all-or-nothing machine
-serializer (format version 10). It includes CPU, RAM/color RAM, banking, VIC-II, CIA,
-SID, controls, cartridge, D64/G64 drive-slot data, and — when real 1541 emulation is
-on with a drive ROM loaded — full live 1541 drive-object state (CPU including mid-
+serializer (format version 12). It includes CPU, RAM/color RAM, banking, VIC-II
+chip state (not the ARGB paint buffers), CIA, SID, controls, cartridge, and
+per-drive slot data. When real 1541 emulation is on with a drive ROM loaded,
+**powered** units also store full live 1541 drive-object state (CPU including mid-
 instruction micro fields, both VIAs, 2 KiB RAM, media scalars, and verbatim GCR
-track buffers) plus `clock.drive_accum` / `drive_synced_cycle`. C64 ROM bytes are
-referenced and hash-validated; 1541 ROM bytes stay host-side (not embedded).
-SDL/frontend/runtime state, CLI loading, and self-contained ROM/media embedding are
-not part of the format. Versions 9 and earlier are **sunset**: v10 widened the
-VIC-II framebuffer to the full raster line, so an older file's frame cannot be
-reconstructed without inventing columns it never captured. `VERSION_MIN` moved up
-with `VERSION` and the header check rejects them, leaving the machine untouched
-(`test_legacy_versions_rejected`). The reader carries no pre-v10 branches: every
-accepted file is at the current version, so the legacy version comparisons are
-gone. The `1541_STATE_DEFERRED` flag path itself stays live - a current-version
-snapshot saved without full drive state still hard-resets the drives on load
-(`test_synthetic_v9_deferred_resets_drives`).
+track buffers) as `DR8C`/`DR9C`, plus `clock.drive_accum` / `drive_synced_cycle`.
+Unpowered units store only a one-byte `DRV*` stub (`powered=false`); power-off
+already ejects media and power-on resets the 1541, so cold core state is not
+load-bearing. Unmounted carts are a one-byte `CART` stub; mounted carts store
+metadata plus only present ROML/ROMH banks (no empty 16 KiB padding). C64 ROM
+bytes are referenced and hash-validated; 1541 ROM bytes stay host-side (not
+embedded). SDL/frontend/runtime presentation state is mostly out of band; the main loop
+appends a trailing `HOST` chunk (ignored by the machine loader) for keyboard
+joystick layout/port and disk path queues for devices 8/9. CLI loading and
+self-contained ROM/media embedding are not part of the machine format.
 
-Stored VIC-II frames carry their own geometry header (width, height, stride,
-format) and the reader validates it against this build's `c64_frame` before
-consuming the pixel payload; a mismatch fails the whole load. The payload itself
-is always the full `C64_FRAME_WIDTH * C64_FRAME_HEIGHT` array regardless of the
-stored height (NTSC's 263 rows live in the same 312-row buffer), so the header
-bounds nothing — do not size the read loop from it. An all-zero header is valid
-and means a frame that has never been painted.
+Versions 11 and earlier are **sunset** (no migration). `VERSION_MIN` moves with
+`VERSION`; the header check rejects older files and leaves the machine untouched
+(`test_legacy_versions_rejected`). The reader carries no pre-v12 branches. The
+`1541_STATE_DEFERRED` flag path stays live - a current-version snapshot saved
+without the included-core flag still hard-resets the drives on load
+(`test_synthetic_deferred_resets_drives`).
+
+Paint buffers are zeroed on load; the first correct picture is the next completed
+frame. That is intentional - frames are display cache, not machine state.
+
+CIA chunks store the delayed IRQ/NMI pin pipeline (`interrupt_ff`,
+`interrupt_pending_latched`, `interrupt_line`).
 
 ## Do not claim
 

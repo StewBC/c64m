@@ -701,8 +701,10 @@ literally, but their exact bytes are always preserved through the numeric escape
 **[Save]** opens a save dialog and writes a named `.c64state` snapshot.
 
 State snapshots preserve the emulated machine state, RAM, color RAM, CPU, VIC-II, CIA,
-SID, attached generic cartridge, mounted D64/G64 drive-slot data, live 1541 drive-object
-state when real 1541 emulation is on, and the frontend keyboard joystick layout/port.
+SID, attached generic cartridge, mounted D64/G64 drive-slot data, and live 1541
+drive-object state when real 1541 emulation is on. Host-side extras stored with the
+snapshot include the keyboard joystick layout/port and the disk path queues for
+devices 8 and 9 (so a multi-disk CLI queue is restored for UI swap after load).
 C64 ROM bytes are referenced and hash-validated rather than fully embedded, so a
 snapshot is expected to be loaded with the same ROM files available. A failed load
 leaves the live machine unchanged.
@@ -2492,8 +2494,9 @@ port with **Shift+Opt+1** / **Shift+Opt+2**, the Keyboard Joystick control in th
 Configure dialog, or `--kbdjoy`. A gamepad and the keyboard may share the same port,
 in which case their directions and fire are combined.
 
-When a `.c64state` snapshot is saved, the active keyboard joystick port and layout are
-stored with it and restored when the snapshot is loaded.
+When a `.c64state` snapshot is saved, host extras are stored with it and restored on
+load: the active keyboard joystick port and layout, and the disk path queues for
+devices 8 and 9 (including which image is selected in each queue).
 
 Two layouts are available:
 

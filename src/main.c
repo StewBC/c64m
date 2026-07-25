@@ -34,7 +34,10 @@ enum {
     C64M_CONTROLLER_MAX = 2,
     C64M_CONTROLLER_AXIS_THRESHOLD = 16000,
     C64M_STATE_CHUNK_HEADER_SIZE = 8,
-    C64M_STATE_HOST_CHUNK_SIZE = 8
+    /* v1 HOST payload: version + port + layout + 2 pad bytes. */
+    C64M_STATE_HOST_V1_SIZE = 8,
+    C64M_STATE_HOST_PATH_MAX = 4096,
+    C64M_STATE_HOST_QUEUE_MAX = 64
 };
 
 #define C64M_STATE_TAG(a, b, c, d) \
@@ -43,7 +46,9 @@ enum {
 
 enum {
     C64M_STATE_HOST_TAG = C64M_STATE_TAG('H', 'O', 'S', 'T'),
-    C64M_STATE_HOST_VERSION = 1u
+    /* v1: joystick only. v2: joystick + disk queues for devices 8 and 9. */
+    C64M_STATE_HOST_VERSION = 2u,
+    C64M_STATE_HOST_VERSION_V1 = 1u
 };
 
 typedef struct sdl_c64_controller {
@@ -637,14 +642,260 @@ static void write_le32_local(uint8_t *bytes, uint32_t value) {
     bytes[3] = (uint8_t)(value >> 24);
 }
 
+static size_t host_state_queue_encoded_size(const app_disk_slot *slot) {
+    size_t size = 4u + 4u + 1u; /* count, current, power_on_only */
+    int i;
+    int count;
+
+    if (slot == NULL) {
+        return size;
+    }
+    count = slot->count;
+    if (count < 0) {
+        count = 0;
+    }
+    if (count > C64M_STATE_HOST_QUEUE_MAX) {
+        count = C64M_STATE_HOST_QUEUE_MAX;
+    }
+    for (i = 0; i < count; ++i) {
+        size_t path_len = 0;
+        if (slot->paths != NULL && slot->paths[i] != NULL) {
+            path_len = strlen(slot->paths[i]);
+            if (path_len > (size_t)C64M_STATE_HOST_PATH_MAX) {
+                path_len = (size_t)C64M_STATE_HOST_PATH_MAX;
+            }
+        }
+        size += 4u + path_len + 1u; /* path_len, path, writable */
+    }
+    return size;
+}
+
+static bool host_state_write_u32(uint8_t **cursor, uint8_t *end, uint32_t value) {
+    if (*cursor == NULL || end == NULL || (size_t)(end - *cursor) < 4u) {
+        return false;
+    }
+    write_le32_local(*cursor, value);
+    *cursor += 4;
+    return true;
+}
+
+static bool host_state_write_u8(uint8_t **cursor, uint8_t *end, uint8_t value) {
+    if (*cursor == NULL || end == NULL || *cursor >= end) {
+        return false;
+    }
+    *(*cursor)++ = value;
+    return true;
+}
+
+static bool host_state_write_queue(
+    uint8_t **cursor,
+    uint8_t *end,
+    const app_disk_slot *slot) {
+    int count = 0;
+    int current = 0;
+    int i;
+
+    if (slot != NULL) {
+        count = slot->count;
+        current = slot->current;
+    }
+    if (count < 0) {
+        count = 0;
+    }
+    if (count > C64M_STATE_HOST_QUEUE_MAX) {
+        count = C64M_STATE_HOST_QUEUE_MAX;
+    }
+    if (current < 0 || current >= count) {
+        current = 0;
+    }
+    if (!host_state_write_u32(cursor, end, (uint32_t)count) ||
+        !host_state_write_u32(cursor, end, (uint32_t)current) ||
+        !host_state_write_u8(cursor, end, (slot != NULL && slot->power_on_only) ? 1u : 0u)) {
+        return false;
+    }
+    for (i = 0; i < count; ++i) {
+        const char *path =
+            (slot != NULL && slot->paths != NULL) ? slot->paths[i] : NULL;
+        size_t path_len = (path != NULL) ? strlen(path) : 0;
+        bool writable =
+            slot != NULL && slot->writable != NULL && slot->writable[i];
+
+        if (path_len > (size_t)C64M_STATE_HOST_PATH_MAX) {
+            path_len = (size_t)C64M_STATE_HOST_PATH_MAX;
+        }
+        if (!host_state_write_u32(cursor, end, (uint32_t)path_len)) {
+            return false;
+        }
+        if (path_len > 0) {
+            if ((size_t)(end - *cursor) < path_len) {
+                return false;
+            }
+            memcpy(*cursor, path, path_len);
+            *cursor += path_len;
+        }
+        if (!host_state_write_u8(cursor, end, writable ? 1u : 0u)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool host_state_read_u32(
+    const uint8_t **cursor,
+    const uint8_t *end,
+    uint32_t *out) {
+    if (*cursor == NULL || end == NULL || out == NULL || (size_t)(end - *cursor) < 4u) {
+        return false;
+    }
+    *out = read_le32_local(*cursor);
+    *cursor += 4;
+    return true;
+}
+
+static bool host_state_read_u8(
+    const uint8_t **cursor,
+    const uint8_t *end,
+    uint8_t *out) {
+    if (*cursor == NULL || end == NULL || out == NULL || *cursor >= end) {
+        return false;
+    }
+    *out = *(*cursor)++;
+    return true;
+}
+
+/* Rebuild a disk queue from ordered paths without relying on add_after_current. */
+static bool host_state_slot_from_paths(
+    app_disk_slot *slot,
+    char **paths,
+    bool *writable,
+    int count,
+    int current,
+    bool power_on_only) {
+    int i;
+
+    app_disk_slot_clear(slot);
+    slot->power_on_only = power_on_only;
+    for (i = 0; i < count; ++i) {
+        if (paths[i] == NULL || paths[i][0] == '\0') {
+            app_disk_slot_clear(slot);
+            return false;
+        }
+        if (i == 0) {
+            if (!app_disk_slot_set(slot, paths[i])) {
+                return false;
+            }
+        } else {
+            /* Append at end: select last then add_after_current. */
+            if (app_disk_slot_select(slot, slot->count - 1) == NULL ||
+                !app_disk_slot_add_after_current(slot, paths[i])) {
+                app_disk_slot_clear(slot);
+                return false;
+            }
+        }
+        if (slot->writable != NULL) {
+            slot->writable[slot->count - 1] = writable != NULL && writable[i];
+        }
+    }
+    if (count > 0 && current >= 0 && current < count) {
+        slot->current = current;
+    }
+    return true;
+}
+
+static bool host_state_read_queue_ordered(
+    const uint8_t **cursor,
+    const uint8_t *end,
+    app_disk_slot *slot) {
+    uint32_t count_u = 0;
+    uint32_t current_u = 0;
+    uint8_t power_on_only = 0;
+    char **paths = NULL;
+    bool *writable = NULL;
+    uint32_t i;
+    bool ok = false;
+
+    if (slot == NULL) {
+        return false;
+    }
+    app_disk_slot_clear(slot);
+    if (!host_state_read_u32(cursor, end, &count_u) ||
+        !host_state_read_u32(cursor, end, &current_u) ||
+        !host_state_read_u8(cursor, end, &power_on_only)) {
+        return false;
+    }
+    if (count_u > (uint32_t)C64M_STATE_HOST_QUEUE_MAX) {
+        return false;
+    }
+    if (count_u == 0u) {
+        slot->power_on_only = power_on_only != 0;
+        return true;
+    }
+
+    paths = (char **)calloc(count_u, sizeof(*paths));
+    writable = (bool *)calloc(count_u, sizeof(*writable));
+    if (paths == NULL || writable == NULL) {
+        free(paths);
+        free(writable);
+        return false;
+    }
+
+    for (i = 0; i < count_u; ++i) {
+        uint32_t path_len = 0;
+        uint8_t wr = 0;
+
+        if (!host_state_read_u32(cursor, end, &path_len) ||
+            path_len == 0u ||
+            path_len > (uint32_t)C64M_STATE_HOST_PATH_MAX ||
+            (size_t)(end - *cursor) < (size_t)path_len) {
+            goto done;
+        }
+        paths[i] = (char *)malloc((size_t)path_len + 1u);
+        if (paths[i] == NULL) {
+            goto done;
+        }
+        memcpy(paths[i], *cursor, path_len);
+        paths[i][path_len] = '\0';
+        *cursor += path_len;
+        if (!host_state_read_u8(cursor, end, &wr)) {
+            goto done;
+        }
+        writable[i] = wr != 0;
+    }
+
+    ok = host_state_slot_from_paths(
+        slot,
+        paths,
+        writable,
+        (int)count_u,
+        (int)current_u,
+        power_on_only != 0);
+
+done:
+    for (i = 0; i < count_u; ++i) {
+        free(paths[i]);
+    }
+    free(paths);
+    free(writable);
+    if (!ok) {
+        app_disk_slot_clear(slot);
+    }
+    return ok;
+}
+
 static bool append_host_state_chunk(
     const char *path,
     const app_options *options,
     const frontend_joystick_input *kbd_joystick) {
     FILE *file;
-    uint8_t bytes[C64M_STATE_CHUNK_HEADER_SIZE + C64M_STATE_HOST_CHUNK_SIZE];
+    uint8_t *bytes = NULL;
+    uint8_t *cursor;
+    uint8_t *end;
+    size_t payload_size;
+    size_t total_size;
     uint8_t port;
     uint8_t layout;
+    const app_disk_slot *slot8 = NULL;
+    const app_disk_slot *slot9 = NULL;
 
     if (path == NULL || path[0] == '\0') {
         return false;
@@ -660,40 +911,82 @@ static bool append_host_state_chunk(
     if (layout > (uint8_t)FRONTEND_JOYSTICK_LAYOUT_WASD) {
         layout = (uint8_t)FRONTEND_JOYSTICK_LAYOUT_NUMPAD;
     }
+    if (options != NULL) {
+        slot8 = &options->disk_slots[8];
+        slot9 = &options->disk_slots[9];
+    }
 
-    write_le32_local(bytes, C64M_STATE_HOST_TAG);
-    write_le32_local(bytes + 4, C64M_STATE_HOST_CHUNK_SIZE);
-    write_le32_local(bytes + 8, C64M_STATE_HOST_VERSION);
-    bytes[12] = port;
-    bytes[13] = layout;
-    bytes[14] = 0;
-    bytes[15] = 0;
+    payload_size = 4u + 1u + 1u + 2u; /* version, port, layout, pad */
+    payload_size += host_state_queue_encoded_size(slot8);
+    payload_size += host_state_queue_encoded_size(slot9);
+    total_size = C64M_STATE_CHUNK_HEADER_SIZE + payload_size;
+    bytes = (uint8_t *)malloc(total_size);
+    if (bytes == NULL) {
+        return false;
+    }
+    cursor = bytes;
+    end = bytes + total_size;
+    write_le32_local(cursor, C64M_STATE_HOST_TAG);
+    cursor += 4;
+    write_le32_local(cursor, (uint32_t)payload_size);
+    cursor += 4;
+    write_le32_local(cursor, C64M_STATE_HOST_VERSION);
+    cursor += 4;
+    *cursor++ = port;
+    *cursor++ = layout;
+    *cursor++ = 0;
+    *cursor++ = 0;
+    if (!host_state_write_queue(&cursor, end, slot8) ||
+        !host_state_write_queue(&cursor, end, slot9) ||
+        cursor != end) {
+        free(bytes);
+        return false;
+    }
 
     file = fopen(path, "ab");
     if (file == NULL) {
+        free(bytes);
         return false;
     }
-    if (fwrite(bytes, 1, sizeof(bytes), file) != sizeof(bytes)) {
+    if (fwrite(bytes, 1, total_size, file) != total_size) {
         fclose(file);
+        free(bytes);
         return false;
     }
     fclose(file);
+    free(bytes);
     return true;
 }
 
-static bool read_host_state_chunk(
-    const char *path,
-    uint8_t *out_port,
-    frontend_joystick_layout *out_layout) {
+typedef struct host_state_loaded {
+    uint8_t port;
+    frontend_joystick_layout layout;
+    bool has_joystick;
+    bool has_disk_queues;
+    app_disk_slot disk8;
+    app_disk_slot disk9;
+} host_state_loaded;
+
+static void host_state_loaded_clear(host_state_loaded *state) {
+    if (state == NULL) {
+        return;
+    }
+    app_disk_slot_clear(&state->disk8);
+    app_disk_slot_clear(&state->disk9);
+    memset(state, 0, sizeof(*state));
+}
+
+static bool read_host_state_chunk(const char *path, host_state_loaded *out) {
     FILE *file;
     uint8_t *bytes = NULL;
     long length;
     size_t pos;
     bool found = false;
 
-    if (path == NULL || out_port == NULL || out_layout == NULL) {
+    if (path == NULL || out == NULL) {
         return false;
     }
+    host_state_loaded_clear(out);
     file = fopen(path, "rb");
     if (file == NULL) {
         return false;
@@ -729,21 +1022,49 @@ static bool read_host_state_chunk(
         uint32_t tag = read_le32_local(bytes + pos);
         uint32_t chunk_len = read_le32_local(bytes + pos + 4);
         const uint8_t *payload;
+        uint32_t version;
 
         pos += C64M_STATE_CHUNK_HEADER_SIZE;
         if (chunk_len > (uint32_t)((size_t)length - pos)) {
             break;
         }
         payload = bytes + pos;
-        if (tag == C64M_STATE_HOST_TAG &&
-            chunk_len >= C64M_STATE_HOST_CHUNK_SIZE &&
-            read_le32_local(payload) == C64M_STATE_HOST_VERSION) {
-            uint8_t port = payload[4];
-            uint8_t layout = payload[5];
-            if (port <= 2u && layout <= (uint8_t)FRONTEND_JOYSTICK_LAYOUT_WASD) {
-                *out_port = port;
-                *out_layout = (frontend_joystick_layout)layout;
-                found = true;
+        if (tag == C64M_STATE_HOST_TAG && chunk_len >= C64M_STATE_HOST_V1_SIZE) {
+            version = read_le32_local(payload);
+            if (version == C64M_STATE_HOST_VERSION_V1 ||
+                version == C64M_STATE_HOST_VERSION) {
+                uint8_t port = payload[4];
+                uint8_t layout = payload[5];
+                if (port <= 2u && layout <= (uint8_t)FRONTEND_JOYSTICK_LAYOUT_WASD) {
+                    out->port = port;
+                    out->layout = (frontend_joystick_layout)layout;
+                    out->has_joystick = true;
+                    found = true;
+                }
+                if (version == C64M_STATE_HOST_VERSION &&
+                    chunk_len > C64M_STATE_HOST_V1_SIZE) {
+                    const uint8_t *cursor = payload + C64M_STATE_HOST_V1_SIZE;
+                    const uint8_t *end = payload + chunk_len;
+                    app_disk_slot disk8;
+                    app_disk_slot disk9;
+
+                    memset(&disk8, 0, sizeof(disk8));
+                    memset(&disk9, 0, sizeof(disk9));
+                    if (host_state_read_queue_ordered(&cursor, end, &disk8) &&
+                        host_state_read_queue_ordered(&cursor, end, &disk9) &&
+                        cursor == end) {
+                        app_disk_slot_clear(&out->disk8);
+                        app_disk_slot_clear(&out->disk9);
+                        out->disk8 = disk8;
+                        out->disk9 = disk9;
+                        memset(&disk8, 0, sizeof(disk8));
+                        memset(&disk9, 0, sizeof(disk9));
+                        out->has_disk_queues = true;
+                    } else {
+                        app_disk_slot_clear(&disk8);
+                        app_disk_slot_clear(&disk9);
+                    }
+                }
             }
         }
         pos += chunk_len;
@@ -759,31 +1080,55 @@ static void apply_loaded_host_state(
     runtime_client *client,
     sdl_c64_controller_state *controller_state,
     frontend_joystick_input *kbd_joystick) {
-    uint8_t port = 0;
-    frontend_joystick_layout layout = FRONTEND_JOYSTICK_LAYOUT_NUMPAD;
+    host_state_loaded host;
 
-    if (kbd_joystick == NULL ||
-        !read_host_state_chunk(path, &port, &layout)) {
+    memset(&host, 0, sizeof(host));
+    if (!read_host_state_chunk(path, &host)) {
+        host_state_loaded_clear(&host);
         return;
     }
-    frontend_joystick_set_layout(kbd_joystick, layout);
-    frontend_joystick_set_port(kbd_joystick, port);
-    if (options != NULL) {
-        options->keyboard_joystick_port = (int)port;
-        app_options_set_string(
-            &options->keyboard_joystick_layout,
-            frontend_joystick_layout_to_string(layout));
+
+    if (host.has_joystick && kbd_joystick != NULL) {
+        frontend_joystick_set_layout(kbd_joystick, host.layout);
+        frontend_joystick_set_port(kbd_joystick, host.port);
+        if (options != NULL) {
+            options->keyboard_joystick_port = (int)host.port;
+            app_options_set_string(
+                &options->keyboard_joystick_layout,
+                frontend_joystick_layout_to_string(host.layout));
+        }
+        if (controller_state != NULL) {
+            sdl_c64_controller_send_ports(controller_state, client);
+        }
+        SDL_Log(
+            "loaded host keyboard joystick: port %u (%s)",
+            (unsigned)host.port,
+            frontend_joystick_layout_to_string(host.layout));
     }
-    if (controller_state != NULL) {
-        sdl_c64_controller_send_ports(controller_state, client);
+
+    if (host.has_disk_queues && options != NULL) {
+        app_disk_slot_clear(&options->disk_slots[8]);
+        app_disk_slot_clear(&options->disk_slots[9]);
+        options->disk_slots[8] = host.disk8;
+        options->disk_slots[9] = host.disk9;
+        memset(&host.disk8, 0, sizeof(host.disk8));
+        memset(&host.disk9, 0, sizeof(host.disk9));
+        if (ui != NULL) {
+            frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
+            frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
+        }
+        SDL_Log(
+            "loaded host disk queues: 8=%d (current=%d) 9=%d (current=%d)",
+            options->disk_slots[8].count,
+            options->disk_slots[8].current,
+            options->disk_slots[9].count,
+            options->disk_slots[9].current);
     }
+
     if (ui != NULL && options != NULL && !frontend_config_dialog_is_open(ui)) {
         frontend_set_config_state(ui, options);
     }
-    SDL_Log(
-        "loaded host keyboard joystick: port %u (%s)",
-        (unsigned)port,
-        frontend_joystick_layout_to_string(layout));
+    host_state_loaded_clear(&host);
 }
 
 static c64_config machine_config_from_options(const app_options *options) {

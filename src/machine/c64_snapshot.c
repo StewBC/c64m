@@ -152,20 +152,6 @@ static void w_i32(snapshot_writer *w, int32_t value) {
     w_u32(w, (uint32_t)value);
 }
 
-static void w_frame(snapshot_writer *w, const c64_frame *frame) {
-    size_t i;
-
-    w_u32(w, frame->width);
-    w_u32(w, frame->height);
-    w_u32(w, frame->stride_bytes);
-    w_u32(w, frame->pixel_format);
-    w_u64(w, frame->frame_number);
-    w_u64(w, frame->machine_cycle);
-    for (i = 0; i < C64_FRAME_WIDTH * C64_FRAME_HEIGHT; ++i) {
-        w_u32(w, frame->pixels[i]);
-    }
-}
-
 static uint8_t r_u8(snapshot_reader *r) {
     if (!r->ok || r->pos >= r->len) {
         r->ok = false;
@@ -237,55 +223,6 @@ static void r_bytes(snapshot_reader *r, void *out, size_t size) {
         memcpy(out, r->data + r->pos, size);
     }
     r->pos += size;
-}
-
-/* The pixel payload is always the full C64_FRAME_WIDTH x C64_FRAME_HEIGHT array
-   regardless of the stored height - NTSC keeps its 263 visible rows in the same
-   312-row buffer (w_frame above). So honouring the header means *validating* it,
-   not sizing the read from it. Do not "fix" this loop to run to frame->height:
-   that would desynchronise it from the writer.
-
-   Validation matters because the geometry is a build-time constant. A file whose
-   frame does not match this build's framebuffer cannot be loaded, and the old
-   code did not notice: it read a fixed pixel count past a mismatched header, so
-   every chunk after the VIC state landed at the wrong offset and the load either
-   failed far from the real cause or restored garbage. Reject it here instead.
-
-   A frame that has never been painted is legitimately all-zero (vicii_reset
-   memsets both frames; completed_frame stays zeroed until the first frame
-   finishes), so accept that shape too. */
-static bool r_frame_geometry_ok(const c64_frame *frame) {
-    if (frame->width == 0u && frame->height == 0u &&
-        frame->stride_bytes == 0u && frame->pixel_format == 0u) {
-        return true;
-    }
-    return (frame->width == (uint32_t)C64_FRAME_PAL_WIDTH ||
-            frame->width == (uint32_t)C64_FRAME_NTSC_WIDTH) &&
-        frame->height > 0u &&
-        frame->height <= (uint32_t)C64_FRAME_HEIGHT &&
-        frame->stride_bytes ==
-            (uint32_t)C64_FRAME_WIDTH * (uint32_t)sizeof(frame->pixels[0]) &&
-        frame->pixel_format == (uint32_t)C64_FRAME_PIXEL_FORMAT_ARGB8888;
-}
-
-static void r_frame(snapshot_reader *r, c64_frame *frame) {
-    size_t i;
-
-    frame->width = r_u32(r);
-    frame->height = r_u32(r);
-    frame->stride_bytes = r_u32(r);
-    frame->pixel_format = r_u32(r);
-    frame->frame_number = r_u64(r);
-    frame->machine_cycle = r_u64(r);
-
-    if (!r->ok || !r_frame_geometry_ok(frame)) {
-        r->ok = false;
-        return;
-    }
-
-    for (i = 0; i < C64_FRAME_WIDTH * C64_FRAME_HEIGHT; ++i) {
-        frame->pixels[i] = r_u32(r);
-    }
 }
 
 static void begin_chunk(snapshot_writer *w, uint32_t tag, size_t *len_pos) {
@@ -470,8 +407,8 @@ static void write_vic(snapshot_writer *w, const c64_t *m) {
     w_bool(w, v->vertical_border_active);
     w_bool(w, v->set_vborder);
     w_bool(w, v->allow_bad_lines);
-    w_frame(w, &v->frames[v->paint_frame & 1u]);
-    w_frame(w, &v->frames[(v->paint_frame ^ 1u) & 1u]);
+    /* ARGB paint buffers are display cache only - not stored. Load zeros them;
+       the next completed frame is the first correct picture. */
     end_chunk(w, chunk);
 }
 
@@ -511,6 +448,14 @@ static void write_cia(snapshot_writer *w, uint32_t tag, const cia *c) {
     w_bool(w, c->tod_latched);
     w_bool(w, c->tod_stopped);
     w_bool(w, c->cnt_pulse);
+    /* Trailing: delayed IRQ/NMI pin pipeline (IR flip-flop + one-cycle latch).
+       Without these, a load leaves interrupt_line=0 while flags&mask still
+       assert; the next CIA step re-raises the pin and the CIA2 NMI edge
+       detector fires a spurious NMI (seen as a post-load jump through $FFFA
+       / garbage $FFFF when HIRAM is off — title-bar BRK). */
+    w_bool(w, c->interrupt_ff);
+    w_bool(w, c->interrupt_pending_latched);
+    w_bool(w, c->interrupt_line);
     end_chunk(w, chunk);
 }
 
@@ -594,13 +539,23 @@ static void write_cart(snapshot_writer *w, const c64_t *m) {
 
     begin_chunk(w, TAG_CART, &chunk);
     w_bool(w, bus->cartridge_mounted);
+    if (!bus->cartridge_mounted) {
+        /* No cart: one-byte stub. Banks are zeros on a detached bus. */
+        end_chunk(w, chunk);
+        return;
+    }
+
     w_bool(w, bus->cartridge_roml_present);
     w_bool(w, bus->cartridge_romh_present);
     w_u8(w, bus->cartridge_exrom);
     w_u8(w, bus->cartridge_game);
     w_u32(w, (uint32_t)bus->cartridge_mode);
-    w_bytes(w, bus->cartridge_roml, sizeof(bus->cartridge_roml));
-    w_bytes(w, bus->cartridge_romh, sizeof(bus->cartridge_romh));
+    if (bus->cartridge_roml_present) {
+        w_bytes(w, bus->cartridge_roml, sizeof(bus->cartridge_roml));
+    }
+    if (bus->cartridge_romh_present) {
+        w_bytes(w, bus->cartridge_romh, sizeof(bus->cartridge_romh));
+    }
     end_chunk(w, chunk);
 }
 
@@ -609,6 +564,14 @@ static void write_drive(snapshot_writer *w, uint32_t tag, const c64_drive_slot *
     size_t chunk;
 
     begin_chunk(w, tag, &chunk);
+    /* Powered first: an off unit is a one-byte stub. Power-off ejects media, so
+       there is nothing else worth restoring; power-on resets the 1541. */
+    w_bool(w, slot->powered);
+    if (!slot->powered) {
+        end_chunk(w, chunk);
+        return;
+    }
+
     w_bool(w, slot->mounted);
     w_u32(w, (uint32_t)slot->image_kind);
     w_u32(w, (uint32_t)slot->last_result);
@@ -632,8 +595,6 @@ static void write_drive(snapshot_writer *w, uint32_t tag, const c64_drive_slot *
         w_size(w, e->filename_length);
         w_u16(w, e->block_count);
     }
-    /* Trailing field: soft power latch. Older files omit this; reader defaults. */
-    w_bool(w, slot->powered);
     end_chunk(w, chunk);
 }
 
@@ -796,8 +757,13 @@ static bool write_snapshot(const c64_t *m, uint8_t *out, size_t out_cap, size_t 
     write_drive(&w, TAG_DRV8, &m->drives[0]);
     write_drive(&w, TAG_DRV9, &m->drives[1]);
     if ((flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0u) {
-        write_drive_core(&w, TAG_DR8C, &m->drive8);
-        write_drive_core(&w, TAG_DR9C, &m->drive9);
+        /* Core payload only for powered units; cold units are the DRV stub. */
+        if (m->drives[0].powered) {
+            write_drive_core(&w, TAG_DR8C, &m->drive8);
+        }
+        if (m->drives[1].powered) {
+            write_drive_core(&w, TAG_DR9C, &m->drive9);
+        }
     }
 
     if (!w.ok) {
@@ -956,9 +922,10 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     v->vertical_border_active = r_bool(r);
     v->set_vborder = r_bool(r);
     v->allow_bad_lines = r_bool(r);
+    /* Paint buffers are not in the file; clear so the first visible frame is
+       whatever paint produces after load. */
     v->paint_frame = 0;
-    r_frame(r, &v->frames[0]);
-    r_frame(r, &v->frames[1]);
+    memset(v->frames, 0, sizeof(v->frames));
 }
 
 static void read_cia_timer(snapshot_reader *r, cia_timer *timer) {
@@ -974,6 +941,21 @@ static void read_cia_tod(snapshot_reader *r, cia_tod *tod) {
     tod->seconds = r_u8(r);
     tod->minutes = r_u8(r);
     tod->hours = r_u8(r);
+}
+
+/* Reconstruct the delayed interrupt pin when a chunk omits it (v11 files before
+   the pin pipeline was stored). Active IR sources → pin already high so a
+   restored cia2_nmi_line does not re-edge; idle → pin low. */
+static void cia_resync_interrupt_pin(cia *c) {
+    if ((c->interrupt_flags & c->interrupt_mask & 0x1fu) != 0u) {
+        c->interrupt_ff = true;
+        c->interrupt_pending_latched = true;
+        c->interrupt_line = true;
+    } else {
+        c->interrupt_ff = false;
+        c->interrupt_pending_latched = false;
+        c->interrupt_line = false;
+    }
 }
 
 static void read_cia(snapshot_reader *r, cia *c) {
@@ -998,6 +980,14 @@ static void read_cia(snapshot_reader *r, cia *c) {
     c->tod_latched = r_bool(r);
     c->tod_stopped = r_bool(r);
     c->cnt_pulse = r_bool(r);
+    /* Optional trailing pin pipeline (added after the spurious-NMI fix). */
+    if (r->ok && r->pos + 3u <= r->len) {
+        c->interrupt_ff = r_bool(r);
+        c->interrupt_pending_latched = r_bool(r);
+        c->interrupt_line = r_bool(r);
+    } else if (r->ok) {
+        cia_resync_interrupt_pin(c);
+    }
     c->keyboard = keyboard;
     c->port_input = port_input;
     c->port_input_user = port_input_user;
@@ -1071,15 +1061,38 @@ static void read_mach(snapshot_reader *r, c64_t *m) {
 
 static void read_cart(snapshot_reader *r, c64_t *m) {
     c64_bus_t *bus = &m->bus;
+    bool mounted;
 
-    bus->cartridge_mounted = r_bool(r);
+    mounted = r_bool(r);
+    if (!r->ok) {
+        return;
+    }
+    if (!mounted) {
+        memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
+        memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+        bus->cartridge_mounted = false;
+        bus->cartridge_roml_present = false;
+        bus->cartridge_romh_present = false;
+        bus->cartridge_exrom = 1;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+        return;
+    }
+
+    bus->cartridge_mounted = true;
     bus->cartridge_roml_present = r_bool(r);
     bus->cartridge_romh_present = r_bool(r);
     bus->cartridge_exrom = r_u8(r);
     bus->cartridge_game = r_u8(r);
     bus->cartridge_mode = (c64_cartridge_mode)r_u32(r);
-    r_bytes(r, bus->cartridge_roml, sizeof(bus->cartridge_roml));
-    r_bytes(r, bus->cartridge_romh, sizeof(bus->cartridge_romh));
+    memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
+    memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+    if (bus->cartridge_roml_present) {
+        r_bytes(r, bus->cartridge_roml, sizeof(bus->cartridge_roml));
+    }
+    if (bus->cartridge_romh_present) {
+        r_bytes(r, bus->cartridge_romh, sizeof(bus->cartridge_romh));
+    }
 }
 
 static void clear_drive_slot(c64_drive_slot *slot) {
@@ -1095,8 +1108,21 @@ static void read_drive(snapshot_reader *r, c64_drive_slot *slot) {
     size_t entry_count;
     uint8_t *image = NULL;
     c64_drive_directory_entry *entries = NULL;
+    bool powered;
 
     clear_drive_slot(slot);
+    powered = r_bool(r);
+    if (!r->ok) {
+        return;
+    }
+    if (!powered) {
+        /* Cold stub: chunk is only the powered flag. */
+        slot->powered = false;
+        slot->last_result = C64_DRIVE_STATUS_NOT_MOUNTED;
+        return;
+    }
+
+    slot->powered = true;
     slot->mounted = r_bool(r);
     slot->image_kind = (c64_drive_image_kind)r_u32(r);
     slot->last_result = (c64_drive_status_result)r_u32(r);
@@ -1150,13 +1176,6 @@ static void read_drive(snapshot_reader *r, c64_drive_slot *slot) {
     slot->image_size = image_size;
     slot->entries = entries;
     slot->entry_count = entry_count;
-    /* Optional trailing powered flag (added with soft power). Legacy chunks
-       without it treat mounted-as-powered so disk midload snapshots stay live. */
-    if (r->pos < r->len) {
-        slot->powered = r_bool(r);
-    } else {
-        slot->powered = slot->mounted;
-    }
 }
 
 static void read_cpu_fields(snapshot_reader *r, CPU *cpu) {
@@ -1476,11 +1495,26 @@ static void apply_loaded_machine(c64_t *dst, c64_t *src, bool restore_1541_core)
     move_drive_slot(&dst->drives[1], &src->drives[1]);
 
     if (restore_1541_core) {
-        /* Host ROM bytes stay on dst; live drive state comes from src. */
-        apply_drive_core(&dst->drive8, &src->drive8, dst, &dst->drives[0]);
-        apply_drive_core(&dst->drive9, &src->drive9, dst, &dst->drives[1]);
+        /* Host ROM stays on dst. Apply live core only for powered units; cold
+           units drop host media and stay unstepped until power-on (which resets). */
+        if (dst->drives[0].powered) {
+            apply_drive_core(&dst->drive8, &src->drive8, dst, &dst->drives[0]);
+        } else {
+            dst->drive8 = drive8_host;
+            dst->drive8.c64 = dst;
+            c1541_media_free_tracks(&dst->drive8.media);
+            c1541_rewire(&dst->drive8, dst);
+        }
+        if (dst->drives[1].powered) {
+            apply_drive_core(&dst->drive9, &src->drive9, dst, &dst->drives[1]);
+        } else {
+            dst->drive9 = drive9_host;
+            dst->drive9.c64 = dst;
+            c1541_media_free_tracks(&dst->drive9.media);
+            c1541_rewire(&dst->drive9, dst);
+        }
     } else {
-        /* Legacy v8 / deferred: keep host drive objects and hard-reset. */
+        /* Deferred: keep host drive objects and hard-reset. */
         dst->drive8 = drive8_host;
         dst->drive9 = drive9_host;
         dst->drive8.c64 = dst;
@@ -1650,8 +1684,14 @@ static bool read_snapshot_into_temp(
         !seen.cart || !seen.drv8 || !seen.drv9) {
         return false;
     }
-    if (restore_1541_core && (!seen.drv8_core || !seen.drv9_core)) {
-        return false;
+    /* Core chunks are required only for powered units (unpowered = DRV stub). */
+    if (restore_1541_core) {
+        if (temp->drives[0].powered && !seen.drv8_core) {
+            return false;
+        }
+        if (temp->drives[1].powered && !seen.drv9_core) {
+            return false;
+        }
     }
     if (meta.flags != flags || !meta_matches_loaded_roms(current, &meta)) {
         return false;

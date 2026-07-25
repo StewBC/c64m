@@ -48,8 +48,8 @@ and each was confirmed to fail with its fix reverted:
   viewport without tripping this.
 
 The Edge of Disgrace checker scene stays a **manual** oracle comparison, not a
-test: it needs a 1.8 MB snapshot pinned to the current save-state version, and
-`assets/` is gitignored. Before any c64m-vs-VICE pixel compare, match VIC-II
+test: it needs a current-version `.c64state` (v11+; paint buffers are not stored)
+and `assets/` is gitignored. Before any c64m-vs-VICE pixel compare, match VIC-II
 models (`-VICIImodel 6569` — see `vice-oracle.md`).
 
 ## Focused workflows

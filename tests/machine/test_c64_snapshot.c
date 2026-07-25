@@ -213,23 +213,7 @@ static void prepare_interesting_state(c64_t *machine) {
     machine->vic.sprite_sprite_collision = 0x34;
     machine->vic.sprite_background_collision = 0x56;
     machine->vic.vertical_border_active = false;
-    /* Set the full geometry, not just width/height: vicii_prepare_frame always
-       writes all four fields together, so a frame carrying a width but a zero
-       stride/format is a shape no real machine holds - and the snapshot reader
-       now rejects it. */
-    machine->vic.paint_frame = 0;
-    machine->vic.frames[0].width = C64_FRAME_PAL_WIDTH;
-    machine->vic.frames[0].height = C64_FRAME_HEIGHT;
-    machine->vic.frames[0].stride_bytes =
-        C64_FRAME_WIDTH * sizeof(machine->vic.frames[0].pixels[0]);
-    machine->vic.frames[0].pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
-    machine->vic.frames[0].pixels[17] = 0xff112233u;
-    machine->vic.frames[1].width = C64_FRAME_PAL_WIDTH;
-    machine->vic.frames[1].height = C64_FRAME_HEIGHT;
-    machine->vic.frames[1].stride_bytes =
-        C64_FRAME_WIDTH * sizeof(machine->vic.frames[1].pixels[0]);
-    machine->vic.frames[1].pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
-    machine->vic.frames[1].pixels[19] = 0xff445566u;
+    /* Paint buffers are not snapshotted (v11); leave whatever is here. */
 
     machine->cia1.registers[0] = 0x12;
     machine->cia1.registers[1] = 0x34;
@@ -479,82 +463,96 @@ static void test_reject_and_leave_unchanged(void) {
     c64_unmount_all_drives(&target);
 }
 
-/* Locate a stored frame header (width, height, stride, format) in a saved
-   snapshot. The VIC chunk writes two of them; the first is enough. Returns 0 if
-   not found - the pattern is far too specific to appear in RAM by chance. */
-static size_t find_frame_header(const uint8_t *snapshot, size_t size) {
-    size_t offset;
-
-    if (size < 16) {
-        return 0;
-    }
-    for (offset = 0; offset + 16 <= size; ++offset) {
-        uint32_t width = read_le32(snapshot + offset);
-        uint32_t height = read_le32(snapshot + offset + 4);
-        uint32_t stride = read_le32(snapshot + offset + 8);
-        uint32_t format = read_le32(snapshot + offset + 12);
-
-        if ((width == (uint32_t)C64_FRAME_PAL_WIDTH ||
-             width == (uint32_t)C64_FRAME_NTSC_WIDTH) &&
-            height > 0u && height <= (uint32_t)C64_FRAME_HEIGHT &&
-            stride == (uint32_t)C64_FRAME_WIDTH * sizeof(uint32_t) &&
-            format == (uint32_t)C64_FRAME_PIXEL_FORMAT_ARGB8888) {
-            return offset;
-        }
-    }
-    return 0;
-}
-
-/* A frame header that does not match this build's framebuffer must fail the
-   load outright. Before the reader validated it, the fixed-size pixel loop ran
-   past the mismatched header, silently misaligning every following chunk. */
-static void test_reject_frame_geometry_mismatch(void) {
+/* v11 no longer stores ARGB paint buffers. A full dual-buffer dump was ~1.24 MiB;
+   a machine with one D64 mounted and no 1541 core must land well under that. */
+static void test_no_paint_buffers_and_cold_drive_stub(void) {
     c64_t source;
     c64_t target;
     uint8_t *snapshot;
     size_t snapshot_size;
-    size_t header;
-    uint32_t original_width;
-    uint32_t original_height;
-    uint32_t original_stride;
+    size_t i;
+    int found_dr9c = 0;
+    size_t drv9_len = 0;
 
     init_ready_machine(&source);
     init_ready_machine(&target);
     prepare_interesting_state(&source);
+    /* Drive 8 is mounted (powered); drive 9 stays cold. */
+    expect_true("drive 8 powered after mount", source.drives[0].powered);
+    expect_false("drive 9 cold", source.drives[1].powered);
+
+    /* Scribble paint buffers - must not appear in the file or survive load. */
+    source.vic.frames[0].pixels[17] = 0xff112233u;
+    source.vic.frames[1].pixels[19] = 0xff445566u;
+    source.vic.frames[0].width = C64_FRAME_PAL_WIDTH;
+    source.vic.frames[0].height = C64_FRAME_HEIGHT;
+
     snapshot = save_snapshot(&source, &snapshot_size);
+    /* One D64 (~175 KiB) + RAM (~65 KiB) + cart banks (only if present) + chips. */
+    expect_true("snapshot without paint buffers under 512 KiB",
+                snapshot_size < 512u * 1024u);
 
-    header = find_frame_header(snapshot, snapshot_size);
-    if (header == 0) {
-        fail("frame header not found in snapshot");
+    {
+        size_t cart_len = 0;
+        for (i = 32; i + 8 < snapshot_size; ) {
+            uint32_t tag = read_le32(snapshot + i);
+            uint32_t length = read_le32(snapshot + i + 4);
+            if (tag == 0x43395244u /* 'DR9C' LE */) {
+                found_dr9c = 1;
+            }
+            if (tag == 0x39565244u /* 'DRV9' LE */) {
+                drv9_len = length;
+            }
+            if (tag == 0x54524143u /* 'CART' LE */) {
+                cart_len = length;
+            }
+            i += 8u + (size_t)length;
+        }
+        expect_false("no DR9C for cold drive 9", found_dr9c != 0);
+        expect_u64("DRV9 cold stub is one byte (powered=false)", 1, drv9_len);
+        /* prepare_interesting_state attaches a 16K cart → both banks present. */
+        expect_true("mounted 16K cart stores both banks",
+                    cart_len > 2u * C64_CARTRIDGE_ROM_BANK_SIZE);
     }
-    original_width = read_le32(snapshot + header);
-    original_height = read_le32(snapshot + header + 4);
-    original_stride = read_le32(snapshot + header + 8);
 
-    write_le32(snapshot + header, original_width + 8u);
-    expect_false("reject frame width mismatch",
-                 c64_snapshot_load(&target, snapshot, snapshot_size));
-
-    write_le32(snapshot + header, original_width);
-    write_le32(snapshot + header + 8, original_stride + 32u);
-    expect_false("reject frame stride mismatch",
-                 c64_snapshot_load(&target, snapshot, snapshot_size));
-
-    write_le32(snapshot + header + 8, original_stride);
-    write_le32(snapshot + header + 4, (uint32_t)C64_FRAME_HEIGHT + 1u);
-    expect_false("reject frame height overflow",
-                 c64_snapshot_load(&target, snapshot, snapshot_size));
-
-    /* Restoring every field makes it load again, proving the rejections came
-       from the geometry check and not from collateral damage to the buffer. */
-    write_le32(snapshot + header + 4, original_height);
-    expect_true("accept repaired frame header",
-                c64_snapshot_load(&target, snapshot, snapshot_size));
+    mutate_machine(&target);
+    target.vic.frames[0].pixels[0] = 0xffffffffu;
+    expect_true("load lean snapshot", c64_snapshot_load(&target, snapshot, snapshot_size));
     assert_restored_state(&target);
+    expect_false("drive 9 still cold after load", target.drives[1].powered);
+    expect_u64("paint buffer cleared on load", 0, target.vic.frames[0].pixels[0]);
+    expect_u64("paint buffer not restored", 0, target.vic.frames[0].pixels[17]);
 
     free(snapshot);
     c64_unmount_all_drives(&source);
     c64_unmount_all_drives(&target);
+}
+
+static void test_unmounted_cart_is_one_byte_stub(void) {
+    c64_t source;
+    uint8_t *snapshot;
+    size_t snapshot_size;
+    size_t i;
+    size_t cart_len = 0;
+
+    init_ready_machine(&source);
+    expect_false("no cart after reset", c64_cartridge_attached(&source));
+    snapshot = save_snapshot(&source, &snapshot_size);
+    /* RAM 65 KiB + chips; no cart banks, no disk. */
+    expect_true("no-disk no-cart snapshot under 80 KiB", snapshot_size < 80u * 1024u);
+
+    for (i = 32; i + 8 < snapshot_size; ) {
+        uint32_t tag = read_le32(snapshot + i);
+        uint32_t length = read_le32(snapshot + i + 4);
+        if (tag == 0x54524143u /* 'CART' LE */) {
+            cart_len = length;
+        }
+        i += 8u + (size_t)length;
+    }
+    expect_u64("CART unmounted stub is one byte", 1, cart_len);
+
+    free(snapshot);
+    c64_unmount_all_drives(&source);
 }
 
 static void test_reject_rom_hash_mismatch(void) {
@@ -925,11 +923,8 @@ static void init_real_rom_machine(c64_t *machine, int emulate_1541) {
     expect_true("reset machine", c64_reset(machine, error, sizeof(error)));
 }
 
-/* v10 widened the framebuffer, so pre-v10 files carry a frame that cannot be
-   reconstructed into the current buffer. They are sunset, not migrated: the
-   header version check must reject them and leave the machine untouched. The v8
-   fixture is kept as the evidence that the rejection is real rather than a
-   constant nobody exercises. */
+/* Pre-v11 files are sunset (no migration). The v8 fixture proves the version
+   gate rejects old files and leaves the machine untouched. */
 static void test_legacy_versions_rejected(void) {
     c64_t machine;
     uint8_t *fixture;
@@ -964,7 +959,7 @@ static void test_legacy_versions_rejected(void) {
     c64_unmount_all_drives(&machine);
 }
 
-static void test_synthetic_v9_deferred_resets_drives(void) {
+static void test_synthetic_deferred_resets_drives(void) {
     c64_t source;
     c64_t target;
     uint8_t *snapshot;
@@ -981,6 +976,8 @@ static void test_synthetic_v9_deferred_resets_drives(void) {
     install_fake_1541_rom(&target.drive8);
     install_fake_1541_rom(&target.drive9);
 
+    /* Power drive 8 so a DR8C core is written (cold units omit cores). */
+    expect_true("power drive 8", c64_power_on_drive(&source, 8));
     fill_pattern(source.drive8.ram, sizeof(source.drive8.ram), 0x77);
     source.drive8.cpu.cpu.pc = 0x0600;
     source.drive8.cpu.micro_active = 0;
@@ -991,8 +988,8 @@ static void test_synthetic_v9_deferred_resets_drives(void) {
             ((uint32_t)snapshot[19] << 24);
     expect_true("source has included flag", (flags & C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) != 0);
 
-    /* Clear INCLUDED so the loader takes the legacy hard-reset path. Core chunks
-       remain; the loader ignores them when the flag is off. */
+    /* Clear INCLUDED so the loader takes the hard-reset path. Core chunks remain;
+       the loader ignores them when the flag is off. */
     flags = (flags & ~C64_SNAPSHOT_FLAG_1541_STATE_INCLUDED) | C64_SNAPSHOT_FLAG_1541_STATE_DEFERRED;
     snapshot[16] = (uint8_t)(flags & 0xffu);
     snapshot[17] = (uint8_t)((flags >> 8) & 0xffu);
@@ -1031,6 +1028,72 @@ static void test_synthetic_v9_deferred_resets_drives(void) {
     expect_true("drive ram cleared by legacy reset", target.drive8.ram[0] == 0 &&
                                                            target.drive8.ram[1] == 0);
     expect_true("drive not left at scribbled pc", target.drive8.cpu.cpu.pc != 0x0600);
+
+    free(snapshot);
+    c64_unmount_all_drives(&source);
+    c64_unmount_all_drives(&target);
+}
+
+/* CIA2 NMI asserted at save: without restoring interrupt_line, load re-edges
+   NMI and jumps through $FFFA (garbage $FFFF when HIRAM is off). */
+static void test_cia2_nmi_line_stable_across_load(void) {
+    c64_t source;
+    c64_t target;
+    uint8_t *snapshot;
+    size_t snapshot_size;
+    char error[256];
+    uint64_t nmi_before;
+    int i;
+
+    init_ready_machine(&source);
+    init_ready_machine(&target);
+
+    source.cpu.cpu.pc = 0xc000;
+    source.cpu.cpu.flags = 0x20; /* I clear */
+    source.cpu.micro_active = 0;
+    source.bus.ram[0xc000] = 0xea; /* NOP */
+    source.bus.ram[0xc001] = 0xea;
+    source.bus.ram[0xc002] = 0xea;
+    source.bus.cpu_port_data = 0x35; /* HIRAM off */
+    /* NMI vector $FFFF would trap if NMI re-edged (lft-nine case). */
+    source.bus.ram[0xfffa] = 0xff;
+    source.bus.ram[0xfffb] = 0xff;
+    source.bus.ram[0xfffe] = 0x00;
+    source.bus.ram[0xffff] = 0xc0; /* IRQ → $C000 NOPs if taken */
+
+    /* Stable pin pipeline: IR active and pin already high; edge already seen. */
+    source.cia2.interrupt_flags = 0x01;
+    source.cia2.interrupt_mask = 0x01;
+    source.cia2.interrupt_ff = true;
+    source.cia2.interrupt_pending_latched = true;
+    source.cia2.interrupt_line = true;
+    source.cia2_nmi_line = true;
+    source.restore_pending = false;
+    /* Keep CIA1 quiet so IRQ does not compete. */
+    source.cia1.interrupt_flags = 0;
+    source.cia1.interrupt_mask = 0;
+    source.cia1.interrupt_ff = false;
+    source.cia1.interrupt_pending_latched = false;
+    source.cia1.interrupt_line = false;
+
+    nmi_before = source.cpu.cpu.nmi_entries;
+    snapshot = save_snapshot(&source, &snapshot_size);
+    expect_true("load with cia2 nmi asserted",
+                c64_snapshot_load(&target, snapshot, snapshot_size));
+    expect_true("interrupt_line restored", target.cia2.interrupt_line);
+    expect_true("cia2_nmi_line restored", target.cia2_nmi_line);
+    expect_false("restore_pending clear", target.restore_pending);
+
+    for (i = 0; i < 8; ++i) {
+        expect_true("step after nmi-asserted load",
+                    c64_step_instruction(&target, error, sizeof(error)));
+        if (target.cpu.cpu.pc == 0xffffu ||
+            target.cpu.micro_interrupt_vector == 0xfffau ||
+            target.cpu.cpu.nmi_entries > nmi_before) {
+            fail("spurious NMI after load with CIA2 already asserted");
+        }
+    }
+    expect_u16("still in nop loop region", 0xc000, (uint16_t)(target.cpu.cpu.pc & 0xff00u));
 
     free(snapshot);
     c64_unmount_all_drives(&source);
@@ -1104,12 +1167,14 @@ int main(void) {
     test_round_trip();
     test_ignores_unknown_chunk();
     test_reject_and_leave_unchanged();
-    test_reject_frame_geometry_mismatch();
+    test_no_paint_buffers_and_cold_drive_stub();
+    test_unmounted_cart_is_one_byte_stub();
     test_reject_rom_hash_mismatch();
     test_reject_mid_instruction_state();
     test_1541_core_round_trip();
     test_legacy_versions_rejected();
-    test_synthetic_v9_deferred_resets_drives();
+    test_synthetic_deferred_resets_drives();
+    test_cia2_nmi_line_stable_across_load();
     test_load_clears_host_micro_state();
     return 0;
 }
