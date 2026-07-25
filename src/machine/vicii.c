@@ -7,6 +7,52 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Portable 8-dot ARGB helpers. NEON on Apple Silicon / AArch64; scalar
+   unrolls elsewhere (x64, MSVC, older ARM). Same memory effect either way. */
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define VICII_HAVE_NEON 1
+#else
+#define VICII_HAVE_NEON 0
+#endif
+
+static inline void vicii_store8_u32(uint32_t *dst, const uint32_t *src) {
+#if VICII_HAVE_NEON
+    vst1q_u32(dst, vld1q_u32(src));
+    vst1q_u32(dst + 4, vld1q_u32(src + 4));
+#else
+    dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+    dst[4] = src[4]; dst[5] = src[5]; dst[6] = src[6]; dst[7] = src[7];
+#endif
+}
+
+static inline void vicii_fill8_u32(uint32_t *dst, uint32_t value) {
+#if VICII_HAVE_NEON
+    uint32x4_t v = vdupq_n_u32(value);
+    vst1q_u32(dst, v);
+    vst1q_u32(dst + 4, v);
+#else
+    dst[0] = value; dst[1] = value; dst[2] = value; dst[3] = value;
+    dst[4] = value; dst[5] = value; dst[6] = value; dst[7] = value;
+#endif
+}
+
+/* Consecutive framebuffer indices base..base+7 and identity dots 0..7. */
+static inline void vicii_span8_identity(uint32_t *idx, uint8_t *dot, uint32_t base) {
+    int k;
+    for (k = 0; k < 8; k++) {
+        idx[k] = base + (uint32_t)k;
+        dot[k] = (uint8_t)k;
+    }
+}
+
+static inline void vicii_span8_d021_true(bool *is_d021) {
+    int k;
+    for (k = 0; k < 8; k++) {
+        is_d021[k] = true;
+    }
+}
+
 enum {
     VICII_REG_RASTER = 0x12,
     VICII_REG_CONTROL_1 = 0x11,
@@ -1610,8 +1656,14 @@ static void vicii_hborder_flush_slot(vicii *v, uint8_t slot, bool main_border) {
         if (n == 8u && idx[7] == idx[0] + 7u) {
             uint32_t *dst = pixels + idx[0];
             const uint32_t *src = main_border ? border : content;
-            dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
-            dst[4] = src[4]; dst[5] = src[5]; dst[6] = src[6]; dst[7] = src[7];
+            /* Solid span (common border / flat B0C): one fill beats 8 loads. */
+            if (src[0] == src[1] && src[0] == src[2] && src[0] == src[3] &&
+                src[0] == src[4] && src[0] == src[5] && src[0] == src[6] &&
+                src[0] == src[7]) {
+                vicii_fill8_u32(dst, src[0]);
+            } else {
+                vicii_store8_u32(dst, src);
+            }
         } else if (main_border) {
             for (i = 0; i < n; i++) {
                 pixels[idx[i]] = border[i];
@@ -1787,23 +1839,17 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint32_t *idx = v->hborder_pipe[paint_i].idx;
                 uint32_t b0c0 = b0c;
                 uint32_t bord0 = bord;
-                int k;
 
-                for (k = 0; k < 8; k++) {
-                    dot[k] = (uint8_t)k;
-                    idx[k] = base_idx + (uint32_t)k;
-                    is_d021[k] = true;
-                }
+                vicii_span8_identity(idx, dot, base_idx);
+                vicii_span8_d021_true(is_d021);
                 content[0] = b0c0;
                 border[0] = bord0;
                 vicii_color_pipes_sample_regs(v, &bord, &b0c);
-                content[1] = b0c; border[1] = bord;
-                content[2] = b0c; border[2] = bord;
-                content[3] = b0c; border[3] = bord;
-                content[4] = b0c; border[4] = bord;
-                content[5] = b0c; border[5] = bord;
-                content[6] = b0c; border[6] = bord;
-                content[7] = b0c; border[7] = bord;
+                /* Post-drain: remaining seven dots share drained B0C / border. */
+                vicii_fill8_u32(content, b0c);
+                content[0] = b0c0;
+                vicii_fill8_u32(border, bord);
+                border[0] = bord0;
                 v->hborder_pipe[paint_i].n = 8u;
             } else {
                 for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
@@ -1900,11 +1946,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     }
                     bg0 = bg;
 
-                    /* Identity map for frame indices and dots. */
-                    for (i = 0; i < 8; i++) {
-                        dot[i] = (uint8_t)i;
-                        idx[i] = base_idx + (uint32_t)i;
-                    }
+                    vicii_span8_identity(idx, dot, base_idx);
 
                     /* Dot 0: delayed colour pipe. */
                     if ((g & 0x80u) != 0u) {
@@ -1919,6 +1961,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     if (bg_is_d021) {
                         bg = b0c;
                     }
+                    /* Border is constant for dots 1..7 after the pipe drains. */
+                    vicii_fill8_u32(border, bord);
+                    border[0] = bord0;
 
                     /* Dots 1..7: post-drain colours (unrolled). */
 #define VICII_HIRES_DOT(bit, ii)                                       \
@@ -1930,7 +1975,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
             content[(ii)] = bg;                                        \
             is_d021[(ii)] = bg_is_d021;                                \
         }                                                              \
-        border[(ii)] = bord;                                           \
     } while (0)
                     VICII_HIRES_DOT(0x40u, 1);
                     VICII_HIRES_DOT(0x20u, 2);
