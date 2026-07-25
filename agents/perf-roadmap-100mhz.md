@@ -313,3 +313,4 @@ Each step: measure pure on/off + product both-off; run accuracy suite; write res
 | 2026-07-24 | begin_cycle sprite work only on sequencer cycles; ECM mode-4 spans; one-shot color-pipe drain per span; consecutive CSEL=1 flush. M2 pure paint-on ~**12.4 MHz**, paint-off ~**15.5 MHz**, product drives-off ~**11.3 MHz**. ctest 56/56. |
 | 2026-07-24 | SID silent voice path + env-idle skip; mode-0 bulk expand; skip idle Phi1 ghost read. M2 pure paint-on ~**13.0 MHz**, paint-off ~**16.1 MHz**, product drives-off ~**11.6 MHz**. ctest 56/56. |
 | 2026-07-24 | CIA idle-timer/serial gates; paint-off finish_cycle skip; mode-2 bulk. M2 pure paint-on ~**13.5 MHz**, paint-off ~**16.5 MHz**, product drives-off ~**12.1 MHz**. ctest 56/56. |
+| 2026-07-24 | Fast BRK peek; MCM bulk paint; hborder 2-slot index flip (no pipe memcpy). M2 pure paint-on ~**13.4 MHz**, paint-off ~**16.5 MHz**, product drives-off ~**12.3 MHz**. ctest 56/56. |

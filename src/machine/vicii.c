@@ -281,6 +281,7 @@ static void vicii_begin_live_frame(vicii *v) {
     v->hborder_pipe[1].n = 0;
     v->hborder_pipe[0].csel = true;
     v->hborder_pipe[1].csel = true;
+    v->hborder_oldest = 0;
 }
 
 bool vicii_init(vicii *v, char *error, size_t error_size) {
@@ -1523,20 +1524,20 @@ static void vicii_apply_vborder_latch(vicii *v) {
    CSEL=1: one border decision for the whole 8-dot span (previous model).
    CSEL=0: VICE draw_border8 — first 7 dots keep hborder_out_state, last dot takes
    the new main_border (38-col edges at VIC X 31/335). */
-static void vicii_hborder_flush(vicii *v, bool main_border) {
+static void vicii_hborder_flush_slot(vicii *v, uint8_t slot, bool main_border) {
     uint8_t i;
-    uint8_t n = v->hborder_pipe[0].n;
+    uint8_t n = v->hborder_pipe[slot].n;
     uint32_t *pixels = v->working_frame.pixels;
-    const uint32_t *idx = v->hborder_pipe[0].idx;
-    const uint32_t *border = v->hborder_pipe[0].border;
-    const uint32_t *content = v->hborder_pipe[0].content;
+    const uint32_t *idx = v->hborder_pipe[slot].idx;
+    const uint32_t *border = v->hborder_pipe[slot].border;
+    const uint32_t *content = v->hborder_pipe[slot].content;
 
     if (n == 0u) {
         v->hborder_out_state = main_border;
         return;
     }
 
-    if (v->hborder_pipe[0].csel) {
+    if (v->hborder_pipe[slot].csel) {
         /* Common CSEL=1 path: one border decision for the whole span.
            Full 8-dot g-access spans are consecutive framebuffer columns. */
         if (n == 8u && idx[7] == idx[0] + 7u) {
@@ -1642,6 +1643,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     bool     any_sprite;
     uint8_t  reg11;
     uint8_t  mode;
+    uint8_t  paint_i;
     int      n;
 
     if (!bus) {
@@ -1683,10 +1685,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         }
     }
 
-    /* Apply the (now-updated) flip-flop to the span painted two cycles ago, then
-       shift the one-cycle-old span into the flush slot. */
-    vicii_hborder_flush(v, v->main_border_ff);
-    v->hborder_pipe[0] = v->hborder_pipe[1];
+    /* Flush oldest span, then reuse that slot for this cycle's paint (no copy). */
+    paint_i = v->hborder_oldest;
+    vicii_hborder_flush_slot(v, paint_i, v->main_border_ff);
 
     /* Cheap cycle-constant flags; full paint_prep (idle bus read) only on the
        general path. finish_cycle still re-decodes from registers when needed. */
@@ -1711,10 +1712,10 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         uint32_t bord = vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
         uint32_t b0c = vicii_palette_argb[v->color_pipe_d021 & 0x0fu];
 
-        v->hborder_pipe[1].n = 0;
-        v->hborder_pipe[1].mode = mode;
-        v->hborder_pipe[1].reg11 = reg11;
-        v->hborder_pipe[1].csel = check_csel;
+        v->hborder_pipe[paint_i].n = 0;
+        v->hborder_pipe[paint_i].mode = mode;
+        v->hborder_pipe[paint_i].reg11 = reg11;
+        v->hborder_pipe[paint_i].csel = check_csel;
 
         /*
          * Fast path A: vertical border, no sprites. Content is forced to B0C
@@ -1728,29 +1729,29 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)fb0;
                 for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                     uint8_t k = (uint8_t)i;
-                    v->hborder_pipe[1].dot[k] = k;
-                    v->hborder_pipe[1].idx[k] = base_idx + (uint32_t)i;
-                    v->hborder_pipe[1].content[k] = b0c;
-                    v->hborder_pipe[1].content_d021[k] = true;
-                    v->hborder_pipe[1].border[k] = bord;
+                    v->hborder_pipe[paint_i].dot[k] = k;
+                    v->hborder_pipe[paint_i].idx[k] = base_idx + (uint32_t)i;
+                    v->hborder_pipe[paint_i].content[k] = b0c;
+                    v->hborder_pipe[paint_i].content_d021[k] = true;
+                    v->hborder_pipe[paint_i].border[k] = bord;
                     if (i == 0) {
                         vicii_color_pipes_sample_regs(v, &bord, &b0c);
                     }
                 }
-                v->hborder_pipe[1].n = 8u;
+                v->hborder_pipe[paint_i].n = 8u;
             } else {
                 for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                     int32_t raw_x = raw_xs + i;
                     int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
                     if (fb_x >= 0) {
-                        uint8_t k = v->hborder_pipe[1].n;
-                        v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                        v->hborder_pipe[1].idx[k] =
+                        uint8_t k = v->hborder_pipe[paint_i].n;
+                        v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                        v->hborder_pipe[paint_i].idx[k] =
                             y * C64_FRAME_WIDTH + (uint32_t)fb_x;
-                        v->hborder_pipe[1].content[k] = b0c;
-                        v->hborder_pipe[1].content_d021[k] = true;
-                        v->hborder_pipe[1].border[k] = bord;
-                        v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                        v->hborder_pipe[paint_i].content[k] = b0c;
+                        v->hborder_pipe[paint_i].content_d021[k] = true;
+                        v->hborder_pipe[paint_i].border[k] = bord;
+                        v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
                     }
                     if (i == 0) {
                         vicii_color_pipes_sample_regs(v, &bord, &b0c);
@@ -1784,39 +1785,84 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint8_t vm_byte = vm_latch[col];
                 uint8_t color_reg = color_latch[col];
 
-                /* Mode 0/2 / XSCROLL=0: expand one g-data byte to 8 dots without
-                   per-dot switch. G-access columns always map 1:1 to frame_x. */
-                if (mode == 0u || mode == 2u) {
-                    uint32_t fg = (mode == 0u)
-                        ? vicii_palette_argb[color_reg & 0x0fu]
-                        : vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
-                    uint32_t bg = (mode == 0u)
-                        ? b0c
-                        : vicii_palette_argb[vm_byte & 0x0fu];
-                    bool bg_is_d021 = (mode == 0u);
+                /* XSCROLL=0 bulk expand: g-access columns map 1:1 to frame_x. */
+                if (mode == 0u || mode == 2u ||
+                    (mode == 1u && (color_reg & 0x08u) == 0u)) {
+                    /* Hires text / hires MCM-text / hires bitmap. */
+                    uint32_t fg = (mode == 2u)
+                        ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
+                        : vicii_palette_argb[color_reg & 0x0fu];
+                    uint32_t bg = (mode == 2u)
+                        ? vicii_palette_argb[vm_byte & 0x0fu]
+                        : b0c;
+                    bool bg_is_d021 = (mode != 2u);
                     uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
                     uint8_t g = gdata;
                     for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                         uint8_t k = (uint8_t)i;
                         bool on = (g & (uint8_t)(0x80u >> (unsigned)i)) != 0u;
-                        v->hborder_pipe[1].dot[k] = k;
-                        v->hborder_pipe[1].idx[k] = base_idx + (uint32_t)i;
+                        v->hborder_pipe[paint_i].dot[k] = k;
+                        v->hborder_pipe[paint_i].idx[k] = base_idx + (uint32_t)i;
                         if (on) {
-                            v->hborder_pipe[1].content[k] = fg;
-                            v->hborder_pipe[1].content_d021[k] = false;
+                            v->hborder_pipe[paint_i].content[k] = fg;
+                            v->hborder_pipe[paint_i].content_d021[k] = false;
                         } else {
-                            v->hborder_pipe[1].content[k] = bg;
-                            v->hborder_pipe[1].content_d021[k] = bg_is_d021;
+                            v->hborder_pipe[paint_i].content[k] = bg;
+                            v->hborder_pipe[paint_i].content_d021[k] = bg_is_d021;
                         }
-                        v->hborder_pipe[1].border[k] = bord;
+                        v->hborder_pipe[paint_i].border[k] = bord;
                         if (i == 0) {
                             vicii_color_pipes_sample_regs(v, &bord, &b0c);
-                            if (mode == 0u) {
+                            if (bg_is_d021) {
                                 bg = b0c;
                             }
                         }
                     }
-                    v->hborder_pipe[1].n = 8u;
+                    v->hborder_pipe[paint_i].n = 8u;
+                } else if (mode == 1u || mode == 3u) {
+                    /* Multicolor text (colour bit3) or multicolor bitmap. */
+                    uint32_t pair_c[4];
+                    bool pair_d021[4];
+                    uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
+                    int p;
+                    if (mode == 1u) {
+                        pair_c[0] = b0c;
+                        pair_c[1] = b1c;
+                        pair_c[2] = b2c;
+                        pair_c[3] = vicii_palette_argb[color_reg & 0x07u];
+                        pair_d021[0] = true;
+                        pair_d021[1] = false;
+                        pair_d021[2] = false;
+                        pair_d021[3] = false;
+                    } else {
+                        pair_c[0] = b0c;
+                        pair_c[1] = vicii_palette_argb[(vm_byte >> 4) & 0x0fu];
+                        pair_c[2] = vicii_palette_argb[vm_byte & 0x0fu];
+                        pair_c[3] = vicii_palette_argb[color_reg & 0x0fu];
+                        pair_d021[0] = true;
+                        pair_d021[1] = false;
+                        pair_d021[2] = false;
+                        pair_d021[3] = false;
+                    }
+                    for (p = 0; p < 4; p++) {
+                        uint8_t pair =
+                            (uint8_t)((gdata >> (6u - (unsigned)(p * 2))) & 3u);
+                        int d;
+                        for (d = 0; d < 2; d++) {
+                            uint8_t k = (uint8_t)(p * 2 + d);
+                            v->hborder_pipe[paint_i].dot[k] = k;
+                            v->hborder_pipe[paint_i].idx[k] = base_idx + (uint32_t)k;
+                            v->hborder_pipe[paint_i].content[k] = pair_c[pair];
+                            v->hborder_pipe[paint_i].content_d021[k] = pair_d021[pair];
+                            v->hborder_pipe[paint_i].border[k] = bord;
+                            /* 1-dot colour latency: drain after the first dot. */
+                            if (k == 0u) {
+                                vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                                pair_c[0] = b0c;
+                            }
+                        }
+                    }
+                    v->hborder_pipe[paint_i].n = 8u;
                 } else for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                     int32_t raw_x = raw_xs + i;
                     int32_t fb_x = raw_x;
@@ -1827,9 +1873,9 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     if (fb_x < 0) {
                         goto pipe_advance_b0;
                     }
-                    k = v->hborder_pipe[1].n;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
+                    k = v->hborder_pipe[paint_i].n;
+                    v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[paint_i].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                     switch (mode) {
                     case 1u: {
@@ -1906,10 +1952,10 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                         break;
                     }
                     }
-                    v->hborder_pipe[1].content[k] = pix;
-                    v->hborder_pipe[1].content_d021[k] = is_d021;
-                    v->hborder_pipe[1].border[k] = bord;
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    v->hborder_pipe[paint_i].content[k] = pix;
+                    v->hborder_pipe[paint_i].content_d021[k] = is_d021;
+                    v->hborder_pipe[paint_i].border[k] = bord;
+                    v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
 pipe_advance_b0:
                     if (i == 0) {
                         vicii_color_pipes_sample_regs(v, &bord, &b0c);
@@ -1930,9 +1976,9 @@ pipe_advance_b0:
                     if (fb_x < 0) {
                         goto pipe_advance_bx;
                     }
-                    k = v->hborder_pipe[1].n;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
+                    k = v->hborder_pipe[paint_i].n;
+                    v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[paint_i].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
 
                     if (sx_raw < (uint32_t)xscroll) {
@@ -2049,10 +2095,10 @@ pipe_advance_b0:
                             }
                         }
                     }
-                    v->hborder_pipe[1].content[k] = pix;
-                    v->hborder_pipe[1].content_d021[k] = is_d021;
-                    v->hborder_pipe[1].border[k] = bord;
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    v->hborder_pipe[paint_i].content[k] = pix;
+                    v->hborder_pipe[paint_i].content_d021[k] = is_d021;
+                    v->hborder_pipe[paint_i].border[k] = bord;
+                    v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
 pipe_advance_bx:
                     if (i == 0) {
                         vicii_color_pipes_sample_regs(v, &bord, &b0c);
@@ -2081,18 +2127,18 @@ pipe_advance_bx:
                 int32_t raw_x = raw_xs + i;
                 int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
                 if (fb_x >= 0) {
-                    uint8_t k = v->hborder_pipe[1].n;
+                    uint8_t k = v->hborder_pipe[paint_i].n;
                     vicii_bg_pixel bg;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
+                    v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[paint_i].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                     bg = vicii_idle_pixel_decoded(
                         v, (uint32_t)raw_x, xscroll, idle_g,
                         idle_ecm, idle_bmm, idle_mcm, idle_invalid);
-                    v->hborder_pipe[1].content[k] = bg.color;
-                    v->hborder_pipe[1].content_d021[k] = bg.color_is_d021;
-                    v->hborder_pipe[1].border[k] = bord;
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    v->hborder_pipe[paint_i].content[k] = bg.color;
+                    v->hborder_pipe[paint_i].content_d021[k] = bg.color_is_d021;
+                    v->hborder_pipe[paint_i].border[k] = bord;
+                    v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
                 }
                 if (i == 0) {
                     vicii_color_pipes_sample_regs(v, &bord, &b0c);
@@ -2125,18 +2171,18 @@ pipe_advance_bx:
                 int32_t raw_x = raw_xs + i;
                 int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
                 if (fb_x >= 0) {
-                    uint8_t k = v->hborder_pipe[1].n;
+                    uint8_t k = v->hborder_pipe[paint_i].n;
                     vicii_bg_pixel bg;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
+                    v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[paint_i].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
                     bg = vicii_border_gfx_pixel(
                         &lc, b0c, b1c, b2c, b3c,
                         idle_ecm, idle_bmm, idle_mcm, idle_invalid);
-                    v->hborder_pipe[1].content[k] = bg.color;
-                    v->hborder_pipe[1].content_d021[k] = bg.color_is_d021;
-                    v->hborder_pipe[1].border[k] = bord;
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    v->hborder_pipe[paint_i].content[k] = bg.color;
+                    v->hborder_pipe[paint_i].content_d021[k] = bg.color_is_d021;
+                    v->hborder_pipe[paint_i].border[k] = bord;
+                    v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
                 }
                 if (i == 0) {
                     vicii_color_pipes_sample_regs(v, &bord, &b0c);
@@ -2152,19 +2198,19 @@ pipe_advance_bx:
                 int32_t fb_x = vicii_vic_x_to_frame_x(v, raw_x);
 
                 if (fb_x >= 0) {
-                    uint8_t k = v->hborder_pipe[1].n;
+                    uint8_t k = v->hborder_pipe[paint_i].n;
                     x = (uint32_t)raw_x;
-                    v->hborder_pipe[1].dot[k] = (uint8_t)i;
-                    v->hborder_pipe[1].idx[k] =
+                    v->hborder_pipe[paint_i].dot[k] = (uint8_t)i;
+                    v->hborder_pipe[paint_i].idx[k] =
                         y * C64_FRAME_WIDTH + (uint32_t)fb_x;
-                    v->hborder_pipe[1].content[k] =
+                    v->hborder_pipe[paint_i].content[k] =
                         vicii_live_pixel(v, bus, &g, &prep, x, y, false,
                             v->vertical_border_active, true,
-                            &v->hborder_pipe[1].content_d021[k]);
+                            &v->hborder_pipe[paint_i].content_d021[k]);
 #ifdef C64M_VIC_TRACE
                     if ((x == 24u || x == 48u || x == 144u || x == 240u || x == 336u) &&
                         y >= 40u && y <= 250u) {
-                        uint32_t pixel = v->hborder_pipe[1].content[k];
+                        uint32_t pixel = v->hborder_pipe[paint_i].content[k];
                         unsigned palette = 16u;
                         for (unsigned pi = 0; pi < 16u; ++pi) {
                             if (pixel == vicii_palette_argb[pi]) {
@@ -2176,9 +2222,9 @@ pipe_advance_bx:
                             (uint8_t)palette);
                     }
 #endif
-                    v->hborder_pipe[1].border[k] =
+                    v->hborder_pipe[paint_i].border[k] =
                         vicii_palette_argb[v->color_pipe_d020 & 0x0fu];
-                    v->hborder_pipe[1].n = (uint8_t)(k + 1u);
+                    v->hborder_pipe[paint_i].n = (uint8_t)(k + 1u);
                 }
                 /* First advance drains the 1-dot latency; further dots see regs. */
                 if (i == 0) {
@@ -2187,6 +2233,9 @@ pipe_advance_bx:
             }
         }
     }
+
+    /* Newest span is paint_i; next flush is the previous newest. */
+    v->hborder_oldest = (uint8_t)(1u - paint_i);
 
     /* Latch CSEL for the next cycle's pre-store border check. */
     v->hborder_prev2_csel = v->hborder_prev_csel;
@@ -2208,8 +2257,8 @@ pipe_advance_bx:
         if (brdlog) {
             unsigned long fr = (unsigned long)v->timing.frame_number;
             if (fr >= bf0 && fr <= bf1 && y >= r0 && y <= r1) {
-                uint32_t paint_x0 = (v->hborder_pipe[1].n > 0u)
-                    ? (v->hborder_pipe[1].idx[0] % C64_FRAME_WIDTH)
+                uint32_t paint_x0 = (v->hborder_pipe[paint_i].n > 0u)
+                    ? (v->hborder_pipe[paint_i].idx[0] % C64_FRAME_WIDTH)
                     : 0u;
                 fprintf(brdlog, "F%lu R%u C%u x0=%u csel=%d chk=%d chk2=%d "
                         "mbff=%d vb=%d svb=%d d11=%02x d16=%02x\n",
@@ -2830,8 +2879,13 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
 void vicii_finish_cycle(vicii *v) {
     uint32_t cyc;
+    uint8_t old_i;
+    uint8_t new_i;
 
     assert(v);
+
+    old_i = v->hborder_oldest;
+    new_i = (uint8_t)(1u - old_i);
 
     /* Warp / paint-off: no live spans. Still advance xscroll pipe + raster. */
     if (!v->pixel_output_enabled) {
@@ -2859,11 +2913,11 @@ void vicii_finish_cycle(vicii *v) {
         uint8_t d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
         if (d020 != v->color_pipe_d020) {
             uint8_t i;
-            for (i = 1u; i < v->hborder_pipe[0].n; ++i) {
-                v->hborder_pipe[0].border[i] = vicii_palette_argb[d020];
+            for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
+                v->hborder_pipe[old_i].border[i] = vicii_palette_argb[d020];
             }
-            for (i = 0u; i < v->hborder_pipe[1].n; ++i) {
-                v->hborder_pipe[1].border[i] = vicii_palette_argb[d020];
+            for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
+                v->hborder_pipe[new_i].border[i] = vicii_palette_argb[d020];
             }
             v->color_pipe_d020 = d020;
         }
@@ -2880,14 +2934,14 @@ void vicii_finish_cycle(vicii *v) {
             (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
         if (d021 != v->color_pipe_d021) {
             uint8_t i;
-            for (i = 1u; i < v->hborder_pipe[0].n; ++i) {
-                if (v->hborder_pipe[0].content_d021[i]) {
-                    v->hborder_pipe[0].content[i] = vicii_palette_argb[d021];
+            for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
+                if (v->hborder_pipe[old_i].content_d021[i]) {
+                    v->hborder_pipe[old_i].content[i] = vicii_palette_argb[d021];
                 }
             }
-            for (i = 0u; i < v->hborder_pipe[1].n; ++i) {
-                if (v->hborder_pipe[1].content_d021[i]) {
-                    v->hborder_pipe[1].content[i] = vicii_palette_argb[d021];
+            for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
+                if (v->hborder_pipe[new_i].content_d021[i]) {
+                    v->hborder_pipe[new_i].content[i] = vicii_palette_argb[d021];
                 }
             }
             v->color_pipe_d021 = d021;
@@ -2922,22 +2976,22 @@ void vicii_finish_cycle(vicii *v) {
         /* Only a same-cycle $D016 MCM flip is resolved here. $D011 (ECM/BMM)
            mode changes keep their existing reg11_delay/fetch model, which the
            border and FLI regressions depend on -- do not re-decode on those. */
-        if (((new_mode ^ v->hborder_pipe[1].mode) & 0x01u) != 0u) {
+        if (((new_mode ^ v->hborder_pipe[new_i].mode) & 0x01u) != 0u) {
             vicii_border_geometry g = vicii_get_border_geometry(v);
             vicii_paint_prep prep;
             uint32_t y = v->timing.raster_line;
             uint8_t k;
             vicii_build_paint_prep(v, v->paint_bus, &prep); /* prep.mode == new_mode */
-            for (k = 0; k < v->hborder_pipe[1].n; ++k) {
+            for (k = 0; k < v->hborder_pipe[new_i].n; ++k) {
                 uint32_t fb_x =
-                    v->hborder_pipe[1].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                    v->hborder_pipe[new_i].idx[k] % (uint32_t)C64_FRAME_WIDTH;
                 uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
-                v->hborder_pipe[1].content[k] =
+                v->hborder_pipe[new_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
                         v->vertical_border_active, false,
-                        &v->hborder_pipe[1].content_d021[k]);
+                        &v->hborder_pipe[new_i].content_d021[k]);
             }
-            v->hborder_pipe[1].mode = new_mode;
+            v->hborder_pipe[new_i].mode = new_mode;
         }
     }
 
@@ -2967,10 +3021,10 @@ void vicii_finish_cycle(vicii *v) {
        whole-span re-decode - VICE moves MCM at pixel 4 too, but the existing
        model is what the DEM column-0 regression pins, so it is left alone. */
     if (v->pixel_output_enabled && v->paint_bus != NULL) {
-        uint8_t old11 = v->hborder_pipe[0].reg11;
+        uint8_t old11 = v->hborder_pipe[old_i].reg11;
         uint8_t new11 = v->registers[0x11];
 
-        if (v->hborder_pipe[0].n != 0u && ((old11 ^ new11) & 0x60u) != 0u) {
+        if (v->hborder_pipe[old_i].n != 0u && ((old11 ^ new11) & 0x60u) != 0u) {
             uint8_t keep    = (uint8_t)(old11 & (uint8_t)~0x60u);
             uint8_t reg_45  = (uint8_t)(keep | ((old11 | new11) & 0x60u));
             uint8_t reg_67  = (uint8_t)(keep | (new11 & 0x60u));
@@ -2982,8 +3036,8 @@ void vicii_finish_cycle(vicii *v) {
 
             vicii_build_paint_prep_reg11(v, v->paint_bus, &prep45, reg_45);
             vicii_build_paint_prep_reg11(v, v->paint_bus, &prep67, reg_67);
-            for (k = 0; k < v->hborder_pipe[0].n; ++k) {
-                uint8_t dot = v->hborder_pipe[0].dot[k];
+            for (k = 0; k < v->hborder_pipe[old_i].n; ++k) {
+                uint8_t dot = v->hborder_pipe[old_i].dot[k];
                 const vicii_paint_prep *use;
                 uint32_t fb_x;
                 uint32_t x;
@@ -2992,37 +3046,37 @@ void vicii_finish_cycle(vicii *v) {
                     continue;               /* old bits still stand */
                 }
                 use = (dot < 6u) ? &prep45 : &prep67;
-                fb_x = v->hborder_pipe[0].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                fb_x = v->hborder_pipe[old_i].idx[k] % (uint32_t)C64_FRAME_WIDTH;
                 x = vicii_frame_x_to_vic_x(v, fb_x);
                 /* note_collisions=false: the paint pass already latched them. */
-                v->hborder_pipe[0].content[k] =
+                v->hborder_pipe[old_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, use, x, y, false,
                         v->vertical_border_active, false,
-                        &v->hborder_pipe[0].content_d021[k]);
+                        &v->hborder_pipe[old_i].content_d021[k]);
             }
-            v->hborder_pipe[0].mode = prep67.mode;
-            v->hborder_pipe[0].reg11 = new11;
+            v->hborder_pipe[old_i].mode = prep67.mode;
+            v->hborder_pipe[old_i].reg11 = new11;
         }
 
-        if (v->hborder_pipe[1].n != 0u &&
-            ((v->hborder_pipe[1].reg11 ^ new11) & 0x60u) != 0u) {
+        if (v->hborder_pipe[new_i].n != 0u &&
+            ((v->hborder_pipe[new_i].reg11 ^ new11) & 0x60u) != 0u) {
             vicii_border_geometry g = vicii_get_border_geometry(v);
             vicii_paint_prep prep;
             uint32_t y = v->timing.raster_line;
             uint8_t k;
 
             vicii_build_paint_prep_reg11(v, v->paint_bus, &prep, new11);
-            for (k = 0; k < v->hborder_pipe[1].n; ++k) {
+            for (k = 0; k < v->hborder_pipe[new_i].n; ++k) {
                 uint32_t fb_x =
-                    v->hborder_pipe[1].idx[k] % (uint32_t)C64_FRAME_WIDTH;
+                    v->hborder_pipe[new_i].idx[k] % (uint32_t)C64_FRAME_WIDTH;
                 uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
-                v->hborder_pipe[1].content[k] =
+                v->hborder_pipe[new_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
                         v->vertical_border_active, false,
-                        &v->hborder_pipe[1].content_d021[k]);
+                        &v->hborder_pipe[new_i].content_d021[k]);
             }
-            v->hborder_pipe[1].mode = prep.mode;
-            v->hborder_pipe[1].reg11 = new11;
+            v->hborder_pipe[new_i].mode = prep.mode;
+            v->hborder_pipe[new_i].reg11 = new11;
         }
     }
 

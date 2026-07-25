@@ -530,6 +530,9 @@ void c64_copy_1541_hardware_snapshot(
     c64_1541_hardware_snapshot *out);
 void c64_copy_vicii_snapshot(const c64_t *machine, c64_vicii_snapshot *out);
 uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address);
+/* Hot-path opcode/data peek for free-run BRK checks: same map as
+   c64_debug_read_cpu_map but branches for the common RAM/ROM cases first. */
+uint8_t c64_debug_peek_cpu_byte(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address);
 uint8_t c64_debug_read_rom(const c64_t *machine, uint16_t address);
 bool c64_debug_read_drive_map(const c64_t *machine, uint8_t device, uint16_t address, uint8_t *out_value);

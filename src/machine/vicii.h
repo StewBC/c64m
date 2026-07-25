@@ -188,6 +188,9 @@ struct vicii {
     bool     hborder_prev2_csel;
     /* Output border state after the last flushed span (VICE border_state). */
     bool     hborder_out_state;
+    /* Index of the span to flush next (oldest). Newest is 1 - hborder_oldest.
+       Avoids a full struct copy each cycle when rotating the 2-deep pipe. */
+    uint8_t  hborder_oldest;
     struct {
         uint8_t  n;
         uint8_t  mode;               /* graphics mode used to paint this span */

@@ -2788,6 +2788,50 @@ uint8_t c64_debug_read_cpu_map(const c64_t *machine, uint16_t address) {
     return machine->bus.ram[address];
 }
 
+uint8_t c64_debug_peek_cpu_byte(const c64_t *machine, uint16_t address) {
+    uint8_t cartridge_value;
+    uint8_t port;
+
+    assert(machine);
+
+    /* Free-run BRK / hot peeks: order for common PC regions first. */
+    if (address >= 0x0002u && address < 0x8000u) {
+        return machine->bus.ram[address];
+    }
+
+    port = machine->bus.cpu_port_data;
+
+    if (address >= 0xe000u) {
+        if (c64_bus_cartridge_read(&machine->bus, address, &cartridge_value)) {
+            return cartridge_value;
+        }
+        if ((port & 0x02u) != 0u && machine->has_kernal_rom) {
+            return machine->bus.kernal_rom[address - 0xe000u];
+        }
+        return machine->bus.ram[address];
+    }
+
+    if (address >= 0xa000u && address <= 0xbfffu) {
+        if (c64_bus_cartridge_read(&machine->bus, address, &cartridge_value)) {
+            return cartridge_value;
+        }
+        if ((port & 0x03u) == 0x03u && machine->has_basic_rom) {
+            return machine->bus.basic_rom[address - 0xa000u];
+        }
+        return machine->bus.ram[address];
+    }
+
+    if (address >= 0x8000u && address <= 0x9fffu) {
+        if (c64_bus_cartridge_read(&machine->bus, address, &cartridge_value)) {
+            return cartridge_value;
+        }
+        return machine->bus.ram[address];
+    }
+
+    /* $0000/$0001, I/O, char ROM — rare for opcode fetches; full map. */
+    return c64_debug_read_cpu_map(machine, address);
+}
+
 uint8_t c64_debug_read_ram(const c64_t *machine, uint16_t address) {
     assert(machine);
 

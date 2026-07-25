@@ -1917,7 +1917,7 @@ static bool runtime_brk_pending(runtime *rt) {
     if (!runtime_at_instruction_boundary(rt)) {
         return false;
     }
-    return (uint8_t)c64_debug_read_cpu_map(&rt->machine, rt->machine.cpu.cpu.pc) == 0x00u;
+    return c64_debug_peek_cpu_byte(&rt->machine, rt->machine.cpu.cpu.pc) == 0x00u;
 }
 
 static void runtime_pause_for_brk(runtime *rt) {
@@ -4651,10 +4651,15 @@ int runtime_thread_main(void *userdata) {
 
             if (runtime_free_run_is_simple(rt)) {
                 /* Slim free-run: no BP/paste/history/pending loads. Still
-                   auto-pause on BRK and publish frames. */
+                   auto-pause on BRK and publish frames. BRK only needs a peek
+                   at instruction boundaries (micro inactive). */
                 for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
                      i < RUNTIME_RUN_BATCH_CYCLES; i++) {
-                    if (runtime_brk_pending(rt)) {
+                    if (!rt->machine.cpu.micro_active &&
+                        !rt->machine.pending_cpu_trace_active &&
+                        !rt->suppress_execute_bp &&
+                        c64_debug_peek_cpu_byte(
+                            &rt->machine, rt->machine.cpu.cpu.pc) == 0x00u) {
                         runtime_pause_for_brk(rt);
                         break;
                     }
