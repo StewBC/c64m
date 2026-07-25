@@ -3101,6 +3101,13 @@ void vicii_finish_cycle(vicii *v) {
         }
     }
 
+    /* Mode re-decode and XSCROLL only matter outside the vertical border.
+       Inside it graphics are forced to B0C (sprites still mux on paint), so
+       same-cycle $D016/$D011 repairs are no-ops for content colour. */
+    if (v->vertical_border_active) {
+        goto advance_raster;
+    }
+
     /* Same-cycle Phi2 $D016 MCM (mode) resolution. c64m paints a cycle's whole
        8-dot span in begin_cycle, before the CPU-owned Phi2 store, so a $D016
        write that flips the graphics mode during this cycle is missed by that
@@ -3117,9 +3124,7 @@ void vicii_finish_cycle(vicii *v) {
        note_collisions=false: the paint pass already latched this cycle's
        collisions. */
     cyc = v->timing.cycle_in_line;
-    if (v->pixel_output_enabled &&
-        v->paint_bus != NULL &&
-        !v->vertical_border_active &&
+    if (v->paint_bus != NULL &&
         cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
         cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
         uint8_t new_mode =
@@ -3141,7 +3146,7 @@ void vicii_finish_cycle(vicii *v) {
                 uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
                 v->hborder_pipe[new_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
-                        v->vertical_border_active, false,
+                        false, false,
                         &v->hborder_pipe[new_i].content_d021[k]);
             }
             v->hborder_pipe[new_i].mode = new_mode;
@@ -3173,7 +3178,7 @@ void vicii_finish_cycle(vicii *v) {
        the store that matters here lands at cycle 11, in HBLANK. $D016 keeps its
        whole-span re-decode - VICE moves MCM at pixel 4 too, but the existing
        model is what the DEM column-0 regression pins, so it is left alone. */
-    if (v->pixel_output_enabled && v->paint_bus != NULL) {
+    if (v->paint_bus != NULL) {
         uint8_t old11 = v->hborder_pipe[old_i].reg11;
         uint8_t new11 = v->registers[0x11];
 
@@ -3204,7 +3209,7 @@ void vicii_finish_cycle(vicii *v) {
                 /* note_collisions=false: the paint pass already latched them. */
                 v->hborder_pipe[old_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, use, x, y, false,
-                        v->vertical_border_active, false,
+                        false, false,
                         &v->hborder_pipe[old_i].content_d021[k]);
             }
             v->hborder_pipe[old_i].mode = prep67.mode;
@@ -3225,7 +3230,7 @@ void vicii_finish_cycle(vicii *v) {
                 uint32_t x = vicii_frame_x_to_vic_x(v, fb_x);
                 v->hborder_pipe[new_i].content[k] =
                     vicii_live_pixel(v, v->paint_bus, &g, &prep, x, y, false,
-                        v->vertical_border_active, false,
+                        false, false,
                         &v->hborder_pipe[new_i].content_d021[k]);
             }
             v->hborder_pipe[new_i].mode = prep.mode;
@@ -3240,8 +3245,7 @@ void vicii_finish_cycle(vicii *v) {
        right-border dodge STA $D016,$62). Either mistake pads x=24 with B0C
        and draws the solid vertical checker line. */
     cyc = v->timing.cycle_in_line;
-    if (!v->vertical_border_active &&
-        cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+    if (cyc >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
         cyc <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
         v->xscroll_pipe = (uint8_t)(v->registers[0x16] & 0x07u);
     }
