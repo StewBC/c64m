@@ -1,16 +1,31 @@
 # Performance baseline: turbo=2 free-run
 
-Recorded **2026-07-24** on **Apple M2** (8-core arm64, macOS). Use this file to
-compare free-run throughput after performance work. Prefer re-running the same
-recipes on the same class of host; absolute MHz will move with silicon and OS
-load, but **relative deltas** between rows should stay meaningful.
+Recorded **2026-07-24** on **Apple M2** (8-core arm64, macOS), with plateau
+updates through **2026-07-25**. Use this file to compare free-run throughput
+after performance work. Prefer re-running the same recipes on the same class of
+host; absolute MHz will move with silicon and OS load, but **relative deltas**
+between rows should stay meaningful.
 
-**Bar for full correctness:** turbo mode 2 (max) — free-run with live ARGB paint.
-Warp (mode 3) is a diagnostic upper bound when paint is off, not the product bar.
+Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread
+ownership), `disk-iec1541.md` (soft power), `testing.md` (ctest).
 
-Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread ownership),
-`perf-roadmap-100mhz.md` (aspirational path past the paint-on core ceiling),
-`perf-handoff-2026-07.md` (**2026-07 session hand-off: plateau, pitfalls, next levers**).
+---
+
+## Contract (do not weaken when optimizing)
+
+| Item | Rule |
+|------|------|
+| **Correctness bar** | Turbo **1 and 2**: free-run with **live ARGB**, collisions, full VIC/CIA/SID model as today. **No behavioral shortcuts.** Internal rewrites OK only if observables hold. |
+| **Warp (turbo 3)** | May drop paint / batch aggressively for speed. Returning to turbo 2 must leave a **valid turbo-2 world** (as if turbo never went above 2). UI/control still serviced. |
+| **Phase 1 measure** | Pure machine core, paint **on**, drives soft-powered **off** (`profile_c64_hotloop` / `bench_core_mhz`) |
+| **Phase 2 measure** | Product free-run **turbo=2** headless, drives off (control-port Φ2 window) |
+| **1541** | Soft power when cold (default). Pure-core “host only” rows assume drives off. Drive 8 on is a secondary budget. |
+| **Platform** | macOS / Linux / Windows; ARM + x64. Prefer portable hot paths (e.g. NEON + scalar). |
+
+**Kill suite before claiming a win:** `ctest --test-dir build --output-on-failure`,
+plus demos that exercise the changed path when VIC/CPU is touched (e.g.
+**lft-nine**, **EoD**, **Deus Ex Machina** / VICE oracle work already in tree).
+Do not land VIC/CPU changes on bench-only evidence.
 
 ---
 
@@ -18,9 +33,9 @@ Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread owner
 
 | Item | Value |
 |------|--------|
-| Host | Apple M2, arm64 |
-| Date | 2026-07-24 |
-| Binary | `./build/c64m`, `./build/profile_c64_hotloop` (Release/Ninja tree under `build/`) |
+| Host (original baseline) | Apple M2, arm64 |
+| Date | 2026-07-24 (plateau notes through 2026-07-25) |
+| Binary | `./build/c64m`, `./build/profile_c64_hotloop` (Release/Ninja under `build/`) |
 | Video standard | PAL (Φ2 real-time ≈ **0.985248 MHz**) |
 | Workload | Idle BASIC/Kernal after reset/boot (no demo, no disk I/O during window) |
 | Contended runs | **No** — one process at a time for product measurements |
@@ -31,9 +46,18 @@ Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread owner
 
 ## How to measure (reproduce)
 
-### Pure machine core
+Always **serial**. Contention collapses Φ2 rates. Prefer **2–3 passes**; thermal/OS
+noise of **±0.3–0.5 MHz** is normal on this class of host.
+
+### Pure machine core (authoritative Phase 1)
 
 ```text
+cmake --build build -j$(sysctl -n hw.ncpu)   # or nproc / hw.ncpu equivalent
+
+# Preferred wrapper (same host table every time):
+./tools/bench_core_mhz.sh 20000000
+
+# Or direct:
 ./build/profile_c64_hotloop 20000000
 ./build/profile_c64_hotloop 20000000 no-video
 ./build/profile_c64_hotloop 20000000 1541-one
@@ -47,14 +71,18 @@ Related: `runtime-control.md` (turbo semantics), `architecture.md` (thread owner
 Flags (any order after cycle count): `no-video`, `1541` (drive8+drive9 ROM),
 `1541-one` (drive8 only), `media` (emulate_1541+media_1541), `null-error`.
 
-Report the `mhz=` field. Baseline used **two passes** of 20M cycles; table shows
-both pass values and their average.
+Report the `mhz=` field. Original baseline used **two passes** of 20M cycles.
+
+**Accuracy:**
+
+```text
+ctest --test-dir build --output-on-failure
+```
 
 ### Product free-run (Φ2 via control port)
 
 Serial: start one `c64m`, wait for control port, pause barrier → run N seconds →
-pause → `get-state` cycle delta / wall time. Example client pattern (see session
-scripts; `tools/c64_control_client.py`):
+pause → `get-state` cycle delta / wall time. Client: `tools/c64_control_client.py`.
 
 1. `hello` / ensure `run`
 2. `pause` + `wait-paused`
@@ -107,8 +135,7 @@ emulate_1541=true
 media_1541=true
 ```
 
-**Do not** run multiple free-run instances in parallel when collecting baselines;
-CPU contention collapses Φ2 rates.
+**Do not** run multiple free-run instances in parallel when collecting baselines.
 
 ### Thread samples (optional)
 
@@ -122,7 +149,23 @@ CPU%.
 
 ---
 
-## Baseline numbers
+## Plateau note (post 2026-07 work)
+
+On Apple M2, pure-core serial `bench_core_mhz` after the 2026-07 stacks is roughly:
+
+| Mode | ≈ MHz (idle BASIC, drives off) |
+|------|--------------------------------|
+| Paint-on | **~16.5–17.1** |
+| Paint-off | **~22–23** |
+
+That is about **~2×** paint-on from the original **~7.8–8.0** MHz pure host row
+below. Absolute numbers are host-specific; re-measure after any free-run or
+hot-path change. Do not equate pure-core MHz with product feel without a
+product window.
+
+---
+
+## Baseline numbers (original 2026-07-24 table)
 
 ### A. Pure `c64_step_cycle` (`profile_c64_hotloop`, 20M cycles × 2)
 
@@ -165,17 +208,14 @@ Taken with `sample` during free-run; hierarchical presence on **c64m-runtime**:
 | `c64m-runtime` | **Saturated** — `runtime_step_cycle` → `c64_step_cycle` | Same |
 | `c64m-control` | Blocked in accept | Same |
 
-Earlier concurrent 3-instance run (invalid for absolute MHz) still showed
-headless≈windowed; exclusive serial table is authoritative.
-
 Frame slot is latest-wins with drops — runtime does **not** block on present.
 
 ---
 
-## Derived cost model (this host)
+## Derived cost model (original host, 2026-07-24)
 
 Anchored on pure host paint-on **7.76 MHz** and product headless 1541+media
-**4.04 MHz**.
+**4.04 MHz**. Shares shift after later stacks; the **loci** still matter.
 
 | Factor | Approx effect | Evidence |
 |--------|---------------|----------|
@@ -187,19 +227,46 @@ Anchored on pure host paint-on **7.76 MHz** and product headless 1541+media
 | Windowed + audio vs headless | **~6–9%** | windowed rows vs headless |
 | Frame publish / dirty flush | **≪1%** of runtime samples when idle | `sample` |
 
-**Conclusion recorded with the baseline:** for turbo=2 free-run, the UI thread is
-not the limiter; `c64m-runtime` is. With a 1541 ROM installed (default discovery
-or ini), **dual-drive ROM stepping dominates** the host-only→product gap. Pure
-host-only must not be compared to product-with-1541 without calling out the
-drive cost.
+**Conclusion:** for turbo=2 free-run, the UI thread is not the limiter;
+`c64m-runtime` is. With a 1541 ROM installed, **dual-drive ROM stepping**
+dominates the host-only→product gap when drives are powered. Soft power keeps
+cold drives off by default. Pure host-only must not be compared to
+product-with-1541 without calling out drive cost.
+
+### One Phi2 (hot-path map)
+
+```text
+c64_step_cycle / c64_step_cycles_ex
+  c64_begin_vic → vicii_begin_cycle
+    Phi1 prepare/fetch
+    if pixel_output: vicii_render_live_cycle   // paint-on cost
+    badline / border / sprite / BA / Phi2 fetch
+  6510 micro (or BA stall)                     // micro_hot / between_hot
+  cia1 + cia2 + sid
+  vicii_finish_cycle
+  drive_sync                                   // cheap when both off
+```
+
+| Bucket | Code loci |
+|--------|-----------|
+| Live paint | `vicii_render_live_cycle`, hborder flush, finish colour repair |
+| Non-paint VIC | rest of `vicii_begin_cycle` |
+| 6510 | `c6510_micro_step`, peeks |
+| SID/CIA | `sid_advance_cycles`, `cia_step_cycle` |
+| Glue | `c64_step_cycles_ex`, free-run batching in `runtime_thread.c` |
+
+Key files: `src/machine/c64.c`, `vicii.c` / `vicii.h`, `c6510.c`, `sid.c`,
+`cia.c`, `src/runtime/runtime_thread.c`, `tools/bench_core_mhz.sh`,
+`tools/profile_c64_hotloop.c`, `tools/c64_control_client.py`.
 
 ### Warp (mode 3) caveat
 
 Headless turbo=3 with an active control port can be **slower** than turbo=2 on
-this baseline (~3.66 vs ~4.04) because the main loop drains the frame slot and
-warp rebuilds geometric snapshots whenever the slot is free. Windowed warp can
-look faster (paint off; slot freed only at ~display rate). Prefer matched
-headless turbo=2 rows for advancement tracking unless intentionally testing warp.
+the original baseline (~3.66 vs ~4.04) because the main loop drains the frame
+slot and warp rebuilds geometric snapshots whenever the slot is free. Windowed
+warp can look faster (paint off; slot freed only at ~display rate). Prefer
+matched headless turbo=2 rows for advancement tracking unless intentionally
+testing warp.
 
 ---
 
@@ -208,7 +275,7 @@ headless turbo=2 rows for advancement tracking unless intentionally testing warp
 When landing a free-run optimization, re-measure at least:
 
 1. **Pure host, video on** — `profile_c64_hotloop 20000000`  
-   Baseline avg: **7.76 MHz**
+   Original baseline avg: **7.76 MHz** (later plateau ~16.5–17 MHz; see changelog)
 2. **Pure host+d8+d9+media, video on** — `… 1541 media`  
    Baseline avg: **4.38 MHz**
 3. **Product headless, 1541+media, turbo=2**  
@@ -219,7 +286,8 @@ When landing a free-run optimization, re-measure at least:
    Baseline avg: **6.36 MHz**
 
 Report new numbers next to these five. A win that only moves (5) but not (3)
-is runtime-only; a win on (2) and (3) is machine-path.
+is runtime-only; a win on (2) and (3) is machine-path. For pure-core-only work,
+also report paint-off (`no-video`) so the on/off gap is visible.
 
 ---
 
@@ -233,13 +301,32 @@ is runtime-only; a win on (2) and (3) is machine-path.
 
 ---
 
+## Measurement pitfalls (durable)
+
+1. **Thermal / contention = fake regressions.** Serial benches only; 2–3 passes.  
+2. **`line_class` can go stale** if tests teleport raster / `allow_bad_lines`. Demote
+   to full path when allow_bad_lines, near vborder, sprites, or border opens.  
+3. **Do not stop before BRK in plain `c64_step_cycle`.** Only free-run multi-step
+   uses `C64_STEP_STOP_BEFORE_BRK`. Stopping in `step_cycle(1)` breaks BRK and
+   frame tests.  
+4. **Debug dumps in the Phi2 path** must be behind `#ifdef C64M_VIC_TRACE` (or
+   equivalent compile gate).  
+5. **BA / AEC vs schedule** are not always identical when sprites + badline
+   overlap; only collapse walks when `sprite_active_mask == 0`.  
+6. **Snapshot `c64_hz`** must refresh on load.  
+7. **Tests that poke `sprite_active[]`** must rebuild sprite masks.  
+8. **`c6510_micro_cycles_remaining` is not a free multi-Phi2 oracle** in Release
+   (`assert` off). Do not pre-paint or skip work past an unverified remaining count.
+
+---
+
 ## Changelog
 
 | Date | Note |
 |------|------|
 | 2026-07-24 | Initial baseline (M2). Extended `profile_c64_hotloop` flags: `1541`, `1541-one`, `media`, `no-video`. |
 | 2026-07-24 | Soft power: product free-run no longer steps unpowered 1541s (default cold). Re-measure primary rows after this change; host-only product path should rise toward pure host. |
-| 2026-07-24 | After soft power + paint fast paths (M2): pure host paint-on ~**9.85 MHz**; product headless drives-off ~**8.2 MHz**. See `perf-roadmap-100mhz.md`. |
+| 2026-07-24 | After soft power + paint fast paths (M2): pure host paint-on ~**9.85 MHz**; product headless drives-off ~**8.2 MHz**. |
 | 2026-07-24 | Sprite-slot LUT + modes 1-3 span paint (M2): pure paint-on ~**10.5 MHz**, product drives-off ~**8.6 MHz**. |
 | 2026-07-24 | XSCROLL spans + free-run audio mute + slim free-run loop (M2): pure paint-on ~**10.5 MHz**, product headless drives-off turbo=2 ~**9.8 MHz** (was ~8.6). |
 | 2026-07-24 | Idle/over-border paint spans + lazy prep (M2): pure paint-on ~**12.2 MHz**, product headless drives-off turbo=2 ~**11.0 MHz**. |
@@ -257,6 +344,7 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | Go1–5 local stack tip (M2): pure paint-on ~**15.1–15.7 MHz**, paint-off ~**18.7–19.5 MHz** (`c64_step_cycles` micro strip + paint/VIC/CPU tables). |
 | 2026-07-24 | GoA–E local stack tip (M2): pure paint-on ~**15.8 MHz**, paint-off ~**21.5 MHz** (between-hot chain, slim vborder begin, silent SID, idle CIA, free-run audio skip). |
 | 2026-07-24 | Go N1–5 local stack tip (M2): pure paint-on ~**16.3–16.4 MHz**, paint-off ~**21.8–22.3 MHz** (BRK-aware cross-instr free-run strips, MCM bulk, AEC schedule skip). |
-| 2026-07-24 | User tip benches ~**16.5 / 22.4** MHz paint-on/off; hand-off note `perf-handoff-2026-07.md` frozen for next session. |
-| 2026-07-25 | Paint re-arch start (local `perf/paint-rearch`): frame double-buffer swap (no ~650KB EOF memcpy), skip full-frame border clear, EOF hborder pipe drain, solid-span flush flags. M2 pure paint-on ~**16.5–16.7 MHz**, paint-off ~**22.2–22.3 MHz** (modest vs ~16.4/22.3 tip; ctest 56/56). |
-| 2026-07-25 | Hazard strip (local `perf/hazard-batch`): fuse between_hot + micro drain; free-pin micro_hot skips access-kind walk; demote stale VBORDER_IDLE on allow_bad_lines. M2 pure paint-on ~**16.8 MHz**, paint-off ~**22.7–22.9 MHz**. ctest 56/56. |
+| 2026-07-24 | User tip benches ~**16.5 / 22.4** MHz paint-on/off. |
+| 2026-07-25 | Frame double-buffer swap (no ~650KB EOF memcpy), skip full-frame border clear, EOF hborder pipe drain, solid-span flush flags. M2 pure paint-on ~**16.5–16.7 MHz**, paint-off ~**22.2–22.3 MHz**. ctest 56/56. |
+| 2026-07-25 | Fuse between_hot + micro drain; free-pin micro_hot skips access-kind walk; demote stale VBORDER_IDLE on allow_bad_lines. M2 pure paint-on ~**16.8 MHz**, paint-off ~**22.7–22.9 MHz**. ctest 56/56. |
+| 2026-07-25 | Perf program paused. Folded durable measure/contract/pitfalls into this file; removed session hand-off and 100 MHz roadmap docs. |
