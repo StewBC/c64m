@@ -1584,6 +1584,7 @@ static void run_cpu_vic_interaction_trace(
         machine.vic.sprite_active[sprite] = true;
         machine.vic.sprite_active_mask |= (uint8_t)(1u << sprite);
         machine.vic.sprite_visible[sprite] = true;
+        machine.vic.sprite_visible_mask |= (uint8_t)(1u << sprite);
     }
     c64_set_cpu_trace_enabled(&machine, true);
 

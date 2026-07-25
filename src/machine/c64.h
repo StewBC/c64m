@@ -39,6 +39,9 @@ typedef struct c64_clock {
        drive_catch_up_hook) and by a per-cycle backstop, so an IEC read/write
        samples the drive exactly at the access clock. */
     uint64_t drive_synced_cycle;
+    /* Cached Phi2 rate for drive sync (PAL 985248 / NTSC 1022727). Refreshed
+       when the machine config video standard changes. */
+    uint32_t c64_hz;
 } c64_clock;
 
 typedef enum c64_cpu_bus_event_kind {

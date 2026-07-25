@@ -929,6 +929,15 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
         v->sprite_active_mask = mask;
     }
     for (i = 0; i < 8; ++i) v->sprite_visible[i] = r_bool(r);
+    {
+        uint8_t vmask = 0;
+        for (i = 0; i < 8; ++i) {
+            if (v->sprite_visible[i]) {
+                vmask |= (uint8_t)(1u << i);
+            }
+        }
+        v->sprite_visible_mask = vmask;
+    }
     for (i = 0; i < 8; ++i) v->sprite_y_exp_ff[i] = r_bool(r);
     r_bytes(r, v->sprite_pointer, sizeof(v->sprite_pointer));
     for (i = 0; i < 8; ++i) {
@@ -1055,6 +1064,8 @@ static void read_mach(snapshot_reader *r, c64_t *m) {
     m->config.emulate_1541 = r_u8(r) != 0;
     m->instruction_complete = r_bool(r);
     m->config.media_1541 = r_u8(r) != 0;
+    /* c64_hz is derived (not snapshotted); refresh after video_standard load. */
+    m->clock.c64_hz = c64_config_clock_hz(&m->config);
 }
 
 static void read_cart(snapshot_reader *r, c64_t *m) {

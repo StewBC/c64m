@@ -199,7 +199,11 @@ static void c64_drive_sync_to(c64_t *machine, uint64_t target_cycle) {
         return;
     }
 
-    c64_hz = c64_config_clock_hz(&machine->config);
+    c64_hz = machine->clock.c64_hz;
+    if (c64_hz == 0u) {
+        c64_hz = c64_config_clock_hz(&machine->config);
+        machine->clock.c64_hz = (uint32_t)c64_hz;
+    }
     delta = target_cycle - machine->clock.drive_synced_cycle;
 
     /* Soft-power cold path: neither 1541 is clocked. Advance the phase
@@ -1374,13 +1378,19 @@ static bool c64_step_cycle_internal(c64_t *machine) {
     bool between_instructions_stalled = false;
 
     if (machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
-        !machine->pending_cpu_trace_active && !machine->cpu.micro_active &&
-        (c64_try_kernal_load_trap(machine) || c64_try_kernal_save_trap(machine))) {
-        machine->instruction_complete = true;
-        machine->clock.cpu_cycles++;
-        machine->cpu_prev_between_stall = false;
-        c64_advance_one_cycle(machine);
-        return true;
+        !machine->pending_cpu_trace_active && !machine->cpu.micro_active) {
+        uint16_t pc = machine->cpu.cpu.pc;
+        /* LOAD/SAVE traps are rare; gate the heavy handlers on PC first. */
+        if ((pc == (uint16_t)C64_KERNAL_LOAD_ENTRY ||
+             pc == (uint16_t)C64_KERNAL_SAVE_ENTRY) &&
+            (c64_try_kernal_load_trap(machine) ||
+             c64_try_kernal_save_trap(machine))) {
+            machine->instruction_complete = true;
+            machine->clock.cpu_cycles++;
+            machine->cpu_prev_between_stall = false;
+            c64_advance_one_cycle(machine);
+            return true;
+        }
     }
 
     /* Establish this cycle's VIC Phi1 state and current BA/AEC pins before the
@@ -1698,6 +1708,7 @@ void c64_init(c64_t *machine) {
     c6510_set_nmi_pending_callback(&machine->cpu, c64_cpu_nmi_pending);
     c1541_init(&machine->drive8, machine, 8);
     c1541_init(&machine->drive9, machine, 9);
+    machine->clock.c64_hz = c64_config_clock_hz(&machine->config);
 }
 
 void c64_set_config(c64_t *machine, const c64_config *config) {
@@ -1717,6 +1728,7 @@ void c64_set_config(c64_t *machine, const c64_config *config) {
     next_media = (config->emulate_1541 != 0 && config->media_1541 != 0) ? 1 : 0;
 
     machine->config = *config;
+    machine->clock.c64_hz = c64_config_clock_hz(&machine->config);
 
     if (prev_media != next_media) {
         if (prev_media && !next_media) {
@@ -1813,6 +1825,7 @@ bool c64_reset(c64_t *machine, char *error, size_t error_size) {
     }
     c64_disk_activity_clear_all(machine);
     memset(&machine->clock, 0, sizeof(machine->clock));
+    machine->clock.c64_hz = c64_config_clock_hz(&machine->config);
     memset(&machine->working_frame, 0, sizeof(machine->working_frame));
     c64_trace_reset(&machine->last_cpu_trace);
     c64_trace_reset(&machine->pending_cpu_trace);

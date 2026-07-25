@@ -120,6 +120,8 @@ struct vicii {
     uint8_t  sprite_active_mask;
     uint8_t  sprite_mcbase[8];      /* MCBASE latch used by the line sequencer */
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
+    /* Bitmask of sprite_visible[] for O(1) paint any-sprite tests. */
+    uint8_t  sprite_visible_mask;
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */
     uint8_t  sprite_pointer[8];     /* pointer fetched in the sprite p-access */
     uint8_t  sprite_data[8][3];     /* current row: 3 fetched data bytes (committed to renderer) */

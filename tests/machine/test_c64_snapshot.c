@@ -199,6 +199,7 @@ static void prepare_interesting_state(c64_t *machine) {
     machine->vic.sprite_active[3] = true;
     machine->vic.sprite_active_mask |= (uint8_t)(1u << 3u);
     machine->vic.sprite_visible[3] = true;
+    machine->vic.sprite_visible_mask |= (uint8_t)(1u << 3u);
     machine->vic.sprite_y_exp_ff[3] = true;
     machine->vic.sprite_data[3][1] = 0xaa;
     machine->vic.sprite_line_enabled[3] = true;

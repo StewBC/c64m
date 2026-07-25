@@ -2753,6 +2753,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     v.sprite_active[0] = true;
     v.sprite_active_mask |= (uint8_t)(1u << 0u);
     v.sprite_visible[0] = true;
+    v.sprite_visible_mask |= (uint8_t)(1u << 0u);
 
     v.timing.cycle_in_line = 54u;
     vicii_begin_cycle(&v, NULL, 54u);

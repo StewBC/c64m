@@ -339,6 +339,7 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
     v->sprite_active_mask = 0;
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
+    v->sprite_visible_mask = 0;
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
     memset(v->sprite_pointer,  0, sizeof(v->sprite_pointer));
     memset(v->sprite_data,         0, sizeof(v->sprite_data));
@@ -590,6 +591,7 @@ static vicii_line_ctx vicii_snapshot_line_ctx(const vicii *v, uint32_t y) {
    do not batch those bus reads here. */
 static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
     int n;
+    uint8_t visible_mask = 0;
 
     memset(v->sprite_visible, 0, sizeof(v->sprite_visible));
 
@@ -606,6 +608,7 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
             continue;
         }
         v->sprite_visible[n] = true;
+        visible_mask |= (uint8_t)(1u << n);
         if (bus) {
             uint8_t  mc = v->sprite_mc[n];
             uint16_t vic_bank = c64_bus_vic_bank_base(bus);
@@ -621,6 +624,7 @@ static void vicii_prepare_sprite_line(vicii *v, const c64_bus_t *bus) {
         }
         v->sprite_mc[n] = (uint8_t)((v->sprite_mc[n] + 3u) & 0x3fu);
     }
+    v->sprite_visible_mask = visible_mask;
 }
 
 #ifdef C64M_VIC_TRACE
@@ -735,6 +739,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
                    before DMA-on so the Y-match line would otherwise stay
                    invisible for the rest of this raster. */
                 v->sprite_visible[n] = true;
+                v->sprite_visible_mask |= (uint8_t)(1u << n);
                 v->sprite_mc[n] = 0u;
                 changed = true;
             }
@@ -1607,7 +1612,6 @@ static inline void vicii_build_paint_prep_reg11(vicii *v, const c64_bus_t *bus,
                                                 uint8_t reg11) {
     uint16_t idle_bank;
     uint16_t idle_addr;
-    int      n;
 
     prep->lc = vicii_live_line_ctx(v);
     prep->xscroll = (uint8_t)(v->xscroll_pipe & 0x07u);
@@ -1624,13 +1628,7 @@ static inline void vicii_build_paint_prep_reg11(vicii *v, const c64_bus_t *bus,
     idle_bank = c64_bus_vic_bank_base(bus);
     idle_addr = (uint16_t)(idle_bank + (prep->idle_ecm ? 0x39ffu : 0x3fffu));
     prep->idle_g = c64_bus_vic_read_ram(bus, idle_addr);
-    prep->any_sprite = false;
-    for (n = 0; n < 8; n++) {
-        if (v->sprite_visible[n]) {
-            prep->any_sprite = true;
-            break;
-        }
-    }
+    prep->any_sprite = v->sprite_visible_mask != 0u;
 }
 
 static inline void vicii_build_paint_prep(vicii *v, const c64_bus_t *bus,
@@ -1668,7 +1666,6 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     uint8_t  reg11;
     uint8_t  mode;
     uint8_t  paint_i;
-    int      n;
 
     if (!bus) {
         return;
@@ -1715,13 +1712,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
 
     /* Cheap cycle-constant flags; full paint_prep (idle bus read) only on the
        general path. finish_cycle still re-decodes from registers when needed. */
-    any_sprite = false;
-    for (n = 0; n < 8; n++) {
-        if (v->sprite_visible[n]) {
-            any_sprite = true;
-            break;
-        }
-    }
+    any_sprite = v->sprite_visible_mask != 0u;
     reg11 = v->registers[0x11];
     mode = (uint8_t)(((reg11 & 0x40u) ? 4u : 0u) |
                      ((reg11 & 0x20u) ? 2u : 0u) |
