@@ -217,18 +217,19 @@ static void prepare_interesting_state(c64_t *machine) {
        writes all four fields together, so a frame carrying a width but a zero
        stride/format is a shape no real machine holds - and the snapshot reader
        now rejects it. */
-    machine->vic.working_frame.width = C64_FRAME_PAL_WIDTH;
-    machine->vic.working_frame.height = C64_FRAME_HEIGHT;
-    machine->vic.working_frame.stride_bytes =
-        C64_FRAME_WIDTH * sizeof(machine->vic.working_frame.pixels[0]);
-    machine->vic.working_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
-    machine->vic.working_frame.pixels[17] = 0xff112233u;
-    machine->vic.completed_frame.width = C64_FRAME_PAL_WIDTH;
-    machine->vic.completed_frame.height = C64_FRAME_HEIGHT;
-    machine->vic.completed_frame.stride_bytes =
-        C64_FRAME_WIDTH * sizeof(machine->vic.completed_frame.pixels[0]);
-    machine->vic.completed_frame.pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
-    machine->vic.completed_frame.pixels[19] = 0xff445566u;
+    machine->vic.paint_frame = 0;
+    machine->vic.frames[0].width = C64_FRAME_PAL_WIDTH;
+    machine->vic.frames[0].height = C64_FRAME_HEIGHT;
+    machine->vic.frames[0].stride_bytes =
+        C64_FRAME_WIDTH * sizeof(machine->vic.frames[0].pixels[0]);
+    machine->vic.frames[0].pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    machine->vic.frames[0].pixels[17] = 0xff112233u;
+    machine->vic.frames[1].width = C64_FRAME_PAL_WIDTH;
+    machine->vic.frames[1].height = C64_FRAME_HEIGHT;
+    machine->vic.frames[1].stride_bytes =
+        C64_FRAME_WIDTH * sizeof(machine->vic.frames[1].pixels[0]);
+    machine->vic.frames[1].pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    machine->vic.frames[1].pixels[19] = 0xff445566u;
 
     machine->cia1.registers[0] = 0x12;
     machine->cia1.registers[1] = 0x34;

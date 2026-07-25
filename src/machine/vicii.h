@@ -79,8 +79,11 @@ typedef struct c64_vicii_snapshot {
 struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
-    c64_frame working_frame;
-    c64_frame completed_frame;
+    /* Double-buffered live ARGB frames. paint_frame is the buffer being
+       painted; the other holds the last completed frame when ready. EOF
+       swaps the index instead of memcpy'ing ~650KB. */
+    c64_frame frames[2];
+    uint8_t paint_frame; /* 0 or 1 */
     bool completed_frame_ready;
 
     /* Phase A additions */

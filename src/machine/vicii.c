@@ -144,6 +144,14 @@ static const uint32_t vicii_palette_argb[16] = {
     0xffb2b2b2u,
 };
 
+static inline c64_frame *vicii_paint_buf(vicii *v) {
+    return &v->frames[v->paint_frame & 1u];
+}
+
+static inline c64_frame *vicii_completed_buf(vicii *v) {
+    return &v->frames[(v->paint_frame ^ 1u) & 1u];
+}
+
 static const uint32_t vicii_pal_sprite_fetch_cycle[8] = {
     57, 59, 61, 0, 2, 4, 6, 8
 };
@@ -406,20 +414,33 @@ static void vicii_prepare_frame(c64_frame *frame, uint32_t width, uint32_t heigh
     }
 }
 
+/* Metadata only — live paint covers every cycle × 8 dots of the full line
+   width, so a full-buffer border fill every frame is pure bandwidth waste
+   (~650KB write). Unpainted residual at EOF is handled by flushing the
+   pending hborder pipe before the buffer swap. */
+static void vicii_prepare_frame_meta(c64_frame *frame, uint32_t width, uint32_t height,
+                                     uint64_t frame_number, uint64_t machine_cycle) {
+    assert(frame);
+    frame->width = width;
+    frame->height = height;
+    frame->stride_bytes = C64_FRAME_WIDTH * sizeof(frame->pixels[0]);
+    frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    frame->frame_number = frame_number;
+    frame->machine_cycle = machine_cycle;
+}
+
 static void vicii_begin_live_frame(vicii *v) {
-    uint8_t fill_index;
-    uint32_t fill_color;
+    c64_frame *wf;
 
     assert(v);
 
-    /* Any pixel this frame does not paint lies outside the display window, which
-       is border. That holds with DEN=0 too: the vertical border flip-flop never
-       opens, so the border covers the whole screen - it does NOT become B0C.
-       Selecting B0C on DEN=0 was inverted, and showed up on NTSC as a
-       $D021-coloured band under a $D020-coloured boot screen. */
-    fill_index = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
-    fill_color = vicii_palette_argb[fill_index];
-    vicii_prepare_frame(&v->working_frame, vicii_frame_width(v), vicii_frame_height(v), v->timing.frame_number, 0, fill_color);
+    /* Live paint writes every framebuffer pixel over the course of a frame
+       (63/65 cycles × 8 dots × lines). Skipping the border fill removes one
+       full-buffer write per emulated frame. DEN=0 still paints border via the
+       vertical-border / main_border paths. */
+    wf = vicii_paint_buf(v);
+    vicii_prepare_frame_meta(wf, vicii_frame_width(v), vicii_frame_height(v),
+                             v->timing.frame_number, 0);
     /* Do NOT reset the vertical border flip-flop here. On real hardware it is
        only toggled by the top/bottom RSEL compares, so a program that dodges the
        bottom compare (the classic "open the border" trick) keeps the border open
@@ -428,10 +449,8 @@ static void vicii_begin_live_frame(vicii *v) {
        Forcing it closed every frame re-hid those border sprites. Power-on/reset
        still establishes the closed default via vicii_reset(). */
 
-    /* The horizontal-border pixel pipeline holds at most the last two render
-       cycles. Every visible line is fully flushed within two cycles (long before
-       the last raster line), so nothing carries across the frame boundary; clear
-       it anyway so a freshly begun frame starts empty. */
+    /* Pending spans are flushed at EOF before the buffer swap. Clear the pipe
+       so the new frame starts empty. */
     v->hborder_pipe[0].n = 0;
     v->hborder_pipe[1].n = 0;
     v->hborder_pipe[0].csel = true;
@@ -460,8 +479,8 @@ void vicii_reset(vicii *v) {
     standard = v->timing.standard;
     memset(v->registers, 0, sizeof(v->registers));
     memset(&v->timing, 0, sizeof(v->timing));
-    memset(&v->working_frame, 0, sizeof(v->working_frame));
-    memset(&v->completed_frame, 0, sizeof(v->completed_frame));
+    memset(v->frames, 0, sizeof(v->frames));
+    v->paint_frame = 0;
 
     v->timing.standard = standard;
     vicii_set_video_standard(v, standard);
@@ -1749,7 +1768,7 @@ static void vicii_apply_vborder_latch(vicii *v) {
 static void vicii_hborder_flush_slot(vicii *v, uint8_t slot, bool main_border) {
     uint8_t i;
     uint8_t n = v->hborder_pipe[slot].n;
-    uint32_t *pixels = v->working_frame.pixels;
+    uint32_t *pixels = vicii_paint_buf(v)->pixels;
     const uint32_t *idx = v->hborder_pipe[slot].idx;
     const uint32_t *border = v->hborder_pipe[slot].border;
     const uint32_t *content = v->hborder_pipe[slot].content;
@@ -1796,6 +1815,16 @@ static void vicii_hborder_flush_slot(vicii *v, uint8_t slot, bool main_border) {
         pixels[idx[7]] =
             v->hborder_out_state ? border[7] : content[7];
     }
+}
+
+/* Drain both in-flight spans at EOF so the completed buffer is whole. */
+static void vicii_hborder_flush_pending(vicii *v) {
+    uint8_t oldest = v->hborder_oldest;
+    vicii_hborder_flush_slot(v, oldest, v->main_border_ff);
+    v->hborder_pipe[oldest].n = 0;
+    vicii_hborder_flush_slot(v, (uint8_t)(1u - oldest), v->main_border_ff);
+    v->hborder_pipe[1u - oldest].n = 0;
+    v->hborder_oldest = 0;
 }
 
 /* Build the cycle-constant paint prep from the current register/latch state.
@@ -1875,7 +1904,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
     v->paint_bus = bus;
 
     y = v->timing.raster_line;
-    if (y >= v->working_frame.height) {
+    if (y >= vicii_paint_buf(v)->height) {
         return;
     }
 
@@ -3541,8 +3570,12 @@ advance_raster:
     v->allow_bad_lines = false;
 
     if (v->pixel_output_enabled) {
-        v->working_frame.frame_number = v->timing.frame_number;
-        memcpy(&v->completed_frame, &v->working_frame, sizeof(v->completed_frame));
+        /* Drain the 2-deep pipe so the completed buffer holds every dot of this
+           frame (previously the last two spans were dropped at the boundary). */
+        vicii_hborder_flush_pending(v);
+        vicii_paint_buf(v)->frame_number = v->timing.frame_number;
+        /* Swap buffers instead of memcpy'ing ~650KB of ARGB. */
+        v->paint_frame ^= 1u;
         v->completed_frame_ready = true;
         vicii_begin_live_frame(v);
     } else {
@@ -3871,7 +3904,7 @@ bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine
         return false;
     }
 
-    memcpy(out_frame, &v->completed_frame, sizeof(*out_frame));
+    memcpy(out_frame, vicii_completed_buf(v), sizeof(*out_frame));
     out_frame->machine_cycle = machine_cycle;
     return true;
 }
