@@ -581,7 +581,9 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
         return C6510_BUS_ACCESS_VECTOR_READ;
     }
 
-    if (c6510_micro_is_practical_undocumented(m->micro_opcode)) {
+    c6510_micro_init_op_class();
+    if (c6510_micro_op_class[m->micro_opcode] ==
+        (uint8_t)C6510_OP_UND_PRACTICAL) {
         c6510_undocumented_mode mode =
             c6510_micro_undocumented_mode(m->micro_opcode);
         bool rmw = c6510_micro_is_undocumented_rmw(m->micro_opcode);
@@ -631,7 +633,7 @@ c6510_bus_access_kind c6510_micro_access_kind(const C6510 *m) {
         }
     }
 
-    if (c6510_micro_is_undocumented_nop(m->micro_opcode)) {
+    if (c6510_micro_op_class[m->micro_opcode] == (uint8_t)C6510_OP_UND_NOP) {
         if (m->micro_opcode == UND_80) {
             return C6510_BUS_ACCESS_OPERAND_READ;
         }
