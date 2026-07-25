@@ -3,20 +3,34 @@
 These libraries are kept small and are intended to be wrapped by project-facing
 APIs under `src/util/` before broad use.
 
-## CIA timing corpus clones (not vendored into git)
+## Optional: CIA timing corpus (not in git)
 
-`external/cia-timing-corpus/VICE-testprogs/` and
-`external/cia-timing-corpus/c64ciaTests/` are fetched by
-`tools/cia-timing-corpus/fetch.sh` and gitignored. Agent docs and VICE result
-logs live under `md-files/corpus/cia-timing/`.
+A clean clone of this repository does **not** include anything under
+`external/cia-timing-corpus/`. Those directories are gitignored and are never
+fetched by CMake, the normal build, or `ctest`.
 
-## Contents
-- `VICE project's testprogs`
-  - Upstream: <https://sourceforge.net/p/vice-emu/code/HEAD/tree/testprogs/CIA/>
-  - License: Test programs sourced from the VICE project's testprogs repository,
-     used here for CIA timing reference/validation only, not redistributed as
-     part of c64m's build. VICE is licensed GPLv2; no separate license file
-     accompanies the testprogs subtree.
+If they appear on disk, someone ran `tools/cia-timing-corpus/fetch.sh` (or
+cloned the upstreams there by hand). That is a manual development path for
+race-level CIA comparison against VICE/hardware test programs — not part of
+everyday build or test. Safe to delete at any time (`rm -rf
+external/cia-timing-corpus/`); re-run `fetch.sh` only when you need the oracle
+scripts under `tools/cia-timing-corpus/`.
+
+When present, typical contents are:
+
+- `VICE-testprogs/` — full multi-system VICE testprog tree  
+  Upstream: <https://github.com/libsidplayfp/VICE-testprogs>  
+  (CIA-relevant paths only are used by the run scripts.)  
+  License: VICE GPLv2; used for local reference/validation only, not
+  redistributed as part of c64m’s product build.
+- `c64ciaTests/` — hardware dump / result notes  
+  Upstream: <https://github.com/dmolinagarcia/c64ciaTests>
+
+Agent notes and any saved run logs live under `md-files/corpus/cia-timing/`
+(also optional evidence, not a ctest gate).
+
+## Contents (vendored in git)
+
 - `C64_TrueType_v1.2.1-STYLE`
   - Upstream: <http://style64.org/c64-truetype>
   - License: http://style64.org/c64-truetype/license
