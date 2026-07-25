@@ -433,6 +433,18 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
    6510 is mid-instruction uses a thinner hot path (no re-prepare / KERNAL gate).
    Updates cpu_cycles_remaining once at the end. count==0 is a no-op. */
 bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size);
+
+enum {
+    /* Stop at instruction boundary when next opcode is BRK ($00), without
+       consuming that cycle. Free-run uses this so multi-Phi2 strips do not
+       execute BRK; c64_step_cycle still runs BRK normally. */
+    C64_STEP_STOP_BEFORE_BRK = 1u
+};
+
+/* Like c64_step_cycles with optional flags. out_ran may be NULL; on success it
+   receives how many Phi2 cycles actually ran (may be < count if stopped). */
+bool c64_step_cycles_ex(c64_t *machine, uint32_t count, uint32_t *out_ran,
+                        unsigned flags, char *error, size_t error_size);
 bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_make_current_frame_snapshot(c64_t *machine, c64_frame *out_frame);

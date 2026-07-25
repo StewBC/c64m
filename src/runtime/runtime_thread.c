@@ -1970,27 +1970,31 @@ static bool runtime_step_cycle_free_run(runtime *rt) {
    to runtime_step_cycle_free_run, with one c64_step_cycles batch. Host audio is
    already muted under free-run turbo (sample path off); skip the N no-op
    audio advances. BRK/frame checks happen between instructions only. */
-static bool runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
+/* Returns cycles actually advanced (may be < count on BRK boundary stop). */
+static uint32_t runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
     char error[256];
     uint32_t i;
+    uint32_t ran = 0u;
     bool free_run_mute;
 
     if (count == 0u) {
-        return true;
+        return 0u;
     }
-    if (!c64_step_cycles(&rt->machine, count, error, sizeof(error))) {
+    /* BRK-aware: may run fewer than count cycles and stop at $00 boundary. */
+    if (!c64_step_cycles_ex(&rt->machine, count, &ran, C64_STEP_STOP_BEFORE_BRK,
+                            error, sizeof(error))) {
         rt->exec_state = RUNTIME_EXEC_PAUSED;
         runtime_publish_error(rt, error);
-        return false;
+        return 0u;
     }
     free_run_mute =
         runtime_turbo_is_free_run(rt) && rt->audio_record_path == NULL;
     if (!free_run_mute) {
-        for (i = 0u; i < count; i++) {
+        for (i = 0u; i < ran; i++) {
             runtime_audio_advance_cycle(rt);
         }
     }
-    return true;
+    return ran;
 }
 
 /* True when free-run can omit rare-path checks (BP/paste/history/pending loads).
@@ -4691,6 +4695,7 @@ int runtime_thread_main(void *userdata) {
                 for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
                      i < batch; ) {
                     uint32_t n = 1u;
+                    uint32_t room = (uint32_t)(batch - i);
 
                     if (!rt->machine.cpu.micro_active &&
                         !rt->machine.pending_cpu_trace_active &&
@@ -4700,9 +4705,9 @@ int runtime_thread_main(void *userdata) {
                         runtime_pause_for_brk(rt);
                         break;
                     }
-                    /* Drain the rest of a mid-instruction strip in one batch.
-                       Do not multi-step across instruction boundaries here:
-                       BRK auto-pause must see the boundary opcode. */
+                    /* Cross-instruction free-run strip: c64_step_cycles_ex stops
+                       before BRK at a boundary. Cap so frames/commands still
+                       get serviced. */
                     if (rt->machine.cpu.micro_active &&
                         rt->machine.cpu_deferred_interrupt ==
                             C6510_INTERRUPT_NONE &&
@@ -4710,17 +4715,38 @@ int runtime_thread_main(void *userdata) {
                         size_t rem =
                             c6510_micro_cycles_remaining(&rt->machine.cpu);
                         if (rem > 1u) {
-                            uint32_t room = (uint32_t)(batch - i);
                             n = rem > room ? room : (uint32_t)rem;
-                            if (n < 1u) {
-                                n = 1u;
-                            }
                         }
+                    } else if (runtime_turbo_is_free_run(rt) &&
+                               !rt->machine.pending_cpu_trace_active) {
+                        n = room > 128u ? 128u : room;
                     }
-                    if (!runtime_step_cycles_free_run(rt, n)) {
+                    if (n < 1u) {
+                        n = 1u;
+                    }
+                    {
+                        uint32_t ran = runtime_step_cycles_free_run(rt, n);
+                        if (ran == 0u &&
+                            rt->exec_state != RUNTIME_EXEC_RUNNING) {
+                            break;
+                        }
+                        if (ran == 0u) {
+                            /* Stopped at BRK without advancing. */
+                            if (!rt->suppress_execute_bp) {
+                                runtime_pause_for_brk(rt);
+                            }
+                            break;
+                        }
+                        i += (int)ran;
+                    }
+                    if (!rt->machine.cpu.micro_active &&
+                        !rt->machine.pending_cpu_trace_active &&
+                        !rt->suppress_execute_bp &&
+                        c64_debug_peek_cpu_byte(
+                            &rt->machine, rt->machine.cpu.cpu.pc) == 0x00u) {
+                        runtime_pause_for_brk(rt);
                         break;
                     }
-                    i += (int)n;
                     if (c64_consume_frame_complete(&rt->machine)) {
                         runtime_flush_dirty_disks(rt);
                         runtime_publish_completed_frame(rt);

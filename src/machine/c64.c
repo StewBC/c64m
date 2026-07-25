@@ -1979,16 +1979,24 @@ static void c64_step_cycle_between_hot(c64_t *machine) {
     c64_finish_cycle(machine);
 }
 
-bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size) {
+bool c64_step_cycles_ex(c64_t *machine, uint32_t count, uint32_t *out_ran,
+                        unsigned flags, char *error, size_t error_size) {
     uint32_t i;
+    bool stop_before_brk = (flags & C64_STEP_STOP_BEFORE_BRK) != 0u;
 
     assert(machine);
 
     if (!machine->ready) {
         c64_set_error(error, error_size, "machine is not ready");
+        if (out_ran != NULL) {
+            *out_ran = 0u;
+        }
         return false;
     }
     if (count == 0u) {
+        if (out_ran != NULL) {
+            *out_ran = 0u;
+        }
         return true;
     }
 
@@ -2005,9 +2013,12 @@ bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_s
             }
             continue;
         }
-        /* Between instructions (and deferred-trace start): thinner than full
-           internal when not already in pending-trace playback mid-stream. */
+        /* Between instructions. Optional free-run stop before BRK. */
         if (!machine->pending_cpu_trace_active) {
+            if (stop_before_brk &&
+                c64_debug_peek_cpu_byte(machine, machine->cpu.cpu.pc) == 0x00u) {
+                break;
+            }
             c64_step_cycle_between_hot(machine);
             i++;
             continue;
@@ -2024,7 +2035,14 @@ bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_s
     } else {
         machine->cpu_cycles_remaining = 0;
     }
+    if (out_ran != NULL) {
+        *out_ran = i;
+    }
     return true;
+}
+
+bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size) {
+    return c64_step_cycles_ex(machine, count, NULL, 0u, error, error_size);
 }
 
 bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame) {
