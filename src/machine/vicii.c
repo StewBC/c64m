@@ -2636,8 +2636,14 @@ static void vicii_schedule_phi2_bus_access(vicii *v, uint32_t cycle) {
     /* Phi2 is CPU-visible only for bad-line c-accesses and sprite data. */
     v->timing.bus_access = VICII_BUS_ACCESS_NONE;
 
-    if (v->sprite_active_mask != 0u &&
-        vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
+    if (v->sprite_active_mask == 0u) {
+        if (v->bad_line && (cf & (uint16_t)VICII_CF_C_WINDOW) != 0u) {
+            v->timing.bus_access = VICII_BUS_ACCESS_C;
+        }
+        return;
+    }
+
+    if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
         if (vicii_sprite_dma_current_line(v, sprite)) {
             v->timing.bus_access = VICII_BUS_ACCESS_SPRITE_DATA;
         }
@@ -3260,8 +3266,17 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     } else {
         v->timing.prefetch_cycles = VICII_BA_LEAD_CYCLES + 1u;
     }
-    v->timing.aec_active =
-        !vicii_phi2_access_scheduled_now(v) || v->timing.prefetch_cycles != 0u;
+    /* No sprites: Phi2 schedule already encodes matrix C vs none — skip the
+       second sprite-slot walk in phi2_access_scheduled_now. */
+    if (v->sprite_active_mask == 0u) {
+        v->timing.aec_active =
+            (v->timing.bus_access == VICII_BUS_ACCESS_NONE) ||
+            v->timing.prefetch_cycles != 0u;
+    } else {
+        v->timing.aec_active =
+            !vicii_phi2_access_scheduled_now(v) ||
+            v->timing.prefetch_cycles != 0u;
+    }
     vicii_execute_phi2_fetch(v, bus, cycle);
 
     /* VICE updates reg11_delay during VIC Phi2, before a CPU-owned Phi2 write.
