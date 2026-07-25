@@ -538,6 +538,29 @@ void sid_advance_cycles(sid *s, uint32_t cycles) {
     /* Free-run / warp: host sample path off. Still advance oscillators and
        envelopes so $D41B/$D41C and later 1x audio resume stay correct. */
     if (!s->sample_output_enabled) {
+        bool any_sync =
+            ((s->voices[0].control | s->voices[1].control | s->voices[2].control) &
+             0x02u) != 0u;
+        bool any_env = !sid_voice_env_idle(&s->voices[0]) ||
+            !sid_voice_env_idle(&s->voices[1]) ||
+            !sid_voice_env_idle(&s->voices[2]);
+
+        /* Common silent BASIC/idle: no hard-sync, envelopes parked at 0.
+           Only advance oscillators (and OSC3 readback). */
+        if (!any_sync && !any_env) {
+            for (c = 0u; c < cycles; c++) {
+                uint32_t i;
+                for (i = 0u; i < 3u; i++) {
+                    sid_voice *v = &s->voices[i];
+                    if ((v->control & 0x08u) == 0u) {
+                        v->phase = (v->phase + (uint32_t)v->freq) & 0x00FFFFFFu;
+                    }
+                }
+                s->voice3_osc_read = (uint8_t)(s->voices[2].phase >> 16);
+                s->voice3_env_read = 0u;
+            }
+            return;
+        }
         for (c = 0u; c < cycles; c++) {
             sid_advance_voices_state(s, prev_phase, false);
         }

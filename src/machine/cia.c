@@ -599,16 +599,40 @@ static void cia_step_serial(cia *c) {
 
 void cia_step_cycle(cia *c) {
     bool pending_now;
+    uint8_t cra;
+    uint8_t crb;
 
     assert(c);
 
     if (c->timer_a.pulse_active || c->timer_b.pulse_active) {
         cia_reset_timer_output_pulses(c);
     }
+
+    cra = c->registers[CIA_REG_CONTROL_A];
+    crb = c->registers[CIA_REG_CONTROL_B];
+    /* Both timers fully idle and no serial/CNT activity: only TOD + IRQ pin. */
+    if (cia_timer_step_idle(&c->timer_a, cra) &&
+        cia_timer_step_idle(&c->timer_b, crb) &&
+        c->serial_out_bits == 0u &&
+        !c->cnt_pulse &&
+        (cra & CIA_CONTROL_A_SERIAL_OUT) == 0u) {
+        c->timer_a.underflow = false;
+        c->timer_b.underflow = false;
+        cia_step_tod(c);
+        if ((c->interrupt_flags & c->interrupt_mask & CIA_INTERRUPT_SOURCE_MASK) != 0) {
+            c->interrupt_ff = true;
+        }
+        pending_now = c->interrupt_ff;
+        c->interrupt_line = c->interrupt_pending_latched;
+        c->interrupt_pending_latched = pending_now;
+        c->pc_line = !c->pc_pulse_request;
+        c->pc_pulse_request = false;
+        return;
+    }
+
     cia_step_timer(c, &c->timer_a, CIA_REG_CONTROL_A, CIA_INTERRUPT_TIMER_A);
     cia_step_timer(c, &c->timer_b, CIA_REG_CONTROL_B, CIA_INTERRUPT_TIMER_B);
     {
-        uint8_t cra = c->registers[CIA_REG_CONTROL_A];
         if ((cra & CIA_CONTROL_A_SERIAL_OUT) != 0u) {
             if (c->serial_out_bits != 0u && c->timer_a.underflow) {
                 cia_step_serial(c);
