@@ -2119,22 +2119,36 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                         pair_d021[2] = false;
                         pair_d021[3] = false;
                     }
-                    for (p = 0; p < 4; p++) {
-                        uint8_t pair =
-                            (uint8_t)((gdata >> (6u - (unsigned)(p * 2))) & 3u);
-                        int d;
-                        for (d = 0; d < 2; d++) {
-                            uint8_t k = (uint8_t)(p * 2 + d);
-                            v->hborder_pipe[paint_i].dot[k] = k;
-                            v->hborder_pipe[paint_i].idx[k] = base_idx + (uint32_t)k;
-                            v->hborder_pipe[paint_i].content[k] = pair_c[pair];
-                            v->hborder_pipe[paint_i].content_d021[k] = pair_d021[pair];
-                            v->hborder_pipe[paint_i].border[k] = bord;
-                            /* 1-dot colour latency: drain after the first dot. */
-                            if (k == 0u) {
-                                vicii_color_pipes_sample_regs(v, &bord, &b0c);
-                                pair_c[0] = b0c;
-                            }
+                    {
+                        uint32_t *content = v->hborder_pipe[paint_i].content;
+                        uint32_t *border = v->hborder_pipe[paint_i].border;
+                        bool *is_d021 = v->hborder_pipe[paint_i].content_d021;
+                        uint8_t *dot = v->hborder_pipe[paint_i].dot;
+                        uint32_t *idx = v->hborder_pipe[paint_i].idx;
+                        uint32_t bord0 = bord;
+                        uint8_t pair0 =
+                            (uint8_t)((gdata >> 6) & 3u);
+
+                        vicii_span8_identity(idx, dot, base_idx);
+                        /* Dot 0 uses pre-drain B0C; drain then paint pairs. */
+                        content[0] = pair_c[pair0];
+                        is_d021[0] = pair_d021[pair0];
+                        border[0] = bord0;
+                        vicii_color_pipes_sample_regs(v, &bord, &b0c);
+                        pair_c[0] = b0c;
+                        vicii_fill8_u32(border, bord);
+                        border[0] = bord0;
+                        /* Pair 0 second dot + pairs 1..3 (post-drain). */
+                        content[1] = pair_c[pair0];
+                        is_d021[1] = pair_d021[pair0];
+                        for (p = 1; p < 4; p++) {
+                            uint8_t pair =
+                                (uint8_t)((gdata >> (6u - (unsigned)(p * 2))) & 3u);
+                            uint8_t k0 = (uint8_t)(p * 2);
+                            content[k0] = pair_c[pair];
+                            content[k0 + 1u] = pair_c[pair];
+                            is_d021[k0] = pair_d021[pair];
+                            is_d021[k0 + 1u] = pair_d021[pair];
                         }
                     }
                     v->hborder_pipe[paint_i].n = 8u;
