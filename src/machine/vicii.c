@@ -2868,6 +2868,11 @@ static void vicii_execute_phi1_fetch(vicii *v, const c64_bus_t *bus, uint32_t cy
         vicii_fetch_sprite_slot(v, bus, cycle);
         return;
     }
+    /* Idle Phi1 outside display-state: fetch_g_or_idle only does optional
+       TRACE ghost work. Skip the call on the common non-display path. */
+    if (!v->display_state) {
+        return;
+    }
     vicii_fetch_g_or_idle_access(v, bus, cycle);
 }
 
