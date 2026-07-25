@@ -2311,6 +2311,8 @@ static void setup_sprite_ba_test_for_standard(
             v->sprite_active[n] = true;
         }
     }
+    /* Keep BA mask in sync with direct sprite_active[] test setup. */
+    v->sprite_active_mask = sprite_enable_mask;
 }
 
 static void setup_sprite_ba_test(
@@ -2422,6 +2424,7 @@ static void test_sprite_dma_off_stops_late_phi2_slots(void) {
     vicii_write_register(&v, 0xd017, 0x01u);
     vicii_write_register(&v, 0xd001, 99u); /* no new Y-match on this line */
     v.sprite_active[0] = true;
+    v.sprite_active_mask |= (uint8_t)(1u << 0u);
     v.sprite_y_exp_ff[0] = true;
     v.sprite_mc[0] = 60u;
     v.sprite_mcbase[0] = 60u;
@@ -2459,6 +2462,7 @@ static void test_sprite_crunch_keeps_dma_past_21_rows(void) {
     /* Mid-display state after a few normal rows, with exp_flop clear as after
        the expand-toggle cycle — the condition the hardware crunch requires. */
     v.sprite_active[0] = true;
+    v.sprite_active_mask |= (uint8_t)(1u << 0u);
     v.sprite_y_exp_ff[0] = false;
     v.sprite_mcbase[0] = mcbase;
     v.sprite_mc[0] = mc;
@@ -2500,6 +2504,7 @@ static void test_sprite_d017_clear_off_crunch_cycle_ends_normally(void) {
     vicii_write_register(&v, 0xd017, 0x01u);
 
     v.sprite_active[0] = true;
+    v.sprite_active_mask |= (uint8_t)(1u << 0u);
     v.sprite_y_exp_ff[0] = false;
     v.sprite_mcbase[0] = 9u;
     v.sprite_mc[0] = 12u;
@@ -2746,6 +2751,7 @@ static void test_aec_rdy_pin_transitions_follow_schedule(void) {
     vicii_write_register(&v, 0xd015, 0x01u);
     v.timing.raster_line = 100u;
     v.sprite_active[0] = true;
+    v.sprite_active_mask |= (uint8_t)(1u << 0u);
     v.sprite_visible[0] = true;
 
     v.timing.cycle_in_line = 54u;

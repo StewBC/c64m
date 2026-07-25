@@ -1582,6 +1582,7 @@ static void run_cpu_vic_interaction_trace(
         vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite only. */
         vicii_write_register(&machine.vic, 0xd015, (uint8_t)(1u << sprite));
         machine.vic.sprite_active[sprite] = true;
+        machine.vic.sprite_active_mask |= (uint8_t)(1u << sprite);
         machine.vic.sprite_visible[sprite] = true;
     }
     c64_set_cpu_trace_enabled(&machine, true);
@@ -1787,6 +1788,7 @@ static void test_timing_fixture_records_sprite_ba_stall(
     vicii_write_register(&machine.vic, 0xd011, 0x03u); /* DEN=0: sprite BA only. */
     vicii_write_register(&machine.vic, 0xd015, 0x01u);
     machine.vic.sprite_active[0] = true;
+    machine.vic.sprite_active_mask |= (uint8_t)(1u << 0u);
     machine.vic.timing.raster_line = 100u;
     machine.vic.timing.cycle_in_line = ba_assert_cycle;
 
@@ -1844,6 +1846,7 @@ static void test_timing_fixture_records_cross_line_sprite_ba_stall(void) {
     /* DMA turns on at cycles 54/55 of the Y-match line; by cycle 60 the live
        DMA flag is set. Bus BA follows sprite_active only (VICE sprite_dma). */
     machine.vic.sprite_active[3] = true;
+    machine.vic.sprite_active_mask |= (uint8_t)(1u << 3u);
 
     /* Sprite 3 asserts on line N-1 for its line-N fetch. */
     capture_timing_step(&machine, &sample);

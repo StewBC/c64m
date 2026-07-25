@@ -919,6 +919,15 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     r_bytes(r, v->sprite_mc, sizeof(v->sprite_mc));
     r_bytes(r, v->sprite_mcbase, sizeof(v->sprite_mcbase));
     for (i = 0; i < 8; ++i) v->sprite_active[i] = r_bool(r);
+    {
+        uint8_t mask = 0;
+        for (i = 0; i < 8; ++i) {
+            if (v->sprite_active[i]) {
+                mask |= (uint8_t)(1u << i);
+            }
+        }
+        v->sprite_active_mask = mask;
+    }
     for (i = 0; i < 8; ++i) v->sprite_visible[i] = r_bool(r);
     for (i = 0; i < 8; ++i) v->sprite_y_exp_ff[i] = r_bool(r);
     r_bytes(r, v->sprite_pointer, sizeof(v->sprite_pointer));

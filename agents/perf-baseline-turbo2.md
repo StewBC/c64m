@@ -247,3 +247,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | CIA idle-timer/serial gates + mode-2 bulk + paint-off finish skip (M2): pure paint-on ~**13.5 MHz**, product drives-off turbo=2 ~**12.1 MHz**. |
 | 2026-07-24 | Fast BRK peek + MCM bulk + hborder index flip (M2): pure paint-on ~**13.4 MHz**, product drives-off turbo=2 ~**12.3 MHz**. |
 | 2026-07-24 | Drive-sync cold path + ECM bulk + turbo 4k batch (M2): pure paint-on ~**13.7 MHz**, product drives-off turbo=2 ~**12.4 MHz**. |
+| 2026-07-24 | Opcode peek for micro-begin + sprite_active_mask BA (M2): product drives-off turbo=2 ~**12.5 MHz**. |

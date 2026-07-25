@@ -116,6 +116,8 @@ struct vicii {
     /* Phase D: per-sprite state */
     uint8_t  sprite_mc[8];          /* next byte offset into 63-byte sprite block (0,3,6…60) */
     bool     sprite_active[8];      /* sprite sequencer remains active for future lines */
+    /* Bitmask of sprite_active[] for O(1) BA / idle tests (bit n = sprite n). */
+    uint8_t  sprite_active_mask;
     uint8_t  sprite_mcbase[8];      /* MCBASE latch used by the line sequencer */
     bool     sprite_visible[8];     /* sprite has valid fetched data for the current line */
     bool     sprite_y_exp_ff[8];    /* Y-expand flip-flop; governs when mc advances */

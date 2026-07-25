@@ -1301,7 +1301,7 @@ static bool c64_prepare_micro_instruction(c64_t *machine, bool ba_stall_resume) 
         return true;
     }
 
-    opcode = c64_debug_read_cpu_map(machine, machine->cpu.cpu.pc);
+    opcode = c64_debug_peek_cpu_byte(machine, machine->cpu.cpu.pc);
     if (!c6510_micro_can_begin(&machine->cpu, opcode)) {
         return false;
     }

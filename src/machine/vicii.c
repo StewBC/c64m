@@ -337,6 +337,7 @@ void vicii_reset(vicii *v) {
     memset(v->sprite_mc,       0, sizeof(v->sprite_mc));
     memset(v->sprite_mcbase,   0, sizeof(v->sprite_mcbase));
     memset(v->sprite_active,   0, sizeof(v->sprite_active));
+    v->sprite_active_mask = 0;
     memset(v->sprite_visible,  0, sizeof(v->sprite_visible));
     memset(v->sprite_y_exp_ff, 0, sizeof(v->sprite_y_exp_ff));
     memset(v->sprite_pointer,  0, sizeof(v->sprite_pointer));
@@ -678,6 +679,17 @@ static void vicii_trace_sprite_dma(const vicii *v) {
    expansion-check cycle for expanded sprites, and forced to 1 by a $D017
    clear (see the crunch handler in vicii_write_register). MC advances +3/line
    in vicii_prepare_sprite_line. */
+static void vicii_rebuild_sprite_active_mask(vicii *v) {
+    uint8_t mask = 0;
+    int n;
+    for (n = 0; n < 8; ++n) {
+        if (v->sprite_active[n]) {
+            mask |= (uint8_t)(1u << n);
+        }
+    }
+    v->sprite_active_mask = mask;
+}
+
 static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
     uint8_t  enable   = v->registers[VICII_REG_SPR_ENABLE];
     uint8_t  y_expand = v->registers[VICII_REG_SPR_Y_EXPAND];
@@ -688,13 +700,20 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
        flip-flop is set, latch MCBASE from MC and turn DMA off when MCBASE
        reaches 63. */
     if (cycle == 15u) {
+        bool changed = false;
         for (n = 0; n < 8; ++n) {
             if (v->sprite_y_exp_ff[n]) {
                 v->sprite_mcbase[n] = v->sprite_mc[n];
                 if (v->sprite_mcbase[n] == 63u) {
-                    v->sprite_active[n] = false;
+                    if (v->sprite_active[n]) {
+                        v->sprite_active[n] = false;
+                        changed = true;
+                    }
                 }
             }
+        }
+        if (changed) {
+            vicii_rebuild_sprite_active_mask(v);
         }
     }
 
@@ -702,6 +721,7 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
        for an enabled sprite whose Y matches the current raster and whose DMA
        is still off; reset MCBASE and set the expansion flip-flop. */
     if (cycle == 54u || cycle == 55u) {
+        bool changed = false;
         for (n = 0; n < 8; ++n) {
             uint8_t spr_y = v->registers[1 + n * 2];
             if ((enable & (uint8_t)(1u << n)) != 0u &&
@@ -716,7 +736,11 @@ static void vicii_step_sprite_sequencer(vicii *v, uint32_t cycle) {
                    invisible for the rest of this raster. */
                 v->sprite_visible[n] = true;
                 v->sprite_mc[n] = 0u;
+                changed = true;
             }
+        }
+        if (changed) {
+            vicii_rebuild_sprite_active_mask(v);
         }
     }
 
@@ -2353,6 +2377,7 @@ static void vicii_prepare_phi1_bus_access(vicii *v, uint32_t cycle) {
     v->timing.bus_access_phi1 = v->display_state ?
         VICII_BUS_ACCESS_G : VICII_BUS_ACCESS_IDLE;
 
+    /* Sprite p/s slots only exist on a sparse cycle set (LUT). */
     if (vicii_sprite_slot(v, cycle, &sprite, &second_cycle)) {
         v->timing.bus_access_phi1 = second_cycle ?
             VICII_BUS_ACCESS_SPRITE_DATA : VICII_BUS_ACCESS_SPRITE_POINTER;
@@ -2396,18 +2421,11 @@ static bool vicii_phi2_access_scheduled_now(const vicii *v) {
 static bool vicii_update_ba(vicii *v, uint32_t cycle, uint64_t abs_cycle) {
     const uint8_t *table = v->timing.standard == VICII_VIDEO_STANDARD_PAL ?
         vicii_pal_sprite_ba_mask : vicii_ntsc_sprite_ba_mask;
-    uint8_t active = 0;
+    uint8_t active = v->sprite_active_mask;
     bool pending_ba = abs_cycle < v->timing.ba_low_until_abs;
     bool sprite_ba;
     bool matrix_ba;
-    int n;
 
-    /* Pack only when any sprite DMA is live; idle screens skip the 8-way scan. */
-    for (n = 0; n < 8; ++n) {
-        if (v->sprite_active[n]) {
-            active |= (uint8_t)(1u << n);
-        }
-    }
     sprite_ba = active != 0u && (active & table[cycle]) != 0u;
     matrix_ba = v->bad_line && cycle >= 11u &&
         cycle <= VICII_CACCESS_LAST_CYCLE;
@@ -2840,13 +2858,8 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     } else if (cycle == 15u || cycle == 57u) {
         vicii_step_sprite_sequencer(v, cycle);
     } else if (cycle == 54u || cycle == 55u) {
-        uint8_t active_before = 0;
+        uint8_t active_before = v->sprite_active_mask;
         int n;
-        for (n = 0; n < 8; ++n) {
-            if (v->sprite_active[n]) {
-                active_before |= (uint8_t)(1u << n);
-            }
-        }
         vicii_step_sprite_sequencer(v, cycle);
         if (bus != NULL) {
             /* Same-line presentation fetch for sprites that just turned DMA on.
