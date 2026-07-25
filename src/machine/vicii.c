@@ -2828,12 +2828,15 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
             v->display_state = true;
         }
 
+#ifdef C64M_VIC_TRACE
         /* Optional per-line sequencer dump for eod-3 diagnosis.
            C64M_LINELOG=<path> C64M_LINELOG_R0=190 C64M_LINELOG_R1=220
-           Optional C64M_LINELOG_F0/F1 frame window. */
+           Optional C64M_LINELOG_F0/F1 frame window.
+           Compile-gated like C64M_GFXLOG / C64M_SPRDMA: inert in normal builds. */
         {
             static FILE *linelog;
             static int line_init;
+            static int line_full;
             static unsigned long lf0, lf1;
             static unsigned lr0, lr1;
             if (!line_init) {
@@ -2846,6 +2849,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
                 lf1 = 0xffffffffUL;
                 lr0 = 0;
                 lr1 = 0xffffffffU;
+                line_full = getenv("C64M_LINELOG_FULL") != NULL;
                 if (p) {
                     linelog = fopen(p, "wb");
                 }
@@ -2902,7 +2906,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
                             (unsigned)v->color_line[2],
                             (unsigned)gaddr,
                             (unsigned)scr, (unsigned)bmp, (unsigned)ch);
-                    if (getenv("C64M_LINELOG_FULL") != NULL) {
+                    if (line_full) {
                         int q;
                         fprintf(linelog, "  cl:");
                         for (q = 0; q < 40; ++q) {
@@ -2921,6 +2925,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
                 }
             }
         }
+#endif /* C64M_VIC_TRACE */
     }
 
     /* VICE Phi2(58), zero-based cycle 57. This runs well before line wrap;
