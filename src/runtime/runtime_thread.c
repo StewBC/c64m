@@ -1964,6 +1964,27 @@ static bool runtime_step_cycle_free_run(runtime *rt) {
     return true;
 }
 
+/* Mid-instruction multi-Phi2 strip for free-run: same machine clocks as N calls
+   to runtime_step_cycle_free_run, with one c64_step_cycles batch + N audio
+   advances. BRK/frame checks happen between instructions only. */
+static bool runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
+    char error[256];
+    uint32_t i;
+
+    if (count == 0u) {
+        return true;
+    }
+    if (!c64_step_cycles(&rt->machine, count, error, sizeof(error))) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    for (i = 0u; i < count; i++) {
+        runtime_audio_advance_cycle(rt);
+    }
+    return true;
+}
+
 /* True when free-run can omit rare-path checks (BP/paste/history/pending loads).
    BRK auto-pause still runs — it is a product free-run feature. */
 static bool runtime_free_run_is_simple(const runtime *rt) {
@@ -4660,7 +4681,9 @@ int runtime_thread_main(void *userdata) {
                     ? RUNTIME_RUN_BATCH_CYCLES_TURBO
                     : RUNTIME_RUN_BATCH_CYCLES;
                 for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
-                     i < batch; i++) {
+                     i < batch; ) {
+                    uint32_t n = 1u;
+
                     if (!rt->machine.cpu.micro_active &&
                         !rt->machine.pending_cpu_trace_active &&
                         !rt->suppress_execute_bp &&
@@ -4669,9 +4692,25 @@ int runtime_thread_main(void *userdata) {
                         runtime_pause_for_brk(rt);
                         break;
                     }
-                    if (!runtime_step_cycle_free_run(rt)) {
+                    /* Drain the rest of a mid-instruction strip in one batch. */
+                    if (rt->machine.cpu.micro_active &&
+                        rt->machine.cpu_deferred_interrupt ==
+                            C6510_INTERRUPT_NONE &&
+                        !rt->machine.pending_cpu_trace_active) {
+                        size_t rem =
+                            c6510_micro_cycles_remaining(&rt->machine.cpu);
+                        if (rem > 1u) {
+                            uint32_t room = (uint32_t)(batch - i);
+                            n = rem > room ? room : (uint32_t)rem;
+                            if (n < 1u) {
+                                n = 1u;
+                            }
+                        }
+                    }
+                    if (!runtime_step_cycles_free_run(rt, n)) {
                         break;
                     }
+                    i += (int)n;
                     if (c64_consume_frame_complete(&rt->machine)) {
                         runtime_flush_dirty_disks(rt);
                         runtime_publish_completed_frame(rt);

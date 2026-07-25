@@ -1881,14 +1881,54 @@ bool c64_step_instruction(c64_t *machine, char *error, size_t error_size) {
 }
 
 bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
+    return c64_step_cycles(machine, 1u, error, error_size);
+}
+
+/* Mid-instruction Phi2: VIC + CIA/SID + one micro cycle (or BA stall). Skips
+   KERNAL trap PC gate and instruction-begin prepare — those only matter between
+   instructions. Observables match c64_step_cycle_internal for micro_active. */
+static void c64_step_cycle_micro_hot(c64_t *machine) {
+    c64_begin_vic_for_current_cycle(machine);
+    c64_step_nonvic_devices_for_current_cycle(machine);
+    c64_cyclelog_emit(machine);
+    if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
+        c64_step_micro_cycle(machine);
+    } else {
+        c64_step_host_ba_stall(machine);
+    }
+}
+
+bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size) {
+    uint32_t i;
+
     assert(machine);
 
     if (!machine->ready) {
         c64_set_error(error, error_size, "machine is not ready");
         return false;
     }
+    if (count == 0u) {
+        return true;
+    }
 
-    c64_step_cycle_internal(machine);
+    for (i = 0u; i < count; ) {
+        /* Safe multi-Phi2 strip: stay on the micro hot path while an instruction
+           is in flight (no IRQ defer / deferred-trace / between-instr prepare). */
+        if (machine->cpu.micro_active &&
+            machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
+            !machine->pending_cpu_trace_active) {
+            while (i < count && machine->cpu.micro_active &&
+                   machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
+                   !machine->pending_cpu_trace_active) {
+                c64_step_cycle_micro_hot(machine);
+                i++;
+            }
+            continue;
+        }
+        c64_step_cycle_internal(machine);
+        i++;
+    }
+
     if (machine->cpu.micro_active) {
         machine->cpu_cycles_remaining = c6510_micro_cycles_remaining(&machine->cpu);
     } else if (machine->pending_cpu_trace_active) {

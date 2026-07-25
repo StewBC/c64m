@@ -429,6 +429,10 @@ bool c64_install_roms(c64_t *machine, const c64_rom_set *roms, char *error, size
 bool c64_reset(c64_t *machine, char *error, size_t error_size);
 bool c64_step_instruction(c64_t *machine, char *error, size_t error_size);
 bool c64_step_cycle(c64_t *machine, char *error, size_t error_size);
+/* Step `count` Phi2 cycles. Same accuracy as repeated c64_step_cycle; when the
+   6510 is mid-instruction uses a thinner hot path (no re-prepare / KERNAL gate).
+   Updates cpu_cycles_remaining once at the end. count==0 is a no-op. */
+bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size);
 bool c64_generate_test_frame(c64_t *machine, c64_frame *out_frame);
 bool c64_make_frame_snapshot(c64_t *machine, c64_frame *out_frame);
 bool c64_make_current_frame_snapshot(c64_t *machine, c64_frame *out_frame);

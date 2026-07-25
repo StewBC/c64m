@@ -2939,23 +2939,36 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
        this cycle's compares (same order as before the line_class split). */
     {
         uint32_t rl = v->timing.raster_line;
-        bool idle_line = v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
-            (cf & (uint16_t)VICII_CF_LINE_START) == 0u;
+        bool near_vborder =
+            (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
+             rl <= (uint32_t)VICII_VBORDER_TOP_24) ||
+            (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
+             rl <= (uint32_t)VICII_VBORDER_BOTTOM_25);
+        bool spr_possible = v->sprite_active_mask != 0u ||
+            v->registers[VICII_REG_SPR_ENABLE] != 0u;
+        /* Demote stale IDLE class when raster/BA state was teleported (tests)
+           or sprites/badlines become possible mid-line. */
+        if (v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
+            (near_vborder || spr_possible || v->allow_bad_lines ||
+             !v->vertical_border_active ||
+             (rl >= (uint32_t)VICII_BADLINE_FIRST &&
+              rl <= (uint32_t)VICII_BADLINE_LAST))) {
+            v->line_class = (uint8_t)VICII_LINE_CLASS_FULL;
+        }
 
-        if (!idle_line) {
-            if (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
-                rl <= (uint32_t)VICII_VBORDER_TOP_24) {
-                vicii_check_vborder_top(v);
-            }
-            if (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
-                rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
-                vicii_check_vborder_bottom(v);
+        if (v->line_class != (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE) {
+            if (near_vborder) {
+                if (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
+                    rl <= (uint32_t)VICII_VBORDER_TOP_24) {
+                    vicii_check_vborder_top(v);
+                }
+                if (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
+                    rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
+                    vicii_check_vborder_bottom(v);
+                }
             }
         }
         if ((cf & (uint16_t)VICII_CF_LINE_START) != 0u) {
-            bool near_vborder;
-            bool spr_possible;
-
             vicii_apply_vborder_latch(v);
             near_vborder =
                 (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&

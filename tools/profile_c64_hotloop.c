@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     };
     char error[256];
     uint64_t cycles = parse_cycles(argc, argv);
-    uint64_t i;
+    uint64_t left;
     double start;
     double elapsed;
     bool null_error = has_flag(argc, argv, "null-error");
@@ -121,11 +121,17 @@ int main(int argc, char **argv) {
     }
 
     start = monotonic_seconds();
-    for (i = 0; i < cycles; i++) {
-        if (!c64_step_cycle(&machine, null_error ? NULL : error, null_error ? 0 : sizeof(error))) {
-            fprintf(stderr, "step failed at %llu: %s\n", (unsigned long long)i, error);
+    /* Batch Phi2 steps: mid-instruction uses the thinner micro hot path. */
+    left = cycles;
+    while (left > 0u) {
+        uint32_t chunk = left > 1000000ull ? 1000000u : (uint32_t)left;
+        if (!c64_step_cycles(&machine, chunk,
+                             null_error ? NULL : error,
+                             null_error ? 0 : sizeof(error))) {
+            fprintf(stderr, "step failed: %s\n", error);
             return 1;
         }
+        left -= chunk;
     }
     elapsed = monotonic_seconds() - start;
 
