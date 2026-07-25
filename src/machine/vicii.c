@@ -219,11 +219,8 @@ enum {
     VICII_CF_C_WINDOW      = 1u << 8,  /* Phi2 c-access window 14..53 */
     VICII_CF_HBORDER_LEFT  = 1u << 9,  /* cycle 17 left border compare */
     VICII_CF_SPR_ANY       = VICII_CF_SPR_15 | VICII_CF_SPR_54 |
-                            VICII_CF_SPR_55 | VICII_CF_SPR_57,
-
-    /* line_class values (transient, cycle-0). */
-    VICII_LINE_CLASS_FULL         = 0,
-    VICII_LINE_CLASS_VBORDER_IDLE = 1
+                            VICII_CF_SPR_55 | VICII_CF_SPR_57
+    /* line_class values live in vicii.h (VICII_LINE_CLASS_*). */
 };
 
 static uint16_t vicii_pal_cycle_flags[VICII_PAL_CYCLES_PER_LINE];
@@ -2989,7 +2986,14 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     cf = vicii_cycle_flags(v, cycle);
 
     /* Deep vertical-border idle, no sprites, no sequencer events this cycle:
-       skip Phi1 fetch/paint/sequencer. Still maintain BA/AEC/reg11_delay. */
+       skip Phi1 fetch/paint/sequencer. Still maintain BA/AEC/reg11_delay.
+       Cheap stale-class demote: allow_bad_lines or open border means this
+       line is no longer pure vborder-idle (tests teleport these flags). */
+    if (v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
+        (v->allow_bad_lines || !v->vertical_border_active ||
+         v->sprite_active_mask != 0u)) {
+        v->line_class = (uint8_t)VICII_LINE_CLASS_FULL;
+    }
     if (v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
         v->sprite_active_mask == 0u &&
         !v->bad_line &&

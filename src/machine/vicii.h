@@ -223,6 +223,11 @@ struct vicii {
     uint8_t line_class;
 };
 
+enum {
+    VICII_LINE_CLASS_FULL         = 0,
+    VICII_LINE_CLASS_VBORDER_IDLE = 1
+};
+
 bool vicii_init(vicii *v, char *error, size_t error_size);
 void vicii_reset(vicii *v);
 void vicii_set_video_standard(vicii *v, vicii_video_standard standard);

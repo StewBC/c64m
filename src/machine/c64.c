@@ -1886,16 +1886,34 @@ bool c64_step_cycle(c64_t *machine, char *error, size_t error_size) {
 
 /* Mid-instruction Phi2: VIC + CIA/SID + one micro cycle (or BA stall). Skips
    KERNAL trap PC gate and instruction-begin prepare — those only matter between
-   instructions. Observables match c64_step_cycle_internal for micro_active. */
+   instructions. Observables match c64_step_cycle_internal for micro_active.
+
+   Fast path: when AEC and RDY are both high after begin_vic, the 6510 cannot
+   be stalled — skip the access-kind walk. When RDY is low, fall through to the
+   full helper so Phi2 writes still complete under BA. */
 static void c64_step_cycle_micro_hot(c64_t *machine) {
     c64_begin_vic_for_current_cycle(machine);
     c64_step_nonvic_devices_for_current_cycle(machine);
     c64_cyclelog_emit(machine);
-    if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
+    if (machine->vic.timing.aec_active && machine->vic.timing.rdy_active) {
+        c64_step_micro_cycle(machine);
+    } else if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
         c64_step_micro_cycle(machine);
     } else {
         c64_step_host_ba_stall(machine);
     }
+}
+
+/* Drain up to `limit` mid-instruction Phi2 cycles. */
+static uint32_t c64_step_micro_strip(c64_t *machine, uint32_t limit) {
+    uint32_t n = 0u;
+    while (n < limit && machine->cpu.micro_active &&
+           machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
+           !machine->pending_cpu_trace_active) {
+        c64_step_cycle_micro_hot(machine);
+        n++;
+    }
+    return n;
 }
 
 /* Between-instruction free-run strip: same observables as step_cycle_internal
@@ -2001,19 +2019,16 @@ bool c64_step_cycles_ex(c64_t *machine, uint32_t count, uint32_t *out_ran,
     }
 
     for (i = 0u; i < count; ) {
-        /* Mid-instruction strip. */
+        /* Mid-instruction strip (optional no-BA thin path under vborder idle). */
         if (machine->cpu.micro_active &&
             machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
             !machine->pending_cpu_trace_active) {
-            while (i < count && machine->cpu.micro_active &&
-                   machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
-                   !machine->pending_cpu_trace_active) {
-                c64_step_cycle_micro_hot(machine);
-                i++;
-            }
+            i += c64_step_micro_strip(machine, count - i);
             continue;
         }
-        /* Between instructions. Optional free-run stop before BRK. */
+        /* Between instructions. Optional free-run stop before BRK.
+           Fuse: begin one instruction then drain its remaining micro cycles
+           so the outer loop does not re-enter per Phi2 mid-instruction. */
         if (!machine->pending_cpu_trace_active) {
             if (stop_before_brk &&
                 c64_debug_peek_cpu_byte(machine, machine->cpu.cpu.pc) == 0x00u) {
@@ -2021,6 +2036,11 @@ bool c64_step_cycles_ex(c64_t *machine, uint32_t count, uint32_t *out_ran,
             }
             c64_step_cycle_between_hot(machine);
             i++;
+            if (i < count && machine->cpu.micro_active &&
+                machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
+                !machine->pending_cpu_trace_active) {
+                i += c64_step_micro_strip(machine, count - i);
+            }
             continue;
         }
         c64_step_cycle_internal(machine);
