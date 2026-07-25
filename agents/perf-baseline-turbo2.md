@@ -255,3 +255,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | finish_cycle skips mode re-decode / XSCROLL under vertical border (M2): pure paint-on holds ~**14.2 MHz**. |
 | 2026-07-24 | Go1–5 local stack tip (M2): pure paint-on ~**15.1–15.7 MHz**, paint-off ~**18.7–19.5 MHz** (`c64_step_cycles` micro strip + paint/VIC/CPU tables). |
 | 2026-07-24 | GoA–E local stack tip (M2): pure paint-on ~**15.8 MHz**, paint-off ~**21.5 MHz** (between-hot chain, slim vborder begin, silent SID, idle CIA, free-run audio skip). |
+| 2026-07-24 | Go N1–5 local stack tip (M2): pure paint-on ~**16.3–16.4 MHz**, paint-off ~**21.8–22.3 MHz** (BRK-aware cross-instr free-run strips, MCM bulk, AEC schedule skip). |
