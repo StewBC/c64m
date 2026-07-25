@@ -192,7 +192,25 @@ static void c64_configure_cia_tod(c64_t *machine) {
    plus a per-cycle backstop, so IEC line transitions are sampled in the C64
    clock domain. */
 static void c64_drive_sync_to(c64_t *machine, uint64_t target_cycle) {
-    uint64_t c64_hz = c64_config_clock_hz(&machine->config);
+    uint64_t c64_hz;
+    uint64_t delta;
+
+    if (machine->clock.drive_synced_cycle >= target_cycle) {
+        return;
+    }
+
+    c64_hz = c64_config_clock_hz(&machine->config);
+    delta = target_cycle - machine->clock.drive_synced_cycle;
+
+    /* Soft-power cold path: neither 1541 is clocked. Advance the phase
+       accumulator in closed form so a later power-on resumes at the correct
+       fractional drive-cycle offset without per-cycle work. */
+    if (!machine->drives[0].powered && !machine->drives[1].powered) {
+        uint64_t total = machine->clock.drive_accum + delta * 1000000ull;
+        machine->clock.drive_accum = total % c64_hz;
+        machine->clock.drive_synced_cycle = target_cycle;
+        return;
+    }
 
     while (machine->clock.drive_synced_cycle < target_cycle) {
         machine->clock.drive_synced_cycle++;

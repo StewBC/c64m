@@ -21,7 +21,10 @@
 #include <string.h>
 
 enum {
+    /* Normal free-run batch between command-queue polls. Turbo max/warp uses a
+       larger batch to cut poll overhead when the UI is not interactive. */
     RUNTIME_RUN_BATCH_CYCLES = 1024,
+    RUNTIME_RUN_BATCH_CYCLES_TURBO = 4096,
     PASTE_HOLD_CYCLES        =  39400,  /* ~40ms  at PAL 985248 Hz */
     PASTE_GAP_CYCLES         =  19704,  /* ~20ms  at PAL 985248 Hz — must exceed one KERNAL scan period */
     PASTE_RETURN_GAP_CYCLES  = 246312,  /* ~250ms at PAL 985248 Hz */
@@ -4653,8 +4656,11 @@ int runtime_thread_main(void *userdata) {
                 /* Slim free-run: no BP/paste/history/pending loads. Still
                    auto-pause on BRK and publish frames. BRK only needs a peek
                    at instruction boundaries (micro inactive). */
+                int batch = runtime_turbo_is_free_run(rt)
+                    ? RUNTIME_RUN_BATCH_CYCLES_TURBO
+                    : RUNTIME_RUN_BATCH_CYCLES;
                 for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
-                     i < RUNTIME_RUN_BATCH_CYCLES; i++) {
+                     i < batch; i++) {
                     if (!rt->machine.cpu.micro_active &&
                         !rt->machine.pending_cpu_trace_active &&
                         !rt->suppress_execute_bp &&

@@ -1786,18 +1786,42 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 uint8_t color_reg = color_latch[col];
 
                 /* XSCROLL=0 bulk expand: g-access columns map 1:1 to frame_x. */
-                if (mode == 0u || mode == 2u ||
+                if (mode == 0u || mode == 2u || mode == 4u ||
                     (mode == 1u && (color_reg & 0x08u) == 0u)) {
-                    /* Hires text / hires MCM-text / hires bitmap. */
+                    /* Hires text / hires MCM-text / hires bitmap / ECM text. */
                     uint32_t fg = (mode == 2u)
                         ? vicii_palette_argb[(vm_byte >> 4) & 0x0fu]
                         : vicii_palette_argb[color_reg & 0x0fu];
-                    uint32_t bg = (mode == 2u)
-                        ? vicii_palette_argb[vm_byte & 0x0fu]
-                        : b0c;
-                    bool bg_is_d021 = (mode != 2u);
+                    uint32_t bg;
+                    bool bg_is_d021;
                     uint32_t base_idx = y * C64_FRAME_WIDTH + (uint32_t)raw_xs;
                     uint8_t g = gdata;
+                    if (mode == 2u) {
+                        bg = vicii_palette_argb[vm_byte & 0x0fu];
+                        bg_is_d021 = false;
+                    } else if (mode == 4u) {
+                        switch ((vm_byte >> 6) & 3u) {
+                        case 0u:
+                            bg = b0c;
+                            bg_is_d021 = true;
+                            break;
+                        case 1u:
+                            bg = b1c;
+                            bg_is_d021 = false;
+                            break;
+                        case 2u:
+                            bg = b2c;
+                            bg_is_d021 = false;
+                            break;
+                        default:
+                            bg = b3c;
+                            bg_is_d021 = false;
+                            break;
+                        }
+                    } else {
+                        bg = b0c;
+                        bg_is_d021 = true;
+                    }
                     for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
                         uint8_t k = (uint8_t)i;
                         bool on = (g & (uint8_t)(0x80u >> (unsigned)i)) != 0u;
@@ -2630,11 +2654,12 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* Deferred $D01E/$D01F clear follows this cycle's draw/collision sample. */
-    if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {
-        v->sprite_sprite_collision = 0;
-        v->clear_collisions = 0;
-    } else if (v->clear_collisions == VICII_REG_SPR_BG_COLL) {
-        v->sprite_background_collision = 0;
+    if (v->clear_collisions != 0u) {
+        if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {
+            v->sprite_sprite_collision = 0;
+        } else if (v->clear_collisions == VICII_REG_SPR_BG_COLL) {
+            v->sprite_background_collision = 0;
+        }
         v->clear_collisions = 0;
     }
 
@@ -2652,24 +2677,31 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
        DEN; bottom only sets the latch. At cycle 0 (= VICE PAL cycle 1) copy
        latch → live vertical flag. Mid-line $D011 RSEL/DEN changes are seen on
        the next check this cycle or at the left border apply. */
-    vicii_check_vborder_top(v);
-    vicii_check_vborder_bottom(v);
-    if (cycle == 0u) {
-        vicii_apply_vborder_latch(v);
-    }
+    {
+        uint32_t rl = v->timing.raster_line;
+        /* RSEL can change mid-line, so re-evaluate compares only near the
+           possible top/bottom lines (24- and 25-row windows). */
+        if (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
+            rl <= (uint32_t)VICII_VBORDER_TOP_24) {
+            vicii_check_vborder_top(v);
+        }
+        if (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
+            rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
+            vicii_check_vborder_bottom(v);
+        }
+        if (cycle == 0u) {
+            vicii_apply_vborder_latch(v);
+        }
 
-    /* Bauer/VICE allow_bad_lines: arm on first DMA line ($30) if DEN is set
-       during any cycle of that line; disarm after last DMA line ($F7). */
-    if (v->timing.raster_line == (uint32_t)VICII_BADLINE_FIRST &&
-        (v->registers[0x11] & 0x10u) != 0u) {
-        v->allow_bad_lines = true;
-    }
-    if (v->timing.raster_line == (uint32_t)VICII_BADLINE_LAST && cycle == 0u) {
-        /* VICE's start-of-line hook runs before incrementing raster_line, so
-           its LAST_DMA_LINE clear occurs after line $f7 has completed. */
-    }
-    if (v->timing.raster_line > (uint32_t)VICII_BADLINE_LAST) {
-        v->allow_bad_lines = false;
+        /* Bauer/VICE allow_bad_lines: arm on first DMA line ($30) if DEN is set
+           during any cycle of that line; disarm after last DMA line ($F7). */
+        if (rl == (uint32_t)VICII_BADLINE_FIRST &&
+            (v->registers[0x11] & 0x10u) != 0u) {
+            v->allow_bad_lines = true;
+        }
+        if (rl > (uint32_t)VICII_BADLINE_LAST) {
+            v->allow_bad_lines = false;
+        }
     }
 
     /* Bad Line Condition (Bauer 3.5 / VICE check_badline): once allow_bad_lines
@@ -2913,11 +2945,15 @@ void vicii_finish_cycle(vicii *v) {
         uint8_t d020 = (uint8_t)(v->registers[VICII_REG_BORDER_COLOR] & 0x0fu);
         if (d020 != v->color_pipe_d020) {
             uint8_t i;
-            for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
-                v->hborder_pipe[old_i].border[i] = vicii_palette_argb[d020];
+            if (v->hborder_pipe[old_i].n > 1u) {
+                for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
+                    v->hborder_pipe[old_i].border[i] = vicii_palette_argb[d020];
+                }
             }
-            for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
-                v->hborder_pipe[new_i].border[i] = vicii_palette_argb[d020];
+            if (v->hborder_pipe[new_i].n > 0u) {
+                for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
+                    v->hborder_pipe[new_i].border[i] = vicii_palette_argb[d020];
+                }
             }
             v->color_pipe_d020 = d020;
         }
@@ -2934,14 +2970,20 @@ void vicii_finish_cycle(vicii *v) {
             (uint8_t)(v->registers[VICII_REG_BACKGROUND_COLOR_0] & 0x0fu);
         if (d021 != v->color_pipe_d021) {
             uint8_t i;
-            for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
-                if (v->hborder_pipe[old_i].content_d021[i]) {
-                    v->hborder_pipe[old_i].content[i] = vicii_palette_argb[d021];
+            if (v->hborder_pipe[old_i].n > 1u) {
+                for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
+                    if (v->hborder_pipe[old_i].content_d021[i]) {
+                        v->hborder_pipe[old_i].content[i] =
+                            vicii_palette_argb[d021];
+                    }
                 }
             }
-            for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
-                if (v->hborder_pipe[new_i].content_d021[i]) {
-                    v->hborder_pipe[new_i].content[i] = vicii_palette_argb[d021];
+            if (v->hborder_pipe[new_i].n > 0u) {
+                for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
+                    if (v->hborder_pipe[new_i].content_d021[i]) {
+                        v->hborder_pipe[new_i].content[i] =
+                            vicii_palette_argb[d021];
+                    }
                 }
             }
             v->color_pipe_d021 = d021;
