@@ -192,6 +192,111 @@ static void vicii_init_sprite_slot_luts(void) {
     vicii_sprite_slot_lut_ready = 1;
 }
 
+/* Per-cycle_in_line event flags. Looked up once per Phi2 instead of a stack of
+   cycle==N / range compares for the same fixed geometry (PAL 63 / NTSC 65). */
+enum {
+    VICII_CF_LINE_START    = 1u << 0,  /* cycle 0 */
+    VICII_CF_VC_RC         = 1u << 1,  /* cycle 13 UpdateVc */
+    VICII_CF_UPDATE_RC     = 1u << 2,  /* cycle 57 UpdateRc */
+    VICII_CF_SPR_15        = 1u << 3,
+    VICII_CF_SPR_54        = 1u << 4,
+    VICII_CF_SPR_55        = 1u << 5,
+    VICII_CF_SPR_57        = 1u << 6,
+    VICII_CF_G_WINDOW      = 1u << 7,  /* Phi1 g-access window 15..54 */
+    VICII_CF_C_WINDOW      = 1u << 8,  /* Phi2 c-access window 14..53 */
+    VICII_CF_HBORDER_LEFT  = 1u << 9,  /* cycle 17 left border compare */
+    VICII_CF_SPR_ANY       = VICII_CF_SPR_15 | VICII_CF_SPR_54 |
+                            VICII_CF_SPR_55 | VICII_CF_SPR_57
+};
+
+static uint16_t vicii_pal_cycle_flags[VICII_PAL_CYCLES_PER_LINE];
+static uint16_t vicii_ntsc_cycle_flags[VICII_NTSC_CYCLES_PER_LINE];
+static int vicii_cycle_flags_ready;
+
+static void vicii_init_cycle_flags(void) {
+    uint32_t c;
+    if (vicii_cycle_flags_ready) {
+        return;
+    }
+    for (c = 0; c < (uint32_t)VICII_PAL_CYCLES_PER_LINE; ++c) {
+        uint16_t f = 0;
+        if (c == 0u) {
+            f |= (uint16_t)VICII_CF_LINE_START;
+        }
+        if (c == (uint32_t)VICII_VC_RC_CYCLE) {
+            f |= (uint16_t)VICII_CF_VC_RC;
+        }
+        if (c == (uint32_t)VICII_UPDATE_RC_CYCLE) {
+            f |= (uint16_t)(VICII_CF_UPDATE_RC | VICII_CF_SPR_57);
+        }
+        if (c == 15u) {
+            f |= (uint16_t)VICII_CF_SPR_15;
+        }
+        if (c == 54u) {
+            f |= (uint16_t)VICII_CF_SPR_54;
+        }
+        if (c == 55u) {
+            f |= (uint16_t)VICII_CF_SPR_55;
+        }
+        if (c >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+            c <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
+            f |= (uint16_t)VICII_CF_G_WINDOW;
+        }
+        if (c >= (uint32_t)VICII_CACCESS_FIRST_CYCLE &&
+            c <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
+            f |= (uint16_t)VICII_CF_C_WINDOW;
+        }
+        if (c == 17u) {
+            f |= (uint16_t)VICII_CF_HBORDER_LEFT;
+        }
+        vicii_pal_cycle_flags[c] = f;
+    }
+    for (c = 0; c < (uint32_t)VICII_NTSC_CYCLES_PER_LINE; ++c) {
+        uint16_t f = 0;
+        if (c == 0u) {
+            f |= (uint16_t)VICII_CF_LINE_START;
+        }
+        if (c == (uint32_t)VICII_VC_RC_CYCLE) {
+            f |= (uint16_t)VICII_CF_VC_RC;
+        }
+        if (c == (uint32_t)VICII_UPDATE_RC_CYCLE) {
+            f |= (uint16_t)(VICII_CF_UPDATE_RC | VICII_CF_SPR_57);
+        }
+        if (c == 15u) {
+            f |= (uint16_t)VICII_CF_SPR_15;
+        }
+        if (c == 54u) {
+            f |= (uint16_t)VICII_CF_SPR_54;
+        }
+        if (c == 55u) {
+            f |= (uint16_t)VICII_CF_SPR_55;
+        }
+        if (c >= (uint32_t)VICII_GACCESS_FIRST_CYCLE &&
+            c <= (uint32_t)VICII_GACCESS_LAST_CYCLE) {
+            f |= (uint16_t)VICII_CF_G_WINDOW;
+        }
+        if (c >= (uint32_t)VICII_CACCESS_FIRST_CYCLE &&
+            c <= (uint32_t)VICII_CACCESS_LAST_CYCLE) {
+            f |= (uint16_t)VICII_CF_C_WINDOW;
+        }
+        if (c == 17u) {
+            f |= (uint16_t)VICII_CF_HBORDER_LEFT;
+        }
+        vicii_ntsc_cycle_flags[c] = f;
+    }
+    vicii_cycle_flags_ready = 1;
+}
+
+static inline uint16_t vicii_cycle_flags(const vicii *v, uint32_t cycle) {
+    vicii_init_cycle_flags();
+    if (v->timing.standard == VICII_VIDEO_STANDARD_PAL) {
+        return cycle < (uint32_t)VICII_PAL_CYCLES_PER_LINE ?
+            vicii_pal_cycle_flags[cycle] : 0u;
+    }
+    return cycle < (uint32_t)VICII_NTSC_CYCLES_PER_LINE ?
+        vicii_ntsc_cycle_flags[cycle] : 0u;
+}
+
 /* VICE viciisc cycle_tab_{pal,ntsc}: sprite bits whose DMA makes BA low in
    each zero-based raster cycle.  These masks are deliberately explicit.  A
    generic look-ahead interval gets both the cross-line start and, critically,
@@ -2491,7 +2596,9 @@ static void vicii_prepare_phi1_bus_access(vicii *v, uint32_t cycle) {
     int sprite;
     bool second_cycle;
 
-    /* Phi1 is sampled before this cycle's Phi2 sequencer transitions. */
+    /* Phi1 is sampled before this cycle's Phi2 sequencer transitions.
+       Outside the g-window fetch_g_or_idle still short-circuits; the G vs
+       IDLE label follows display_state (VICE / snapshot traces). */
     v->timing.bus_access_phi1 = v->display_state ?
         VICII_BUS_ACCESS_G : VICII_BUS_ACCESS_IDLE;
 
@@ -2506,6 +2613,7 @@ static void vicii_prepare_phi1_bus_access(vicii *v, uint32_t cycle) {
 static void vicii_schedule_phi2_bus_access(vicii *v, uint32_t cycle) {
     int sprite;
     bool second_cycle;
+    uint16_t cf = vicii_cycle_flags(v, cycle);
 
     /* Phi2 is CPU-visible only for bad-line c-accesses and sprite data. */
     v->timing.bus_access = VICII_BUS_ACCESS_NONE;
@@ -2518,8 +2626,7 @@ static void vicii_schedule_phi2_bus_access(vicii *v, uint32_t cycle) {
         return;
     }
 
-    if (v->bad_line && cycle >= VICII_CACCESS_FIRST_CYCLE &&
-        cycle <= VICII_CACCESS_LAST_CYCLE) {
+    if (v->bad_line && (cf & (uint16_t)VICII_CF_C_WINDOW) != 0u) {
         v->timing.bus_access = VICII_BUS_ACCESS_C;
     }
 }
@@ -2528,10 +2635,10 @@ static bool vicii_phi2_access_scheduled_now(const vicii *v) {
     uint32_t cycle = v->timing.cycle_in_line;
     int sprite;
     bool second_cycle;
+    uint16_t cf = vicii_cycle_flags(v, cycle);
 
     /* bad_line is refreshed earlier in begin_cycle for this cycle's YSCROLL. */
-    if (v->bad_line &&
-        cycle >= VICII_CACCESS_FIRST_CYCLE && cycle <= VICII_CACCESS_LAST_CYCLE) {
+    if (v->bad_line && (cf & (uint16_t)VICII_CF_C_WINDOW) != 0u) {
         return true;
     }
     if (v->sprite_active_mask == 0u) {
@@ -2785,11 +2892,13 @@ static void vicii_execute_phi2_fetch(vicii *v, const c64_bus_t *bus, uint32_t cy
 
 void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     uint32_t cycle;
+    uint16_t cf;
     bool ba_low;
 
     assert(v);
 
     cycle = v->timing.cycle_in_line;
+    cf = vicii_cycle_flags(v, cycle);
 
     /* VICE's cycle order is Phi1 fetch, horizontal-border/draw work, then the
        internal Phi2 sequencer and c-access. In particular, drawing must see the
@@ -2814,7 +2923,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     /* ------------------------------------------------------------------
      * Start-of-line events (cycle 0 of the current raster line)
      * ------------------------------------------------------------------ */
-    if (cycle == 0) {
+    if ((cf & (uint16_t)VICII_CF_LINE_START) != 0u) {
         v->bad_line = false;
         if (v->timing.raster_line == v->timing.raster_compare) {
             vicii_assert_raster_irq(v);
@@ -2837,7 +2946,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
             rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
             vicii_check_vborder_bottom(v);
         }
-        if (cycle == 0u) {
+        if ((cf & (uint16_t)VICII_CF_LINE_START) != 0u) {
             vicii_apply_vborder_latch(v);
         }
 
@@ -2864,7 +2973,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     /* Bauer 3.7.2 UpdateVc at VICE Phi2(14), zero-based cycle 13.
        VC ← VCBASE and VMLI ← 0 every line; a live badline clears RC. */
-    if (cycle == (uint32_t)VICII_VC_RC_CYCLE) {
+    if ((cf & (uint16_t)VICII_CF_VC_RC) != 0u) {
         v->vc = v->vc_base;
         v->vmli = 0;
         if (v->bad_line) {
@@ -2974,7 +3083,7 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     /* VICE Phi2(58), zero-based cycle 57. This runs well before line wrap;
        VC has already been advanced by the forty cycle-15..54 g-accesses. */
-    if (cycle == (uint32_t)VICII_UPDATE_RC_CYCLE) {
+    if ((cf & (uint16_t)VICII_CF_UPDATE_RC) != 0u) {
         if (v->rc == (uint8_t)VICII_RC_MAX) {
             v->display_state = false;
             v->vc_base = v->vc;
@@ -2987,15 +3096,16 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     /* Sprite sequencer only mutates state on cycles 15/54/55/57. Same-line
        presentation fetch after DMA-on needs active_before only at 54/55. */
-    if (cycle == 0u) {
+    if ((cf & (uint16_t)VICII_CF_LINE_START) != 0u) {
         vicii_prepare_sprite_line(v, bus);
         vicii_latch_sprite_line_state(v);
-    } else if (cycle == 15u || cycle == 57u) {
-        if (v->sprite_active_mask != 0u || cycle == 57u) {
+    } else if ((cf & (uint16_t)(VICII_CF_SPR_15 | VICII_CF_SPR_57)) != 0u) {
+        if (v->sprite_active_mask != 0u ||
+            (cf & (uint16_t)VICII_CF_SPR_57) != 0u) {
             /* cycle 57 still traces; step itself is cheap when mask is 0. */
             vicii_step_sprite_sequencer(v, cycle);
         }
-    } else if (cycle == 54u || cycle == 55u) {
+    } else if ((cf & (uint16_t)(VICII_CF_SPR_54 | VICII_CF_SPR_55)) != 0u) {
         uint8_t active_before = v->sprite_active_mask;
         uint8_t enable = v->registers[VICII_REG_SPR_ENABLE];
         /* Idle: no DMA and nothing enabled → no Y-match or expand work. */
