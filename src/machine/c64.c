@@ -1898,6 +1898,87 @@ static void c64_step_cycle_micro_hot(c64_t *machine) {
     }
 }
 
+/* Between-instruction free-run strip: same observables as step_cycle_internal
+   when there is no deferred CPU-trace playback. Skips the pending-trace branch
+   and is used to chain into micro_hot without re-entering the full switch. */
+static void c64_step_cycle_between_hot(c64_t *machine) {
+    bool between_instructions_stalled = false;
+
+    if (machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE) {
+        uint16_t pc = machine->cpu.cpu.pc;
+        if ((pc == (uint16_t)C64_KERNAL_LOAD_ENTRY ||
+             pc == (uint16_t)C64_KERNAL_SAVE_ENTRY) &&
+            (c64_try_kernal_load_trap(machine) ||
+             c64_try_kernal_save_trap(machine))) {
+            machine->instruction_complete = true;
+            machine->clock.cpu_cycles++;
+            machine->cpu_prev_between_stall = false;
+            c64_advance_one_cycle(machine);
+            return;
+        }
+    }
+
+    c64_begin_vic_for_current_cycle(machine);
+
+    {
+        bool resuming = machine->cpu_prev_between_stall;
+        if (!vicii_aec_active(&machine->vic) ||
+            !vicii_rdy_active(&machine->vic, machine->clock.cycle)) {
+            between_instructions_stalled = true;
+        } else if (machine->cpu_deferred_interrupt != C6510_INTERRUPT_NONE) {
+            c64_begin_interrupt_now(machine, machine->cpu_deferred_interrupt);
+            machine->cpu_deferred_interrupt = C6510_INTERRUPT_NONE;
+        } else if (!c64_prepare_micro_instruction(machine, resuming)) {
+            /* Rare unsupported opcode → deferred bulk path. */
+            c64_prepare_deferred_cpu_trace(machine);
+        }
+    }
+
+    machine->cpu_prev_between_stall = between_instructions_stalled;
+    c64_step_nonvic_devices_for_current_cycle(machine);
+    c64_cyclelog_emit(machine);
+
+    if (between_instructions_stalled) {
+        c64_step_host_ba_stall(machine);
+        return;
+    }
+    if (machine->cpu.micro_active) {
+        if (!c64_micro_cycle_stalled_by_vic_pins(machine)) {
+            c64_step_micro_cycle(machine);
+        } else {
+            c64_step_host_ba_stall(machine);
+        }
+        return;
+    }
+    if (machine->pending_cpu_trace_active) {
+        /* Fall through to the shared deferred-trace handling via one internal
+           step would double-begin VIC. Finish this cycle as a no-op host if
+           deferred was just armed: prepare_deferred leaves micro inactive and
+           pending true — run the pending path once inline. */
+        if (c64_cpu_cycle_stalled_by_vic_pins(machine)) {
+            c64_step_host_ba_stall(machine);
+            return;
+        }
+        c64_balog_mark(0);
+        c64_apply_pending_cpu_events_at_elapsed(machine);
+        machine->pending_cpu_elapsed++;
+        machine->clock.cpu_cycles++;
+        c64_finish_cycle(machine);
+        if (machine->pending_cpu_elapsed >= machine->pending_cpu_trace.total_cycles) {
+            c64_apply_pending_cpu_events_at_elapsed(machine);
+            if (machine->cpu_trace_enabled) {
+                machine->last_cpu_trace = machine->pending_cpu_trace;
+            }
+            machine->pending_cpu_trace_active = false;
+            machine->instruction_complete = true;
+            machine->pending_cpu_event_index = 0;
+            machine->pending_cpu_elapsed = 0;
+        }
+        return;
+    }
+    c64_finish_cycle(machine);
+}
+
 bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_size) {
     uint32_t i;
 
@@ -1912,8 +1993,7 @@ bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_s
     }
 
     for (i = 0u; i < count; ) {
-        /* Safe multi-Phi2 strip: stay on the micro hot path while an instruction
-           is in flight (no IRQ defer / deferred-trace / between-instr prepare). */
+        /* Mid-instruction strip. */
         if (machine->cpu.micro_active &&
             machine->cpu_deferred_interrupt == C6510_INTERRUPT_NONE &&
             !machine->pending_cpu_trace_active) {
@@ -1923,6 +2003,13 @@ bool c64_step_cycles(c64_t *machine, uint32_t count, char *error, size_t error_s
                 c64_step_cycle_micro_hot(machine);
                 i++;
             }
+            continue;
+        }
+        /* Between instructions (and deferred-trace start): thinner than full
+           internal when not already in pending-trace playback mid-stream. */
+        if (!machine->pending_cpu_trace_active) {
+            c64_step_cycle_between_hot(machine);
+            i++;
             continue;
         }
         c64_step_cycle_internal(machine);
