@@ -24,7 +24,9 @@ enum {
     /* Normal free-run batch between command-queue polls. Turbo max/warp uses a
        larger batch to cut poll overhead when the UI is not interactive. */
     RUNTIME_RUN_BATCH_CYCLES = 1024,
-    RUNTIME_RUN_BATCH_CYCLES_TURBO = 4096,
+    /* Larger free-run turbo batch: command poll overhead drops; BRK still
+       checked at instruction boundaries inside the batch. */
+    RUNTIME_RUN_BATCH_CYCLES_TURBO = 8192,
     PASTE_HOLD_CYCLES        =  39400,  /* ~40ms  at PAL 985248 Hz */
     PASTE_GAP_CYCLES         =  19704,  /* ~20ms  at PAL 985248 Hz — must exceed one KERNAL scan period */
     PASTE_RETURN_GAP_CYCLES  = 246312,  /* ~250ms at PAL 985248 Hz */
@@ -1965,11 +1967,13 @@ static bool runtime_step_cycle_free_run(runtime *rt) {
 }
 
 /* Mid-instruction multi-Phi2 strip for free-run: same machine clocks as N calls
-   to runtime_step_cycle_free_run, with one c64_step_cycles batch + N audio
-   advances. BRK/frame checks happen between instructions only. */
+   to runtime_step_cycle_free_run, with one c64_step_cycles batch. Host audio is
+   already muted under free-run turbo (sample path off); skip the N no-op
+   audio advances. BRK/frame checks happen between instructions only. */
 static bool runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
     char error[256];
     uint32_t i;
+    bool free_run_mute;
 
     if (count == 0u) {
         return true;
@@ -1979,8 +1983,12 @@ static bool runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
         runtime_publish_error(rt, error);
         return false;
     }
-    for (i = 0u; i < count; i++) {
-        runtime_audio_advance_cycle(rt);
+    free_run_mute =
+        runtime_turbo_is_free_run(rt) && rt->audio_record_path == NULL;
+    if (!free_run_mute) {
+        for (i = 0u; i < count; i++) {
+            runtime_audio_advance_cycle(rt);
+        }
     }
     return true;
 }
@@ -4692,7 +4700,9 @@ int runtime_thread_main(void *userdata) {
                         runtime_pause_for_brk(rt);
                         break;
                     }
-                    /* Drain the rest of a mid-instruction strip in one batch. */
+                    /* Drain the rest of a mid-instruction strip in one batch.
+                       Do not multi-step across instruction boundaries here:
+                       BRK auto-pause must see the boundary opcode. */
                     if (rt->machine.cpu.micro_active &&
                         rt->machine.cpu_deferred_interrupt ==
                             C6510_INTERRUPT_NONE &&
