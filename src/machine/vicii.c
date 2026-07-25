@@ -2909,6 +2909,41 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     cycle = v->timing.cycle_in_line;
     cf = vicii_cycle_flags(v, cycle);
 
+    /* Deep vertical-border idle, no sprites, no sequencer events this cycle:
+       skip Phi1 fetch/paint/sequencer. Still maintain BA/AEC/reg11_delay. */
+    if (v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
+        v->sprite_active_mask == 0u &&
+        !v->bad_line &&
+        (cf & (uint16_t)(VICII_CF_LINE_START | VICII_CF_VC_RC |
+                         VICII_CF_UPDATE_RC | VICII_CF_SPR_ANY)) == 0u) {
+        v->timing.bus_access_phi1 = VICII_BUS_ACCESS_IDLE;
+        v->timing.bus_access = VICII_BUS_ACCESS_NONE;
+        if (v->pixel_output_enabled) {
+            vicii_render_live_cycle(v, bus);
+        }
+        if (v->clear_collisions != 0u) {
+            if (v->clear_collisions == VICII_REG_SPR_SPR_COLL) {
+                v->sprite_sprite_collision = 0;
+            } else if (v->clear_collisions == VICII_REG_SPR_BG_COLL) {
+                v->sprite_background_collision = 0;
+            }
+            v->clear_collisions = 0;
+        }
+        v->bad_line = false;
+        ba_low = vicii_update_ba(v, cycle, abs_cycle);
+        v->timing.rdy_active = !ba_low;
+        if (ba_low) {
+            if (v->timing.prefetch_cycles != 0u) {
+                v->timing.prefetch_cycles--;
+            }
+        } else {
+            v->timing.prefetch_cycles = VICII_BA_LEAD_CYCLES + 1u;
+        }
+        v->timing.aec_active = true;
+        v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
+        return;
+    }
+
     /* VICE's cycle order is Phi1 fetch, horizontal-border/draw work, then the
        internal Phi2 sequencer and c-access. In particular, drawing must see the
        matrix/color buffer as it existed before this cycle's c-access. */
