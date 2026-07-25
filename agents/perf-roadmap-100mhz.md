@@ -321,3 +321,4 @@ Each step: measure pure on/off + product both-off; run accuracy suite; write res
 | 2026-07-24 | Unrolled hires bulk expand; skip sprite p/s schedule when DMA mask empty. Holds pure paint-on ~**13.7 MHz** plateau. ctest 56/56. |
 | 2026-07-24 | Path-A unrolled B0C bulk; BA early-return when no sprite DMA/badline; allow_bad_lines gate; idle sprite prepare/latch/sequencer skips. M2 pure paint-on ~**14.5 MHz**, paint-off ~**17.6 MHz**, product drives-off ~**13.1 MHz**. ctest 56/56. |
 | 2026-07-24 | finish_cycle early-out of $D016/$D011 re-decode + XSCROLL under vertical border. Holds pure paint-on ~**14.2 MHz**. ctest 56/56. |
+| 2026-07-24 | Local stack Go1–5 (no push): NEON/scalar 8-dot paint helpers; cycle_in_line flag table; deep vborder line_class; `c64_step_cycles` micro hot-path batch; 6510 op-class table. Pure paint-on ~**15.1–15.7 MHz**, paint-off ~**18.7–19.5 MHz** on M2. ctest 56/56 on tip. |
