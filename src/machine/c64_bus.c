@@ -5,6 +5,7 @@
 #include "vicii.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -84,6 +85,70 @@ static c64_cartridge_mode c64_bus_cartridge_mode_from_lines(uint8_t exrom, uint8
     return C64_CARTRIDGE_MODE_NONE;
 }
 
+/* VICE magicdesk.c: bankmask from highest bank index present in the image. */
+static uint8_t c64_bus_magic_desk_bank_mask(size_t last_bank_index) {
+    if (last_bank_index >= 64u) {
+        return 0x7fu;
+    }
+    if (last_bank_index >= 32u) {
+        return 0x3fu;
+    }
+    if (last_bank_index >= 16u) {
+        return 0x1fu;
+    }
+    if (last_bank_index >= 8u) {
+        return 0x0fu;
+    }
+    if (last_bank_index >= 4u) {
+        return 0x07u;
+    }
+    return 0x03u;
+}
+
+static void c64_bus_magic_desk_apply_latch(c64_bus_t *bus) {
+    uint8_t bank;
+    size_t offset;
+
+    assert(bus);
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK);
+
+    bus->cartridge_io_latch =
+        (uint8_t)(bus->cartridge_io_latch & (uint8_t)(0x80u | bus->cartridge_bank_mask));
+    bank = (uint8_t)(bus->cartridge_io_latch & bus->cartridge_bank_mask);
+
+    if (bus->cartridge_io_latch & 0x80u) {
+        /* Bit 7 set: cart ROM disabled; $8000 is RAM. */
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+        bus->cartridge_exrom = 1;
+        bus->cartridge_game = 1;
+    } else {
+        bus->cartridge_exrom = 0;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_8K;
+    }
+
+    if (bus->cartridge_rom_banks != NULL && bus->cartridge_bank_count > 0) {
+        if (bank >= bus->cartridge_bank_count) {
+            bank = (uint8_t)(bank % (uint8_t)bus->cartridge_bank_count);
+        }
+        offset = (size_t)bank * C64_CARTRIDGE_ROM_BANK_SIZE;
+        memcpy(
+            bus->cartridge_roml,
+            bus->cartridge_rom_banks + offset,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+        bus->cartridge_roml_present = true;
+    }
+}
+
+static void c64_bus_free_cartridge_banks(c64_bus_t *bus) {
+    free(bus->cartridge_rom_banks);
+    bus->cartridge_rom_banks = NULL;
+    bus->cartridge_bank_count = 0;
+    bus->cartridge_bank_mask = 0;
+    bus->cartridge_io_latch = 0;
+    bus->cartridge_hardware_type = C64_CARTRIDGE_HW_NORMAL;
+}
+
 static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
     if (address >= 0xd000 && address <= 0xd3ff && bus->vic) {
         return vicii_read_register(bus->vic, address);
@@ -105,6 +170,7 @@ static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
         return cia_read_register(bus->cia2, address);
     }
 
+    /* Magic Desk IO1 is write-only (VICE: read never valid). */
     return 0xff;
 }
 
@@ -147,6 +213,15 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
             c64_bus_refresh_vic_bank_base(bus);
         }
         bus->cia2_register_writes++;
+        return;
+    }
+
+    /* Magic Desk / Domark / HES: bank register at IO1 $DE00–$DEFF. */
+    if (address >= 0xde00u && address <= 0xdeffu &&
+        bus->cartridge_mounted &&
+        bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
+        bus->cartridge_io_latch = value;
+        c64_bus_magic_desk_apply_latch(bus);
     }
 }
 
@@ -184,6 +259,8 @@ void c64_bus_reset(c64_bus_t *bus) {
     bus->cia2_register_writes = 0;
     bus->sid_register_writes = 0;
     c64_bus_refresh_vic_bank_base(bus);
+    /* Cart ROM survives machine reset; Magic Desk re-selects bank 0 / enabled. */
+    c64_bus_cartridge_reset(bus);
 }
 
 void c64_bus_attach_vicii(c64_bus_t *bus, vicii *v) {
@@ -321,6 +398,7 @@ bool c64_bus_attach_generic_cartridge(
     uint8_t game)
 {
     c64_cartridge_mode mode;
+    uint8_t *banks;
 
     assert(bus);
 
@@ -339,6 +417,19 @@ bool c64_bus_attach_generic_cartridge(
         return false;
     }
 
+    banks = (uint8_t *)malloc(C64_CARTRIDGE_ROM_BANK_SIZE);
+    if (banks == NULL) {
+        return false;
+    }
+    memcpy(banks, roml, C64_CARTRIDGE_ROM_BANK_SIZE);
+
+    c64_bus_detach_cartridge(bus);
+
+    bus->cartridge_rom_banks = banks;
+    bus->cartridge_bank_count = 1;
+    bus->cartridge_bank_mask = 0;
+    bus->cartridge_io_latch = 0;
+    bus->cartridge_hardware_type = C64_CARTRIDGE_HW_NORMAL;
     memcpy(bus->cartridge_roml, roml, C64_CARTRIDGE_ROM_BANK_SIZE);
     bus->cartridge_roml_present = true;
     if (mode == C64_CARTRIDGE_MODE_16K) {
@@ -355,9 +446,54 @@ bool c64_bus_attach_generic_cartridge(
     return true;
 }
 
+bool c64_bus_attach_magic_desk_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    uint8_t *storage;
+    size_t bytes;
+    size_t last_bank;
+
+    assert(bus);
+
+    if (banks == NULL || bank_count == 0 || bank_count > C64_CARTRIDGE_MAX_BANKS) {
+        return false;
+    }
+    /* Magic Desk is 8K game: EXROM low, GAME high in the CRT header. */
+    if (exrom != 0 || game == 0) {
+        return false;
+    }
+
+    bytes = bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    storage = (uint8_t *)malloc(bytes);
+    if (storage == NULL) {
+        return false;
+    }
+    memcpy(storage, banks, bytes);
+
+    c64_bus_detach_cartridge(bus);
+
+    last_bank = bank_count - 1u;
+    bus->cartridge_rom_banks = storage;
+    bus->cartridge_bank_count = (uint16_t)bank_count;
+    bus->cartridge_bank_mask = c64_bus_magic_desk_bank_mask(last_bank);
+    bus->cartridge_hardware_type = C64_CARTRIDGE_HW_MAGIC_DESK;
+    bus->cartridge_romh_present = false;
+    memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+    bus->cartridge_mounted = true;
+    /* Power-on: bank 0, cart enabled (VICE magicdesk_config_init). */
+    bus->cartridge_io_latch = 0;
+    c64_bus_magic_desk_apply_latch(bus);
+    return true;
+}
+
 void c64_bus_detach_cartridge(c64_bus_t *bus) {
     assert(bus);
 
+    c64_bus_free_cartridge_banks(bus);
     memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
     memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
     bus->cartridge_mounted = false;
@@ -366,6 +502,37 @@ void c64_bus_detach_cartridge(c64_bus_t *bus) {
     bus->cartridge_exrom = 1;
     bus->cartridge_game = 1;
     bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+}
+
+void c64_bus_cartridge_reset(c64_bus_t *bus) {
+    assert(bus);
+
+    if (!bus->cartridge_mounted) {
+        return;
+    }
+    if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
+        bus->cartridge_io_latch = 0;
+        c64_bus_magic_desk_apply_latch(bus);
+    }
+}
+
+void c64_bus_cartridge_apply_banking(c64_bus_t *bus) {
+    assert(bus);
+
+    if (!bus->cartridge_mounted) {
+        return;
+    }
+    if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
+        c64_bus_magic_desk_apply_latch(bus);
+    } else if (
+        bus->cartridge_rom_banks != NULL &&
+        bus->cartridge_bank_count > 0 &&
+        bus->cartridge_roml_present) {
+        memcpy(
+            bus->cartridge_roml,
+            bus->cartridge_rom_banks,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+    }
 }
 
 bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value) {

@@ -7,10 +7,10 @@
 #include <stdint.h>
 
 #define C64_SNAPSHOT_MAGIC 0x63363453u
-/* v12: CART is a one-byte unmounted stub, or metadata plus only the present
-   ROML/ROMH banks (no empty 16 KiB padding). Pre-v12 files are sunset. */
-#define C64_SNAPSHOT_VERSION 12u
-#define C64_SNAPSHOT_VERSION_MIN 12u
+/* v13: CART includes hardware type, multi-bank ROML storage, Magic Desk latch.
+   Pre-v13 files are sunset (v12 had single ROML/ROMH only). */
+#define C64_SNAPSHOT_VERSION 13u
+#define C64_SNAPSHOT_VERSION_MIN 13u
 
 typedef enum c64_snapshot_content_mode {
     C64_SNAPSHOT_CONTENT_REFERENCED = 1,

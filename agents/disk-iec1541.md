@@ -15,8 +15,8 @@ is in `src/machine/c64.c`, `c1541.c`, `c1541_media.c`, and runtime disk code.
   fallback when 1541 emulation is disabled or no usable 1541 ROM is loaded.
 - T64 is host convenience loading only: the first loadable entry is extracted.
   There is no mounted tape/Datasette state or T64 KERNAL trap.
-- CRT supports generic hardware type 0 8K/16K cartridges through the machine path;
-  it is not a disk/file injection.
+- CRT supports hardware type 0 (generic 8K/16K) and type 19 (Magic Desk multi-bank
+  8K) through the machine cart path; it is not a disk/file injection.
 
 Useful runtime entry points are `c64_mount_d64_ex()`, `c64_mount_g64()`,
 `c64_set_drive_writable()`, `c64_unmount_drive()`, `c64_copy_drive_status()`, and
@@ -102,7 +102,7 @@ path (no sector map / no KERNAL-trap SAVE into G64).
 G64 empty-track grow / format rebuild, pure Port-A GCR write fidelity polish,
 cross-drive copy, block/memory commands, devices beyond 8/9, 1571/other ROM
 variants, and exhaustive fast-loader support are deferred. Full 1541 drive-object
-save-state is supported in snapshot format v12 (`DR8C`/`DR9C` for **powered**
+save-state is supported in snapshot format v13 (`DR8C`/`DR9C` for **powered**
 units only: CPU/VIA/RAM/media + verbatim GCR tracks; unpowered units are a
 `powered=false` stub) so a mid-transfer custom-loader snapshot can resume.
 Without the included-core flag, load hard-resets the drives. Do not add

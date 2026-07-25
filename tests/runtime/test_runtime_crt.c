@@ -104,6 +104,44 @@ static void write_generic_16k_crt(const char *path) {
     fclose(file);
 }
 
+static void write_magic_desk_crt(const char *path) {
+    FILE *file = fopen(path, "wb");
+    size_t bank;
+    size_t i;
+
+    if (file == NULL) {
+        fail("failed to create Magic Desk CRT test file");
+    }
+
+    fwrite("C64 CARTRIDGE   ", 1, 16, file);
+    put_be32(file, 0x40);
+    put_be16(file, 0x0100);
+    put_be16(file, 19); /* Magic Desk */
+    fputc(0x00, file); /* EXROM */
+    fputc(0x01, file); /* GAME */
+    for (i = 0; i < 6; ++i) {
+        fputc(0x00, file);
+    }
+    fwrite("MAGIC DESK TEST ", 1, 16, file);
+    for (i = 0; i < 16; ++i) {
+        fputc(0x00, file);
+    }
+
+    for (bank = 0; bank < 4; ++bank) {
+        fwrite("CHIP", 1, 4, file);
+        put_be32(file, 0x2010);
+        put_be16(file, 0x0000);
+        put_be16(file, (uint16_t)bank);
+        put_be16(file, 0x8000);
+        put_be16(file, 0x2000);
+        for (i = 0; i < 0x2000u; ++i) {
+            fputc((int)(((bank + 1u) << 4) | (i & 0x0fu)), file);
+        }
+    }
+
+    fclose(file);
+}
+
 static void write_test_prg(const char *path) {
     FILE *file = fopen(path, "wb");
 
@@ -275,6 +313,33 @@ int main(void) {
     if (event.data.memory.bytes[0] == 0x80 && event.data.memory.bytes[1] == 0x81 &&
         event.data.memory.bytes[2] == 0x82 && event.data.memory.bytes[3] == 0x83) {
         fail("cartridge still mapped at $8000 after reset with unmount");
+    }
+
+    /* Magic Desk (type 19): load multi-bank cart and verify bank 0 at $8000. */
+    {
+        static const char md_path[] = "runtime magic desk (test).crt";
+        write_magic_desk_crt(md_path);
+        expect_true("load Magic Desk CRT", runtime_client_load_crt(client, md_path));
+        if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+            fail("Magic Desk RESET_COMPLETE not received");
+        }
+        if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+            fail("Magic Desk RUNNING not received");
+        }
+        expect_true("pause after Magic Desk", runtime_client_pause(client));
+        if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+            fail("Magic Desk PAUSED not received");
+        }
+        expect_true(
+            "request Magic Desk ROML",
+            runtime_client_request_memory(client, 0x8000, 2, RUNTIME_MEMORY_MODE_CPU_MAP));
+        if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+            fail("Magic Desk memory response not received");
+        }
+        /* Bank 0 first byte pattern: ((0+1)<<4) | 0 = 0x10 */
+        expect_u8("Magic Desk bank0 byte0", 0x10, event.data.memory.bytes[0]);
+        expect_u8("Magic Desk bank0 byte1", 0x11, event.data.memory.bytes[1]);
+        remove(md_path);
     }
 
     runtime_client_quit(client);

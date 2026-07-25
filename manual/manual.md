@@ -35,7 +35,7 @@ Useful flags:
 | `--disk <drive>=<image[,image...]>` | Mount a D64/G64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue. Empty path (`--disk 8=`) soft-powers that unit without media |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
-| `--crt <file>`         | Attach a generic 8K/16K cartridge at startup        |
+| `--crt <file>`         | Attach a CRT cartridge at startup (types 0 and 19)  |
 | `--sna <file>`         | Load a machine snapshot (`.c64state`) at startup    |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
 | `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
@@ -107,10 +107,17 @@ Example:
 
 ### Cartridges
 
-c64m supports generic 8K and 16K `.crt` cartridges (normal hardware type). `--crt <file>`
-attaches the cartridge at startup and resets with it running; a `.crt` file can also be
-dragged onto the window at any time. ROML maps at `$8000-$9FFF` and, for 16K cartridges,
-ROMH at `$A000-$BFFF`.
+c64m supports these `.crt` hardware types:
+
+- **Type 0 (Normal):** generic 8K and 16K cartridges. ROML maps at `$8000-$9FFF` and, for
+  16K cartridges, ROMH at `$A000-$BFFF`.
+- **Type 19 (Magic Desk / Domark / HES):** multi-bank 8K cartridges. ROML maps at
+  `$8000-$9FFF`; the game selects banks by writing to `$DE00`. Bit 7 of that register
+  can disable the cartridge so RAM appears at `$8000` instead.
+
+`--crt <file>` attaches a supported cartridge at startup and resets with it running; a
+`.crt` file can also be dragged onto the window at any time. Unsupported cartridge types
+are rejected with an error rather than attached.
 
 Loading a program (drag a `.prg`/`.t64`/`.bas`, or use `--prg`/`--basic`) detaches an
 attached cartridge first, so the program boots to BASIC instead of the cartridge. To go
@@ -151,7 +158,7 @@ The file extension determines how the file is handled:
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
 | `.g64`    | Mount the G64 image on device 8 (same as D64; use media path for GCR) |
 | `.c64state` | Load a saved machine state snapshot                         |
-| `.crt`    | Attach a generic 8K/16K cartridge and reset with it running |
+| `.crt`    | Attach a supported CRT (types 0 and 19) and reset with it running |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B-$2E`) |
 | `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
 | anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |
@@ -701,13 +708,13 @@ literally, but their exact bytes are always preserved through the numeric escape
 **[Save]** opens a save dialog and writes a named `.c64state` snapshot.
 
 State snapshots preserve the emulated machine state, RAM, color RAM, CPU, VIC-II, CIA,
-SID, attached generic cartridge, mounted D64/G64 drive-slot data, and live 1541
-drive-object state when real 1541 emulation is on. Host-side extras stored with the
-snapshot include the keyboard joystick layout/port and the disk path queues for
-devices 8 and 9 (so a multi-disk CLI queue is restored for UI swap after load).
-C64 ROM bytes are referenced and hash-validated rather than fully embedded, so a
-snapshot is expected to be loaded with the same ROM files available. A failed load
-leaves the live machine unchanged.
+SID, attached cartridge (including Magic Desk multi-bank state), mounted D64/G64
+drive-slot data, and live 1541 drive-object state when real 1541 emulation is on.
+Host-side extras stored with the snapshot include the keyboard joystick layout/port and
+the disk path queues for devices 8 and 9 (so a multi-disk CLI queue is restored for UI
+swap after load). C64 ROM bytes are referenced and hash-validated rather than fully
+embedded, so a snapshot is expected to be loaded with the same ROM files available. A
+failed load leaves the live machine unchanged.
 
 **Shift+Opt+>** quicksaves to the snapshot folder (Configure -> Paths -> `snapshot`,
 which defaults to the current directory). Each quicksave creates a new timestamped

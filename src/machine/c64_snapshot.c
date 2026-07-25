@@ -536,22 +536,28 @@ static void write_mach(snapshot_writer *w, const c64_t *m) {
 static void write_cart(snapshot_writer *w, const c64_t *m) {
     const c64_bus_t *bus = &m->bus;
     size_t chunk;
+    size_t bank_bytes;
 
     begin_chunk(w, TAG_CART, &chunk);
     w_bool(w, bus->cartridge_mounted);
     if (!bus->cartridge_mounted) {
-        /* No cart: one-byte stub. Banks are zeros on a detached bus. */
+        /* No cart: one-byte stub. */
         end_chunk(w, chunk);
         return;
     }
 
+    w_u16(w, bus->cartridge_hardware_type);
+    w_u16(w, bus->cartridge_bank_count);
+    w_u8(w, bus->cartridge_bank_mask);
+    w_u8(w, bus->cartridge_io_latch);
     w_bool(w, bus->cartridge_roml_present);
     w_bool(w, bus->cartridge_romh_present);
     w_u8(w, bus->cartridge_exrom);
     w_u8(w, bus->cartridge_game);
     w_u32(w, (uint32_t)bus->cartridge_mode);
-    if (bus->cartridge_roml_present) {
-        w_bytes(w, bus->cartridge_roml, sizeof(bus->cartridge_roml));
+    bank_bytes = (size_t)bus->cartridge_bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    if (bus->cartridge_bank_count > 0 && bus->cartridge_rom_banks != NULL) {
+        w_bytes(w, bus->cartridge_rom_banks, bank_bytes);
     }
     if (bus->cartridge_romh_present) {
         w_bytes(w, bus->cartridge_romh, sizeof(bus->cartridge_romh));
@@ -1062,37 +1068,60 @@ static void read_mach(snapshot_reader *r, c64_t *m) {
 static void read_cart(snapshot_reader *r, c64_t *m) {
     c64_bus_t *bus = &m->bus;
     bool mounted;
+    uint16_t bank_count;
+    size_t bank_bytes;
+    uint8_t *banks;
 
     mounted = r_bool(r);
     if (!r->ok) {
         return;
     }
+    c64_bus_detach_cartridge(bus);
     if (!mounted) {
-        memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
-        memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
-        bus->cartridge_mounted = false;
-        bus->cartridge_roml_present = false;
-        bus->cartridge_romh_present = false;
-        bus->cartridge_exrom = 1;
-        bus->cartridge_game = 1;
-        bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
         return;
     }
 
-    bus->cartridge_mounted = true;
+    bus->cartridge_hardware_type = r_u16(r);
+    bank_count = r_u16(r);
+    bus->cartridge_bank_mask = r_u8(r);
+    bus->cartridge_io_latch = r_u8(r);
     bus->cartridge_roml_present = r_bool(r);
     bus->cartridge_romh_present = r_bool(r);
     bus->cartridge_exrom = r_u8(r);
     bus->cartridge_game = r_u8(r);
     bus->cartridge_mode = (c64_cartridge_mode)r_u32(r);
+    if (!r->ok) {
+        return;
+    }
+    if (bank_count > C64_CARTRIDGE_MAX_BANKS) {
+        r->ok = false;
+        return;
+    }
+
+    bank_bytes = (size_t)bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    banks = NULL;
+    if (bank_count > 0) {
+        banks = (uint8_t *)malloc(bank_bytes);
+        if (banks == NULL) {
+            r->ok = false;
+            return;
+        }
+        r_bytes(r, banks, bank_bytes);
+        if (!r->ok) {
+            free(banks);
+            return;
+        }
+    }
+
+    bus->cartridge_rom_banks = banks;
+    bus->cartridge_bank_count = bank_count;
     memset(bus->cartridge_roml, 0, sizeof(bus->cartridge_roml));
     memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
-    if (bus->cartridge_roml_present) {
-        r_bytes(r, bus->cartridge_roml, sizeof(bus->cartridge_roml));
-    }
     if (bus->cartridge_romh_present) {
         r_bytes(r, bus->cartridge_romh, sizeof(bus->cartridge_romh));
     }
+    bus->cartridge_mounted = true;
+    c64_bus_cartridge_apply_banking(bus);
 }
 
 static void clear_drive_slot(c64_drive_slot *slot) {
@@ -1422,6 +1451,23 @@ static void apply_loaded_machine(c64_t *dst, c64_t *src, bool restore_1541_core)
     dst->bus.cia2_register_writes = src->bus.cia2_register_writes;
     dst->bus.sid_register_writes = src->bus.sid_register_writes;
     dst->bus.vic_bank_base = src->bus.vic_bank_base;
+    /* Deep-copy multi-bank ROML storage (heap). */
+    {
+        size_t bank_bytes =
+            (size_t)src->bus.cartridge_bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+        free(dst->bus.cartridge_rom_banks);
+        dst->bus.cartridge_rom_banks = NULL;
+        dst->bus.cartridge_bank_count = src->bus.cartridge_bank_count;
+        dst->bus.cartridge_bank_mask = src->bus.cartridge_bank_mask;
+        dst->bus.cartridge_io_latch = src->bus.cartridge_io_latch;
+        dst->bus.cartridge_hardware_type = src->bus.cartridge_hardware_type;
+        if (src->bus.cartridge_rom_banks != NULL && bank_bytes > 0) {
+            dst->bus.cartridge_rom_banks = (uint8_t *)malloc(bank_bytes);
+            if (dst->bus.cartridge_rom_banks != NULL) {
+                memcpy(dst->bus.cartridge_rom_banks, src->bus.cartridge_rom_banks, bank_bytes);
+            }
+        }
+    }
     dst->bus.cartridge_mounted = src->bus.cartridge_mounted;
     dst->bus.cartridge_roml_present = src->bus.cartridge_roml_present;
     dst->bus.cartridge_romh_present = src->bus.cartridge_romh_present;

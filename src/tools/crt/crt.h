@@ -53,3 +53,7 @@ size_t crt_image_chip_count(const crt_image *image);
 crt_result crt_image_chip(const crt_image *image, size_t index, crt_chip *out_chip);
 
 bool crt_image_is_generic_supported(const crt_image *image);
+/* CRT hardware type 19 (Magic Desk / Domark / HES): multi-bank 8K @ $8000. */
+bool crt_image_is_magic_desk_supported(const crt_image *image);
+/* True if c64m can attach this image with a known mapper. */
+bool crt_image_is_supported(const crt_image *image);

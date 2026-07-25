@@ -86,6 +86,8 @@ Component handoffs:
 - `control-port.md` - wire protocol, Python client, command reference, payloads
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
+- `crt-type19-plan.md` - CRT mapper roadmap: type 19 Magic Desk first, type
+  checklist with OneLoad64 unlock counts; implement later, not current code
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
 - `perf-baseline-turbo2.md` - free-run throughput baseline (turbo=2 bar), measure
   recipes, cost model, pitfalls; re-measure against this after performance work

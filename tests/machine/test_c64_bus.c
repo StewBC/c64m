@@ -1,10 +1,12 @@
 #include "c64.h"
 #include "c64_bus.h"
+#include "c64_rom.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void expect_u8(const char *name, uint8_t expected, uint8_t actual) {
     if (expected != actual) {
@@ -329,6 +331,76 @@ static void test_debugcart_d7ff(void) {
     expect_u8("fail value", 0xff, bus.debugcart_value);
 }
 
+static void test_magic_desk_banking(void) {
+    c64_t machine;
+    uint8_t banks[4 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    /* Four banks with distinct first bytes; last bank index 3 → mask 0x03. */
+    memset(banks, 0, sizeof(banks));
+    for (i = 0; i < 4; ++i) {
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x10u + (uint8_t)i);
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE + 1] = (uint8_t)(0xa0u + (uint8_t)i);
+    }
+
+    expect_true(
+        "attach magic desk",
+        c64_attach_magic_desk_cartridge(
+            &machine, banks, 4, 0, 1, error, sizeof(error)));
+    expect_u8("bank0 at power-on", 0x10, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("bank0 second", 0xa0, c64_bus_read(&machine.bus, 0x8001));
+
+    /* IO1 write selects bank (IO mapped with default CPU port). */
+    c64_bus_write(&machine.bus, 0xde00, 0x02);
+    expect_u8("bank2 after DE00", 0x12, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("bank2 second", 0xa2, c64_bus_read(&machine.bus, 0x8001));
+
+    /* Bit 7 disables cart ROM → RAM at $8000. */
+    c64_debug_write_ram(&machine, 0x8000, 0x55);
+    c64_bus_write(&machine.bus, 0xde00, 0x80);
+    expect_u8("disabled shows ram", 0x55, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Re-enable bank 1. */
+    c64_bus_write(&machine.bus, 0xde00, 0x01);
+    expect_u8("bank1 after re-enable", 0x11, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Bank mask: write bank 5 with mask 0x03 → bank 1. */
+    c64_bus_write(&machine.bus, 0xde00, 0x05);
+    expect_u8("masked bank 5->1", 0x11, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Reset restores bank 0 / enabled. */
+    {
+        c64_rom_set roms;
+        size_t j;
+        c64_rom_set_init(&roms);
+        for (j = 0; j < sizeof(roms.basic); j++) {
+            roms.basic[j] = 0xea;
+        }
+        for (j = 0; j < sizeof(roms.character); j++) {
+            roms.character[j] = 0x00;
+        }
+        for (j = 0; j < sizeof(roms.kernal); j++) {
+            roms.kernal[j] = 0xea;
+        }
+        roms.kernal[0x1ffc] = 0x00;
+        roms.kernal[0x1ffd] = 0xe0;
+        roms.has_basic = true;
+        roms.has_character = true;
+        roms.has_kernal = true;
+        expect_true("roms", c64_install_roms(&machine, &roms, error, sizeof(error)));
+        c64_bus_write(&machine.bus, 0xde00, 0x03);
+        expect_u8("bank3 before reset", 0x13, c64_bus_read(&machine.bus, 0x8000));
+        expect_true("reset", c64_reset(&machine, error, sizeof(error)));
+    }
+    expect_u8("reset bank0", 0x10, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_detach_cartridge(&machine);
+}
+
 int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
@@ -342,5 +414,6 @@ int main(void) {
     test_cartridge_survives_reset();
     test_combined_system_rom();
     test_debugcart_d7ff();
+    test_magic_desk_banking();
     return 0;
 }

@@ -47,11 +47,16 @@ the boundary between the CPU and C64-visible address decoding. The
 
 ## Cartridges and startup
 
-- Generic CRT hardware type 0 supports 8K ROML at `$8000-$9FFF` and 16K ROMH at
+- **CRT type 0 (Normal):** 8K ROML at `$8000-$9FFF` and optional 16K ROMH at
   `$A000-$BFFF`; EXROM/GAME mapping is modeled.
+- **CRT type 19 (Magic Desk / Domark / HES):** multi-bank 8K ROML at `$8000-$9FFF`
+  (EXROM=0, GAME=1). Bank select is write-only at IO1 `$DE00–$DEFF`: bits 0–6
+  select bank (masked per VICE bankmask from highest bank index), bit 7 disables
+  cart ROM so RAM appears at `$8000`. Power-on / plain reset: bank 0, cart enabled.
+  Up to 128 × 8 KiB banks (VICE max). See `crt-type19-plan.md` for the mapper roadmap.
 - Cartridge ROM is read-only; writes update shadow RAM underneath. Plain reset
-  preserves a cartridge. PRG/BASIC/T64 injection detaches it first. The frontend
-  reset flow can explicitly detach or preserve it.
+  preserves a cartridge (Magic Desk re-applies bank 0). PRG/BASIC/T64 injection
+  detaches it first. The frontend reset flow can explicitly detach or preserve it.
 - CLI startup supports `--disk`, `--crt`, `--prg`, `--basic`, `--sna`, `--autorun`,
   and `--video PAL|NTSC`. `--sna <path>` loads a `.c64state` snapshot at startup
   (takes priority over `--crt`/`--prg`/`--basic` when present). Control-port
@@ -68,7 +73,7 @@ reads use `c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, 
 ## Save states
 
 `c64_snapshot.{c,h}` provides a versioned, chunked, all-or-nothing machine
-serializer (format version 12). It includes CPU, RAM/color RAM, banking, VIC-II
+serializer (format version 13). It includes CPU, RAM/color RAM, banking, VIC-II
 chip state (not the ARGB paint buffers), CIA, SID, controls, cartridge, and
 per-drive slot data. When real 1541 emulation is on with a drive ROM loaded,
 **powered** units also store full live 1541 drive-object state (CPU including mid-
@@ -77,16 +82,17 @@ track buffers) as `DR8C`/`DR9C`, plus `clock.drive_accum` / `drive_synced_cycle`
 Unpowered units store only a one-byte `DRV*` stub (`powered=false`); power-off
 already ejects media and power-on resets the 1541, so cold core state is not
 load-bearing. Unmounted carts are a one-byte `CART` stub; mounted carts store
-metadata plus only present ROML/ROMH banks (no empty 16 KiB padding). C64 ROM
-bytes are referenced and hash-validated; 1541 ROM bytes stay host-side (not
-embedded). SDL/frontend/runtime presentation state is mostly out of band; the main loop
-appends a trailing `HOST` chunk (ignored by the machine loader) for keyboard
-joystick layout/port and disk path queues for devices 8/9. CLI loading and
-self-contained ROM/media embedding are not part of the machine format.
+hardware type, bank count/mask/IO latch, mode lines, multi-bank ROML blob, and
+optional ROMH. C64 ROM bytes are referenced and hash-validated; 1541 ROM bytes
+stay host-side (not embedded). SDL/frontend/runtime presentation state is mostly
+out of band; the main loop appends a trailing `HOST` chunk (ignored by the
+machine loader) for keyboard joystick layout/port and disk path queues for
+devices 8/9. CLI loading and self-contained ROM/media embedding are not part of
+the machine format.
 
-Versions 11 and earlier are **sunset** (no migration). `VERSION_MIN` moves with
+Versions 12 and earlier are **sunset** (no migration). `VERSION_MIN` moves with
 `VERSION`; the header check rejects older files and leaves the machine untouched
-(`test_legacy_versions_rejected`). The reader carries no pre-v12 branches. The
+(`test_legacy_versions_rejected`). The reader carries no pre-v13 branches. The
 `1541_STATE_DEFERRED` flag path stays live - a current-version snapshot saved
 without the included-core flag still hard-resets the drives on load
 (`test_synthetic_deferred_resets_drives`).

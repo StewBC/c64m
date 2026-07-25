@@ -27,6 +27,10 @@ enum {
     C64_CHAR_ROM_SIZE = 0x1000,
     C64_KERNAL_ROM_SIZE = 0x2000,
     C64_CARTRIDGE_ROM_BANK_SIZE = 0x2000,
+    /* VICE Magic Desk max: 128 × 8 KiB (1 MiB homebrew / DDI variants). */
+    C64_CARTRIDGE_MAX_BANKS = 128,
+    C64_CARTRIDGE_HW_NORMAL = 0,
+    C64_CARTRIDGE_HW_MAGIC_DESK = 19
 };
 
 typedef enum c64_cartridge_mode {
@@ -47,8 +51,15 @@ struct c64_bus_t {
     uint8_t basic_rom[C64_BASIC_ROM_SIZE];
     uint8_t char_rom[C64_CHAR_ROM_SIZE];
     uint8_t kernal_rom[C64_KERNAL_ROM_SIZE];
+    /* Active ROML window cache (bank 0 for type 0; selected bank for Magic Desk). */
     uint8_t cartridge_roml[C64_CARTRIDGE_ROM_BANK_SIZE];
     uint8_t cartridge_romh[C64_CARTRIDGE_ROM_BANK_SIZE];
+    /* Multi-bank ROML storage (heap). bank_count × 8 KiB; NULL when detached. */
+    uint8_t *cartridge_rom_banks;
+    uint16_t cartridge_bank_count;
+    uint8_t cartridge_bank_mask;
+    uint8_t cartridge_io_latch;
+    uint16_t cartridge_hardware_type;
     vicii *vic;
     cia *cia1;
     cia *cia2;
@@ -150,5 +161,16 @@ bool c64_bus_attach_generic_cartridge(
     size_t romh_size,
     uint8_t exrom,
     uint8_t game);
+/* Magic Desk (CRT type 19): banks is bank_count contiguous 8 KiB ROML images. */
+bool c64_bus_attach_magic_desk_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game);
 void c64_bus_detach_cartridge(c64_bus_t *bus);
+/* Re-apply mapper power-on state (Magic Desk: bank 0, cart enabled). */
+void c64_bus_cartridge_reset(c64_bus_t *bus);
+/* Apply current Magic Desk IO latch to mode + ROML window (no-op for other mappers). */
+void c64_bus_cartridge_apply_banking(c64_bus_t *bus);
 bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value);

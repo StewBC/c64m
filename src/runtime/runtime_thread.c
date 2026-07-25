@@ -2717,17 +2717,138 @@ static bool runtime_copy_generic_crt_roms(
     return true;
 }
 
+/* Flatten Magic Desk CHIP packets into bank_count contiguous 8 KiB banks. */
+static bool runtime_copy_magic_desk_banks(
+    runtime *rt,
+    const crt_image *image,
+    uint8_t **out_banks,
+    size_t *out_bank_count)
+{
+    size_t i;
+    size_t chip_count;
+    int max_bank = -1;
+    size_t bank_count;
+    uint8_t *banks;
+
+    *out_banks = NULL;
+    *out_bank_count = 0;
+
+    chip_count = crt_image_chip_count(image);
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            runtime_publish_error(rt, "failed to read Magic Desk CRT CHIP");
+            return false;
+        }
+        if ((int)chip.bank > max_bank) {
+            max_bank = (int)chip.bank;
+        }
+    }
+    if (max_bank < 0 || max_bank >= (int)C64_CARTRIDGE_MAX_BANKS) {
+        runtime_publish_error(rt, "unsupported Magic Desk bank count");
+        return false;
+    }
+
+    bank_count = (size_t)max_bank + 1u;
+    banks = (uint8_t *)calloc(bank_count, C64_CARTRIDGE_ROM_BANK_SIZE);
+    if (banks == NULL) {
+        runtime_publish_error(rt, "out of memory for Magic Desk banks");
+        return false;
+    }
+
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+        size_t offset;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            free(banks);
+            runtime_publish_error(rt, "failed to read Magic Desk CRT CHIP");
+            return false;
+        }
+        offset = (size_t)chip.bank * C64_CARTRIDGE_ROM_BANK_SIZE;
+        memcpy(banks + offset, chip.bytes, C64_CARTRIDGE_ROM_BANK_SIZE);
+    }
+
+    *out_banks = banks;
+    *out_bank_count = bank_count;
+    return true;
+}
+
+static bool runtime_attach_generic_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
+    uint8_t romh[C64_CARTRIDGE_ROM_BANK_SIZE];
+    bool has_roml = false;
+    bool has_romh = false;
+    char error[256];
+
+    if (!runtime_copy_generic_crt_roms(rt, image, roml, romh, &has_roml, &has_romh)) {
+        return false;
+    }
+
+    if (header->exrom == 0 && header->game != 0) {
+        if (!has_roml || has_romh) {
+            runtime_publish_error(rt, "unsupported 8K CRT ROM layout");
+            return false;
+        }
+    } else if (header->exrom == 0 && header->game == 0) {
+        if (!has_roml || !has_romh) {
+            runtime_publish_error(rt, "unsupported 16K CRT ROM layout");
+            return false;
+        }
+    } else {
+        runtime_publish_error(rt, "unsupported CRT EXROM/GAME mode");
+        return false;
+    }
+
+    if (!c64_attach_generic_cartridge(
+            &rt->machine,
+            roml,
+            sizeof(roml),
+            has_romh ? romh : NULL,
+            has_romh ? sizeof(romh) : 0u,
+            header->exrom,
+            header->game,
+            error,
+            sizeof(error))) {
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    return true;
+}
+
+static bool runtime_attach_magic_desk_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    uint8_t *banks = NULL;
+    size_t bank_count = 0;
+    char error[256];
+
+    if (!runtime_copy_magic_desk_banks(rt, image, &banks, &bank_count)) {
+        return false;
+    }
+
+    if (!c64_attach_magic_desk_cartridge(
+            &rt->machine,
+            banks,
+            bank_count,
+            header->exrom,
+            header->game,
+            error,
+            sizeof(error))) {
+        free(banks);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(banks);
+    return true;
+}
+
 static void runtime_load_crt(runtime *rt, const runtime_command *command) {
     uint8_t *bytes;
     size_t length;
     crt_result result;
     crt_image *image;
     const crt_header *header;
-    uint8_t roml[C64_CARTRIDGE_ROM_BANK_SIZE];
-    uint8_t romh[C64_CARTRIDGE_ROM_BANK_SIZE];
-    bool has_roml = false;
-    bool has_romh = false;
-    char error[256];
+    bool attached = false;
 
     if (!runtime_read_host_file(rt, command->data.load_crt.path, "CRT", &bytes, &length)) {
         return;
@@ -2743,50 +2864,32 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
     }
 
     header = crt_image_header(image);
-    if (header == NULL || !crt_image_is_generic_supported(image)) {
+    if (header == NULL || !crt_image_is_supported(image)) {
+        char message[128];
+        uint16_t hw = header != NULL ? header->hardware_type : 0xffffu;
+        snprintf(
+            message,
+            sizeof(message),
+            "unsupported CRT cartridge type %u",
+            (unsigned)hw);
+        crt_image_destroy(image);
+        runtime_publish_error(rt, message);
+        return;
+    }
+
+    if (crt_image_is_generic_supported(image)) {
+        attached = runtime_attach_generic_crt(rt, image, header);
+    } else if (crt_image_is_magic_desk_supported(image)) {
+        attached = runtime_attach_magic_desk_crt(rt, image, header);
+    } else {
         crt_image_destroy(image);
         runtime_publish_error(rt, "unsupported CRT cartridge type");
         return;
     }
-
-    if (!runtime_copy_generic_crt_roms(rt, image, roml, romh, &has_roml, &has_romh)) {
-        crt_image_destroy(image);
-        return;
-    }
-
-    if (header->exrom == 0 && header->game != 0) {
-        if (!has_roml || has_romh) {
-            crt_image_destroy(image);
-            runtime_publish_error(rt, "unsupported 8K CRT ROM layout");
-            return;
-        }
-    } else if (header->exrom == 0 && header->game == 0) {
-        if (!has_roml || !has_romh) {
-            crt_image_destroy(image);
-            runtime_publish_error(rt, "unsupported 16K CRT ROM layout");
-            return;
-        }
-    } else {
-        crt_image_destroy(image);
-        runtime_publish_error(rt, "unsupported CRT EXROM/GAME mode");
-        return;
-    }
-
-    if (!c64_attach_generic_cartridge(
-            &rt->machine,
-            roml,
-            sizeof(roml),
-            has_romh ? romh : NULL,
-            has_romh ? sizeof(romh) : 0u,
-            header->exrom,
-            header->game,
-            error,
-            sizeof(error))) {
-        crt_image_destroy(image);
-        runtime_publish_error(rt, error);
-        return;
-    }
     crt_image_destroy(image);
+    if (!attached) {
+        return;
+    }
 
     if (!runtime_reset_machine(rt)) {
         return;

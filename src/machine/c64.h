@@ -486,6 +486,14 @@ bool c64_attach_generic_cartridge(
     uint8_t game,
     char *error,
     size_t error_size);
+bool c64_attach_magic_desk_cartridge(
+    c64_t *machine,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size);
 void c64_detach_cartridge(c64_t *machine);
 bool c64_cartridge_attached(const c64_t *machine);
 bool c64_drive_device_supported(uint8_t device);

@@ -4,9 +4,10 @@
 
 c64m is a C99 Commodore 64 emulator. The current target is useful PAL and NTSC
 execution for ordinary BASIC, PRG, D64, selected games/demos, recognizable SID
-audio, usable keyboard/joystick input, generic 8K/16K CRT loading, and the
-optional real-1541 path. It is not a promise of cycle-perfect demo-scene behavior,
-full drive mechanics, exact analog SID behavior, or every cartridge mapper.
+audio, usable keyboard/joystick input, CRT types 0 (generic 8K/16K) and 19
+(Magic Desk multi-bank), and the optional real-1541 path. It is not a promise of
+cycle-perfect demo-scene behavior, full drive mechanics, exact analog SID
+behavior, or every cartridge mapper.
 
 ## Dependency direction
 
