@@ -251,3 +251,4 @@ is runtime-only; a win on (2) and (3) is machine-path.
 | 2026-07-24 | Confirmed pure plateau (3× serial `bench_core_mhz`): paint-on ~**13.75 MHz**, paint-off ~**17.0 MHz** (earlier ~13.1 was thermal noise). |
 | 2026-07-24 | sprite_visible_mask + c64_hz cache + KERNAL PC gate (M2): pure paint-on ~**14.0 MHz**, product drives-off turbo=2 ~**12.6 MHz**. |
 | 2026-07-24 | Unrolled hires bulk + no sprite-slot work without DMA (M2): pure paint-on holds ~**13.7 MHz** (triple sample). |
+| 2026-07-24 | Path-A unrolled B0C + BA idle early-return + idle sprite sequencer gates (M2): pure paint-on ~**14.5 MHz**, paint-off ~**17.6 MHz**, product drives-off turbo=2 ~**13.1 MHz**. |

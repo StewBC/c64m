@@ -319,3 +319,4 @@ Each step: measure pure on/off + product both-off; run accuracy suite; write res
 | 2026-07-24 | Confirmed pure plateau (user 3× serial): paint-on ~**13.75 MHz**, paint-off ~**17.0 MHz**. |
 | 2026-07-24 | sprite_visible_mask, cached c64_hz (refresh on snapshot load), KERNAL trap PC gate. Pure paint-on ~**14.0 MHz**, product drives-off ~**12.6 MHz**. ctest 56/56. |
 | 2026-07-24 | Unrolled hires bulk expand; skip sprite p/s schedule when DMA mask empty. Holds pure paint-on ~**13.7 MHz** plateau. ctest 56/56. |
+| 2026-07-24 | Path-A unrolled B0C bulk; BA early-return when no sprite DMA/badline; allow_bad_lines gate; idle sprite prepare/latch/sequencer skips. M2 pure paint-on ~**14.5 MHz**, paint-off ~**17.6 MHz**, product drives-off ~**13.1 MHz**. ctest 56/56. |
