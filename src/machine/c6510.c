@@ -336,6 +336,17 @@ size_t c6510_step(C6510 *m) {
 /* Stable NMOS unofficial opcodes used by C64 software.  Deliberately exclude
    the data-bus/chip-dependent forms (XAA, AHX, SHX, SHY, TAS, LAS, LAX #imm)
    and JAM: their compatibility executor remains the explicit fallback. */
+/* Opcode class for micro-step dispatch (O(1) instead of dual switch probes). */
+enum {
+    C6510_OP_NONE = 0,
+    C6510_OP_DOC = 1,
+    C6510_OP_UND_PRACTICAL = 2,
+    C6510_OP_UND_NOP = 3
+};
+
+static uint8_t c6510_micro_op_class[256];
+static int c6510_micro_op_class_ready;
+
 static bool c6510_micro_is_practical_undocumented(uint8_t opcode) {
     switch (opcode) {
     /* SLO, RLA, SRE, RRA, DCP, ISC: (zp,X), zp, abs, (zp),Y, zp,X, abs,Y, abs,X. */
@@ -360,6 +371,82 @@ static bool c6510_micro_is_practical_undocumented(uint8_t opcode) {
 static bool c6510_micro_is_undocumented_nop(uint8_t opcode) {
     return opcode == UND_44 || opcode == UND_80 ||
            opcode == UND_1C || opcode == UND_FC;
+}
+
+static void c6510_micro_init_op_class(void) {
+    unsigned op;
+    if (c6510_micro_op_class_ready) {
+        return;
+    }
+    memset(c6510_micro_op_class, 0, sizeof(c6510_micro_op_class));
+    for (op = 0; op < 256u; op++) {
+        if (c6510_micro_is_practical_undocumented((uint8_t)op)) {
+            c6510_micro_op_class[op] = (uint8_t)C6510_OP_UND_PRACTICAL;
+        } else if (c6510_micro_is_undocumented_nop((uint8_t)op)) {
+            c6510_micro_op_class[op] = (uint8_t)C6510_OP_UND_NOP;
+        }
+    }
+    /* Documented set mirrors the previous can_begin switch (without undocs). */
+#define C6510_MARK_DOC(op) c6510_micro_op_class[(op)] = (uint8_t)C6510_OP_DOC
+    C6510_MARK_DOC(NOP);
+    C6510_MARK_DOC(LDA_imm); C6510_MARK_DOC(LDX_imm); C6510_MARK_DOC(LDY_imm);
+    C6510_MARK_DOC(LDA_abs); C6510_MARK_DOC(LDX_abs); C6510_MARK_DOC(LDY_abs);
+    C6510_MARK_DOC(STA_abs); C6510_MARK_DOC(STX_abs); C6510_MARK_DOC(STY_abs);
+    C6510_MARK_DOC(JMP_abs); C6510_MARK_DOC(JMP_ind);
+    C6510_MARK_DOC(BPL_rel); C6510_MARK_DOC(BMI_rel); C6510_MARK_DOC(BVC_rel);
+    C6510_MARK_DOC(BVS_rel); C6510_MARK_DOC(BCC_rel); C6510_MARK_DOC(BCS_rel);
+    C6510_MARK_DOC(BNE_rel); C6510_MARK_DOC(BEQ_rel);
+    C6510_MARK_DOC(JSR_abs); C6510_MARK_DOC(RTS);
+    C6510_MARK_DOC(ORA_imm); C6510_MARK_DOC(AND_imm); C6510_MARK_DOC(EOR_imm);
+    C6510_MARK_DOC(ADC_imm); C6510_MARK_DOC(SBC_imm); C6510_MARK_DOC(CMP_imm);
+    C6510_MARK_DOC(CPX_imm); C6510_MARK_DOC(CPY_imm);
+    C6510_MARK_DOC(CLC); C6510_MARK_DOC(SEC); C6510_MARK_DOC(CLI); C6510_MARK_DOC(SEI);
+    C6510_MARK_DOC(CLD); C6510_MARK_DOC(SED); C6510_MARK_DOC(CLV);
+    C6510_MARK_DOC(INX); C6510_MARK_DOC(INY); C6510_MARK_DOC(DEX); C6510_MARK_DOC(DEY);
+    C6510_MARK_DOC(TAX); C6510_MARK_DOC(TAY); C6510_MARK_DOC(TXA); C6510_MARK_DOC(TYA);
+    C6510_MARK_DOC(TSX); C6510_MARK_DOC(TXS);
+    C6510_MARK_DOC(ASL_A); C6510_MARK_DOC(ROL_A); C6510_MARK_DOC(LSR_A); C6510_MARK_DOC(ROR_A);
+    C6510_MARK_DOC(PHA); C6510_MARK_DOC(PHP); C6510_MARK_DOC(PLA); C6510_MARK_DOC(PLP);
+    C6510_MARK_DOC(RTI); C6510_MARK_DOC(BRK);
+    C6510_MARK_DOC(LDA_zpg); C6510_MARK_DOC(LDX_zpg); C6510_MARK_DOC(LDY_zpg);
+    C6510_MARK_DOC(STA_zpg); C6510_MARK_DOC(STX_zpg); C6510_MARK_DOC(STY_zpg);
+    C6510_MARK_DOC(ORA_zpg); C6510_MARK_DOC(AND_zpg); C6510_MARK_DOC(EOR_zpg);
+    C6510_MARK_DOC(ADC_zpg); C6510_MARK_DOC(SBC_zpg); C6510_MARK_DOC(CMP_zpg);
+    C6510_MARK_DOC(CPX_zpg); C6510_MARK_DOC(CPY_zpg);
+    C6510_MARK_DOC(BIT_zpg); C6510_MARK_DOC(BIT_abs);
+    C6510_MARK_DOC(ORA_abs); C6510_MARK_DOC(AND_abs); C6510_MARK_DOC(EOR_abs);
+    C6510_MARK_DOC(ADC_abs); C6510_MARK_DOC(SBC_abs); C6510_MARK_DOC(CMP_abs);
+    C6510_MARK_DOC(CPX_abs); C6510_MARK_DOC(CPY_abs);
+    C6510_MARK_DOC(ORA_zpg_X); C6510_MARK_DOC(AND_zpg_X); C6510_MARK_DOC(EOR_zpg_X);
+    C6510_MARK_DOC(ADC_zpg_X); C6510_MARK_DOC(SBC_zpg_X); C6510_MARK_DOC(CMP_zpg_X);
+    C6510_MARK_DOC(ORA_abs_X); C6510_MARK_DOC(ORA_abs_Y); C6510_MARK_DOC(ORA_X_ind);
+    C6510_MARK_DOC(ORA_ind_Y);
+    C6510_MARK_DOC(AND_abs_X); C6510_MARK_DOC(AND_abs_Y); C6510_MARK_DOC(AND_X_ind);
+    C6510_MARK_DOC(AND_ind_Y);
+    C6510_MARK_DOC(EOR_abs_X); C6510_MARK_DOC(EOR_abs_Y); C6510_MARK_DOC(EOR_X_ind);
+    C6510_MARK_DOC(EOR_ind_Y);
+    C6510_MARK_DOC(ADC_abs_X); C6510_MARK_DOC(ADC_abs_Y); C6510_MARK_DOC(ADC_X_ind);
+    C6510_MARK_DOC(ADC_ind_Y);
+    C6510_MARK_DOC(SBC_abs_X); C6510_MARK_DOC(SBC_abs_Y); C6510_MARK_DOC(SBC_X_ind);
+    C6510_MARK_DOC(SBC_ind_Y);
+    C6510_MARK_DOC(CMP_abs_X); C6510_MARK_DOC(CMP_abs_Y); C6510_MARK_DOC(CMP_X_ind);
+    C6510_MARK_DOC(CMP_ind_Y);
+    C6510_MARK_DOC(LDA_X_ind); C6510_MARK_DOC(STA_X_ind);
+    C6510_MARK_DOC(LDA_ind_Y); C6510_MARK_DOC(STA_ind_Y);
+    C6510_MARK_DOC(LDA_zpg_X); C6510_MARK_DOC(LDX_zpg_Y); C6510_MARK_DOC(LDY_zpg_X);
+    C6510_MARK_DOC(STA_zpg_X); C6510_MARK_DOC(STX_zpg_Y); C6510_MARK_DOC(STY_zpg_X);
+    C6510_MARK_DOC(LDA_abs_X); C6510_MARK_DOC(LDA_abs_Y); C6510_MARK_DOC(LDX_abs_Y);
+    C6510_MARK_DOC(LDY_abs_X); C6510_MARK_DOC(STA_abs_X); C6510_MARK_DOC(STA_abs_Y);
+    C6510_MARK_DOC(ASL_zpg); C6510_MARK_DOC(ROL_zpg); C6510_MARK_DOC(LSR_zpg);
+    C6510_MARK_DOC(ROR_zpg); C6510_MARK_DOC(DEC_zpg); C6510_MARK_DOC(INC_zpg);
+    C6510_MARK_DOC(ASL_abs); C6510_MARK_DOC(ROL_abs); C6510_MARK_DOC(LSR_abs);
+    C6510_MARK_DOC(ROR_abs); C6510_MARK_DOC(DEC_abs); C6510_MARK_DOC(INC_abs);
+    C6510_MARK_DOC(ASL_zpg_X); C6510_MARK_DOC(ROL_zpg_X); C6510_MARK_DOC(LSR_zpg_X);
+    C6510_MARK_DOC(ROR_zpg_X); C6510_MARK_DOC(DEC_zpg_X); C6510_MARK_DOC(INC_zpg_X);
+    C6510_MARK_DOC(ASL_abs_X); C6510_MARK_DOC(ROL_abs_X); C6510_MARK_DOC(LSR_abs_X);
+    C6510_MARK_DOC(ROR_abs_X); C6510_MARK_DOC(DEC_abs_X); C6510_MARK_DOC(INC_abs_X);
+#undef C6510_MARK_DOC
+    c6510_micro_op_class_ready = 1;
 }
 
 static bool c6510_micro_is_undocumented_rmw(uint8_t opcode) {
@@ -418,170 +505,9 @@ static c6510_undocumented_mode c6510_micro_undocumented_mode(uint8_t opcode) {
 
 bool c6510_micro_can_begin(const C6510 *m, uint8_t opcode) {
     assert(m);
-
-    if (c6510_micro_is_practical_undocumented(opcode)) {
-        return true;
-    }
-    if (c6510_micro_is_undocumented_nop(opcode)) {
-        return true;
-    }
-
-    switch (opcode) {
-    case NOP:
-    case LDA_imm:
-    case LDX_imm:
-    case LDY_imm:
-    case LDA_abs:
-    case LDX_abs:
-    case LDY_abs:
-    case STA_abs:
-    case STX_abs:
-    case STY_abs:
-    case JMP_abs:
-    case JMP_ind:
-    case BPL_rel:
-    case BMI_rel:
-    case BVC_rel:
-    case BVS_rel:
-    case BCC_rel:
-    case BCS_rel:
-    case BNE_rel:
-    case BEQ_rel:
-    case JSR_abs:
-    case RTS:
-    case ORA_imm:
-    case AND_imm:
-    case EOR_imm:
-    case ADC_imm:
-    case SBC_imm:
-    case CMP_imm:
-    case CPX_imm:
-    case CPY_imm:
-    case CLC:
-    case SEC:
-    case CLI:
-    case SEI:
-    case CLD:
-    case SED:
-    case CLV:
-    case INX:
-    case INY:
-    case DEX:
-    case DEY:
-    case TAX:
-    case TAY:
-    case TXA:
-    case TYA:
-    case TSX:
-    case TXS:
-    case ASL_A:
-    case ROL_A:
-    case LSR_A:
-    case ROR_A:
-    case PHA:
-    case PHP:
-    case PLA:
-    case PLP:
-    case RTI:
-    case BRK:
-    case LDA_zpg:
-    case LDX_zpg:
-    case LDY_zpg:
-    case STA_zpg:
-    case STX_zpg:
-    case STY_zpg:
-    case ORA_zpg:
-    case AND_zpg:
-    case EOR_zpg:
-    case ADC_zpg:
-    case SBC_zpg:
-    case CMP_zpg:
-    case CPX_zpg:
-    case CPY_zpg:
-    case BIT_zpg:
-    case BIT_abs:
-    case ORA_abs:
-    case AND_abs:
-    case EOR_abs:
-    case ADC_abs:
-    case SBC_abs:
-    case CMP_abs:
-    case CPX_abs:
-    case CPY_abs:
-    case ORA_zpg_X:
-    case AND_zpg_X:
-    case EOR_zpg_X:
-    case ADC_zpg_X:
-    case SBC_zpg_X:
-    case CMP_zpg_X:
-    case ORA_abs_X:
-    case ORA_abs_Y:
-    case ORA_X_ind:
-    case ORA_ind_Y:
-    case AND_abs_X:
-    case AND_abs_Y:
-    case AND_X_ind:
-    case AND_ind_Y:
-    case EOR_abs_X:
-    case EOR_abs_Y:
-    case EOR_X_ind:
-    case EOR_ind_Y:
-    case ADC_abs_X:
-    case ADC_abs_Y:
-    case ADC_X_ind:
-    case ADC_ind_Y:
-    case SBC_abs_X:
-    case SBC_abs_Y:
-    case SBC_X_ind:
-    case SBC_ind_Y:
-    case CMP_abs_X:
-    case CMP_abs_Y:
-    case CMP_X_ind:
-    case CMP_ind_Y:
-    case LDA_X_ind:
-    case STA_X_ind:
-    case LDA_ind_Y:
-    case STA_ind_Y:
-    case LDA_zpg_X:
-    case LDX_zpg_Y:
-    case LDY_zpg_X:
-    case STA_zpg_X:
-    case STX_zpg_Y:
-    case STY_zpg_X:
-    case LDA_abs_X:
-    case LDA_abs_Y:
-    case LDX_abs_Y:
-    case LDY_abs_X:
-    case STA_abs_X:
-    case STA_abs_Y:
-    case ASL_zpg:
-    case ROL_zpg:
-    case LSR_zpg:
-    case ROR_zpg:
-    case DEC_zpg:
-    case INC_zpg:
-    case ASL_abs:
-    case ROL_abs:
-    case LSR_abs:
-    case ROR_abs:
-    case DEC_abs:
-    case INC_abs:
-    case ASL_zpg_X:
-    case ROL_zpg_X:
-    case LSR_zpg_X:
-    case ROR_zpg_X:
-    case DEC_zpg_X:
-    case INC_zpg_X:
-    case ASL_abs_X:
-    case ROL_abs_X:
-    case LSR_abs_X:
-    case ROR_abs_X:
-    case DEC_abs_X:
-    case INC_abs_X:
-        return true;
-    default:
-        return false;
-    }
+    (void)m;
+    c6510_micro_init_op_class();
+    return c6510_micro_op_class[opcode] != (uint8_t)C6510_OP_NONE;
 }
 
 void c6510_micro_begin(C6510 *m) {
@@ -1408,62 +1334,72 @@ bool c6510_micro_step(C6510 *m) {
         return false;
     }
 
-    if (c6510_micro_is_practical_undocumented(m->micro_opcode)) {
-        if (!c6510_micro_step_practical_undocumented(m)) {
-            return false;
-        }
-        goto micro_complete;
-    }
-
-    if (c6510_micro_is_undocumented_nop(m->micro_opcode)) {
-        if (m->micro_opcode == UND_80) {
-            (void)read_operand(m, m->cpu.pc);
-            CYCLE(m);
-            m->cpu.pc++;
-            goto micro_complete;
-        }
-        if (m->micro_opcode == UND_44) {
-            if (m->micro_phase == 1) {
-                m->cpu.address_lo = read_operand(m, m->cpu.pc);
-                CYCLE(m);
-                m->cpu.pc++;
-                m->micro_phase++;
+    c6510_micro_init_op_class();
+    {
+        uint8_t cls = c6510_micro_op_class[m->micro_opcode];
+        if (cls == (uint8_t)C6510_OP_UND_PRACTICAL) {
+            if (!c6510_micro_step_practical_undocumented(m)) {
                 return false;
             }
-            (void)read_from_memory(m, m->cpu.address_lo);
-            CYCLE(m);
             goto micro_complete;
         }
+        if (cls == (uint8_t)C6510_OP_UND_NOP) {
+            /* fall into undocumented-nop body below */
+        } else {
+            /* Documented: skip undoc probes and use the main switch. */
+            goto micro_documented;
+        }
+    }
+
+    /* C6510_OP_UND_NOP body */
+    if (m->micro_opcode == UND_80) {
+        (void)read_operand(m, m->cpu.pc);
+        CYCLE(m);
+        m->cpu.pc++;
+        goto micro_complete;
+    }
+    if (m->micro_opcode == UND_44) {
         if (m->micro_phase == 1) {
             m->cpu.address_lo = read_operand(m, m->cpu.pc);
             CYCLE(m);
             m->cpu.pc++;
-            m->micro_branch_taken = (uint16_t)m->cpu.address_lo + m->cpu.X > 0xffu;
             m->micro_phase++;
             return false;
         }
-        if (m->micro_phase == 2) {
-            uint16_t base;
-            m->cpu.address_hi = read_operand(m, m->cpu.pc);
-            CYCLE(m);
-            m->cpu.pc++;
-            base = m->cpu.address_16;
-            m->micro_target = (uint16_t)(base + m->cpu.X);
-            m->micro_phase++;
-            return false;
-        }
-        if (m->micro_phase == 3 && m->micro_branch_taken) {
-            (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
-                                            (m->micro_target & 0x00ffu)));
-            CYCLE(m);
-            m->micro_phase++;
-            return false;
-        }
-        (void)read_from_memory(m, m->micro_target);
+        (void)read_from_memory(m, m->cpu.address_lo);
         CYCLE(m);
         goto micro_complete;
     }
+    if (m->micro_phase == 1) {
+        m->cpu.address_lo = read_operand(m, m->cpu.pc);
+        CYCLE(m);
+        m->cpu.pc++;
+        m->micro_branch_taken = (uint16_t)m->cpu.address_lo + m->cpu.X > 0xffu;
+        m->micro_phase++;
+        return false;
+    }
+    if (m->micro_phase == 2) {
+        uint16_t base;
+        m->cpu.address_hi = read_operand(m, m->cpu.pc);
+        CYCLE(m);
+        m->cpu.pc++;
+        base = m->cpu.address_16;
+        m->micro_target = (uint16_t)(base + m->cpu.X);
+        m->micro_phase++;
+        return false;
+    }
+    if (m->micro_phase == 3 && m->micro_branch_taken) {
+        (void)read_dummy(m, (uint16_t)((m->cpu.address_16 & 0xff00u) |
+                                        (m->micro_target & 0x00ffu)));
+        CYCLE(m);
+        m->micro_phase++;
+        return false;
+    }
+    (void)read_from_memory(m, m->micro_target);
+    CYCLE(m);
+    goto micro_complete;
 
+micro_documented:
     switch (m->micro_opcode) {
     case NOP:
         (void)read_dummy(m, m->cpu.pc);
