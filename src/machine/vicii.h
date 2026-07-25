@@ -203,6 +203,9 @@ struct vicii {
         uint8_t  mode;               /* graphics mode used to paint this span */
         uint8_t  reg11;              /* $D011 as sampled when this span was painted */
         bool     csel;               /* CSEL used when this span was checked/painted */
+        /* bit0: content[0] applies to all n dots; bit1: border[0] applies to all.
+           idx is consecutive from idx[0] when n==8 (set by paint path). */
+        uint8_t  solid;
         uint8_t  dot[8];             /* dot position 0..7 within the cycle */
         uint32_t idx[8];
         uint32_t content[8];

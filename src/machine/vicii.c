@@ -54,6 +54,11 @@ static inline void vicii_span8_d021_true(bool *is_d021) {
 }
 
 enum {
+    VICII_PIPE_SOLID_CONTENT = 1u << 0,
+    VICII_PIPE_SOLID_BORDER  = 1u << 1
+};
+
+enum {
     VICII_REG_RASTER = 0x12,
     VICII_REG_CONTROL_1 = 0x11,
     VICII_REG_MEMORY_POINTER = 0x18,
@@ -1781,13 +1786,19 @@ static void vicii_hborder_flush_slot(vicii *v, uint8_t slot, bool main_border) {
     if (v->hborder_pipe[slot].csel) {
         /* Common CSEL=1 path: one border decision for the whole span.
            Full 8-dot g-access spans are consecutive framebuffer columns. */
-        if (n == 8u && idx[7] == idx[0] + 7u) {
+        uint8_t solid = v->hborder_pipe[slot].solid;
+        if (n == 8u &&
+            ((solid & (main_border ? VICII_PIPE_SOLID_BORDER
+                                   : VICII_PIPE_SOLID_CONTENT)) != 0u ||
+             idx[7] == idx[0] + 7u)) {
             uint32_t *dst = pixels + idx[0];
             const uint32_t *src = main_border ? border : content;
             /* Solid span (common border / flat B0C): one fill beats 8 loads. */
-            if (src[0] == src[1] && src[0] == src[2] && src[0] == src[3] &&
-                src[0] == src[4] && src[0] == src[5] && src[0] == src[6] &&
-                src[0] == src[7]) {
+            if ((solid & (main_border ? VICII_PIPE_SOLID_BORDER
+                                      : VICII_PIPE_SOLID_CONTENT)) != 0u ||
+                (src[0] == src[1] && src[0] == src[2] && src[0] == src[3] &&
+                 src[0] == src[4] && src[0] == src[5] && src[0] == src[6] &&
+                 src[0] == src[7])) {
                 vicii_fill8_u32(dst, src[0]);
             } else {
                 vicii_store8_u32(dst, src);
@@ -1959,6 +1970,7 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
         v->hborder_pipe[paint_i].mode = mode;
         v->hborder_pipe[paint_i].reg11 = reg11;
         v->hborder_pipe[paint_i].csel = check_csel;
+        v->hborder_pipe[paint_i].solid = 0;
 
         /*
          * Fast path A: vertical border, no sprites. Content is forced to B0C
@@ -1983,11 +1995,21 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                 content[0] = b0c0;
                 border[0] = bord0;
                 vicii_color_pipes_sample_regs(v, &bord, &b0c);
-                /* Post-drain: remaining seven dots share drained B0C / border. */
+                /* Post-drain: remaining seven dots share drained B0C / border.
+                   Always materialize all 8 slots so finish_cycle colour repair
+                   can patch per-dot; solid flags only accelerate flush. */
                 vicii_fill8_u32(content, b0c);
                 content[0] = b0c0;
                 vicii_fill8_u32(border, bord);
                 border[0] = bord0;
+                if (b0c0 == b0c) {
+                    v->hborder_pipe[paint_i].solid |=
+                        (uint8_t)VICII_PIPE_SOLID_CONTENT;
+                }
+                if (bord0 == bord) {
+                    v->hborder_pipe[paint_i].solid |=
+                        (uint8_t)VICII_PIPE_SOLID_BORDER;
+                }
                 v->hborder_pipe[paint_i].n = 8u;
             } else {
                 for (i = 0; i < (int)VICII_CHARACTER_WIDTH; i++) {
@@ -2102,6 +2124,10 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                     /* Border is constant for dots 1..7 after the pipe drains. */
                     vicii_fill8_u32(border, bord);
                     border[0] = bord0;
+                    if (bord0 == bord) {
+                        v->hborder_pipe[paint_i].solid |=
+                            (uint8_t)VICII_PIPE_SOLID_BORDER;
+                    }
 
                     /* Dots 1..7: post-drain colours (unrolled). */
 #define VICII_HIRES_DOT(bit, ii)                                       \
@@ -2167,6 +2193,10 @@ static void vicii_render_live_cycle(vicii *v, const c64_bus_t *bus) {
                         pair_c[0] = b0c;
                         vicii_fill8_u32(border, bord);
                         border[0] = bord0;
+                        if (bord0 == bord) {
+                            v->hborder_pipe[paint_i].solid |=
+                                (uint8_t)VICII_PIPE_SOLID_BORDER;
+                        }
                         /* Pair 0 second dot + pairs 1..3 (post-drain). */
                         content[1] = pair_c[pair0];
                         is_d021[1] = pair_d021[pair0];
@@ -3354,10 +3384,19 @@ void vicii_finish_cycle(vicii *v) {
                 for (i = 1u; i < v->hborder_pipe[old_i].n; ++i) {
                     v->hborder_pipe[old_i].border[i] = vicii_palette_argb[d020];
                 }
+                v->hborder_pipe[old_i].solid =
+                    (uint8_t)(v->hborder_pipe[old_i].solid &
+                              (uint8_t)~VICII_PIPE_SOLID_BORDER);
             }
             if (v->hborder_pipe[new_i].n > 0u) {
                 for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
                     v->hborder_pipe[new_i].border[i] = vicii_palette_argb[d020];
+                }
+                /* Whole newer span shares one post-CPU border colour. */
+                if (v->hborder_pipe[new_i].n == 8u) {
+                    v->hborder_pipe[new_i].border[0] = vicii_palette_argb[d020];
+                    v->hborder_pipe[new_i].solid |=
+                        (uint8_t)VICII_PIPE_SOLID_BORDER;
                 }
             }
             v->color_pipe_d020 = d020;
@@ -3382,6 +3421,9 @@ void vicii_finish_cycle(vicii *v) {
                             vicii_palette_argb[d021];
                     }
                 }
+                v->hborder_pipe[old_i].solid =
+                    (uint8_t)(v->hborder_pipe[old_i].solid &
+                              (uint8_t)~VICII_PIPE_SOLID_CONTENT);
             }
             if (v->hborder_pipe[new_i].n > 0u) {
                 for (i = 0u; i < v->hborder_pipe[new_i].n; ++i) {
@@ -3390,6 +3432,9 @@ void vicii_finish_cycle(vicii *v) {
                             vicii_palette_argb[d021];
                     }
                 }
+                v->hborder_pipe[new_i].solid =
+                    (uint8_t)(v->hborder_pipe[new_i].solid &
+                              (uint8_t)~VICII_PIPE_SOLID_CONTENT);
             }
             v->color_pipe_d021 = d021;
         }
