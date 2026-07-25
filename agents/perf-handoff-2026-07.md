@@ -1,8 +1,8 @@
 # Performance hand-off (2026-07 session)
 
-**Status:** frozen for the next agent / session.  
+**Status:** active again 2026-07-25 (paint re-arch stack on `perf/paint-rearch`).  
 **Host frozen with numbers:** Apple M2, arm64, macOS.  
-**Tip at freeze:** `main` @ post-Go-N1–5 merge (see git log around `867156e` and parents).  
+**Tip at freeze:** `main` @ post-Go-N1–5 merge; local continuation has frame double-buffer + solid spans (see git log on `perf/paint-rearch`).  
 **Related:** `perf-baseline-turbo2.md` (how to measure + changelog numbers),  
 `perf-roadmap-100mhz.md` (locked brief + tier plan to 100 MHz).
 
