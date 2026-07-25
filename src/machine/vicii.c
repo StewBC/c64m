@@ -206,7 +206,11 @@ enum {
     VICII_CF_C_WINDOW      = 1u << 8,  /* Phi2 c-access window 14..53 */
     VICII_CF_HBORDER_LEFT  = 1u << 9,  /* cycle 17 left border compare */
     VICII_CF_SPR_ANY       = VICII_CF_SPR_15 | VICII_CF_SPR_54 |
-                            VICII_CF_SPR_55 | VICII_CF_SPR_57
+                            VICII_CF_SPR_55 | VICII_CF_SPR_57,
+
+    /* line_class values (transient, cycle-0). */
+    VICII_LINE_CLASS_FULL         = 0,
+    VICII_LINE_CLASS_VBORDER_IDLE = 1
 };
 
 static uint16_t vicii_pal_cycle_flags[VICII_PAL_CYCLES_PER_LINE];
@@ -2931,44 +2935,64 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     }
 
     /* VICE vertical border unit (every cycle): top may clear latch+flag with
-       DEN; bottom only sets the latch. At cycle 0 (= VICE PAL cycle 1) copy
-       latch → live vertical flag. Mid-line $D011 RSEL/DEN changes are seen on
-       the next check this cycle or at the left border apply. */
+       DEN; bottom only sets the latch. At cycle 0 copy latch → live flag after
+       this cycle's compares (same order as before the line_class split). */
     {
         uint32_t rl = v->timing.raster_line;
-        /* RSEL can change mid-line, so re-evaluate compares only near the
-           possible top/bottom lines (24- and 25-row windows). */
-        if (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
-            rl <= (uint32_t)VICII_VBORDER_TOP_24) {
-            vicii_check_vborder_top(v);
-        }
-        if (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
-            rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
-            vicii_check_vborder_bottom(v);
+        bool idle_line = v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE &&
+            (cf & (uint16_t)VICII_CF_LINE_START) == 0u;
+
+        if (!idle_line) {
+            if (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
+                rl <= (uint32_t)VICII_VBORDER_TOP_24) {
+                vicii_check_vborder_top(v);
+            }
+            if (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
+                rl <= (uint32_t)VICII_VBORDER_BOTTOM_25) {
+                vicii_check_vborder_bottom(v);
+            }
         }
         if ((cf & (uint16_t)VICII_CF_LINE_START) != 0u) {
+            bool near_vborder;
+            bool spr_possible;
+
             vicii_apply_vborder_latch(v);
+            near_vborder =
+                (rl >= (uint32_t)VICII_VBORDER_TOP_25 &&
+                 rl <= (uint32_t)VICII_VBORDER_TOP_24) ||
+                (rl >= (uint32_t)VICII_VBORDER_BOTTOM_24 &&
+                 rl <= (uint32_t)VICII_VBORDER_BOTTOM_25);
+            spr_possible = v->sprite_active_mask != 0u ||
+                v->registers[VICII_REG_SPR_ENABLE] != 0u;
+            if (v->vertical_border_active && !near_vborder && !spr_possible &&
+                (rl < (uint32_t)VICII_BADLINE_FIRST ||
+                 rl > (uint32_t)VICII_BADLINE_LAST)) {
+                v->line_class = (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE;
+            } else {
+                v->line_class = (uint8_t)VICII_LINE_CLASS_FULL;
+            }
         }
 
-        /* Bauer/VICE allow_bad_lines: arm on first DMA line ($30) if DEN is set
-           during any cycle of that line; disarm after last DMA line ($F7). */
-        if (rl == (uint32_t)VICII_BADLINE_FIRST &&
-            (v->registers[0x11] & 0x10u) != 0u) {
-            v->allow_bad_lines = true;
+        if (v->line_class == (uint8_t)VICII_LINE_CLASS_VBORDER_IDLE) {
+            v->bad_line = false;
+            if (rl > (uint32_t)VICII_BADLINE_LAST) {
+                v->allow_bad_lines = false;
+            }
+        } else {
+            if (rl == (uint32_t)VICII_BADLINE_FIRST &&
+                (v->registers[0x11] & 0x10u) != 0u) {
+                v->allow_bad_lines = true;
+            }
+            if (rl > (uint32_t)VICII_BADLINE_LAST) {
+                v->allow_bad_lines = false;
+            }
+            if (v->allow_bad_lines && vicii_is_bad_line(v)) {
+                v->bad_line      = true;
+                v->display_state = true;
+            } else {
+                v->bad_line = false;
+            }
         }
-        if (rl > (uint32_t)VICII_BADLINE_LAST) {
-            v->allow_bad_lines = false;
-        }
-    }
-
-    /* Bad Line Condition (Bauer 3.5 / VICE check_badline): once allow_bad_lines
-       is armed, each cycle tests (RASTER&7)==YSCROLL in $30–$F7. Mid-line
-       YSCROLL writes assert/drop immediately. DEN is not re-tested here. */
-    if (v->allow_bad_lines && vicii_is_bad_line(v)) {
-        v->bad_line      = true;
-        v->display_state = true;
-    } else {
-        v->bad_line = false;
     }
 
     /* Bauer 3.7.2 UpdateVc at VICE Phi2(14), zero-based cycle 13.

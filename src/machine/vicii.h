@@ -210,6 +210,11 @@ struct vicii {
        a same-cycle Phi2 $D016 MCM write into the current span (see the mode
        resolution in vicii_finish_cycle). Not snapshotted; re-set every cycle. */
     const c64_bus_t *paint_bus;
+
+    /* Transient line class recomputed at cycle 0. Not snapshotted.
+       0 = full accuracy path; 1 = deep vertical-border idle (no sprites, away
+       from top/bottom compares, outside badline window). */
+    uint8_t line_class;
 };
 
 bool vicii_init(vicii *v, char *error, size_t error_size);
