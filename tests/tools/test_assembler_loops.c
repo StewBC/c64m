@@ -160,6 +160,51 @@ static int test_loop_errors(void)
     return failures;
 }
 
+/* Bare "jmp :" is invalid; error text must not be truncated by a NUL from %c. */
+static int test_anon_label_bare_colon_error_message(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    const char *source =
+        "* = $c000\n"
+        ": inc $d020\n"
+        "  jmp :\n";
+    int failures = 0;
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) == ASM_OK || log.log_array.items == 0) {
+        fprintf(stderr, "bare anon ':': expected an assembly error\n");
+        failures++;
+    } else {
+        ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
+        if (e->err_str == NULL ||
+            (strstr(e->err_str, "'+' or '-'") == NULL &&
+             strstr(e->err_str, ":+") == NULL)) {
+            fprintf(stderr, "bare anon ':': unclear error: %s\n",
+                    e->err_str ? e->err_str : "(null)");
+            failures++;
+        }
+        /* Truncation bug left the message ending at a lone '('. */
+        if (e->err_str != NULL) {
+            size_t len = strlen(e->err_str);
+            if (len > 0 && e->err_str[len - 1] == '(') {
+                fprintf(stderr, "bare anon ':': error message truncated at '('\n");
+                failures++;
+            }
+        }
+    }
+
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 static int test_anon_label_with_repeat(void)
 {
     char path[128];
@@ -374,6 +419,7 @@ int main(void)
 
     failures += test_loop_output();
     failures += test_loop_errors();
+    failures += test_anon_label_bare_colon_error_message();
     failures += test_anon_label_with_repeat();
     failures += test_org_below_start();
     failures += test_star_below_start();

@@ -61,23 +61,36 @@ static int anonymous_symbol_lookup(ASSEMBLER *as, uint16_t *address, int directi
 }
 
 static uint16_t expr_anonymous_address(ASSEMBLER *as) {
+    /* After the leading ':', require '+' or '-' (:+ / :++ / :- / :--).
+       A bare ":" alone is not a reference (use ":-" for the previous
+       anonymous label). Never printf token.op with %c when it may be '\0'
+       (TOKEN_END): that used to embed a NUL and truncate the error at '('. */
     next_token(as);
     char op = as->token.op;
     int direction = 0;
+
+    if(as->token.type != TOKEN_OP || (op != '+' && op != '-')) {
+        if(as->token.type == TOKEN_END) {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    "Anonymous label reference needs '+' or '-' after ':' (e.g. ':-' or ':+')");
+        } else if(as->token.type == TOKEN_OP) {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    "Unexpected symbol after anonymous ':' (expected '+' or '-', got '%c')",
+                    op ? op : '?');
+        } else {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    "Unexpected token after anonymous ':' (expected '+' or '-')");
+        }
+        return 0;
+    }
+
     while(as->token.type == TOKEN_OP && op == as->token.op) {
         direction++;
         next_token(as);
     }
 
-    switch(op) {
-    case '+':
-        break;
-    case '-':
+    if(op == '-') {
         direction = -direction;
-        break;
-    default:
-        asm_err(as, ASM_ERR_RESOLVE, "Unexpected symbol after anonymous : (%c)", op);
-        break;
     }
 
     uint16_t address = current_output_address(as) + 1;
