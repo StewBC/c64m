@@ -82,6 +82,7 @@ typedef struct frontend_assembler_state {
     bool reset_first;
     bool rearm_oneshots;
     bool error_dialog_open;
+    bool error_dialog_is_notice;
     char error_text[4096];
     unsigned int error_scroll_x;
     unsigned int error_scroll_y;
@@ -274,6 +275,7 @@ bool frontend_get_disassembly_cursor(const frontend *ui, uint16_t *out_address);
 void frontend_append_symbol_file(frontend *ui, const char *path);
 void frontend_set_assembler_path(frontend *ui, const char *path);
 void frontend_show_assembler_errors(frontend *ui, const char *errors);
+void frontend_show_assembler_notice(frontend *ui, const char *notice);
 void frontend_update_symbols(frontend *ui, const runtime_symbol_snapshot *snapshot);
 void frontend_set_load_bin_path(frontend *ui, const char *path);
 void frontend_set_save_bin_path(frontend *ui, const char *path);

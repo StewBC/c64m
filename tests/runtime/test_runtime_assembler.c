@@ -170,12 +170,91 @@ static int test_assemble_reports_emitted_extent(void) {
     return failures;
 }
 
+static int test_assemble_auto_adjusts_segments(void) {
+    char path[128];
+    char error[1024];
+    char notice[1024];
+    c64_t machine;
+    runtime_assembler_options options = {
+        .auto_adjust_segments = true,
+    };
+    uint16_t start = 0xffff;
+    uint16_t end = 0;
+    uint32_t count = 0;
+    int failures = 0;
+    const char *source =
+        ".segdef \"A\", $1000\n"
+        ".segdef \"B\", $1080\n"
+        ".segdef \"C\", $1200\n"
+        ".segment \"A\"\n"
+        "    .res $100\n"
+        "    .byte $a1\n"
+        ".segment \"B\"\n"
+        "    .align $100\n"
+        "    .byte $b1\n"
+        ".segment \"C\"\n"
+        "    .byte $c1\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    c64_init(&machine);
+    if (!runtime_assemble_file_ex_options(
+            &machine,
+            NULL,
+            path,
+            0x0801,
+            "current",
+            &options,
+            &start,
+            &end,
+            &count,
+            notice,
+            sizeof(notice),
+            error,
+            sizeof(error))) {
+        fprintf(stderr, "auto-adjust runtime assembly failed: %s\n", error);
+        c64m_test_remove_file(path);
+        return 1;
+    }
+    failures += expect_u8(
+        "auto-adjust A marker",
+        0xa1,
+        c64_debug_read_ram(&machine, 0x1100));
+    failures += expect_u8(
+        "auto-adjust B marker",
+        0xb1,
+        c64_debug_read_ram(&machine, 0x1200));
+    failures += expect_u8(
+        "auto-adjust C marker",
+        0xc1,
+        c64_debug_read_ram(&machine, 0x1201));
+    if (start != 0x1000 || end != 0x1202 || count != 514) {
+        fprintf(stderr,
+                "auto-adjust extent mismatch: $%04x-$%04x, %u bytes\n",
+                start,
+                end,
+                count);
+        failures++;
+    }
+    if (strstr(notice, "Suggest \"B\" at $1101") == NULL ||
+        strstr(notice, "Suggest \"C\" at $1201") == NULL) {
+        fprintf(stderr, "auto-adjust notice mismatch: %s\n", notice);
+        failures++;
+    }
+
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 int main(void) {
     int failures = 0;
 
     failures += test_assemble_imports_symbols();
     failures += test_assemble_reports_errors();
     failures += test_assemble_reports_emitted_extent();
+    failures += test_assemble_auto_adjusts_segments();
 
     return failures == 0 ? 0 : 1;
 }

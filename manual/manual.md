@@ -1059,7 +1059,14 @@ auto_run       = no                   ; jump to run address after assembly (defa
 basic_run      = no                   ; fix BASIC pointers and paste RUN after assembly (default: no)
 reset          = yes                  ; Reset C64 before assembling (default: yes)
 rearm_oneshots = no                   ; Rearm one-shot breakpoints before assembling (default: no)
+auto_adjust_segments = no             ; Retry overlapping segment layouts (default: no)
 ```
+
+When `auto_adjust_segments` is enabled, an overlap detected during pass 1 causes up
+to three fresh layout retries using the assembler's suggested starts. Pass 2 only
+runs after the layout no longer overlaps. The source file is not changed; after a
+successful adjusted assembly, an **Assembly Adjustments** dialog lists the `.segdef`
+addresses to copy back into the source.
 
 ### Assembler Language
 
@@ -1243,6 +1250,13 @@ table:  .byte $01,$02,$03
 `noemit` segments advance the location counter but produce no output -- useful for
 mapping zero-page variables without emitting placeholder bytes.
 
+Emitted segments are checked for overlap. Normally an overlap fails assembly and
+prints a compacted set of suggested starts. With segment auto-adjust enabled, those
+starts are applied temporarily and pass 1 is restarted up to three times. This
+re-evaluates `.align` padding at each new start, so a first approximation that changes
+segment sizes can converge on a later retry. The lowest segment remains the packing
+anchor; subsequent emitted segments are packed contiguously in address order.
+
 ### Strcode
 
 `.strcode e` remaps string characters using the expression `e`. The variable `_` holds
@@ -1310,7 +1324,7 @@ It writes raw binary files rather than poking live memory.
 
 ```
 c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
-        [-D name[=value]]... [-v] [-h]
+        [-D name[=value]]... [--auto-adjust-segments] [-v] [-h]
 ```
 
 | Switch            | Effect                                                             |
@@ -1320,6 +1334,7 @@ c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
 | `-a <addr>`       | Origin/load address of the default target (default `$0000`; accepts `$hex`, `0xhex`, or decimal). Not needed if the source sets its own origin with `* =` / `.org` |
 | `-s <symfile\|->` | Write a symbol + segment listing; `-` sends it to stdout          |
 | `-D name[=value]` | Predefine a text define (value defaults to `1`); repeatable       |
+| `-A`, `--auto-adjust-segments` | Retry overlapping pass-1 layouts up to three times using suggested starts |
 | `-v`              | Verbose: hex-dump each target's emitted bytes                     |
 | `-h`              | Show usage                                                        |
 
@@ -1585,6 +1600,7 @@ defaults on next launch.
 | `auto_run`       | `yes` / `no` - Jump to run address after assembling | `no`    |
 | `reset`          | `yes` / `no` - Reset C64 before assembling          | `yes`   |
 | `rearm_oneshots` | `yes` / `no` - Rearm one-shot breakpoints before assembling | `no` |
+| `auto_adjust_segments` | `yes` / `no` - Retry overlap layouts with suggested starts | `no` |
 
 ### [DEBUG]
 

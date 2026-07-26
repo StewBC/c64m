@@ -92,6 +92,7 @@ typedef struct app_options {
     bool assembler_basic_run;
     bool assembler_reset_first;
     bool assembler_rearm_oneshots;
+    bool assembler_auto_adjust_segments;
     int control_port;
     bool headless;
     /* Always-on CPU flight-recorder startup budget in MiB: 0 or 16..4096. */

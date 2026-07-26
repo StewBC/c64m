@@ -192,6 +192,37 @@ static void dump_segments(FILE *fp, DYNARRAY *targets) {
     }
 }
 
+typedef struct {
+    FILE *fp;
+    int printed_header;
+} adjustment_print_ctx;
+
+static void print_segment_adjustment(
+    size_t target_index,
+    const char *segment_name,
+    uint16_t address,
+    void *user) {
+    adjustment_print_ctx *ctx = (adjustment_print_ctx *)user;
+    const char *name = segment_name && segment_name[0] ?
+        segment_name : "<default>";
+    if(!ctx->printed_header) {
+        fprintf(
+            ctx->fp,
+            "\nAssembly succeeded with adjusted segment addresses; update the source to:\n");
+        ctx->printed_header = 1;
+    }
+    if(target_index == 0) {
+        fprintf(ctx->fp, "  Suggest \"%s\" at $%04X\n", name, address);
+    } else {
+        fprintf(
+            ctx->fp,
+            "  Target %zu: Suggest \"%s\" at $%04X\n",
+            target_index,
+            name,
+            address);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Argument handling.
 static const char *arg_value(int argc, char **argv, const char *key) {
@@ -242,7 +273,7 @@ static void usage(const char *program) {
     }
     fprintf(stderr,
         "Usage: %s -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]\n"
-        "               [-D name[=value]]... [-v] [-h]\n"
+        "               [-D name[=value]]... [--auto-adjust-segments] [-v] [-h]\n"
         "\n"
         "  -i <infile>        6502 assembly source to assemble (required)\n"
         "  -o <outfile>       binary output for the default (unnamed) target\n"
@@ -250,6 +281,8 @@ static void usage(const char *program) {
         "                     accepts $hex, 0xhex or decimal)\n"
         "  -s <symfile|->     write a symbol + segment listing ('-' = stdout)\n"
         "  -D name[=value]    predefine a text define (value defaults to \"1\"); repeatable\n"
+        "  -A, --auto-adjust-segments\n"
+        "                     retry overlapping segment layouts with suggested starts\n"
         "  -v                 verbose: hex-dump each target's output\n"
         "  -h                 show this help\n"
         "\n"
@@ -315,6 +348,9 @@ int main(int argc, char **argv) {
     const char *symbol_file = arg_value(argc, argv, "-s");
     const char *addr_text = arg_value(argc, argv, "-a");
     int verbose = arg_flag(argc, argv, "-v");
+    int auto_adjust_segments =
+        arg_flag(argc, argv, "-A") ||
+        arg_flag(argc, argv, "--auto-adjust-segments");
 
     if(!input_file) {
         usage(argv[0]);
@@ -362,6 +398,7 @@ int main(int argc, char **argv) {
 
     // Predefine C64MASM=1 so source can detect the CLI build, then honour -D flags.
     assembler_predefine(&as, "C64MASM", "1");
+    assembler_set_auto_adjust_segments(&as, auto_adjust_segments);
     if(!inject_defines(&as, argc, argv)) {
         assembler_shutdown(&as);
         file_target_free(default_target);
@@ -371,6 +408,14 @@ int main(int argc, char **argv) {
 
     int result = assembler_assemble(&as, input_file, origin);
     int failed = (result != ASM_OK);
+
+    if(!failed && auto_adjust_segments) {
+        adjustment_print_ctx print_ctx = {stderr, 0};
+        assembler_walk_segment_adjustments(
+            &as,
+            print_segment_adjustment,
+            &print_ctx);
+    }
 
     if(verbose) {
         for(size_t i = 0; i < as.targets.items; i++) {

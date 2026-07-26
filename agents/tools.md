@@ -4,7 +4,9 @@
 
 - `src/tools/assembler`: shared two-pass assembler library used by the frontend,
   runtime, and `c64masm`; output-target callbacks are optional and absent in the
-  in-emulator host.
+  in-emulator host. Its opt-in segment auto-adjust mode performs up to three
+  fresh pass-1 layout retries using structured overlap suggestions; pass 2 only
+  runs after layout stabilizes, and hosts can walk the applied address map.
 - `src/tools/disasm_6502`: 6502 disassembly and opcode addressing-mode metadata.
   The frontend adds effective-address/value annotations from copied CPU/memory
   snapshots.

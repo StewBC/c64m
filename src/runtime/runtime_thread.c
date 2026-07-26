@@ -3846,7 +3846,11 @@ static void runtime_complete_pending_prg_load(runtime *rt, char *path) {
     runtime_publish_machine_state(rt);
 }
 
-static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address);
+static void runtime_publish_assemble_complete(
+    runtime *rt,
+    const char *path,
+    uint16_t address,
+    const char *notice);
 
 static void runtime_publish_symbols(runtime *rt) {
     runtime_symbol_slot *slot = &rt->symbol_slot;
@@ -3901,6 +3905,7 @@ static void runtime_set_basic_program_pointers(
 
 static void runtime_complete_pending_asm(runtime *rt, char *path) {
     char error[4096];
+    char notice[4096];
     bool ok;
     uint16_t address = rt->pending_asm_address;
     uint16_t run_address = rt->pending_asm_run_address;
@@ -3909,17 +3914,23 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
     uint32_t assembled_count = 0u;
     bool auto_run = rt->pending_asm_auto_run;
     bool basic_run = rt->pending_asm_basic_run;
+    runtime_assembler_options assembler_options = {
+        .auto_adjust_segments = rt->pending_asm_auto_adjust_segments,
+    };
 
     runtime_history_prepare_discontinuity(rt);
-    ok = runtime_assemble_file_ex(
+    ok = runtime_assemble_file_ex_options(
         &rt->machine,
         rt->symbols,
         path,
         address,
         path,
+        &assembler_options,
         &assembled_start,
         &assembled_end,
         &assembled_count,
+        notice,
+        sizeof(notice),
         error,
         sizeof(error));
 
@@ -3954,7 +3965,11 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
         /* Report where code actually landed (first emitted byte), not the
            requested default origin, which the source overrides for any real
            program. See assembled_start from runtime_assemble_file_ex. */
-        runtime_publish_assemble_complete(rt, path, assembled_start);
+        runtime_publish_assemble_complete(
+            rt,
+            path,
+            assembled_start,
+            notice);
         runtime_publish_memory(rt, assembled_start, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     } else {
         runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
@@ -3963,24 +3978,38 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
     free(path);
 }
 
-static void runtime_publish_assemble_complete(runtime *rt, const char *path, uint16_t address) {
+static void runtime_publish_assemble_complete(
+    runtime *rt,
+    const char *path,
+    uint16_t address,
+    const char *notice) {
     runtime_event event = {
         .type = RUNTIME_EVENT_ASSEMBLE_COMPLETE,
     };
 
     event.data.assemble.address = address;
     snprintf(event.data.assemble.path, sizeof(event.data.assemble.path), "%s", path ? path : "");
+    snprintf(
+        event.data.assemble.notice,
+        sizeof(event.data.assemble.notice),
+        "%s",
+        notice ? notice : "");
     runtime_publish_event(rt, &event);
 }
 
 static void runtime_assemble_file_command(runtime *rt, const runtime_command *command) {
     char error[4096];
+    char notice[4096];
     uint16_t assembled_start = command->data.assemble_file.address;
     uint16_t assembled_end = command->data.assemble_file.address;
     uint32_t assembled_count = 0u;
     bool auto_run = command->data.assemble_file.auto_run != 0;
     bool basic_run = command->data.assemble_file.basic_run != 0;
     bool want_reset = command->data.assemble_file.reset_first != 0;
+    runtime_assembler_options assembler_options = {
+        .auto_adjust_segments =
+            command->data.assemble_file.auto_adjust_segments != 0,
+    };
 
     /* BASIC-run pastes RUN through the editor, which only works at a READY
        prompt. A reset guarantees that state; skip the reset only when the
@@ -4005,6 +4034,8 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
         rt->pending_asm_run_address = command->data.assemble_file.run_address;
         rt->pending_asm_auto_run    = auto_run;
         rt->pending_asm_basic_run   = basic_run;
+        rt->pending_asm_auto_adjust_segments =
+            assembler_options.auto_adjust_segments;
         rt->exec_state = RUNTIME_EXEC_RUNNING;
         rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
         runtime_reset_pacer(rt);
@@ -4013,15 +4044,18 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
 
     /* No-reset path: assemble directly into live RAM, works in any exec state. */
     runtime_history_prepare_discontinuity(rt);
-    if (!runtime_assemble_file_ex(
+    if (!runtime_assemble_file_ex_options(
             &rt->machine,
             rt->symbols,
             command->data.assemble_file.path,
             command->data.assemble_file.address,
             command->data.assemble_file.path,
+            &assembler_options,
             &assembled_start,
             &assembled_end,
             &assembled_count,
+            notice,
+            sizeof(notice),
             error,
             sizeof(error))) {
         runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
@@ -4054,7 +4088,11 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
         runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
     }
     /* Report the actual emitted origin, not the requested default address. */
-    runtime_publish_assemble_complete(rt, command->data.assemble_file.path, assembled_start);
+    runtime_publish_assemble_complete(
+        rt,
+        command->data.assemble_file.path,
+        assembled_start,
+        notice);
     runtime_publish_memory(rt, assembled_start, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     runtime_publish_machine_state(rt);
 }

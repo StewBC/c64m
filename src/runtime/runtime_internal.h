@@ -233,6 +233,7 @@ struct runtime {
     uint16_t pending_asm_run_address;
     bool pending_asm_auto_run;
     bool pending_asm_basic_run;
+    bool pending_asm_auto_adjust_segments;
     char *pending_bin_path;
     uint16_t pending_bin_address;
     uint8_t pending_bin_use_file_address;

@@ -8,12 +8,14 @@
 
 typedef struct {
     uint8_t memory[65536];
+    size_t writes;
 } test_memory;
 
 static void output_byte(void *user, uint16_t addr, uint8_t val)
 {
     test_memory *mem = (test_memory *)user;
     mem->memory[addr] = val;
+    mem->writes++;
 }
 
 static int write_source(char *path, size_t path_size, const char *source)
@@ -206,6 +208,114 @@ static int test_scope_segment_errors(void)
     return failures;
 }
 
+typedef struct {
+    size_t count;
+    size_t target_index[8];
+    char name[8][32];
+    uint16_t address[8];
+} adjustment_capture;
+
+static void capture_adjustment(
+    size_t target_index,
+    const char *segment_name,
+    uint16_t address,
+    void *user)
+{
+    adjustment_capture *capture = (adjustment_capture *)user;
+    if (capture->count >= 8) {
+        return;
+    }
+    capture->target_index[capture->count] = target_index;
+    snprintf(
+        capture->name[capture->count],
+        sizeof(capture->name[capture->count]),
+        "%s",
+        segment_name);
+    capture->address[capture->count] = address;
+    capture->count++;
+}
+
+static int test_segment_auto_adjust_converges(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    ASSEMBLER as;
+    CB_ASM_CTX cb;
+    adjustment_capture capture;
+    int failures = 0;
+    const char *source =
+        ".segdef \"A\", $1000\n"
+        ".segdef \"B\", $1080\n"
+        ".segdef \"C\", $1200\n"
+        ".segment \"A\"\n"
+        "    .res $100\n"
+        "    .byte $a1\n"
+        ".segment \"B\"\n"
+        "    .align $100\n"
+        "    .byte $b1\n"
+        ".segment \"C\"\n"
+        "    .byte $c1\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    /* Existing/default behavior remains a hard overlap failure. */
+    memset(&mem, 0, sizeof(mem));
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) != ASM_ERR ||
+        log.log_array.items == 0) {
+        fprintf(stderr, "overlap unexpectedly succeeded without auto-adjust\n");
+        failures++;
+    }
+    errlog_shutdown(&log);
+
+    /* Moving B across the $1100 alignment boundary grows its padding, so the
+       first suggestion makes B overlap C. A second retry must move C again. */
+    memset(&mem, 0, sizeof(mem));
+    memset(&capture, 0, sizeof(capture));
+    memset(&cb, 0, sizeof(cb));
+    cb.user = &mem;
+    cb.output_byte = output_byte;
+    errlog_init(&log);
+    if (assembler_init(&as, &log, &cb) != ASM_OK) {
+        fprintf(stderr, "assembler_init failed for auto-adjust test\n");
+        errlog_shutdown(&log);
+        c64m_test_remove_file(path);
+        return failures + 1;
+    }
+    assembler_set_auto_adjust_segments(&as, 1);
+    if (assembler_assemble(&as, path, 0x0801) != ASM_OK) {
+        fprintf(stderr, "auto-adjust assembly failed with %zu errors\n",
+                log.log_array.items);
+        failures++;
+    }
+    assembler_walk_segment_adjustments(&as, capture_adjustment, &capture);
+    if (capture.count != 3 ||
+        strcmp(capture.name[0], "A") != 0 || capture.address[0] != 0x1000 ||
+        strcmp(capture.name[1], "B") != 0 || capture.address[1] != 0x1101 ||
+        strcmp(capture.name[2], "C") != 0 || capture.address[2] != 0x1201) {
+        fprintf(stderr, "auto-adjust final suggestion map mismatch\n");
+        failures++;
+    }
+    if (mem.memory[0x1100] != 0xa1 ||
+        mem.memory[0x1200] != 0xb1 ||
+        mem.memory[0x1201] != 0xc1) {
+        fprintf(stderr, "auto-adjust output landed at wrong addresses\n");
+        failures++;
+    }
+    if (mem.writes != 514) {
+        fprintf(stderr, "auto-adjust emitted provisional passes (%zu writes)\n",
+                mem.writes);
+        failures++;
+    }
+    assembler_shutdown(&as);
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -214,6 +324,7 @@ int main(void)
     failures += test_quoted_scope_name();
     failures += test_segments();
     failures += test_scope_segment_errors();
+    failures += test_segment_auto_adjust_converges();
 
     return failures == 0 ? 0 : 1;
 }

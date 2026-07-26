@@ -427,6 +427,11 @@ static void dot_org(ASSEMBLER *as) {
     /* Re-anchor start while the segment is still empty (no bytes emitted). */
     if(!segment->segment_init ||
        segment->segment_output_address == segment->segment_start_address) {
+        address = assembler_adjust_segment_start(
+            as,
+            segment->segment_name,
+            segment->segment_name_length,
+            address);
         segment->segment_start_address = address;
         segment->segment_init = 1;
     }
@@ -1101,6 +1106,11 @@ static void dot_segdef(ASSEMBLER *as) {
     }
 
     uint16_t start = (uint16_t)expr_full_evaluate(as);
+    start = assembler_adjust_segment_start(
+        as,
+        segment.segment_name,
+        segment.segment_name_length,
+        start);
     int do_not_emit = 0;
     if(as->token.op == ',') {
         next_token(as);
@@ -1541,6 +1551,11 @@ void parse_address(ASSEMBLER *as) {
         if(segment &&
            (!segment->segment_init ||
             segment->segment_output_address == segment->segment_start_address)) {
+            address = assembler_adjust_segment_start(
+                as,
+                segment->segment_name,
+                segment->segment_name_length,
+                address);
             segment->segment_start_address = address;
             segment->segment_output_address = address;
             segment->segment_init = 1;

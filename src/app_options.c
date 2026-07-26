@@ -1241,6 +1241,9 @@ static void apply_config(app_options *options, config *cfg)
         cfg, "assembler", "reset", options->assembler_reset_first);
     options->assembler_rearm_oneshots = config_get_bool(
         cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
+    options->assembler_auto_adjust_segments = config_get_bool(
+        cfg, "assembler", "auto_adjust_segments",
+        options->assembler_auto_adjust_segments);
 
     for (drive = 0; drive < C64M_DRIVE_COUNT; ++drive) {
         snprintf(key, sizeof(key), "%d", drive);
@@ -1552,6 +1555,7 @@ void app_options_init(app_options *options)
     options->assembler_basic_run = false;
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
+    options->assembler_auto_adjust_segments = false;
     options->control_port = 0;
     options->headless = false;
     options->show_disk_leds = true;
@@ -1617,6 +1621,8 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->assembler_basic_run = src->assembler_basic_run;
     dest->assembler_reset_first = src->assembler_reset_first;
     dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
+    dest->assembler_auto_adjust_segments =
+        src->assembler_auto_adjust_segments;
     dest->control_port = src->control_port;
     dest->headless = src->headless;
     dest->keyboard_joystick_port = src->keyboard_joystick_port;
@@ -1815,6 +1821,11 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_bool(cfg, "assembler", "basic_run", options->assembler_basic_run);
     config_set_bool(cfg, "assembler", "reset", options->assembler_reset_first);
     config_set_bool(cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
+    config_set_bool(
+        cfg,
+        "assembler",
+        "auto_adjust_segments",
+        options->assembler_auto_adjust_segments);
 
     {
         int i;

@@ -327,6 +327,7 @@ typedef struct runtime_event {
         struct {
             uint16_t address;
             char path[1024];
+            char notice[4096];
         } assemble;
 
         struct {

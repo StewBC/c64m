@@ -4,6 +4,22 @@
 
 #include "asm_lib.h"
 
+#define OVERLAP_MAX_SEGS 64
+#define AUTO_ADJUST_MAX_RETRIES 3
+
+typedef struct {
+    size_t target_index;
+    char *segment_name;
+    uint32_t segment_name_length;
+    uint16_t address;
+} SEGMENT_ADJUSTMENT;
+
+typedef struct {
+    int overlaps;
+    int wraps;
+    int allocation_failed;
+} SEGMENT_CHECK_RESULT;
+
 static void strip_comment(char *line, int *line_len) {
     int in_string = 0;
     for(int i = 0; i < *line_len; i++) {
@@ -21,6 +37,116 @@ static void strip_comment(char *line, int *line_len) {
             return;
         }
     }
+}
+
+static size_t active_target_index(const ASSEMBLER *as) {
+    for(size_t i = 0; i < as->targets.items; i++) {
+        if(*ARRAY_GET((DYNARRAY *)&as->targets, TARGET*, i) == as->active_target) {
+            return i;
+        }
+    }
+    return (size_t)-1;
+}
+
+static void segment_adjustments_clear(DYNARRAY *adjustments) {
+    for(size_t i = 0; i < adjustments->items; i++) {
+        SEGMENT_ADJUSTMENT *adjustment =
+            ARRAY_GET(adjustments, SEGMENT_ADJUSTMENT, i);
+        free(adjustment->segment_name);
+    }
+    array_free(adjustments);
+    ARRAY_INIT(adjustments, SEGMENT_ADJUSTMENT);
+}
+
+static int segment_adjustment_add(
+    DYNARRAY *adjustments,
+    size_t target_index,
+    const char *segment_name,
+    uint32_t segment_name_length,
+    uint16_t address) {
+    SEGMENT_ADJUSTMENT adjustment;
+    memset(&adjustment, 0, sizeof(adjustment));
+    adjustment.target_index = target_index;
+    adjustment.segment_name_length = segment_name_length;
+    adjustment.address = address;
+    if(segment_name_length > 0) {
+        adjustment.segment_name = malloc((size_t)segment_name_length + 1);
+        if(!adjustment.segment_name) {
+            return ASM_ERR;
+        }
+        memcpy(adjustment.segment_name, segment_name, segment_name_length);
+        adjustment.segment_name[segment_name_length] = '\0';
+    }
+    if(ASM_OK != ARRAY_ADD(adjustments, adjustment)) {
+        free(adjustment.segment_name);
+        return ASM_ERR;
+    }
+    return ASM_OK;
+}
+
+static int segment_adjustments_copy(DYNARRAY *dest, const DYNARRAY *source) {
+    ARRAY_INIT(dest, SEGMENT_ADJUSTMENT);
+    for(size_t i = 0; i < source->items; i++) {
+        const SEGMENT_ADJUSTMENT *adjustment =
+            ARRAY_GET((DYNARRAY *)source, SEGMENT_ADJUSTMENT, i);
+        if(ASM_OK != segment_adjustment_add(
+                dest,
+                adjustment->target_index,
+                adjustment->segment_name,
+                adjustment->segment_name_length,
+                adjustment->address)) {
+            segment_adjustments_clear(dest);
+            return ASM_ERR;
+        }
+    }
+    return ASM_OK;
+}
+
+static void segment_adjustments_remove_target(
+    DYNARRAY *adjustments,
+    size_t target_index) {
+    size_t write = 0;
+    for(size_t read = 0; read < adjustments->items; read++) {
+        SEGMENT_ADJUSTMENT *adjustment =
+            ARRAY_GET(adjustments, SEGMENT_ADJUSTMENT, read);
+        if(adjustment->target_index == target_index) {
+            free(adjustment->segment_name);
+            continue;
+        }
+        if(write != read) {
+            *ARRAY_GET(adjustments, SEGMENT_ADJUSTMENT, write) = *adjustment;
+        }
+        write++;
+    }
+    adjustments->items = write;
+}
+
+uint16_t assembler_adjust_segment_start(
+    ASSEMBLER *as,
+    const char *segment_name,
+    uint32_t segment_name_length,
+    uint16_t source_address) {
+    if(!as || !as->auto_adjust_segments || as->segment_adjustments.items == 0) {
+        return source_address;
+    }
+    size_t target_index = active_target_index(as);
+    if(target_index == (size_t)-1) {
+        return source_address;
+    }
+    for(size_t i = 0; i < as->segment_adjustments.items; i++) {
+        SEGMENT_ADJUSTMENT *adjustment =
+            ARRAY_GET(&as->segment_adjustments, SEGMENT_ADJUSTMENT, i);
+        if(adjustment->target_index == target_index &&
+           adjustment->segment_name_length == segment_name_length &&
+           (segment_name_length == 0 ||
+            0 == asm_strnicmp(
+                adjustment->segment_name,
+                segment_name,
+                segment_name_length))) {
+            return adjustment->address;
+        }
+    }
+    return source_address;
 }
 
 static void reset_targets_for_pass(ASSEMBLER *as) {
@@ -145,9 +271,13 @@ static void asm_log_direct(ASSEMBLER *as, const char *fmt, ...) {
     errlog(as->errorlog, &e);
 }
 
-#define OVERLAP_MAX_SEGS 64
+static SEGMENT_CHECK_RESULT check_segment_overlaps(
+    ASSEMBLER *as,
+    DYNARRAY *suggestions,
+    int log_issues) {
+    SEGMENT_CHECK_RESULT result;
+    memset(&result, 0, sizeof(result));
 
-static void check_segment_overlaps(ASSEMBLER *as) {
     for(size_t ti = 0; ti < as->targets.items; ti++) {
         TARGET *target = *ARRAY_GET(&as->targets, TARGET*, ti);
         if(!target) {
@@ -183,16 +313,24 @@ static void check_segment_overlaps(ASSEMBLER *as) {
             segs[j + 1] = key;
         }
 
-        int issues = 0;
+        int target_overlaps = 0;
+        int target_wraps = 0;
 
         // Wrap-around: output_address < start_address in uint16 arithmetic
         for(int i = 0; i < count; i++) {
             if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
-                const char *name = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
-                asm_log_direct(as, "Segment \"%.*s\" wraps past $FFFF (start $%04X end $%04X)",
-                    (int)segs[i]->segment_name_length, name,
-                    segs[i]->segment_start_address, segs[i]->segment_output_address);
-                issues++;
+                if(log_issues) {
+                    const char *name = segs[i]->segment_name ?
+                        segs[i]->segment_name : "<default>";
+                    asm_log_direct(
+                        as,
+                        "Segment \"%.*s\" wraps past $FFFF (start $%04X end $%04X)",
+                        (int)segs[i]->segment_name_length,
+                        name,
+                        segs[i]->segment_start_address,
+                        segs[i]->segment_output_address);
+                }
+                target_wraps++;
             }
         }
 
@@ -206,21 +344,38 @@ static void check_segment_overlaps(ASSEMBLER *as) {
                     continue;
                 }
                 if(segs[j]->segment_start_address < segs[i]->segment_output_address) {
-                    const char *na = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
-                    const char *nb = segs[j]->segment_name ? segs[j]->segment_name : "<default>";
-                    asm_log_direct(as,
-                        "Segment \"%.*s\" [$%04X..$%04X) overlaps \"%.*s\" [$%04X..$%04X)",
-                        (int)segs[i]->segment_name_length, na,
-                        segs[i]->segment_start_address, segs[i]->segment_output_address,
-                        (int)segs[j]->segment_name_length, nb,
-                        segs[j]->segment_start_address, segs[j]->segment_output_address);
-                    issues++;
+                    if(log_issues) {
+                        const char *na = segs[i]->segment_name ?
+                            segs[i]->segment_name : "<default>";
+                        const char *nb = segs[j]->segment_name ?
+                            segs[j]->segment_name : "<default>";
+                        asm_log_direct(
+                            as,
+                            "Segment \"%.*s\" [$%04X..$%04X) overlaps \"%.*s\" [$%04X..$%04X)",
+                            (int)segs[i]->segment_name_length,
+                            na,
+                            segs[i]->segment_start_address,
+                            segs[i]->segment_output_address,
+                            (int)segs[j]->segment_name_length,
+                            nb,
+                            segs[j]->segment_start_address,
+                            segs[j]->segment_output_address);
+                    }
+                    target_overlaps++;
                 }
             }
         }
 
-        if(issues > 0) {
-            asm_log_direct(as, "Segments overlap -- suggested addresses:");
+        result.overlaps += target_overlaps;
+        result.wraps += target_wraps;
+
+        if(target_overlaps > 0) {
+            if(suggestions) {
+                segment_adjustments_remove_target(suggestions, ti);
+            }
+            if(log_issues) {
+                asm_log_direct(as, "Segments overlap -- suggested addresses:");
+            }
             uint16_t next_addr = segs[0]->segment_start_address;
             for(int i = 0; i < count; i++) {
                 if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
@@ -228,22 +383,62 @@ static void check_segment_overlaps(ASSEMBLER *as) {
                 }
                 const char *name = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
                 uint16_t size = segs[i]->segment_output_address - segs[i]->segment_start_address;
-                asm_log_direct(as, "  Suggest \"%.*s\" at $%04X",
-                    (int)segs[i]->segment_name_length, name, next_addr);
+                if(log_issues) {
+                    asm_log_direct(
+                        as,
+                        "  Suggest \"%.*s\" at $%04X",
+                        (int)segs[i]->segment_name_length,
+                        name,
+                        next_addr);
+                }
+                if(suggestions &&
+                   ASM_OK != segment_adjustment_add(
+                       suggestions,
+                       ti,
+                       segs[i]->segment_name,
+                       segs[i]->segment_name_length,
+                       next_addr)) {
+                    result.allocation_failed = 1;
+                    asm_err(as, ASM_ERR_FATAL,
+                            "Out of memory tracking adjusted segment addresses");
+                    return result;
+                }
                 next_addr += size;
             }
         }
     }
+    return result;
 }
 
-int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
-    if(!as || !errorlog || !cb || !cb->output_byte) {
-        return ASM_ERR;
-    }
-    memset(as, 0, sizeof(*as));
-    as->cb = *cb;
-    as->errorlog = errorlog;
-    as->error_log_level = 0;
+static void assembler_program_state_destroy(ASSEMBLER *as) {
+    free(as->root_dir);
+    as->root_dir = NULL;
+    defines_free(as);
+    macro_stack_clear(as);
+    macro_definitions_clear(as);
+    files_free(as);
+    as->root_file = NULL;
+    as->current_file = NULL;
+    as->current_file_name = NULL;
+    as->current_line = 0;
+    as->cur = NULL;
+    scope_destroy(as->root_scope);
+    as->root_scope = NULL;
+    as->active_scope = NULL;
+    as->symbol_table = NULL;
+    array_free(&as->scope_stack);
+    array_free(&as->anon_symbols);
+    loop_stack_clear(as);
+    array_free(&as->loop_stack);
+    array_free(&as->macros);
+    array_free(&as->macro_stack);
+    array_free(&as->if_stack);
+    targets_free(as);
+    free((char *)as->strcode);
+    as->strcode = NULL;
+}
+
+static int assembler_program_state_init(ASSEMBLER *as) {
     ARRAY_INIT(&as->files, ASM_FILE*);
     ARRAY_INIT(&as->file_stack, FILE_FRAME);
     ARRAY_INIT(&as->defines, DEFINE);
@@ -254,22 +449,40 @@ int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
     ARRAY_INIT(&as->macro_stack, MACRO_EXPAND);
     ARRAY_INIT(&as->if_stack, IF_FRAME);
     ARRAY_INIT(&as->targets, TARGET*);
-    ARRAY_INIT(&as->predefines, DEFINE);
     as->valid_opcodes = 0;
 
     as->root_scope = malloc(sizeof(SCOPE));
     if(!as->root_scope || ASM_OK != scope_init(as->root_scope, 0)) {
         free(as->root_scope);
         as->root_scope = NULL;
-        assembler_shutdown(as);
         return ASM_ERR;
     }
     as->active_scope = as->root_scope;
     as->symbol_table = as->root_scope->symbol_table;
     // The default (unnamed) target routes emitted bytes to the host's default_target
     // context; fall back to `user` so a host that only sets user+output_byte still works.
-    as->active_target = add_target(as, cb->default_target ? cb->default_target : cb->user);
-    if(!as->active_target) {
+    as->active_target = add_target(
+        as,
+        as->cb.default_target ? as->cb.default_target : as->cb.user);
+    return as->active_target ? ASM_OK : ASM_ERR;
+}
+
+static int assembler_restart_program_state(ASSEMBLER *as) {
+    assembler_program_state_destroy(as);
+    return assembler_program_state_init(as);
+}
+
+int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb) {
+    if(!as || !errorlog || !cb || !cb->output_byte) {
+        return ASM_ERR;
+    }
+    memset(as, 0, sizeof(*as));
+    as->cb = *cb;
+    as->errorlog = errorlog;
+    as->error_log_level = 0;
+    ARRAY_INIT(&as->predefines, DEFINE);
+    ARRAY_INIT(&as->segment_adjustments, SEGMENT_ADJUSTMENT);
+    if(ASM_OK != assembler_program_state_init(as)) {
         assembler_shutdown(as);
         return ASM_ERR;
     }
@@ -301,79 +514,153 @@ int assembler_predefine(ASSEMBLER *as, const char *name, const char *value) {
     return ASM_OK;
 }
 
+void assembler_set_auto_adjust_segments(ASSEMBLER *as, int enabled) {
+    if(as) {
+        as->auto_adjust_segments = enabled ? 1 : 0;
+    }
+}
+
+static int assembler_run_pass(
+    ASSEMBLER *as,
+    const char *input_file) {
+    reset_pass_state(as);
+
+    if(as->pass == 1) {
+        if(ASM_OK != file_load(as, input_file)) {
+            return ASM_ERR;
+        }
+        free(as->root_dir);
+        as->root_dir = NULL;
+        if(as->root_file && as->root_file->display_name) {
+            const char *slash = strrchr(as->root_file->display_name, '/');
+            if(slash) {
+                size_t dir_len =
+                    (size_t)(slash - as->root_file->display_name + 1);
+                as->root_dir = malloc(dir_len + 1);
+                if(as->root_dir) {
+                    memcpy(as->root_dir, as->root_file->display_name, dir_len);
+                    as->root_dir[dir_len] = '\0';
+                }
+            }
+        }
+    } else if(ASM_OK != file_stack_reset_for_pass2(as)) {
+        return ASM_ERR;
+    }
+
+    while(as->file_stack.items > 0) {
+        if(!file_read_line(as)) {
+            file_stack_pop(as);
+            continue;
+        }
+
+        strip_comment(as->line, &as->line_len);
+        if(as->if_skip_depth > 0) {
+            parse_if_skip(as);
+            continue;
+        }
+
+        macro_substitute_line(as);
+        define_substitute(as);
+        as->cur = as->line;
+        parse_line(as);
+    }
+
+    if(as->scope_stack.items > 0) {
+        asm_err(as, ASM_ERR_RESOLVE, "Unclosed scope at end of assembly");
+    }
+    if(as->loop_stack.items > 0) {
+        asm_err(as, ASM_ERR_RESOLVE, "Unclosed loop at end of assembly");
+    }
+    if(as->if_stack.items > 0 || as->if_skip_depth > 0) {
+        asm_err(as, ASM_ERR_RESOLVE, "Unclosed conditional assembly block");
+    }
+    return ASM_OK;
+}
+
 int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) {
     if(!as || !input_file || !as->active_target || !as->active_target->active_segment) {
         return ASM_ERR;
     }
 
     size_t initial_errors = as->errorlog ? as->errorlog->log_array.items : 0;
+    int adjustment_retries = 0;
 
     reset_source_for_assemble(as);
     as->anon_symbols.items = 0;
+    segment_adjustments_clear(&as->segment_adjustments);
 
-    SEGMENT *default_segment = as->active_target->active_segment;
-    default_segment->segment_start_address = address;
-    default_segment->segment_output_address = address;
-    default_segment->segment_init = 1;
+    for(;;) {
+        DYNARRAY suggestions;
+        SEGMENT_CHECK_RESULT layout;
+        SEGMENT *default_segment = as->active_target->active_segment;
+        uint16_t adjusted_address =
+            assembler_adjust_segment_start(as, NULL, 0, address);
+        default_segment->segment_start_address = adjusted_address;
+        default_segment->segment_output_address = adjusted_address;
+        default_segment->segment_init = 1;
 
-    for(as->pass = 1; as->pass <= 2; as->pass++) {
-        reset_pass_state(as);
-
-        if(as->pass == 1) {
-            if(ASM_OK != file_load(as, input_file)) {
-                return ASM_ERR;
-            }
-            free(as->root_dir);
-            as->root_dir = NULL;
-            if(as->root_file && as->root_file->display_name) {
-                const char *slash = strrchr(as->root_file->display_name, '/');
-                if(slash) {
-                    size_t dir_len = (size_t)(slash - as->root_file->display_name + 1);
-                    as->root_dir = malloc(dir_len + 1);
-                    if(as->root_dir) {
-                        memcpy(as->root_dir, as->root_file->display_name, dir_len);
-                        as->root_dir[dir_len] = '\0';
-                    }
-                }
-            }
-        } else if(ASM_OK != file_stack_reset_for_pass2(as)) {
+        as->pass = 1;
+        if(ASM_OK != assembler_run_pass(as, input_file)) {
             return ASM_ERR;
         }
 
-        while(as->file_stack.items > 0) {
-            if(!file_read_line(as)) {
-                file_stack_pop(as);
-                continue;
-            }
-
-            strip_comment(as->line, &as->line_len);
-            if(as->if_skip_depth > 0) {
-                parse_if_skip(as);
-                continue;
-            }
-
-            macro_substitute_line(as);
-            define_substitute(as);
-            as->cur = as->line;
-            parse_line(as);
+        if(!as->auto_adjust_segments ||
+           (as->errorlog && as->errorlog->log_array.items > initial_errors)) {
+            break;
         }
 
-        if(as->scope_stack.items > 0) {
-            asm_err(as, ASM_ERR_RESOLVE, "Unclosed scope at end of assembly");
+        if(ASM_OK != segment_adjustments_copy(
+                &suggestions,
+                &as->segment_adjustments)) {
+            asm_err(as, ASM_ERR_FATAL,
+                    "Out of memory tracking adjusted segment addresses");
+            return ASM_ERR;
         }
-        if(as->loop_stack.items > 0) {
-            asm_err(as, ASM_ERR_RESOLVE, "Unclosed loop at end of assembly");
+        layout = check_segment_overlaps(as, &suggestions, 0);
+        if(layout.allocation_failed) {
+            segment_adjustments_clear(&suggestions);
+            return ASM_ERR;
         }
-        if(as->if_stack.items > 0 || as->if_skip_depth > 0) {
-            asm_err(as, ASM_ERR_RESOLVE, "Unclosed conditional assembly block");
+        if(layout.wraps > 0) {
+            segment_adjustments_clear(&suggestions);
+            (void)check_segment_overlaps(as, NULL, 1);
+            return ASM_ERR;
         }
+        if(layout.overlaps == 0) {
+            segment_adjustments_clear(&suggestions);
+            break;
+        }
+        if(adjustment_retries >= AUTO_ADJUST_MAX_RETRIES) {
+            segment_adjustments_clear(&suggestions);
+            (void)check_segment_overlaps(as, NULL, 1);
+            return ASM_ERR;
+        }
+
+        segment_adjustments_clear(&as->segment_adjustments);
+        as->segment_adjustments = suggestions;
+        adjustment_retries++;
+        if(ASM_OK != assembler_restart_program_state(as)) {
+            asm_err(as, ASM_ERR_FATAL,
+                    "Out of memory restarting adjusted segment layout");
+            return ASM_ERR;
+        }
+    }
+
+    as->pass = 2;
+    if(ASM_OK != assembler_run_pass(as, input_file)) {
+        return ASM_ERR;
     }
 
     if(!as->errorlog || as->errorlog->log_array.items == initial_errors) {
-        check_segment_overlaps(as);
+        SEGMENT_CHECK_RESULT final_layout =
+            check_segment_overlaps(as, NULL, 1);
+        if(final_layout.allocation_failed) {
+            return ASM_ERR;
+        }
     }
 
-    return as->errorlog && as->errorlog->log_array.items > initial_errors ? ASM_ERR : ASM_OK;
+    return as->errorlog && as->errorlog->log_array.items > initial_errors ?
+        ASM_ERR : ASM_OK;
 }
 
 static int assembler_symbol_is_macro_local(const SYMBOL_LABEL *symbol) {
@@ -441,34 +728,34 @@ void assembler_walk_symbols(ASSEMBLER *as, assembler_symbol_cb cb, void *user) {
     assembler_walk_scope_symbols(as->root_scope, prefix, 0, cb, user);
 }
 
+void assembler_walk_segment_adjustments(
+    ASSEMBLER *as,
+    assembler_segment_adjustment_cb cb,
+    void *user) {
+    if(!as || !cb) {
+        return;
+    }
+    for(size_t i = 0; i < as->segment_adjustments.items; i++) {
+        SEGMENT_ADJUSTMENT *adjustment =
+            ARRAY_GET(&as->segment_adjustments, SEGMENT_ADJUSTMENT, i);
+        cb(
+            adjustment->target_index,
+            adjustment->segment_name ? adjustment->segment_name : "",
+            adjustment->address,
+            user);
+    }
+}
+
 void assembler_shutdown(ASSEMBLER *as) {
     if(!as) {
         return;
     }
-    free(as->root_dir);
-    as->root_dir = NULL;
-    defines_free(as);
+    assembler_program_state_destroy(as);
     for(size_t i = 0; i < as->predefines.items; i++) {
         DEFINE *d = ARRAY_GET(&as->predefines, DEFINE, i);
         free(d->from);
         free(d->to);
     }
     array_free(&as->predefines);
-    macro_stack_clear(as);
-    macro_definitions_clear(as);
-    files_free(as);
-    scope_destroy(as->root_scope);
-    as->root_scope = NULL;
-    as->active_scope = NULL;
-    as->symbol_table = NULL;
-    array_free(&as->scope_stack);
-    array_free(&as->anon_symbols);
-    loop_stack_clear(as);
-    array_free(&as->loop_stack);
-    array_free(&as->macros);
-    array_free(&as->macro_stack);
-    array_free(&as->if_stack);
-    targets_free(as);
-    free((char *)as->strcode);
-    as->strcode = NULL;
+    segment_adjustments_clear(&as->segment_adjustments);
 }

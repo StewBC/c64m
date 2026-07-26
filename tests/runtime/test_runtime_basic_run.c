@@ -163,7 +163,8 @@ static void test_basic_run_reset_first(void) {
        paste RUN -> SYS 2061 runs the ML body. */
     expect_true("assemble basic-run reset",
         runtime_client_assemble_file_full(client, src, 0x0801, 0x0801,
-            /*auto_run=*/false, /*basic_run=*/true, /*reset_first=*/true));
+            /*auto_run=*/false, /*basic_run=*/true, /*reset_first=*/true,
+            /*auto_adjust_segments=*/false));
 
     if (!poll_byte_equals(client, 0xC000, 0x42)) {
         fail("basic-run (reset) did not execute the SYS'd ML body");
@@ -186,7 +187,7 @@ static void test_basic_run_no_reset_from_ready(void) {
     /* First, reset+basic-run to leave the machine at a live BASIC READY prompt. */
     expect_true("assemble basic-run reset (first)",
         runtime_client_assemble_file_full(client, src1, 0x0801, 0x0801,
-            false, true, true));
+            false, true, true, false));
     if (!poll_byte_equals(client, 0xC000, 0x42)) {
         fail("first basic-run did not run");
     }
@@ -195,7 +196,7 @@ static void test_basic_run_no_reset_from_ready(void) {
        paste-RUN path the fresh-launch reset-skip optimization takes. */
     expect_true("assemble basic-run no-reset",
         runtime_client_assemble_file_full(client, src2, 0x0801, 0x0801,
-            false, true, false));
+            false, true, false, false));
     if (!poll_byte_equals(client, 0xC001, 0x43)) {
         fail("no-reset basic-run did not run from a READY prompt");
     }

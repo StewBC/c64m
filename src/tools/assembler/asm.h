@@ -55,6 +55,12 @@ typedef void (*assembler_symbol_cb)(
     uint16_t address,
     void *user);
 
+typedef void (*assembler_segment_adjustment_cb)(
+    size_t target_index,
+    const char *segment_name,
+    uint16_t address,
+    void *user);
+
 struct ASSEMBLER {
     CB_ASM_CTX cb;
 
@@ -100,6 +106,9 @@ struct ASSEMBLER {
     const char *current_file_name;
     size_t current_line;
     char *root_dir;
+
+    int auto_adjust_segments;
+    DYNARRAY segment_adjustments;
 };
 
 static inline uint16_t current_output_address(ASSEMBLER *as) {
@@ -113,6 +122,22 @@ int assembler_init(ASSEMBLER *as, ERRORLOG *errorlog, CB_ASM_CTX *cb);
 // Seed a text define that survives both passes (e.g. a build flag). Call after
 // assembler_init and before assembler_assemble. `value` may be "" but not NULL.
 int assembler_predefine(ASSEMBLER *as, const char *name, const char *value);
+// When enabled, retry pass-1 segment layout up to three times using the overlap
+// checker's suggested starts. The source is not modified and pass 2 only runs
+// after a non-overlapping layout has been found.
+void assembler_set_auto_adjust_segments(ASSEMBLER *as, int enabled);
 int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address);
 void assembler_walk_symbols(ASSEMBLER *as, assembler_symbol_cb cb, void *user);
+void assembler_walk_segment_adjustments(
+    ASSEMBLER *as,
+    assembler_segment_adjustment_cb cb,
+    void *user);
 void assembler_shutdown(ASSEMBLER *as);
+
+// Parser-internal hook: substitute an active target/segment start when the
+// auto-adjust retry map contains one.
+uint16_t assembler_adjust_segment_start(
+    ASSEMBLER *as,
+    const char *segment_name,
+    uint32_t segment_name_length,
+    uint16_t source_address);

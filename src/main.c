@@ -3175,8 +3175,16 @@ static void poll_runtime_events(
             }
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
             poll_symbols_into(client, ui, control_cache);
+            if (event.data.assemble.notice[0] != '\0') {
+                SDL_Log("%s", event.data.assemble.notice);
+            }
             if (ui != NULL) {
                 frontend_invalidate_disassembly_cache(ui);
+                if (event.data.assemble.notice[0] != '\0') {
+                    frontend_show_assembler_notice(
+                        ui,
+                        event.data.assemble.notice);
+                }
             }
         } else if (event.type == RUNTIME_EVENT_SAVE_STATE_COMPLETE) {
             if (!append_host_state_chunk(event.data.state_file.path, options, kbd_joystick)) {
@@ -4092,7 +4100,9 @@ static void dispatch_debugger_intents(
                     intent.assemble_run_address,
                     intent.assemble_auto_run,
                     intent.assemble_basic_run,
-                    intent.assemble_reset_first);
+                    intent.assemble_reset_first,
+                    options != NULL &&
+                        options->assembler_auto_adjust_segments);
                 }
                 break;
 
@@ -4385,6 +4395,7 @@ static void dispatch_control_request(
     control_cached_state *control_cache,
     deferred_control_table *deferred_table,
     control_event_latch *event_latch,
+    bool auto_adjust_segments,
     const control_request *request)
 {
     control_response response;
@@ -5533,7 +5544,8 @@ static void dispatch_control_request(
                         request->args.run_address,
                         request->args.auto_run,
                         request->args.basic_run,
-                        request->args.reset_first)) {
+                        request->args.reset_first,
+                        auto_adjust_segments)) {
                     if (deferred != NULL) {
                         deferred->active = true;
                         deferred->request_id = request->id;
@@ -5674,7 +5686,8 @@ static void dispatch_control_requests(
     const frontend_debug_state *debug_state,
     control_cached_state *control_cache,
     deferred_control_table *deferred_table,
-    control_event_latch *event_latch)
+    control_event_latch *event_latch,
+    bool auto_adjust_segments)
 {
     control_request request;
 
@@ -5690,6 +5703,7 @@ static void dispatch_control_requests(
             control_cache,
             deferred_table,
             event_latch,
+            auto_adjust_segments,
             &request);
         control_request_release(&request);
     }
@@ -5956,7 +5970,8 @@ static bool run_main_loop(
             &debug_state,
             &control_cache,
             &deferred_control,
-            &event_latch);
+            &event_latch,
+            options->assembler_auto_adjust_segments);
 
         if (!title_set ||
             debug_state.runtime_state != last_title_state ||
@@ -6081,7 +6096,8 @@ static bool run_headless_loop(
             &debug_state,
             &control_cache,
             &deferred_control,
-            &event_latch);
+            &event_latch,
+            options->assembler_auto_adjust_segments);
     }
 
     if (control != NULL) {

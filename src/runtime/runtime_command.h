@@ -199,6 +199,7 @@ typedef struct runtime_command {
             uint8_t auto_run;
             uint8_t basic_run;
             uint8_t reset_first;
+            uint8_t auto_adjust_segments;
         } assemble_file;
 
         struct {

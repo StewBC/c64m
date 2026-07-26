@@ -1240,6 +1240,58 @@ static void test_keyboard_joystick_saved_to_ini(void) {
     remove("test_kbdjoy_save.ini");
 }
 
+static void test_assembler_auto_adjust_segments_ini(void) {
+    app_options options;
+    char *default_argv[] = {"test_app_options", "--noini"};
+    char *argv[] = {
+        "test_app_options", "--inifile", "test_assembler_auto_adjust.ini",
+    };
+    FILE *file;
+
+    if (!app_options_load_startup(&options, 2, default_argv)) {
+        fprintf(stderr, "assembler auto-adjust default load failed\n");
+        exit(1);
+    }
+    expect_bool(
+        "assembler auto-adjust default",
+        0,
+        options.assembler_auto_adjust_segments);
+    app_options_destroy(&options);
+
+    file = fopen("test_assembler_auto_adjust.ini", "w");
+    if (file == NULL) {
+        fprintf(stderr, "failed to create assembler auto-adjust INI\n");
+        exit(1);
+    }
+    fputs("[assembler]\nauto_adjust_segments=yes\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "assembler auto-adjust INI load failed\n");
+        exit(1);
+    }
+    expect_bool(
+        "assembler auto-adjust loaded",
+        1,
+        options.assembler_auto_adjust_segments);
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "assembler auto-adjust INI save failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "assembler auto-adjust INI reload failed\n");
+        exit(1);
+    }
+    expect_bool(
+        "assembler auto-adjust saved",
+        1,
+        options.assembler_auto_adjust_segments);
+    app_options_destroy(&options);
+    remove("test_assembler_auto_adjust.ini");
+}
+
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
@@ -1273,5 +1325,6 @@ int main(void) {
     test_disk_slot_copy();
     test_keyboard_joystick_defaults_and_overrides();
     test_keyboard_joystick_saved_to_ini();
+    test_assembler_auto_adjust_segments_ini();
     return 0;
 }

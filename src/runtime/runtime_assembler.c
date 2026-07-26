@@ -20,6 +20,13 @@ typedef struct assembler_symbol_import {
     bool ok;
 } assembler_symbol_import;
 
+typedef struct assembler_adjustment_format {
+    char *buffer;
+    size_t size;
+    size_t written;
+    bool has_adjustments;
+} assembler_adjustment_format;
+
 static void runtime_assembler_output_byte(void *user, uint16_t addr, uint8_t val) {
     assembler_output_ctx *ctx = (assembler_output_ctx *)user;
     c64_debug_write_ram(ctx->machine, addr, val);
@@ -93,15 +100,73 @@ static void runtime_assembler_format_errors(const ERRORLOG *log, char *error, si
     }
 }
 
+static void runtime_assembler_format_adjustment(
+    size_t target_index,
+    const char *segment_name,
+    uint16_t address,
+    void *user) {
+    assembler_adjustment_format *format =
+        (assembler_adjustment_format *)user;
+    const char *name = segment_name && segment_name[0] ?
+        segment_name : "<default>";
+    int n;
+
+    if (format->buffer == NULL || format->size == 0 ||
+        format->written >= format->size) {
+        return;
+    }
+    if (!format->has_adjustments) {
+        n = snprintf(
+            format->buffer + format->written,
+            format->size - format->written,
+            "Assembly succeeded with adjusted segment addresses; update the source to:");
+        if (n < 0) {
+            return;
+        }
+        format->written += (size_t)n;
+        format->has_adjustments = true;
+    }
+    if (format->written >= format->size) {
+        format->buffer[format->size - 1] = '\0';
+        return;
+    }
+    if (target_index == 0) {
+        n = snprintf(
+            format->buffer + format->written,
+            format->size - format->written,
+            "\n  Suggest \"%s\" at $%04X",
+            name,
+            address);
+    } else {
+        n = snprintf(
+            format->buffer + format->written,
+            format->size - format->written,
+            "\n  Target %zu: Suggest \"%s\" at $%04X",
+            target_index,
+            name,
+            address);
+    }
+    if (n < 0) {
+        return;
+    }
+    format->written += (size_t)n;
+    if (format->written >= format->size) {
+        format->buffer[format->size - 1] = '\0';
+    }
+}
+
 static bool c64_assemble_file_ex(
     c64_t *machine,
     symbol_table *symbols,
     const char *path,
     uint16_t address,
     const char *source_name,
+    const runtime_assembler_options *options,
     uint16_t *out_start_address,
     uint16_t *out_end_address,
     uint32_t *out_byte_count,
+    char *notice,
+    size_t notice_size,
     char *error,
     size_t error_size) {
     ERRORLOG log;
@@ -112,6 +177,9 @@ static bool c64_assemble_file_ex(
 
     if (error != NULL && error_size > 0) {
         error[0] = '\0';
+    }
+    if (notice != NULL && notice_size > 0) {
+        notice[0] = '\0';
     }
     if (machine == NULL || path == NULL || path[0] == '\0') {
         if (error != NULL && error_size > 0) {
@@ -140,6 +208,9 @@ static bool c64_assemble_file_ex(
 
     // Let source detect it is being assembled live in the emulator (vs the c64masm CLI).
     assembler_predefine(&assembler, "C64MASM", "0");
+    assembler_set_auto_adjust_segments(
+        &assembler,
+        options != NULL && options->auto_adjust_segments);
 
     if (assembler_assemble(&assembler, path, address) == ASM_OK) {
         ok = true;
@@ -156,6 +227,16 @@ static bool c64_assemble_file_ex(
                     snprintf(error, error_size, "failed to import assembler symbols");
                 }
             }
+        }
+        if (ok && notice != NULL && notice_size > 0) {
+            assembler_adjustment_format format;
+            memset(&format, 0, sizeof(format));
+            format.buffer = notice;
+            format.size = notice_size;
+            assembler_walk_segment_adjustments(
+                &assembler,
+                runtime_assembler_format_adjustment,
+                &format);
         }
     } else {
         runtime_assembler_format_errors(&log, error, error_size);
@@ -197,6 +278,9 @@ bool c64_assemble_file(
         NULL,
         NULL,
         NULL,
+        NULL,
+        NULL,
+        0,
         error,
         error_size);
 }
@@ -229,9 +313,42 @@ bool runtime_assemble_file_ex(
         path,
         address,
         source_name,
+        NULL,
         out_start_address,
         out_end_address,
         out_byte_count,
+        NULL,
+        0,
+        error,
+        error_size);
+}
+
+bool runtime_assemble_file_ex_options(
+    c64_t *machine,
+    symbol_table *symbols,
+    const char *path,
+    uint16_t address,
+    const char *source_name,
+    const runtime_assembler_options *options,
+    uint16_t *out_start_address,
+    uint16_t *out_end_address,
+    uint32_t *out_byte_count,
+    char *notice,
+    size_t notice_size,
+    char *error,
+    size_t error_size) {
+    return c64_assemble_file_ex(
+        machine,
+        symbols,
+        path,
+        address,
+        source_name,
+        options,
+        out_start_address,
+        out_end_address,
+        out_byte_count,
+        notice,
+        notice_size,
         error,
         error_size);
 }
