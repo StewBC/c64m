@@ -86,6 +86,10 @@ Component handoffs:
 - `control-port.md` - wire protocol, Python client, command reference, payloads
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
+- `cpu-flight-recorder.md` - implemented always-on, bounded in-memory 6510
+  forensic recorder and C64M/3 query/API contract
+- `cpu-flight-recorder-plan.md` - completed test-first implementation record,
+  performance gates, measurements, and acceptance checklist
 - `crt-type19-plan.md` - CRT mapper roadmap: type 19 Magic Desk first, type
   checklist with OneLoad64 unlock counts; implement later, not current code
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
@@ -95,9 +99,10 @@ Component handoffs:
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.
 
-Current baseline is 56/56 passing (includes `c64_snapshot_1541_midload` and the
-control/runtime identity tests). That baseline includes the real 1541 ROM/IEC,
-G64, Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
+Current baseline is 60/60 passing (includes `c64_snapshot_1541_midload`, the
+C64M/3 history integration test, and the machine/runtime recorder tests). That
+baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541
+drive-object snapshot paths.
 
 The verification command is:
 

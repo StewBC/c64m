@@ -74,6 +74,15 @@ bool runtime_client_claim_memory_rpc(
     uint32_t *out_length,
     uint16_t *out_address,
     runtime_memory_mode *out_mode);
+bool runtime_client_claim_history_rpc(
+    runtime_client *client,
+    uint64_t request_token,
+    uint8_t **out_bytes,
+    uint32_t *out_length,
+    runtime_history_rpc_meta *out_meta);
+bool runtime_client_cancel_rpc(
+    runtime_client *client,
+    uint64_t request_token);
 bool runtime_client_request_memory_view(
     runtime_client *client,
     uint16_t address,
@@ -184,8 +193,39 @@ bool runtime_client_run_to_raster(
     uint16_t raster_line,
     bool has_cycle,
     uint16_t cycle_in_line);
-bool runtime_client_set_cpu_history(runtime_client *client, bool enabled);
-bool runtime_client_request_cpu_history(runtime_client *client, uint16_t max_entries);
+bool runtime_client_history_info(
+    runtime_client *client,
+    uint64_t request_token);
+bool runtime_client_history_record(
+    runtime_client *client,
+    bool enabled,
+    uint64_t request_token);
+bool runtime_client_history_clear(
+    runtime_client *client,
+    uint64_t request_token);
+bool runtime_client_history_find(
+    runtime_client *client,
+    const runtime_history_query *query,
+    runtime_history_from_kind from_kind,
+    uint64_t from_id,
+    uint16_t limit,
+    uint64_t request_token);
+bool runtime_client_history_next(
+    runtime_client *client,
+    uint64_t cursor,
+    uint16_t limit,
+    uint64_t request_token);
+bool runtime_client_history_read(
+    runtime_client *client,
+    uint64_t epoch,
+    uint64_t id,
+    uint16_t before,
+    uint16_t after,
+    uint64_t request_token);
+bool runtime_client_history_close(
+    runtime_client *client,
+    uint64_t cursor,
+    uint64_t request_token);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

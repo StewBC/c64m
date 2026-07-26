@@ -6,6 +6,8 @@ add_library(runtime STATIC
     runtime_breakpoint_ini.c
     runtime_command.c
     runtime_event.c
+    runtime_history.c
+    runtime_history_wire.c
     runtime.c
     runtime_thread.c
 )

@@ -6,6 +6,7 @@
 #include "mutex.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool runtime_client_send_command_token(
@@ -191,43 +192,112 @@ bool runtime_client_claim_memory_rpc(
     uint32_t *out_length,
     uint16_t *out_address,
     runtime_memory_mode *out_mode) {
-    runtime_rpc_memory_pool *pool;
+    runtime_rpc_payload_pool *pool;
     size_t i;
 
     if (client == NULL ||
-        client->rpc_memory_pool == NULL ||
+        client->rpc_payload_pool == NULL ||
         request_token == 0u ||
         out_bytes == NULL) {
         return false;
     }
-    pool = client->rpc_memory_pool;
+    pool = client->rpc_payload_pool;
     if (pool->mutex == NULL) {
         return false;
     }
 
     mutex_lock(pool->mutex);
-    for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
+    for (i = 0; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
         if (pool->slots[i].in_use &&
-            pool->slots[i].request_token == request_token) {
+            pool->slots[i].request_token == request_token &&
+            pool->slots[i].kind == RUNTIME_RPC_PAYLOAD_MEMORY) {
             *out_bytes = pool->slots[i].bytes;
             if (out_length != NULL) {
                 *out_length = pool->slots[i].length;
             }
             if (out_address != NULL) {
-                *out_address = pool->slots[i].address;
+                *out_address = pool->slots[i].meta.memory.address;
             }
             if (out_mode != NULL) {
-                *out_mode = pool->slots[i].mode;
+                *out_mode = pool->slots[i].meta.memory.mode;
             }
             pool->slots[i].bytes = NULL;
             pool->slots[i].in_use = 0u;
             pool->slots[i].request_token = 0u;
+            pool->slots[i].kind = RUNTIME_RPC_PAYLOAD_NONE;
             mutex_unlock(pool->mutex);
             return true;
         }
     }
     mutex_unlock(pool->mutex);
     return false;
+}
+
+bool runtime_client_claim_history_rpc(
+    runtime_client *client,
+    uint64_t request_token,
+    uint8_t **out_bytes,
+    uint32_t *out_length,
+    runtime_history_rpc_meta *out_meta) {
+    runtime_rpc_payload_pool *pool;
+    size_t i;
+
+    if (client == NULL || client->rpc_payload_pool == NULL ||
+        request_token == 0u || out_bytes == NULL) {
+        return false;
+    }
+    pool = client->rpc_payload_pool;
+    if (pool->mutex == NULL) {
+        return false;
+    }
+    mutex_lock(pool->mutex);
+    for (i = 0u; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
+        if (pool->slots[i].in_use &&
+            pool->slots[i].request_token == request_token &&
+            pool->slots[i].kind == RUNTIME_RPC_PAYLOAD_HISTORY) {
+            *out_bytes = pool->slots[i].bytes;
+            if (out_length != NULL) {
+                *out_length = pool->slots[i].length;
+            }
+            if (out_meta != NULL) {
+                *out_meta = pool->slots[i].meta.history;
+            }
+            pool->slots[i].bytes = NULL;
+            memset(&pool->slots[i], 0, sizeof(pool->slots[i]));
+            mutex_unlock(pool->mutex);
+            return true;
+        }
+    }
+    mutex_unlock(pool->mutex);
+    return false;
+}
+
+bool runtime_client_cancel_rpc(
+    runtime_client *client,
+    uint64_t request_token) {
+    runtime_rpc_payload_pool *pool;
+    size_t i;
+
+    if (client == NULL || client->rpc_payload_pool == NULL ||
+        request_token == 0u) {
+        return false;
+    }
+    pool = client->rpc_payload_pool;
+    if (pool->mutex == NULL) {
+        return false;
+    }
+    mutex_lock(pool->mutex);
+    for (i = 0u; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
+        if (pool->slots[i].in_use &&
+            pool->slots[i].request_token == request_token) {
+            free(pool->slots[i].bytes);
+            memset(&pool->slots[i], 0, sizeof(pool->slots[i]));
+            mutex_unlock(pool->mutex);
+            return true;
+        }
+    }
+    mutex_unlock(pool->mutex);
+    return true;
 }
 
 bool runtime_client_request_memory_view(
@@ -872,33 +942,115 @@ bool runtime_client_run_to_raster(
     return message_queue_push(client->command_queue, &command);
 }
 
-bool runtime_client_set_cpu_history(runtime_client *client, bool enabled) {
-    runtime_command command = {
-        .type = RUNTIME_COMMAND_SET_CPU_HISTORY,
-    };
+bool runtime_client_history_info(
+    runtime_client *client,
+    uint64_t request_token) {
+    return runtime_client_send_command_token(
+        client, RUNTIME_COMMAND_HISTORY_INFO, request_token);
+}
 
-    if (!client) {
+bool runtime_client_history_record(
+    runtime_client *client,
+    bool enabled,
+    uint64_t request_token) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_HISTORY_RECORD,
+        .request_token = request_token,
+    };
+    if (client == NULL) {
         return false;
     }
-    command.data.set_cpu_history.enabled = enabled ? 1u : 0u;
+    command.data.history_record.enabled = enabled ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }
 
-bool runtime_client_request_cpu_history(runtime_client *client, uint16_t max_entries) {
+bool runtime_client_history_clear(
+    runtime_client *client,
+    uint64_t request_token) {
+    return runtime_client_send_command_token(
+        client, RUNTIME_COMMAND_HISTORY_CLEAR, request_token);
+}
+
+bool runtime_client_history_find(
+    runtime_client *client,
+    const runtime_history_query *query,
+    runtime_history_from_kind from_kind,
+    uint64_t from_id,
+    uint16_t limit,
+    uint64_t request_token) {
     runtime_command command = {
-        .type = RUNTIME_COMMAND_REQUEST_CPU_HISTORY,
+        .type = RUNTIME_COMMAND_HISTORY_FIND,
+        .request_token = request_token,
     };
 
-    if (!client) {
+    if (client == NULL || query == NULL || request_token == 0u ||
+        from_kind > RUNTIME_HISTORY_FROM_NEWEST ||
+        limit == 0u || limit > RUNTIME_HISTORY_MAX_QUERY_RECORDS) {
         return false;
     }
-    if (max_entries == 0u) {
-        max_entries = RUNTIME_CPU_HISTORY_MAX;
+    command.data.history_find.query = *query;
+    command.data.history_find.from_id = from_id;
+    command.data.history_find.from_kind = (uint8_t)from_kind;
+    command.data.history_find.limit = limit;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_history_next(
+    runtime_client *client,
+    uint64_t cursor,
+    uint16_t limit,
+    uint64_t request_token) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_HISTORY_NEXT,
+        .request_token = request_token,
+    };
+
+    if (client == NULL || cursor == 0u || request_token == 0u ||
+        limit == 0u || limit > RUNTIME_HISTORY_MAX_QUERY_RECORDS) {
+        return false;
     }
-    if (max_entries > RUNTIME_CPU_HISTORY_MAX) {
-        max_entries = RUNTIME_CPU_HISTORY_MAX;
+    command.data.history_next.cursor = cursor;
+    command.data.history_next.limit = limit;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_history_read(
+    runtime_client *client,
+    uint64_t epoch,
+    uint64_t id,
+    uint16_t before,
+    uint16_t after,
+    uint64_t request_token) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_HISTORY_READ,
+        .request_token = request_token,
+    };
+
+    if (client == NULL || id == 0u || request_token == 0u ||
+        before > RUNTIME_HISTORY_MAX_QUERY_RECORDS ||
+        after > RUNTIME_HISTORY_MAX_QUERY_RECORDS) {
+        return false;
     }
-    command.data.request_cpu_history.max_entries = max_entries;
+    command.data.history_read.epoch = epoch;
+    command.data.history_read.id = id;
+    command.data.history_read.before = before;
+    command.data.history_read.after = after;
+    return message_queue_push(client->command_queue, &command);
+}
+
+bool runtime_client_history_close(
+    runtime_client *client,
+    uint64_t cursor,
+    uint64_t request_token) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_HISTORY_CLOSE,
+        .request_token = request_token,
+    };
+
+    if (client == NULL || request_token == 0u) {
+        return false;
+    }
+    command.data.history_close.cursor = cursor;
     return message_queue_push(client->command_queue, &command);
 }
 

@@ -93,6 +93,8 @@ typedef struct app_options {
     bool assembler_rearm_oneshots;
     int control_port;
     bool headless;
+    /* Always-on CPU flight-recorder startup budget in MiB: 0 or 16..4096. */
+    int history_memory_mb;
     /* Host-keyboard joystick: layout name ("numpad" or "wasd") and the C64 port
        it drives (0 = disabled, 1 or 2 = active). */
     char *keyboard_joystick_layout;

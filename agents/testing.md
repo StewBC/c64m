@@ -8,9 +8,9 @@ When verification is explicitly authorized, run from the repository root:
 ctest --test-dir build --output-on-failure
 ```
 
-The repository owner reports the current agent baseline as 52/52 passing, including
-the longer real 1541 ROM/IEC, G64, Arkanoid, Robocop, and mid-transfer 1541
-snapshot paths. Do not rebuild or
+The current baseline is 60/60 passing after the CPU flight-recorder additions,
+including the longer real 1541 ROM/IEC, G64, Arkanoid, Robocop, mid-transfer
+1541 snapshot paths, and the localhost C64M/3 integration test. Do not rebuild or
 rerun the suite merely to validate these handoffs when another agent is actively
 working in the tree; use the owner-provided baseline unless explicitly asked to
 verify it.
@@ -27,6 +27,20 @@ verify it.
   `platform_fs`, `app_options`, `control_protocol`.
 - Tools/util: assembler tests, `disasm_6502`, `symbol_table`, `t64`, `crt`,
   `basic_v2`, and `paste_parser`.
+
+CPU flight-recorder coverage is split deliberately across layers:
+
+- `c64_cpu_observer`: begin/access/complete semantics, interrupt and deferred
+  paths, host traps, and cycle-step versus instruction-step trace equality.
+- `runtime_history`: arena retention, eviction, lifecycle, filters, opcode
+  patterns, paging, context, and cursor semantics.
+- `runtime_history_wire`: bounded little-endian HST1 encoding.
+- `runtime_flight_recorder`: runtime ownership, reset/mutation ordering,
+  recording controls, epochs, timelines, partial records, and allocation
+  failure.
+- `history_control_integration`: real localhost C64M/3 framing and cursor
+  invalidation against a headless emulator. Environments that sandbox localhost
+  must grant loopback access for this test.
 
 ## PAL line geometry and mid-line register timing
 
@@ -56,6 +70,10 @@ models (`-VICIImodel 6569` — see `vice-oracle.md`).
 
 - Use `--help` for a non-blocking binary smoke test.
 - Use `--headless --control-port PORT` for automated runtime/control-port checks.
+- Use the recorder profilers serially to avoid thermal/contention noise:
+  `profile_c64_hotloop 20000000` with observer modes, then
+  `profile_runtime_hotloop 3 config-off` / `full`, and
+  `profile_history_query` for a full 256 MiB query store.
 - Use `tools/capture_sid_audio.py` and `tools/compare_sid_audio.py` for audio
   fidelity changes.
 - Use the CIA corpus in `md-files/corpus/cia-timing/` for race-level CIA work;

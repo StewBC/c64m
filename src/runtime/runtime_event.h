@@ -1,6 +1,7 @@
 #pragma once
 
 #include "c64.h"
+#include "runtime_history.h"
 
 #include <stdint.h>
 
@@ -31,7 +32,8 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_DEBUG_MEMORY_READY,
     RUNTIME_EVENT_SAVE_STATE_COMPLETE,
     RUNTIME_EVENT_LOAD_STATE_COMPLETE,
-    RUNTIME_EVENT_CPU_HISTORY_RESPONSE
+    RUNTIME_EVENT_HISTORY_STATUS_RESPONSE,
+    RUNTIME_EVENT_HISTORY_RESULT_RESPONSE
 } runtime_event_type;
 
 typedef enum runtime_memory_mode {
@@ -57,31 +59,14 @@ enum {
     RUNTIME_MEMORY_SNAPSHOT_MAX = 1024,
     /* Full 16-bit address space dump in one get-memory RPC. */
     RUNTIME_MEMORY_RPC_MAX_LENGTH = 65536,
-    RUNTIME_RPC_MEMORY_POOL_CAPACITY = 16,
+    RUNTIME_RPC_PAYLOAD_POOL_CAPACITY = 16,
+    RUNTIME_RPC_MEMORY_POOL_CAPACITY =
+        RUNTIME_RPC_PAYLOAD_POOL_CAPACITY,
     RUNTIME_BREAKPOINT_SNAPSHOT_MAX = 64,
     RUNTIME_CALL_STACK_MAX = 16,
     RUNTIME_BREAKPOINT_TRON_PATH_MAX = 256,
-    RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256,
-    /* Kept modest so the history response need not fatten the event queue. */
-    RUNTIME_CPU_HISTORY_MAX = 64
+    RUNTIME_BREAKPOINT_TYPE_TEXT_MAX = 256
 };
-
-typedef struct runtime_cpu_history_entry {
-    uint16_t pc;
-    uint8_t a;
-    uint8_t x;
-    uint8_t y;
-    uint8_t sp;
-    uint8_t p;
-    uint8_t opcode;
-    uint64_t cycles;
-} runtime_cpu_history_entry;
-
-typedef struct runtime_cpu_history_snapshot {
-    uint16_t count;
-    uint8_t enabled;
-    runtime_cpu_history_entry entries[RUNTIME_CPU_HISTORY_MAX];
-} runtime_cpu_history_snapshot;
 
 typedef enum runtime_memory_rpc_status {
     RUNTIME_MEMORY_RPC_OK = 0,
@@ -89,6 +74,29 @@ typedef enum runtime_memory_rpc_status {
     RUNTIME_MEMORY_RPC_BAD_ARGS = 2,
     RUNTIME_MEMORY_RPC_ERROR = 3
 } runtime_memory_rpc_status;
+
+typedef enum runtime_history_rpc_status {
+    RUNTIME_HISTORY_RPC_OK = 0,
+    RUNTIME_HISTORY_RPC_UNAVAILABLE,
+    RUNTIME_HISTORY_RPC_MACHINE_RUNNING,
+    RUNTIME_HISTORY_RPC_REQUEST_ACTIVE,
+    RUNTIME_HISTORY_RPC_BAD_ARGS,
+    RUNTIME_HISTORY_RPC_CURSOR_STALE,
+    RUNTIME_HISTORY_RPC_EPOCH_MISMATCH,
+    RUNTIME_HISTORY_RPC_RECORD_NOT_RETAINED,
+    RUNTIME_HISTORY_RPC_ERROR
+} runtime_history_rpc_status;
+
+typedef struct runtime_history_rpc_meta {
+    runtime_history_rpc_status status;
+    uint32_t byte_length;
+    uint64_t epoch;
+    uint32_t count;
+    uint64_t cursor;
+    uint64_t oldest;
+    uint64_t newest;
+    uint8_t more;
+} runtime_history_rpc_meta;
 
 typedef enum runtime_breakpoint_access {
     RUNTIME_BREAKPOINT_ACCESS_EXECUTE = 1u << 0,
@@ -335,6 +343,7 @@ typedef struct runtime_event {
             uint8_t has_write_history;
         } debug_memory_ready;
 
-        runtime_cpu_history_snapshot cpu_history;
+        runtime_history_status history_status;
+        runtime_history_rpc_meta history_rpc;
     } data;
 } runtime_event;

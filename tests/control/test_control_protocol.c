@@ -28,6 +28,19 @@ static void expect_u32(const char *name, uint32_t expected, uint32_t actual)
     }
 }
 
+static void expect_u64(const char *name, uint64_t expected, uint64_t actual)
+{
+    if (expected != actual) {
+        fprintf(
+            stderr,
+            "%s: expected %llu, got %llu\n",
+            name,
+            (unsigned long long)expected,
+            (unsigned long long)actual);
+        exit(1);
+    }
+}
+
 static void expect_int(const char *name, int expected, int actual)
 {
     if (expected != actual) {
@@ -600,6 +613,218 @@ static void test_deferred_token_matches(void)
     expect_false("wrong token", control_deferred_token_matches(7u, 8u));
 }
 
+static void test_parse_history_commands(void)
+{
+    control_request request;
+    control_response error;
+    char long_pattern[256];
+    size_t used = 0u;
+    unsigned i;
+    static const struct {
+        const char *name;
+        uint16_t mask;
+    } access_names[] = {
+        { "data-read", 1u << 0 },
+        { "data-write", 1u << 1 },
+        { "opcode", 1u << 2 },
+        { "operand", 1u << 3 },
+        { "dummy-read", 1u << 4 },
+        { "rmw-dummy-write", 1u << 5 },
+        { "stack-read", 1u << 6 },
+        { "stack-write", 1u << 7 },
+        { "vector-read", 1u << 8 },
+        { "execute", 1u << 9 },
+        { "fetch", (1u << 2) | (1u << 3) },
+        { "read", (1u << 0) | (1u << 2) | (1u << 3) |
+                  (1u << 4) | (1u << 6) | (1u << 8) },
+        { "write", (1u << 1) | (1u << 5) | (1u << 7) },
+        { "data", (1u << 0) | (1u << 1) },
+    };
+
+    expect_true(
+        "history info",
+        control_protocol_parse_request(
+            "80 history-info", &request, &error));
+    expect_int(
+        "history info type", CONTROL_COMMAND_HISTORY_INFO, request.type);
+    expect_true(
+        "history record on",
+        control_protocol_parse_request(
+            "81 history-record on", &request, &error));
+    expect_int(
+        "history record type", CONTROL_COMMAND_HISTORY_RECORD, request.type);
+    expect_true("history record enabled", request.args.history_record_enabled);
+    expect_true(
+        "history record off",
+        control_protocol_parse_request(
+            "82 history-record off", &request, &error));
+    expect_false(
+        "history record disabled", request.args.history_record_enabled);
+    expect_true(
+        "history clear",
+        control_protocol_parse_request(
+            "83 history-clear", &request, &error));
+    expect_int(
+        "history clear type", CONTROL_COMMAND_HISTORY_CLEAR, request.type);
+
+    expect_true(
+        "history find empty",
+        control_protocol_parse_request(
+            "84 history-find", &request, &error));
+    expect_int(
+        "history find type", CONTROL_COMMAND_HISTORY_FIND, request.type);
+    expect_u32("history default limit", 64u, request.args.history_limit);
+    expect_u32(
+        "history default direction", 0u, request.args.history_direction);
+
+    expect_true(
+        "history find options",
+        control_protocol_parse_request(
+            "85 history-find epoch=3 timeline=2 cycle=100-200 "
+            "from=oldest direction=forward pc=$E000-$EFFF "
+            "address=$D015 access=write,opcode value=A0/F0 "
+            "opcodes=A9,??,8D limit=32",
+            &request,
+            &error));
+    expect_true("history epoch present", request.args.history_query_has_epoch);
+    expect_u64("history epoch", 3u, request.args.history_query_epoch);
+    expect_u32("history timeline", 2u, request.args.history_query_timeline);
+    expect_u64("history cycle first", 100u, request.args.history_cycle_first);
+    expect_u64("history cycle last", 200u, request.args.history_cycle_last);
+    expect_u32("history from oldest", 2u, request.args.history_from_kind);
+    expect_u32("history forward", 1u, request.args.history_direction);
+    expect_u32("history pc first", 0xe000u, request.args.history_pc_first);
+    expect_u32("history pc last", 0xefffu, request.args.history_pc_last);
+    expect_u32(
+        "history access alias mask",
+        (1u << 1) | (1u << 2) | (1u << 5) | (1u << 7),
+        request.args.history_access_mask);
+    expect_u32("history value", 0xa0u, request.args.history_value);
+    expect_u32("history value mask", 0xf0u, request.args.history_value_mask);
+    expect_u32(
+        "history pattern length",
+        3u,
+        request.args.history_opcode_pattern_length);
+    expect_u32("history wildcard mask", 0u, request.args.history_opcode_masks[1]);
+    expect_u32("history limit", 32u, request.args.history_limit);
+    for (i = 0u;
+         i < sizeof(access_names) / sizeof(access_names[0]);
+         ++i) {
+        char line[128];
+        snprintf(
+            line,
+            sizeof(line),
+            "85 history-find access=%s",
+            access_names[i].name);
+        expect_true(
+            "history canonical/alias access",
+            control_protocol_parse_request(line, &request, &error));
+        expect_u32(
+            "history canonical/alias mask",
+            access_names[i].mask,
+            request.args.history_access_mask);
+    }
+
+    expect_true(
+        "history find explicit from and nibbles",
+        control_protocol_parse_request(
+            "86 history-find from=123 opcodes=A?,?D", &request, &error));
+    expect_u32("history from id kind", 1u, request.args.history_from_kind);
+    expect_u64("history from id", 123u, request.args.history_from_id);
+    expect_u32("history high nibble mask", 0xf0u,
+               request.args.history_opcode_masks[0]);
+    expect_u32("history low nibble mask", 0x0fu,
+               request.args.history_opcode_masks[1]);
+
+    expect_true(
+        "history next default",
+        control_protocol_parse_request(
+            "87 history-next 9", &request, &error));
+    expect_int(
+        "history next type", CONTROL_COMMAND_HISTORY_NEXT, request.type);
+    expect_u64("history next cursor", 9u, request.args.history_cursor);
+    expect_u32("history next limit default", 64u, request.args.history_limit);
+    expect_true(
+        "history next limit",
+        control_protocol_parse_request(
+            "88 history-next 10 limit=256", &request, &error));
+    expect_u32("history next limit 256", 256u, request.args.history_limit);
+
+    expect_true(
+        "history read defaults",
+        control_protocol_parse_request(
+            "89 history-read 42", &request, &error));
+    expect_int(
+        "history read type", CONTROL_COMMAND_HISTORY_READ, request.type);
+    expect_u64("history read id", 42u, request.args.history_id);
+    expect_u32("history before default", 32u, request.args.history_before);
+    expect_u32("history after default", 8u, request.args.history_after);
+    expect_true(
+        "history read options",
+        control_protocol_parse_request(
+            "90 history-read 42 epoch=3 before=0 after=256",
+            &request,
+            &error));
+    expect_u64("history read epoch", 3u, request.args.history_epoch);
+    expect_u32("history before zero", 0u, request.args.history_before);
+    expect_u32("history after max", 256u, request.args.history_after);
+
+    expect_true(
+        "history close",
+        control_protocol_parse_request(
+            "91 history-close 9", &request, &error));
+    expect_int(
+        "history close type", CONTROL_COMMAND_HISTORY_CLOSE, request.type);
+    expect_u64("history close cursor", 9u, request.args.history_cursor);
+
+    expect_false(
+        "legacy set history removed",
+        control_protocol_parse_request(
+            "92 set-cpu-history on", &request, &error));
+    expect_false(
+        "legacy get history removed",
+        control_protocol_parse_request(
+            "93 get-cpu-history", &request, &error));
+    expect_false(
+        "duplicate history option",
+        control_protocol_parse_request(
+            "94 history-find pc=$1000 pc=$2000", &request, &error));
+    expect_false(
+        "unknown history option",
+        control_protocol_parse_request(
+            "95 history-find nope=1", &request, &error));
+    expect_false(
+        "reverse history range",
+        control_protocol_parse_request(
+            "96 history-find address=$2000-$1000", &request, &error));
+    expect_false(
+        "bad history value",
+        control_protocol_parse_request(
+            "97 history-find value=A/F0", &request, &error));
+    expect_false(
+        "history next garbage",
+        control_protocol_parse_request(
+            "98 history-next 1 limit=2 garbage", &request, &error));
+    expect_false(
+        "history read duplicate",
+        control_protocol_parse_request(
+            "99 history-read 1 before=2 before=3", &request, &error));
+
+    used = (size_t)snprintf(
+        long_pattern, sizeof(long_pattern), "100 history-find opcodes=");
+    for (i = 0u; i < 33u; ++i) {
+        used += (size_t)snprintf(
+            long_pattern + used,
+            sizeof(long_pattern) - used,
+            "%sEA",
+            i == 0u ? "" : ",");
+    }
+    expect_false(
+        "history opcode limit",
+        control_protocol_parse_request(
+            long_pattern, &request, &error));
+}
+
 int main(void)
 {
     test_parse_known_commands();
@@ -609,5 +834,6 @@ int main(void)
     test_response_formatting();
     test_deferred_token_matches();
     test_parse_run_to_raster();
+    test_parse_history_commands();
     return 0;
 }

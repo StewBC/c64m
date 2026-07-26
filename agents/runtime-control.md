@@ -98,9 +98,12 @@ Duplicate outstanding wire request ids within one epoch: reject with `bad-id`.
 A single latest-wins slot is **not** a reliable multi-outstanding RPC channel.
 Generation numbers detect overwrite; they do **not** preserve lost results.
 
-Bulk RPC data uses a **bounded result pool keyed by `request_token`** (or
-individually owned payloads on a reliable completion path). Do not enlarge
-`runtime_event` unions to carry 64K memory or write-history arrays.
+Bulk RPC data uses the bounded generic `runtime_rpc_payload_pool`, keyed by
+`request_token` and payload kind. Memory and HST1 history payloads cannot be
+claimed through each other's APIs. Claim transfers the owned heap buffer to the
+caller; queue failure, cancellation, disconnect, timeout, and shutdown release
+unclaimed buffers. Do not enlarge `runtime_event` unions to carry 64K memory,
+write-history arrays, or history pages.
 
 ### Lossy vs reliable delivery
 
@@ -151,7 +154,8 @@ control clients; the headless loop wakes when a control request is queued.
 
 Implemented protocol areas include introspection, execution (`step-frame`,
 `run-to-raster`), state/CPU/VIC/CIA/frame/memory (`get-memory` up to 64K bulk /
-`set-memory`)/debug-memory/call-stack, CPU history, keyboard/joystick/RESTORE,
+`set-memory`)/debug-memory/call-stack, CPU flight-recorder queries,
+keyboard/joystick/RESTORE,
 paste, PRG/BIN/D64 operations, machine snapshot save/load (`save-state` /
 `load-state`), breakpoints (exec/read/write and count-only), waits with sticky
 completion events, assemble, find-symbol, and `set-turbo`. Binary responses carry a
@@ -160,7 +164,32 @@ must follow the message contracts above (`request_token`, epoch, lossy vs reliab
 `set-turbo` changes the active mode without altering the configured Opt+T list;
 mode 3 (warp) warns that the live ARGB framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
-load path used by `load-state`. Wire protocol is **C64M/2** — see `control-port.md`.
+load path used by `load-state`. Wire protocol is **C64M/3** - see `control-port.md`.
+
+## CPU flight recorder
+
+The runtime owns `runtime_history`; the machine owns no arena memory. A compact
+`c64_cpu_observer` is installed only while the recorder is available and
+recording. Begin/access/complete callbacks append instruction, IRQ, and NMI
+records directly from the batched machine stepping path. Successful KERNAL
+LOAD/SAVE traps become markers after the active execution record completes.
+
+Default capacity is 256 MiB. Configuration accepts 0 (disabled) or 16..4096 MiB
+through `[debug] history_memory_mb` and `--history-memory`. Allocation failure is
+nonfatal and visible through `history-info`.
+
+Resets retain records and advance `timeline`; successful state load clears the
+arena and advances `epoch`. Save state never serializes recorder state. Runtime
+mutation sites seal partial records and append stable markers in actual commit
+order. Recording does not disable the simple batched free-run path.
+
+`history-find`, `history-next`, and `history-read` require an explicitly paused
+runtime. One runtime-owned cursor binds its full query, epoch, mutation
+generation, and next scan ID. Resume, step, reset, recording control, state
+load, or direct mutation invalidates it before recorder contents change.
+Logical query results materialize opcode/operand fetches. The HST1 encoder then
+places bounded binary pages in the generic payload pool; `runtime_event` carries
+metadata only.
 
 ### Turbo semantics and host throughput
 

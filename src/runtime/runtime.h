@@ -46,6 +46,10 @@ typedef struct runtime_config {
        LOAD"*",8 + RUN after mounting D64/G64 media into an empty device 8.
        Replacing already-mounted media is a disk swap and does not autorun. */
     bool autorun;
+    /* Startup-only recorder budget. When history_memory_mb_configured is false,
+       runtime_create uses RUNTIME_HISTORY_DEFAULT_MEMORY_MB. */
+    uint32_t history_memory_mb;
+    bool history_memory_mb_configured;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

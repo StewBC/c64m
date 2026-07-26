@@ -593,11 +593,28 @@ static void c64_kernal_save_return(c64_t *machine, bool success, uint8_t a) {
     machine->cpu.cpu.pc = (uint16_t)(return_address + 1u);
 }
 
+static void c64_report_host_trap(
+    c64_t *machine,
+    c64_cpu_observer_trap_kind kind,
+    uint16_t start_address,
+    uint32_t byte_count) {
+    if (machine->cpu_observer.host_trap) {
+        c64_cpu_observer_trap trap = {
+            .kind = kind,
+            .start_address = start_address,
+            .byte_count = byte_count,
+        };
+        machine->cpu_observer.host_trap(
+            machine->cpu_observer_user, &trap);
+    }
+}
+
 static bool c64_drive_load_prg_to_memory(
     c64_t *machine,
     const c64_drive_slot *slot,
     const c64_drive_directory_entry *entry,
     bool use_prg_address,
+    uint16_t *out_start_address,
     uint16_t *out_end_address) {
     bool visited[683];
     uint8_t track;
@@ -672,6 +689,7 @@ static bool c64_drive_load_prg_to_memory(
         return false;
     }
 
+    *out_start_address = target_address;
     *out_end_address = (uint16_t)(target_address + written);
     if (!use_prg_address) {
         c64_write_zp16(machine, C64_BASIC_VARTAB_POINTER, *out_end_address);
@@ -914,6 +932,7 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
     uint8_t filename[16];
     c64_drive_slot *slot;
     const c64_drive_directory_entry *entry;
+    uint16_t start_address = 0;
     uint16_t end_address = 0;
     size_t i;
 
@@ -957,12 +976,18 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
     }
 
     if (filename_length == 1 && filename[0] == '$') {
+        start_address = c64_read_zp16(machine, C64_BASIC_START_POINTER);
         if (!c64_drive_load_directory_to_memory(machine, slot, &end_address)) {
             c64_kernal_load_return(machine, false, 0x05, 0);
             return true;
         }
         c64_disk_activity_read(machine, (int)device);
         c64_kernal_load_return(machine, true, 0, end_address);
+        c64_report_host_trap(
+            machine,
+            C64_CPU_OBSERVER_TRAP_KERNAL_LOAD,
+            start_address,
+            (uint32_t)(end_address - start_address));
         return true;
     }
 
@@ -972,13 +997,24 @@ static bool c64_try_kernal_load_trap(c64_t *machine) {
         return true;
     }
 
-    if (!c64_drive_load_prg_to_memory(machine, slot, entry, secondary_address == 1, &end_address)) {
+    if (!c64_drive_load_prg_to_memory(
+            machine,
+            slot,
+            entry,
+            secondary_address == 1,
+            &start_address,
+            &end_address)) {
         c64_kernal_load_return(machine, false, 0x05, 0);
         return true;
     }
 
     c64_disk_activity_read(machine, (int)device);
     c64_kernal_load_return(machine, true, 0, end_address);
+    c64_report_host_trap(
+        machine,
+        C64_CPU_OBSERVER_TRAP_KERNAL_LOAD,
+        start_address,
+        (uint32_t)(end_address - start_address));
     return true;
 }
 
@@ -1101,6 +1137,11 @@ static bool c64_try_kernal_save_trap(c64_t *machine) {
 
     c64_disk_activity_write(machine, (int)device);
     c64_kernal_save_return(machine, true, 0);
+    c64_report_host_trap(
+        machine,
+        C64_CPU_OBSERVER_TRAP_KERNAL_SAVE,
+        start_address,
+        (uint32_t)(end_address - start_address));
     return true;
 }
 
@@ -1141,13 +1182,46 @@ static c64_cpu_bus_event *c64_trace_append_event(
     return event;
 }
 
-static void c64_report_memory_access(
+static void c64_report_cpu_access(
     c64_t *machine,
     c64_memory_access_type access,
+    c6510_bus_access_kind kind,
     uint16_t address,
     uint8_t value) {
+    if (machine->cpu_observer.access) {
+        machine->cpu_observer.access(
+            machine->cpu_observer_user,
+            c64_current_cycle(machine),
+            address,
+            value,
+            kind);
+    }
     if (machine->memory_access) {
         machine->memory_access(machine->memory_access_user, access, address, value);
+    }
+}
+
+static void c64_observer_begin(
+    c64_t *machine,
+    c64_cpu_observer_record_kind kind) {
+    if (machine->cpu_observer.begin) {
+        c64_cpu_observer_begin begin = {
+            .kind = kind,
+            .machine_cycle = c64_current_cycle(machine),
+            .pc = machine->cpu.cpu.pc,
+            .a = machine->cpu.cpu.A,
+            .x = machine->cpu.cpu.X,
+            .y = machine->cpu.cpu.Y,
+            .sp = (uint8_t)machine->cpu.cpu.sp,
+            .p = machine->cpu.cpu.flags,
+        };
+        machine->cpu_observer.begin(machine->cpu_observer_user, &begin);
+    }
+}
+
+static void c64_observer_complete(c64_t *machine) {
+    if (machine->cpu_observer.complete) {
+        machine->cpu_observer.complete(machine->cpu_observer_user);
     }
 }
 
@@ -1167,7 +1241,12 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
     switch (event->kind) {
     case C64_CPU_BUS_EVENT_READ:
         event->value = c64_bus_read(&machine->bus, event->address);
-        c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, event->address, event->value);
+        c64_report_cpu_access(
+            machine,
+            C64_MEMORY_ACCESS_READ,
+            event->access_kind,
+            event->address,
+            event->value);
         break;
 
     case C64_CPU_BUS_EVENT_WRITE:
@@ -1175,7 +1254,12 @@ static void c64_apply_cpu_bus_event(c64_t *machine, c64_cpu_bus_event *event) {
         if (event->record_write_history) {
             c64_record_cpu_write(machine, event->address, machine->pending_cpu_trace.opcode_pc);
         }
-c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, event->address, event->value);
+        c64_report_cpu_access(
+            machine,
+            C64_MEMORY_ACCESS_WRITE,
+            event->access_kind,
+            event->address,
+            event->value);
         break;
 
     case C64_CPU_BUS_EVENT_INTERNAL:
@@ -1261,6 +1345,7 @@ static void c64_prepare_deferred_cpu_trace(c64_t *machine) {
     c64_trace_reset(&machine->pending_cpu_trace);
     machine->cpu_trace_start_cycle = machine->clock.cycle;
     machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    c64_observer_begin(machine, C64_CPU_OBSERVER_INSTRUCTION);
     machine->cpu_bus_mode = C64_CPU_BUS_MODE_DEFER_WRITES;
 
     machine->pending_cpu_trace.total_cycles = c6510_step(&machine->cpu);
@@ -1281,6 +1366,10 @@ static void c64_begin_interrupt_now(c64_t *machine, c6510_interrupt_kind kind) {
     }
     machine->cpu_trace_start_cycle = machine->clock.cycle;
     machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    c64_observer_begin(
+        machine,
+        kind == C6510_INTERRUPT_NMI ?
+            C64_CPU_OBSERVER_NMI : C64_CPU_OBSERVER_IRQ);
     c6510_micro_begin_interrupt(&machine->cpu, kind);
 }
 
@@ -1315,6 +1404,7 @@ static bool c64_prepare_micro_instruction(c64_t *machine, bool ba_stall_resume) 
     }
     machine->cpu_trace_start_cycle = machine->clock.cycle;
     machine->cpu_trace_start_cpu_cycle = machine->cpu.cpu.cycles;
+    c64_observer_begin(machine, C64_CPU_OBSERVER_INSTRUCTION);
     c6510_micro_begin(&machine->cpu);
     return true;
 }
@@ -1357,6 +1447,7 @@ static void c64_step_micro_cycle(c64_t *machine) {
                 (size_t)(machine->cpu.cpu.cycles - machine->cpu_trace_start_cpu_cycle);
         }
         machine->instruction_complete = true;
+        c64_observer_complete(machine);
     }
 }
 
@@ -1454,6 +1545,7 @@ static bool c64_step_cycle_internal(c64_t *machine) {
             }
             machine->pending_cpu_trace_active = false;
             machine->instruction_complete = true;
+            c64_observer_complete(machine);
             machine->pending_cpu_event_index = 0;
             machine->pending_cpu_elapsed = 0;
         }
@@ -1560,7 +1652,12 @@ static uint8_t c64_cpu_read(void *user, uint16_t address) {
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_READ, address, value);
     }
 
-    c64_report_memory_access(machine, C64_MEMORY_ACCESS_READ, address, value);
+    c64_report_cpu_access(
+        machine,
+        C64_MEMORY_ACCESS_READ,
+        machine->cpu.bus_access_kind,
+        address,
+        value);
     return value;
 }
 
@@ -1575,7 +1672,12 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
             c64_record_cpu_write(machine, address, machine->cpu.cpu.opcode_pc);
         }
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
-        c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
+        c64_report_cpu_access(
+            machine,
+            C64_MEMORY_ACCESS_WRITE,
+            machine->cpu.bus_access_kind,
+            address,
+            value);
         return;
     }
 
@@ -1595,7 +1697,12 @@ static void c64_cpu_write(void *user, uint16_t address, uint8_t value) {
     if (machine->cpu_bus_mode == C64_CPU_BUS_MODE_ARBITER) {
         c64_trace_append_event(machine, C64_CPU_BUS_EVENT_WRITE, address, value);
     }
-    c64_report_memory_access(machine, C64_MEMORY_ACCESS_WRITE, address, value);
+    c64_report_cpu_access(
+        machine,
+        C64_MEMORY_ACCESS_WRITE,
+        machine->cpu.bus_access_kind,
+        address,
+        value);
 }
 
 static uint8_t c64_cpu_irq_pending(void *user) {
@@ -1989,6 +2096,7 @@ static void c64_step_cycle_between_hot(c64_t *machine) {
             }
             machine->pending_cpu_trace_active = false;
             machine->instruction_complete = true;
+            c64_observer_complete(machine);
             machine->pending_cpu_event_index = 0;
             machine->pending_cpu_elapsed = 0;
         }
@@ -2244,6 +2352,21 @@ void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callbac
 
     machine->memory_access = callback;
     machine->memory_access_user = user;
+}
+
+void c64_set_cpu_observer(
+    c64_t *machine,
+    const c64_cpu_observer *observer,
+    void *user) {
+    assert(machine);
+
+    if (observer != NULL) {
+        machine->cpu_observer = *observer;
+        machine->cpu_observer_user = user;
+    } else {
+        memset(&machine->cpu_observer, 0, sizeof(machine->cpu_observer));
+        machine->cpu_observer_user = NULL;
+    }
 }
 
 void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled) {

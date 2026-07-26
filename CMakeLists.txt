@@ -444,6 +444,18 @@ target_link_libraries(test_c64_cpu_validation PRIVATE
 
 add_test(NAME c64_cpu_validation COMMAND test_c64_cpu_validation)
 
+add_executable(test_c64_cpu_observer
+    tests/machine/test_c64_cpu_observer.c
+)
+
+target_compile_features(test_c64_cpu_observer PRIVATE c_std_99)
+
+target_link_libraries(test_c64_cpu_observer PRIVATE
+    machine
+)
+
+add_test(NAME c64_cpu_observer COMMAND test_c64_cpu_observer)
+
 add_executable(test_app_options
     src/app_options.c
     tests/test_app_options.c
@@ -473,6 +485,19 @@ target_link_libraries(test_control_protocol PRIVATE
 )
 
 add_test(NAME control_protocol COMMAND test_control_protocol)
+
+add_test(
+    NAME history_control_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/control/test_history_control.py
+        $<TARGET_FILE:c64m>
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(history_control_integration PROPERTIES
+    TIMEOUT 20
+)
 
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c
@@ -573,6 +598,16 @@ add_executable(profile_runtime_hotloop
 target_compile_features(profile_runtime_hotloop PRIVATE c_std_99)
 
 target_link_libraries(profile_runtime_hotloop PRIVATE
+    runtime
+)
+
+add_executable(profile_history_query
+    tools/profile_history_query.c
+)
+
+target_compile_features(profile_history_query PRIVATE c_std_99)
+
+target_link_libraries(profile_history_query PRIVATE
     runtime
 )
 
@@ -826,14 +861,38 @@ target_link_libraries(test_runtime_run_to_raster PRIVATE
 
 add_test(NAME runtime_run_to_raster COMMAND test_runtime_run_to_raster)
 
-add_executable(test_runtime_cpu_history
-    tests/runtime/test_runtime_cpu_history.c
+add_executable(test_runtime_flight_recorder
+    tests/runtime/test_runtime_flight_recorder.c
 )
 
-target_compile_features(test_runtime_cpu_history PRIVATE c_std_99)
+target_compile_features(test_runtime_flight_recorder PRIVATE c_std_99)
 
-target_link_libraries(test_runtime_cpu_history PRIVATE
+target_link_libraries(test_runtime_flight_recorder PRIVATE
     runtime
 )
 
-add_test(NAME runtime_cpu_history COMMAND test_runtime_cpu_history)
+add_test(NAME runtime_flight_recorder COMMAND test_runtime_flight_recorder)
+
+add_executable(test_runtime_history
+    tests/runtime/test_runtime_history.c
+)
+
+target_compile_features(test_runtime_history PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_history PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_history COMMAND test_runtime_history)
+
+add_executable(test_runtime_history_wire
+    tests/runtime/test_runtime_history_wire.c
+)
+
+target_compile_features(test_runtime_history_wire PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_history_wire PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_history_wire COMMAND test_runtime_history_wire)

@@ -1038,6 +1038,95 @@ static void test_control_port_option(void) {
     app_options_destroy(&options);
 }
 
+static void test_history_memory_options(void) {
+    app_options options;
+    FILE *file;
+    char *default_argv[] = {
+        "test_app_options",
+        "--noini",
+    };
+    char *zero_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--history-memory=0",
+    };
+    char *maximum_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--history-memory=4096",
+    };
+    char *invalid_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--history-memory=15",
+    };
+    char *ini_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_history_memory.ini",
+    };
+    char *override_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_history_memory.ini",
+        "--history-memory=16",
+    };
+
+    if (!app_options_load_startup(&options, 2, default_argv)) {
+        fprintf(stderr, "history memory default load failed\n");
+        exit(1);
+    }
+    expect_int(
+        "history memory default",
+        256,
+        options.history_memory_mb);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, zero_argv)) {
+        fprintf(stderr, "history memory zero load failed\n");
+        exit(1);
+    }
+    expect_int("history memory disabled", 0, options.history_memory_mb);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, maximum_argv)) {
+        fprintf(stderr, "history memory maximum load failed\n");
+        exit(1);
+    }
+    expect_int("history memory maximum", 4096, options.history_memory_mb);
+    app_options_destroy(&options);
+
+    if (app_options_load_startup(&options, 3, invalid_argv)) {
+        fprintf(stderr, "invalid history memory should fail\n");
+        app_options_destroy(&options);
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    file = fopen("test_history_memory.ini", "w");
+    if (file == NULL) {
+        fprintf(stderr, "failed to create history memory ini\n");
+        exit(1);
+    }
+    fputs("[debug]\nhistory_memory_mb=64\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, ini_argv)) {
+        fprintf(stderr, "history memory ini load failed\n");
+        exit(1);
+    }
+    expect_int("history memory ini", 64, options.history_memory_mb);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 4, override_argv)) {
+        fprintf(stderr, "history memory override load failed\n");
+        exit(1);
+    }
+    expect_int("history memory override", 16, options.history_memory_mb);
+    app_options_destroy(&options);
+    remove("test_history_memory.ini");
+}
+
 static void test_headless_requires_control_port(void) {
     app_options options;
     char *argv[] = {
@@ -1171,6 +1260,7 @@ int main(void) {
     test_symbol_files_are_relative_to_ini();
     test_audio_record_options();
     test_control_port_option();
+    test_history_memory_options();
     test_headless_requires_control_port();
     test_headless_with_control_port();
     test_crt_path_with_spaces();

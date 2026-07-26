@@ -1728,7 +1728,7 @@ combine headless mode with `--sna`:
 The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
 thread performs network I/O only; runtime commands and snapshot requests are dispatched
 by the main loop, so remote control follows the same thread-ownership rules as the GUI
-debugger. The current protocol name is `C64M/2`.
+debugger. The current protocol name is `C64M/3`.
 
 ### Quick Start
 
@@ -1844,8 +1844,8 @@ is still paced by present/vsync (~16 ms class).
 
 | Command | Response |
 |---------|----------|
-| `hello` | `ok name=c64m protocol=C64M/2` |
-| `version` | `ok protocol=C64M/2 app=0.1.0` |
+| `hello` | `ok name=c64m protocol=C64M/3` |
+| `version` | `ok protocol=C64M/3 app=0.1.0` |
 | `capabilities` | Space-separated capability names |
 | `ping` | `ok` |
 | `quit-client` | `ok`, then the server closes the client connection |
@@ -1853,7 +1853,7 @@ is still paced by present/vsync (~16 ms class).
 `capabilities` currently includes (among others) `connection`, `introspection`,
 `execution`, `state`, `step`, `turbo`, `frame`, `memory`, `debug-memory`, `call-stack`,
 `input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`,
-`drive-cpu`, `vic`, `cia`, `run-to-raster`, and `cpu-history`. The `snapshot` token
+`drive-cpu`, `vic`, `cia`, `run-to-raster`, and `history`. The `snapshot` token
 means machine save/load (`.c64state`) via `load-state` / `save-state`. The `state`
 token means runtime inspection (`get-state`), not file snapshots.
 
@@ -1877,8 +1877,6 @@ machine reaches a new state. Use `wait-*` commands when a script needs to synchr
 | `run-instructions <count>` | Run for a positive instruction count |
 | `run-to <addr>` | Run until the PC reaches a 16-bit address |
 | `set-turbo <1\|2\|3>` | Set turbo mode: 1=normal, 2=max, 3=warp |
-| `set-cpu-history <on\|off\|0\|1>` | Enable/disable instruction-history ring (off by default) |
-| `get-cpu-history [count]` | Last 1..64 instruction-start states (text) |
 
 Accepted execution commands respond:
 
@@ -1898,6 +1896,51 @@ For warp (mode 3), the response warns that live pixels are unavailable:
 ```text
 <id> ok accepted=1 turbo=3 warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2
 ```
+
+### CPU Flight Recorder
+
+The flight recorder continuously retains recent main-CPU execution and physical
+bus accesses in a bounded memory arena. The default budget is 256 MiB. Set it
+with `--history-memory=<MiB>` or `[debug] history_memory_mb`; `0` disables the
+feature and other valid values are 16 through 4096.
+
+| Command | Meaning |
+|---------|---------|
+| `history-info` | Report availability, recording state, epoch, timelines, retained IDs, records, and bytes |
+| `history-record <on\|off>` | Resume or stop recording without discarding retained records |
+| `history-clear` | Clear retained records and start a new epoch |
+| `history-find [key=value ...]` | Search retained execution and markers |
+| `history-next <cursor> [limit=1..256]` | Continue the current search |
+| `history-read <id> [epoch=N] [before=0..256] [after=0..256]` | Read one record with surrounding context |
+| `history-close <cursor>` | Close a cursor; closing an absent cursor is harmless |
+
+Find, next, and read require the machine to be paused. Searches run newest-first
+unless `direction=forward` is specified. Find accepts these keys:
+
+```text
+epoch timeline cycle from direction pc address access value opcodes limit
+```
+
+Ranges are inclusive. `from` is `oldest`, `newest`, or a retained record ID.
+Access values are `execute`, `opcode`, `operand`, `data-read`, `data-write`,
+`dummy-read`, `rmw-dummy-write`, `stack-read`, `stack-write`, or `vector-read`.
+Aliases are `fetch`, `read`, `write`, and `data`. Opcode patterns contain 1..32
+comma-separated bytes and may use `?` nibble wildcards, for example
+`A9,??,8D`.
+
+Find, next, and read return a counted binary `data history` response with
+metadata:
+
+```text
+epoch=N count=N cursor=N more=0|1 oldest=N newest=N
+```
+
+The payload is little-endian HST1: a 24-byte header followed by records with a
+48-byte header and 8-byte bus-access entries. Use
+`tools/c64_control_client.py` to validate and decode it. There is one search
+cursor; execution, reset, recording control, state load, or direct machine
+mutation makes it stale. Searches use a 10 second timeout; other deferred
+commands use the standard 2 second timeout.
 
 ### State and Snapshots
 
@@ -1924,7 +1967,8 @@ last machine snapshot, `get-cpu`, `get-vic`, and `get-cia` may be answered from 
 main-thread hot cache (no runtime round-trip). Mutating commands mark that cache
 stale. While running, or after a mutation without a barrier, those commands still
 go through deferred runtime work. `get-memory`, `set-memory`, `get-debug-memory`,
-`get-call-stack`, and `get-cpu-history` are deferred when they need the runtime.
+`get-call-stack`, and flight-recorder commands are deferred when they need the
+runtime.
 
 `step-frame` is the preferred way to capture consecutive frames: it runs until the
 next completed VIC-II frame is published, then pauses. It honors breakpoints and BRK.

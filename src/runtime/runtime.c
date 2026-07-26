@@ -122,7 +122,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->debug_memory_slot.mutex = mutex_create();
     rt->breakpoint_slot.mutex = mutex_create();
     rt->symbol_slot.mutex = mutex_create();
-    rt->rpc_memory_pool.mutex = mutex_create();
+    rt->rpc_payload_pool.mutex = mutex_create();
 
     if (!rt->command_queue ||
         !rt->event_queue ||
@@ -130,7 +130,7 @@ runtime *runtime_create(const runtime_config *config) {
         !rt->debug_memory_slot.mutex ||
         !rt->breakpoint_slot.mutex ||
         !rt->symbol_slot.mutex ||
-        !rt->rpc_memory_pool.mutex) {
+        !rt->rpc_payload_pool.mutex) {
         runtime_destroy(rt);
         return NULL;
     }
@@ -141,7 +141,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.debug_memory_slot = &rt->debug_memory_slot;
     rt->client.breakpoint_slot = &rt->breakpoint_slot;
     rt->client.symbol_slot = &rt->symbol_slot;
-    rt->client.rpc_memory_pool = &rt->rpc_memory_pool;
+    rt->client.rpc_payload_pool = &rt->rpc_payload_pool;
 
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
@@ -172,6 +172,9 @@ runtime *runtime_create(const runtime_config *config) {
         rt->audio_record_duration_seconds = config->audio_record_duration_seconds;
         rt->audio_smoke       = config->audio_smoke;
         rt->autorun           = config->autorun;
+        rt->history_memory_mb = config->history_memory_mb_configured ?
+            config->history_memory_mb :
+            RUNTIME_HISTORY_DEFAULT_MEMORY_MB;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||
@@ -183,6 +186,22 @@ runtime *runtime_create(const runtime_config *config) {
             runtime_destroy(rt);
             return NULL;
         }
+    }
+
+    if (!config) {
+        rt->history_memory_mb = RUNTIME_HISTORY_DEFAULT_MEMORY_MB;
+    }
+    if (rt->history_memory_mb > 4096u ||
+        (rt->history_memory_mb != 0u && rt->history_memory_mb < 16u) ||
+        (uint64_t)rt->history_memory_mb * 1024u * 1024u > SIZE_MAX) {
+        rt->history = runtime_history_create_ex(1u, 1u, NULL);
+    } else {
+        rt->history = runtime_history_create(
+            (size_t)rt->history_memory_mb * 1024u * 1024u);
+    }
+    if (rt->history == NULL) {
+        runtime_destroy(rt);
+        return NULL;
     }
 
     return rt;
@@ -203,21 +222,23 @@ void runtime_destroy(runtime *rt) {
     free(rt->ini_path);
     free(rt->symbol_files);
     free(rt->audio_record_path);
-    if (rt->rpc_memory_pool.mutex != NULL) {
+    runtime_history_destroy(rt->history);
+    rt->history = NULL;
+    if (rt->rpc_payload_pool.mutex != NULL) {
         size_t i;
-        mutex_lock(rt->rpc_memory_pool.mutex);
-        for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
-            free(rt->rpc_memory_pool.slots[i].bytes);
-            rt->rpc_memory_pool.slots[i].bytes = NULL;
-            rt->rpc_memory_pool.slots[i].in_use = 0;
+        mutex_lock(rt->rpc_payload_pool.mutex);
+        for (i = 0; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
+            free(rt->rpc_payload_pool.slots[i].bytes);
+            rt->rpc_payload_pool.slots[i].bytes = NULL;
+            rt->rpc_payload_pool.slots[i].in_use = 0;
         }
-        mutex_unlock(rt->rpc_memory_pool.mutex);
+        mutex_unlock(rt->rpc_payload_pool.mutex);
     }
     mutex_destroy(rt->frame_slot.mutex);
     mutex_destroy(rt->debug_memory_slot.mutex);
     mutex_destroy(rt->breakpoint_slot.mutex);
     mutex_destroy(rt->symbol_slot.mutex);
-    mutex_destroy(rt->rpc_memory_pool.mutex);
+    mutex_destroy(rt->rpc_payload_pool.mutex);
     message_queue_destroy(rt->event_queue);
     message_queue_destroy(rt->command_queue);
     free(rt);

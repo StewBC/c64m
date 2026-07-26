@@ -9,6 +9,7 @@
 #include "runtime_command.h"
 #include "runtime_event.h"
 #include "runtime_assembler.h"
+#include "runtime_history_wire.h"
 #include "crt.h"
 #include "d64.h"
 #include "disasm_6502.h"
@@ -43,6 +44,15 @@ enum {
     STEP_OVER_LOG_INTERVAL   = 10000,
 
 };
+
+static void runtime_history_sync_observer(runtime *rt);
+static void runtime_history_prepare_discontinuity(runtime *rt);
+static void runtime_history_invalidate_cursor(runtime *rt);
+static bool runtime_history_append_commit_marker(
+    runtime *rt,
+    uint16_t marker_kind,
+    uint32_t arg0,
+    uint32_t arg1);
 
 /* Turbo mode helpers. Field name remains active_turbo_multiplier; values are
    RUNTIME_TURBO_MODE_* (1=normal, 2=max free-run full paint, 3=warp free-run). */
@@ -594,9 +604,9 @@ static void runtime_publish_memory_rpc(
         .type = RUNTIME_EVENT_MEMORY_RPC_COMPLETE,
         .request_token = request_token,
     };
-    runtime_rpc_memory_pool *pool;
+    runtime_rpc_payload_pool *pool;
     uint8_t *bytes = NULL;
-    size_t slot_index = RUNTIME_RPC_MEMORY_POOL_CAPACITY;
+    size_t slot_index = RUNTIME_RPC_PAYLOAD_POOL_CAPACITY;
     size_t i;
     uint32_t end;
 
@@ -620,7 +630,7 @@ static void runtime_publish_memory_rpc(
         return;
     }
 
-    pool = &rt->rpc_memory_pool;
+    pool = &rt->rpc_payload_pool;
     if (pool->mutex == NULL) {
         event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_ERROR;
         runtime_publish_event(rt, &event);
@@ -642,13 +652,13 @@ static void runtime_publish_memory_rpc(
     }
 
     mutex_lock(pool->mutex);
-    for (i = 0; i < RUNTIME_RPC_MEMORY_POOL_CAPACITY; ++i) {
+    for (i = 0; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
         if (!pool->slots[i].in_use) {
             slot_index = i;
             break;
         }
     }
-    if (slot_index >= RUNTIME_RPC_MEMORY_POOL_CAPACITY) {
+    if (slot_index >= RUNTIME_RPC_PAYLOAD_POOL_CAPACITY) {
         mutex_unlock(pool->mutex);
         free(bytes);
         event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BUSY;
@@ -656,9 +666,10 @@ static void runtime_publish_memory_rpc(
         return;
     }
     pool->slots[slot_index].request_token = request_token;
-    pool->slots[slot_index].address = address;
     pool->slots[slot_index].length = length;
-    pool->slots[slot_index].mode = mode;
+    pool->slots[slot_index].kind = RUNTIME_RPC_PAYLOAD_MEMORY;
+    pool->slots[slot_index].meta.memory.address = address;
+    pool->slots[slot_index].meta.memory.mode = mode;
     pool->slots[slot_index].bytes = bytes;
     pool->slots[slot_index].in_use = 1u;
     mutex_unlock(pool->mutex);
@@ -671,6 +682,7 @@ static void runtime_publish_memory_rpc(
             free(pool->slots[slot_index].bytes);
             pool->slots[slot_index].bytes = NULL;
             pool->slots[slot_index].in_use = 0u;
+            pool->slots[slot_index].kind = RUNTIME_RPC_PAYLOAD_NONE;
         }
         mutex_unlock(pool->mutex);
         event.data.memory_rpc.status = RUNTIME_MEMORY_RPC_BUSY;
@@ -1254,7 +1266,611 @@ static bool runtime_load_configured_roms(runtime *rt) {
     return ok;
 }
 
-static bool runtime_reset_machine(runtime *rt) {
+static void runtime_history_flush_pending_trap(runtime *rt) {
+    uint16_t marker_kind;
+
+    if (rt == NULL || !rt->pending_history_trap ||
+        runtime_history_has_active_record(rt->history)) {
+        return;
+    }
+    marker_kind =
+        rt->pending_history_trap_data.kind ==
+                C64_CPU_OBSERVER_TRAP_KERNAL_LOAD ?
+            RUNTIME_HISTORY_MARKER_KERNAL_LOAD_TRAP :
+            RUNTIME_HISTORY_MARKER_KERNAL_SAVE_TRAP;
+    (void)runtime_history_append_marker(
+        rt->history,
+        marker_kind,
+        rt->pending_history_trap_data.start_address,
+        rt->pending_history_trap_data.byte_count,
+        rt->machine.clock.cycle);
+    rt->pending_history_trap = 0u;
+}
+
+static void runtime_history_observer_begin(
+    void *user,
+    const c64_cpu_observer_begin *observed) {
+    runtime *rt = (runtime *)user;
+    runtime_history_begin begin;
+
+    if (rt == NULL || observed == NULL) {
+        return;
+    }
+    memset(&begin, 0, sizeof(begin));
+    switch (observed->kind) {
+    case C64_CPU_OBSERVER_IRQ:
+        begin.kind = RUNTIME_HISTORY_RECORD_IRQ;
+        break;
+    case C64_CPU_OBSERVER_NMI:
+        begin.kind = RUNTIME_HISTORY_RECORD_NMI;
+        break;
+    case C64_CPU_OBSERVER_INSTRUCTION:
+    default:
+        begin.kind = RUNTIME_HISTORY_RECORD_INSTRUCTION;
+        break;
+    }
+    begin.machine_cycle = observed->machine_cycle;
+    begin.pc = observed->pc;
+    begin.a = observed->a;
+    begin.x = observed->x;
+    begin.y = observed->y;
+    begin.sp = observed->sp;
+    begin.p = observed->p;
+    (void)runtime_history_begin_record(rt->history, &begin);
+}
+
+static void runtime_history_observer_access(
+    void *user,
+    uint64_t machine_cycle,
+    uint16_t address,
+    uint8_t value,
+    c6510_bus_access_kind kind) {
+    runtime *rt = (runtime *)user;
+    if (rt == NULL) {
+        return;
+    }
+    (void)runtime_history_append_access(
+        rt->history,
+        kind,
+        address,
+        value,
+        machine_cycle);
+}
+
+static void runtime_history_observer_complete(void *user) {
+    runtime *rt = (runtime *)user;
+    if (rt == NULL) {
+        return;
+    }
+    (void)runtime_history_complete_record(rt->history);
+    runtime_history_flush_pending_trap(rt);
+}
+
+static void runtime_history_observer_host_trap(
+    void *user,
+    const c64_cpu_observer_trap *trap) {
+    runtime *rt = (runtime *)user;
+    if (rt == NULL || trap == NULL) {
+        return;
+    }
+    if (rt->pending_history_trap) {
+        return;
+    }
+    rt->pending_history_trap_data = *trap;
+    rt->pending_history_trap = 1u;
+    runtime_history_flush_pending_trap(rt);
+}
+
+static const c64_cpu_observer runtime_history_observer = {
+    .begin = runtime_history_observer_begin,
+    .access = runtime_history_observer_access,
+    .complete = runtime_history_observer_complete,
+    .host_trap = runtime_history_observer_host_trap,
+};
+
+static void runtime_history_sync_observer(runtime *rt) {
+    runtime_history_status status;
+
+    if (rt == NULL) {
+        return;
+    }
+    runtime_history_get_status(rt->history, &status);
+    c64_set_cpu_observer(
+        &rt->machine,
+        status.available && status.recording ?
+            &runtime_history_observer : NULL,
+        status.available && status.recording ? rt : NULL);
+}
+
+static void runtime_history_prepare_discontinuity(runtime *rt) {
+    if (rt == NULL) {
+        return;
+    }
+    (void)runtime_history_seal_partial(rt->history);
+    runtime_history_flush_pending_trap(rt);
+}
+
+static bool runtime_history_append_commit_marker(
+    runtime *rt,
+    uint16_t marker_kind,
+    uint32_t arg0,
+    uint32_t arg1) {
+    if (rt == NULL) {
+        return false;
+    }
+    runtime_history_prepare_discontinuity(rt);
+    return runtime_history_append_marker(
+        rt->history,
+        marker_kind,
+        arg0,
+        arg1,
+        rt->machine.clock.cycle);
+}
+
+static void runtime_publish_history_status(
+    runtime *rt,
+    uint64_t request_token) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_HISTORY_STATUS_RESPONSE,
+        .request_token = request_token,
+    };
+    runtime_history_get_status(rt->history, &event.data.history_status);
+    runtime_publish_event(rt, &event);
+}
+
+static void runtime_history_invalidate_cursor(runtime *rt) {
+    if (rt == NULL) {
+        return;
+    }
+    rt->history_mutation_generation++;
+    if (rt->history_mutation_generation == 0u) {
+        rt->history_mutation_generation = 1u;
+    }
+    if (rt->history_cursor.active) {
+        rt->history_cursor.active = 0u;
+        rt->history_cursor.stale = 1u;
+    }
+}
+
+static uint64_t runtime_history_allocate_cursor_id(runtime *rt) {
+    uint64_t id = ++rt->next_history_cursor_id;
+    if (id == 0u) {
+        id = ++rt->next_history_cursor_id;
+    }
+    return id;
+}
+
+static bool runtime_history_payload_active(runtime *rt) {
+    runtime_rpc_payload_pool *pool;
+    size_t i;
+    bool active = false;
+
+    if (rt == NULL) {
+        return false;
+    }
+    pool = &rt->rpc_payload_pool;
+    mutex_lock(pool->mutex);
+    for (i = 0u; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
+        if (pool->slots[i].in_use &&
+            pool->slots[i].kind == RUNTIME_RPC_PAYLOAD_HISTORY) {
+            active = true;
+            break;
+        }
+    }
+    mutex_unlock(pool->mutex);
+    return active;
+}
+
+static void runtime_publish_history_rpc_status(
+    runtime *rt,
+    uint64_t request_token,
+    runtime_history_rpc_status status) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
+        .request_token = request_token,
+    };
+    event.data.history_rpc.status = status;
+    runtime_publish_event(rt, &event);
+}
+
+static bool runtime_publish_history_payload(
+    runtime *rt,
+    uint64_t request_token,
+    uint8_t *bytes,
+    uint32_t byte_length,
+    const runtime_history_rpc_meta *meta) {
+    runtime_rpc_payload_pool *pool = &rt->rpc_payload_pool;
+    runtime_event event = {
+        .type = RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
+        .request_token = request_token,
+    };
+    size_t slot_index = RUNTIME_RPC_PAYLOAD_POOL_CAPACITY;
+    size_t i;
+
+    if (request_token == 0u || bytes == NULL || byte_length == 0u ||
+        meta == NULL || pool->mutex == NULL) {
+        free(bytes);
+        runtime_publish_history_rpc_status(
+            rt, request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return false;
+    }
+    mutex_lock(pool->mutex);
+    for (i = 0u; i < RUNTIME_RPC_PAYLOAD_POOL_CAPACITY; ++i) {
+        if (!pool->slots[i].in_use) {
+            slot_index = i;
+            break;
+        }
+    }
+    if (slot_index == RUNTIME_RPC_PAYLOAD_POOL_CAPACITY) {
+        mutex_unlock(pool->mutex);
+        free(bytes);
+        runtime_publish_history_rpc_status(
+            rt, request_token, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        return false;
+    }
+    pool->slots[slot_index].request_token = request_token;
+    pool->slots[slot_index].length = byte_length;
+    pool->slots[slot_index].kind = RUNTIME_RPC_PAYLOAD_HISTORY;
+    pool->slots[slot_index].meta.history = *meta;
+    pool->slots[slot_index].bytes = bytes;
+    pool->slots[slot_index].in_use = 1u;
+    mutex_unlock(pool->mutex);
+
+    event.data.history_rpc = *meta;
+    if (!runtime_publish_event(rt, &event)) {
+        mutex_lock(pool->mutex);
+        if (pool->slots[slot_index].in_use &&
+            pool->slots[slot_index].request_token == request_token &&
+            pool->slots[slot_index].kind == RUNTIME_RPC_PAYLOAD_HISTORY) {
+            free(pool->slots[slot_index].bytes);
+            memset(&pool->slots[slot_index], 0, sizeof(pool->slots[slot_index]));
+        }
+        mutex_unlock(pool->mutex);
+        runtime_publish_history_rpc_status(
+            rt, request_token, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        return false;
+    }
+    return true;
+}
+
+static runtime_history_rpc_status runtime_history_map_query_result(
+    runtime_history_query_result result) {
+    switch (result) {
+    case RUNTIME_HISTORY_QUERY_OK:
+        return RUNTIME_HISTORY_RPC_OK;
+    case RUNTIME_HISTORY_QUERY_UNAVAILABLE:
+        return RUNTIME_HISTORY_RPC_UNAVAILABLE;
+    case RUNTIME_HISTORY_QUERY_EPOCH_MISMATCH:
+        return RUNTIME_HISTORY_RPC_EPOCH_MISMATCH;
+    case RUNTIME_HISTORY_QUERY_RECORD_NOT_RETAINED:
+        return RUNTIME_HISTORY_RPC_RECORD_NOT_RETAINED;
+    case RUNTIME_HISTORY_QUERY_INVALID:
+        return RUNTIME_HISTORY_RPC_BAD_ARGS;
+    case RUNTIME_HISTORY_QUERY_FAILED:
+    default:
+        return RUNTIME_HISTORY_RPC_ERROR;
+    }
+}
+
+static void runtime_history_page_bounds(
+    const runtime_history_record *records,
+    size_t count,
+    uint64_t *out_oldest,
+    uint64_t *out_newest) {
+    size_t i;
+    uint64_t oldest = 0u;
+    uint64_t newest = 0u;
+
+    for (i = 0u; i < count; ++i) {
+        if (oldest == 0u || records[i].id < oldest) {
+            oldest = records[i].id;
+        }
+        if (records[i].id > newest) {
+            newest = records[i].id;
+        }
+    }
+    *out_oldest = oldest;
+    *out_newest = newest;
+}
+
+static void runtime_history_find_command(
+    runtime *rt,
+    const runtime_command *command) {
+    const runtime_history_query *query = &command->data.history_find.query;
+    runtime_history_record *records;
+    runtime_history_page page;
+    runtime_history_query_result query_result;
+    runtime_history_wire_result wire_result;
+    runtime_history_rpc_meta meta;
+    runtime_history_status status;
+    uint8_t *bytes = NULL;
+    uint32_t byte_length = 0u;
+    size_t encoded_count = 0u;
+    bool clipped = false;
+    uint64_t from_id;
+
+    runtime_history_get_status(rt->history, &status);
+    if (!status.available) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_UNAVAILABLE);
+        return;
+    }
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_MACHINE_RUNNING);
+        return;
+    }
+    if (runtime_history_payload_active(rt)) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        return;
+    }
+    memset(&rt->history_cursor, 0, sizeof(rt->history_cursor));
+    records = (runtime_history_record *)calloc(
+        command->data.history_find.limit, sizeof(*records));
+    if (records == NULL) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    switch ((runtime_history_from_kind)
+            command->data.history_find.from_kind) {
+    case RUNTIME_HISTORY_FROM_OLDEST:
+        from_id = status.oldest_id;
+        break;
+    case RUNTIME_HISTORY_FROM_NEWEST:
+        from_id = status.newest_id;
+        break;
+    case RUNTIME_HISTORY_FROM_ID:
+        from_id = command->data.history_find.from_id;
+        if (from_id == 0u) {
+            free(records);
+            runtime_publish_history_rpc_status(
+                rt, command->request_token, RUNTIME_HISTORY_RPC_BAD_ARGS);
+            return;
+        }
+        break;
+    case RUNTIME_HISTORY_FROM_DEFAULT:
+        from_id = 0u;
+        break;
+    default:
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_BAD_ARGS);
+        return;
+    }
+    query_result = runtime_history_find(
+        rt->history,
+        query,
+        from_id,
+        command->data.history_find.limit,
+        records,
+        &page,
+        NULL);
+    if (query_result != RUNTIME_HISTORY_QUERY_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt,
+            command->request_token,
+            runtime_history_map_query_result(query_result));
+        return;
+    }
+    wire_result = runtime_history_wire_encode(
+        query->has_epoch ? query->epoch : status.epoch,
+        records,
+        page.count,
+        true,
+        0u,
+        &bytes,
+        &byte_length,
+        &encoded_count,
+        &clipped);
+    if (wire_result != RUNTIME_HISTORY_WIRE_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    memset(&meta, 0, sizeof(meta));
+    meta.status = RUNTIME_HISTORY_RPC_OK;
+    meta.byte_length = byte_length;
+    meta.epoch = query->has_epoch ? query->epoch : status.epoch;
+    meta.count = (uint32_t)encoded_count;
+    runtime_history_page_bounds(
+        records, encoded_count, &meta.oldest, &meta.newest);
+    meta.more = (page.more || clipped) ? 1u : 0u;
+    if (meta.more) {
+        rt->history_cursor.query = *query;
+        rt->history_cursor.query.has_epoch = true;
+        rt->history_cursor.query.epoch = meta.epoch;
+        rt->history_cursor.id = runtime_history_allocate_cursor_id(rt);
+        rt->history_cursor.epoch = meta.epoch;
+        rt->history_cursor.mutation_generation =
+            rt->history_mutation_generation;
+        rt->history_cursor.next_id = page.next_id;
+        rt->history_cursor.active = 1u;
+        meta.cursor = rt->history_cursor.id;
+    }
+    free(records);
+    (void)runtime_publish_history_payload(
+        rt, command->request_token, bytes, byte_length, &meta);
+}
+
+static void runtime_history_next_command(
+    runtime *rt,
+    const runtime_command *command) {
+    runtime_history_record *records;
+    runtime_history_page page;
+    runtime_history_query_result query_result;
+    runtime_history_rpc_meta meta;
+    uint8_t *bytes = NULL;
+    uint32_t byte_length = 0u;
+    size_t encoded_count = 0u;
+    bool clipped = false;
+
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_MACHINE_RUNNING);
+        return;
+    }
+    if (runtime_history_payload_active(rt)) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        return;
+    }
+    if (rt->history_cursor.id != command->data.history_next.cursor ||
+        !rt->history_cursor.active || rt->history_cursor.stale ||
+        rt->history_cursor.mutation_generation !=
+            rt->history_mutation_generation) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_CURSOR_STALE);
+        return;
+    }
+    records = (runtime_history_record *)calloc(
+        command->data.history_next.limit, sizeof(*records));
+    if (records == NULL) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    query_result = runtime_history_find(
+        rt->history,
+        &rt->history_cursor.query,
+        rt->history_cursor.next_id,
+        command->data.history_next.limit,
+        records,
+        &page,
+        NULL);
+    if (query_result != RUNTIME_HISTORY_QUERY_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt,
+            command->request_token,
+            runtime_history_map_query_result(query_result));
+        return;
+    }
+    if (runtime_history_wire_encode(
+            rt->history_cursor.epoch,
+            records,
+            page.count,
+            true,
+            0u,
+            &bytes,
+            &byte_length,
+            &encoded_count,
+            &clipped) != RUNTIME_HISTORY_WIRE_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    memset(&meta, 0, sizeof(meta));
+    meta.status = RUNTIME_HISTORY_RPC_OK;
+    meta.byte_length = byte_length;
+    meta.epoch = rt->history_cursor.epoch;
+    meta.count = (uint32_t)encoded_count;
+    runtime_history_page_bounds(
+        records, encoded_count, &meta.oldest, &meta.newest);
+    meta.more = (page.more || clipped) ? 1u : 0u;
+    if (meta.more) {
+        rt->history_cursor.next_id = page.next_id;
+        meta.cursor = rt->history_cursor.id;
+    } else {
+        rt->history_cursor.active = 0u;
+        rt->history_cursor.stale = 0u;
+    }
+    free(records);
+    (void)runtime_publish_history_payload(
+        rt, command->request_token, bytes, byte_length, &meta);
+}
+
+static void runtime_history_read_command(
+    runtime *rt,
+    const runtime_command *command) {
+    runtime_history_record *records;
+    runtime_history_page page;
+    runtime_history_query_result query_result;
+    runtime_history_rpc_meta meta;
+    runtime_history_status status;
+    uint64_t epoch;
+    uint8_t *bytes = NULL;
+    uint32_t byte_length = 0u;
+    size_t encoded_count = 0u;
+    bool clipped = false;
+
+    runtime_history_get_status(rt->history, &status);
+    if (!status.available) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_UNAVAILABLE);
+        return;
+    }
+    if (rt->exec_state != RUNTIME_EXEC_PAUSED) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_MACHINE_RUNNING);
+        return;
+    }
+    if (runtime_history_payload_active(rt)) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        return;
+    }
+    records = (runtime_history_record *)calloc(
+        RUNTIME_HISTORY_MAX_CONTEXT_RECORDS, sizeof(*records));
+    if (records == NULL) {
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    epoch = command->data.history_read.epoch != 0u ?
+        command->data.history_read.epoch : status.epoch;
+    query_result = runtime_history_read(
+        rt->history,
+        epoch,
+        command->data.history_read.id,
+        command->data.history_read.before,
+        command->data.history_read.after,
+        records,
+        RUNTIME_HISTORY_MAX_CONTEXT_RECORDS,
+        &page);
+    if (query_result != RUNTIME_HISTORY_QUERY_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt,
+            command->request_token,
+            runtime_history_map_query_result(query_result));
+        return;
+    }
+    if (runtime_history_wire_encode(
+            epoch,
+            records,
+            page.count,
+            false,
+            command->data.history_read.id,
+            &bytes,
+            &byte_length,
+            &encoded_count,
+            &clipped) != RUNTIME_HISTORY_WIRE_OK) {
+        free(records);
+        runtime_publish_history_rpc_status(
+            rt, command->request_token, RUNTIME_HISTORY_RPC_ERROR);
+        return;
+    }
+    memset(&meta, 0, sizeof(meta));
+    meta.status = RUNTIME_HISTORY_RPC_OK;
+    meta.byte_length = byte_length;
+    meta.epoch = epoch;
+    meta.count = (uint32_t)encoded_count;
+    runtime_history_page_bounds(
+        records, encoded_count, &meta.oldest, &meta.newest);
+    meta.more = (page.more || clipped) ? 1u : 0u;
+    free(records);
+    (void)runtime_publish_history_payload(
+        rt, command->request_token, bytes, byte_length, &meta);
+}
+
+static bool runtime_reset_machine(
+    runtime *rt,
+    runtime_history_reset_kind reset_kind) {
     char error[256];
 
     if (!c64_install_roms(&rt->machine, &rt->roms, error, sizeof(error))) {
@@ -1262,9 +1878,18 @@ static bool runtime_reset_machine(runtime *rt) {
         return false;
     }
 
+    runtime_history_prepare_discontinuity(rt);
     if (!c64_reset(&rt->machine, error, sizeof(error))) {
         runtime_publish_error(rt, error);
         return false;
+    }
+    if (runtime_history_transition_timeline(rt->history)) {
+        (void)runtime_history_append_marker(
+            rt->history,
+            RUNTIME_HISTORY_MARKER_RESET_COMPLETE,
+            (uint32_t)reset_kind,
+            0u,
+            rt->machine.clock.cycle);
     }
 
     /* VIC reset re-enables pixel output; re-apply turbo display policy. */
@@ -1302,7 +1927,7 @@ static void runtime_reset_command(runtime *rt, const runtime_command *command) {
         c64_detach_cartridge(&rt->machine);
     }
 
-    if (!runtime_reset_machine(rt)) {
+    if (!runtime_reset_machine(rt, RUNTIME_HISTORY_RESET_EXPLICIT)) {
         return;
     }
 
@@ -1412,7 +2037,16 @@ static void runtime_load_symbol_files(runtime *rt) {
 static void runtime_apply_machine_config(runtime *rt, const runtime_command *command) {
     bool symbols_changed;
     bool was_running = rt->exec_state == RUNTIME_EXEC_RUNNING;
+    uint32_t old_clock_hz = c64_config_clock_hz(&rt->machine_config);
+    uint32_t new_clock_hz =
+        c64_config_clock_hz(&command->data.apply_machine_config.config);
+    bool live_clock_change =
+        command->data.apply_machine_config.reset == 0u &&
+        old_clock_hz != new_clock_hz;
 
+    if (live_clock_change) {
+        runtime_history_prepare_discontinuity(rt);
+    }
     rt->machine_config = command->data.apply_machine_config.config;
     rt->save_ini = command->data.apply_machine_config.save_ini != 0;
     memcpy(rt->turbo_speeds, command->data.apply_machine_config.turbo_speeds, sizeof(rt->turbo_speeds));
@@ -1456,7 +2090,8 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
         runtime_load_configured_roms(rt);
     }
     if (command->data.apply_machine_config.reset != 0) {
-        if (runtime_reset_machine(rt) &&
+        if (runtime_reset_machine(
+                rt, RUNTIME_HISTORY_RESET_MACHINE_CONFIG) &&
             command->data.apply_machine_config.resume_running != 0) {
             rt->exec_state = RUNTIME_EXEC_RUNNING;
             rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
@@ -1464,6 +2099,15 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
             runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
         }
     } else {
+        if (live_clock_change &&
+            runtime_history_transition_timeline(rt->history)) {
+            (void)runtime_history_append_marker(
+                rt->history,
+                RUNTIME_HISTORY_MARKER_CLOCK_DISCONTINUITY,
+                RUNTIME_HISTORY_CLOCK_DISCONTINUITY_VIDEO_STANDARD_CHANGE,
+                0u,
+                rt->machine.clock.cycle);
+        }
         if (was_running) {
             rt->exec_state = RUNTIME_EXEC_RUNNING;
         }
@@ -2016,7 +2660,6 @@ static uint32_t runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
 static bool runtime_free_run_is_simple(const runtime *rt) {
     return rt->breakpoint_count == 0 &&
         !rt->paste_active &&
-        !rt->cpu_history_enabled &&
         !rt->trace_enabled &&
         !rt->temp_bp_active &&
         !rt->suppress_execute_bp &&
@@ -2024,72 +2667,6 @@ static bool runtime_free_run_is_simple(const runtime *rt) {
         rt->pending_asm_path == NULL &&
         rt->pending_bin_path == NULL &&
         rt->autorun_d64_phase == 0;
-}
-
-static void runtime_cpu_history_record(runtime *rt)
-{
-    runtime_cpu_history_entry *entry;
-    c64_cpu_snapshot snap;
-    uint16_t pc;
-
-    if (rt == NULL || !rt->cpu_history_enabled) {
-        return;
-    }
-    c64_copy_cpu_snapshot(&rt->machine, &snap);
-    pc = snap.pc;
-    entry = &rt->cpu_history[rt->cpu_history_head];
-    entry->pc = pc;
-    entry->a = snap.a;
-    entry->x = snap.x;
-    entry->y = snap.y;
-    entry->sp = snap.sp;
-    entry->p = snap.p;
-    entry->cycles = snap.cycles;
-    entry->opcode = c64_debug_read_cpu_map(&rt->machine, pc);
-    rt->cpu_history_head =
-        (uint16_t)((rt->cpu_history_head + 1u) % RUNTIME_CPU_HISTORY_MAX);
-    if (rt->cpu_history_count < RUNTIME_CPU_HISTORY_MAX) {
-        rt->cpu_history_count += 1u;
-    }
-}
-
-static void runtime_publish_cpu_history(runtime *rt, uint16_t max_entries)
-{
-    runtime_event event = {
-        .type = RUNTIME_EVENT_CPU_HISTORY_RESPONSE,
-    };
-    uint16_t n;
-    uint16_t i;
-    uint16_t start;
-
-    if (max_entries == 0u || max_entries > RUNTIME_CPU_HISTORY_MAX) {
-        max_entries = RUNTIME_CPU_HISTORY_MAX;
-    }
-    n = rt->cpu_history_count;
-    if (n > max_entries) {
-        n = max_entries;
-    }
-    event.data.cpu_history.count = n;
-    event.data.cpu_history.enabled = rt->cpu_history_enabled ? 1u : 0u;
-    /* Oldest of the last n first. */
-    if (rt->cpu_history_count < RUNTIME_CPU_HISTORY_MAX) {
-        start = 0;
-        if (rt->cpu_history_count > n) {
-            start = (uint16_t)(rt->cpu_history_count - n);
-        }
-        for (i = 0; i < n; ++i) {
-            event.data.cpu_history.entries[i] = rt->cpu_history[start + i];
-        }
-    } else {
-        start = (uint16_t)((rt->cpu_history_head + RUNTIME_CPU_HISTORY_MAX - n) %
-                           RUNTIME_CPU_HISTORY_MAX);
-        for (i = 0; i < n; ++i) {
-            uint16_t idx =
-                (uint16_t)((start + i) % RUNTIME_CPU_HISTORY_MAX);
-            event.data.cpu_history.entries[i] = rt->cpu_history[idx];
-        }
-    }
-    runtime_publish_event(rt, &event);
 }
 
 static bool runtime_publish_step_complete(runtime *rt) {
@@ -2116,10 +2693,6 @@ static bool runtime_step_instruction(runtime *rt) {
     c64_cpu_snapshot snapshot;
 
     rt->suppress_execute_bp = false;
-    if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
-        runtime_cpu_history_record(rt);
-    }
-
     if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
         runtime_publish_error(rt, error);
         return false;
@@ -2503,6 +3076,7 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
         return;
     }
 
+    runtime_history_prepare_discontinuity(rt);
     if (mode == RUNTIME_MEMORY_MODE_RAM) {
         c64_debug_write_ram(
             &rt->machine,
@@ -2514,6 +3088,12 @@ static void runtime_write_memory_byte(runtime *rt, const runtime_command *comman
             command->data.write_memory_byte.address,
             command->data.write_memory_byte.value);
     }
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_DIRECT_MEMORY_WRITE,
+        command->data.write_memory_byte.address,
+        1u,
+        rt->machine.clock.cycle);
 
     runtime_publish_memory(rt, command->data.write_memory_byte.address, 1, mode);
 }
@@ -2548,6 +3128,7 @@ static void runtime_write_memory(runtime *rt, const runtime_command *command) {
         runtime_publish_machine_state(rt);
     }
 
+    runtime_history_prepare_discontinuity(rt);
     for (i = 0; i < length; ++i) {
         uint16_t current = (uint16_t)(address + i);
         uint8_t value = command->data.write_memory.bytes[i];
@@ -2557,6 +3138,12 @@ static void runtime_write_memory(runtime *rt, const runtime_command *command) {
             c64_debug_write_cpu_map(&rt->machine, current, value);
         }
     }
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_DIRECT_MEMORY_WRITE,
+        address,
+        length,
+        rt->machine.clock.cycle);
 
     runtime_publish_memory(rt, address, length, mode);
 }
@@ -2660,9 +3247,16 @@ static bool runtime_inject_prg_image(runtime *rt, const uint8_t *bytes, size_t l
         return false;
     }
 
+    runtime_history_prepare_discontinuity(rt);
     for (i = 0; i < payload_length; ++i) {
         c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i + 2u]);
     }
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_PROGRAM_INJECT,
+        load_address,
+        (uint32_t)payload_length,
+        rt->machine.clock.cycle);
 
     runtime_publish_memory(
         rt,
@@ -2896,6 +3490,7 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
     crt_result result;
     crt_image *image;
     const crt_header *header;
+    uint16_t hardware_type;
     bool attached = false;
 
     if (!runtime_read_host_file(rt, command->data.load_crt.path, "CRT", &bytes, &length)) {
@@ -2924,6 +3519,7 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
         runtime_publish_error(rt, message);
         return;
     }
+    hardware_type = header->hardware_type;
 
     if (crt_image_is_generic_supported(image)) {
         attached = runtime_attach_generic_crt(rt, image, header);
@@ -2941,7 +3537,12 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
         return;
     }
 
-    if (!runtime_reset_machine(rt)) {
+    (void)runtime_history_append_commit_marker(
+        rt,
+        RUNTIME_HISTORY_MARKER_CRT_ATTACH,
+        hardware_type,
+        0u);
+    if (!runtime_reset_machine(rt, RUNTIME_HISTORY_RESET_CRT_ATTACH)) {
         return;
     }
 
@@ -2989,7 +3590,7 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
        from running (and the injection from firing), so detach it first. */
     c64_detach_cartridge(&rt->machine);
 
-    if (!runtime_reset_machine(rt)) {
+    if (!runtime_reset_machine(rt, RUNTIME_HISTORY_RESET_PROGRAM_LOAD)) {
         return;
     }
 
@@ -3106,11 +3707,29 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
     bool ok;
     uint16_t address = rt->pending_asm_address;
     uint16_t run_address = rt->pending_asm_run_address;
+    uint16_t assembled_start = address;
+    uint32_t assembled_count = 0u;
     bool auto_run = rt->pending_asm_auto_run;
 
-    ok = runtime_assemble_file(&rt->machine, rt->symbols, path, address, path, error, sizeof(error));
+    runtime_history_prepare_discontinuity(rt);
+    ok = runtime_assemble_file_ex(
+        &rt->machine,
+        rt->symbols,
+        path,
+        address,
+        path,
+        &assembled_start,
+        &assembled_count,
+        error,
+        sizeof(error));
 
     if (ok) {
+        (void)runtime_history_append_marker(
+            rt->history,
+            RUNTIME_HISTORY_MARKER_ASSEMBLE,
+            assembled_start,
+            assembled_count,
+            rt->machine.clock.cycle);
         runtime_publish_symbols(rt);
         if (auto_run) {
             rt->machine.cpu.cpu.pc = run_address;
@@ -3147,10 +3766,13 @@ static void runtime_publish_assemble_complete(runtime *rt, const char *path, uin
 
 static void runtime_assemble_file_command(runtime *rt, const runtime_command *command) {
     char error[4096];
+    uint16_t assembled_start = command->data.assemble_file.address;
+    uint32_t assembled_count = 0u;
 
     if (command->data.assemble_file.reset_first) {
         /* Reset machine, run to BASIC ($E38B), then assemble (like PRG load). */
-        if (!runtime_reset_machine(rt)) {
+        if (!runtime_reset_machine(
+                rt, RUNTIME_HISTORY_RESET_ASSEMBLE_RESET_FIRST)) {
             return;
         }
         free(rt->pending_asm_path);
@@ -3169,18 +3791,27 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
     }
 
     /* No-reset path: assemble directly into live RAM, works in any exec state. */
-    if (!runtime_assemble_file(
+    runtime_history_prepare_discontinuity(rt);
+    if (!runtime_assemble_file_ex(
             &rt->machine,
             rt->symbols,
             command->data.assemble_file.path,
             command->data.assemble_file.address,
             command->data.assemble_file.path,
+            &assembled_start,
+            &assembled_count,
             error,
             sizeof(error))) {
         runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
         return;
     }
 
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_ASSEMBLE,
+        assembled_start,
+        assembled_count,
+        rt->machine.clock.cycle);
     runtime_publish_symbols(rt);
     if (command->data.assemble_file.auto_run) {
         rt->machine.cpu.cpu.pc = command->data.assemble_file.run_address;
@@ -3479,6 +4110,7 @@ static bool runtime_load_basic_text(runtime *rt, const char *path) {
     }
     free(text);
 
+    runtime_history_prepare_discontinuity(rt);
     for (i = 0; i < image_len; ++i) {
         c64_debug_write_ram(&rt->machine, (uint16_t)(load_addr + i), image[i]);
     }
@@ -3494,6 +4126,12 @@ static bool runtime_load_basic_text(runtime *rt, const char *path) {
     c64_debug_write_ram(&rt->machine, 0x30u, (uint8_t)((vartab >> 8) & 0xFFu));
     c64_debug_write_ram(&rt->machine, 0x31u, (uint8_t)(vartab & 0xFFu));
     c64_debug_write_ram(&rt->machine, 0x32u, (uint8_t)((vartab >> 8) & 0xFFu));
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_PROGRAM_INJECT,
+        load_addr,
+        (uint32_t)image_len,
+        rt->machine.clock.cycle);
 
     runtime_publish_memory(
         rt, load_addr,
@@ -3580,6 +4218,7 @@ static bool runtime_load_bin_bytes(
             runtime_publish_error(rt, "bin load range overflows address space");
             return false;
         }
+        runtime_history_prepare_discontinuity(rt);
         for (i = 0; i < payload_length; ++i) {
             c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i + 2u]);
         }
@@ -3596,6 +4235,7 @@ static bool runtime_load_bin_bytes(
             runtime_publish_error(rt, "bin load range overflows address space");
             return false;
         }
+        runtime_history_prepare_discontinuity(rt);
         for (i = 0; i < payload_length; ++i) {
             c64_debug_write_ram(&rt->machine, (uint16_t)(load_address + i), bytes[i]);
         }
@@ -3615,6 +4255,12 @@ static bool runtime_load_bin_bytes(
         c64_debug_write_ram(&rt->machine, 0x2Du, (uint8_t)(vartab & 0xFFu));
         c64_debug_write_ram(&rt->machine, 0x2Eu, (uint8_t)((vartab >> 8) & 0xFFu));
     }
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_PROGRAM_INJECT,
+        load_address,
+        (uint32_t)payload_length,
+        rt->machine.clock.cycle);
 
     return true;
 }
@@ -3653,7 +4299,8 @@ static void runtime_load_bin(runtime *rt, const runtime_command *command) {
         /* A reset preserves any attached cartridge, which would boot instead of
            BASIC; detach so the freshly loaded program is what runs. */
         c64_detach_cartridge(&rt->machine);
-        if (!runtime_reset_machine(rt)) {
+        if (!runtime_reset_machine(
+                rt, RUNTIME_HISTORY_RESET_BIN_LOAD_RESET_FIRST)) {
             return;
         }
         free(rt->pending_bin_path);
@@ -3900,6 +4547,10 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
     }
     free(bytes);
 
+    (void)runtime_history_clear_for_state_load(
+        rt->history, rt->machine.clock.cycle);
+    rt->pending_history_trap = 0u;
+    runtime_history_sync_observer(rt);
     runtime_clear_host_transients_after_state_load(rt);
     rt->exec_state = was_running ? RUNTIME_EXEC_RUNNING : RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = was_running ? RUNTIME_STOP_REASON_NONE : previous_stop_reason;
@@ -3915,7 +4566,41 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
     runtime_publish_debug_frame(rt);
 }
 
+static bool runtime_command_invalidates_history_cursor(
+    runtime_command_type type) {
+    switch (type) {
+    case RUNTIME_COMMAND_RESET:
+    case RUNTIME_COMMAND_RUN:
+    case RUNTIME_COMMAND_STEP_CYCLE:
+    case RUNTIME_COMMAND_STEP_INSTRUCTION:
+    case RUNTIME_COMMAND_RUN_CYCLES:
+    case RUNTIME_COMMAND_RUN_INSTRUCTIONS:
+    case RUNTIME_COMMAND_STEP_FRAME:
+    case RUNTIME_COMMAND_RUN_TO_RASTER:
+    case RUNTIME_COMMAND_SET_CPU_REGISTER:
+    case RUNTIME_COMMAND_WRITE_MEMORY_BYTE:
+    case RUNTIME_COMMAND_WRITE_MEMORY:
+    case RUNTIME_COMMAND_LOAD_PRG:
+    case RUNTIME_COMMAND_LOAD_CRT:
+    case RUNTIME_COMMAND_ASSEMBLE_FILE:
+    case RUNTIME_COMMAND_APPLY_MACHINE_CONFIG:
+    case RUNTIME_COMMAND_STEP_OUT:
+    case RUNTIME_COMMAND_STEP_OVER:
+    case RUNTIME_COMMAND_RUN_TO_CURSOR:
+    case RUNTIME_COMMAND_LOAD_BIN:
+    case RUNTIME_COMMAND_LOAD_STATE:
+    case RUNTIME_COMMAND_HISTORY_RECORD:
+    case RUNTIME_COMMAND_HISTORY_CLEAR:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
+    if (runtime_command_invalidates_history_cursor(command->type)) {
+        runtime_history_invalidate_cursor(rt);
+    }
     switch (command->type) {
         case RUNTIME_COMMAND_PING:
             runtime_publish_simple_event(rt, RUNTIME_EVENT_PONG);
@@ -3973,17 +4658,51 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 command->data.run_to_raster.cycle_in_line);
             break;
 
-        case RUNTIME_COMMAND_SET_CPU_HISTORY:
-            rt->cpu_history_enabled = command->data.set_cpu_history.enabled != 0;
-            if (!rt->cpu_history_enabled) {
-                rt->cpu_history_count = 0;
-                rt->cpu_history_head = 0;
-            }
+        case RUNTIME_COMMAND_HISTORY_INFO:
+            runtime_publish_history_status(rt, command->request_token);
             break;
 
-        case RUNTIME_COMMAND_REQUEST_CPU_HISTORY:
-            runtime_publish_cpu_history(
-                rt, command->data.request_cpu_history.max_entries);
+        case RUNTIME_COMMAND_HISTORY_RECORD:
+            if (command->data.history_record.enabled != 0u) {
+                (void)runtime_history_resume(
+                    rt->history, rt->machine.clock.cycle);
+            } else {
+                (void)runtime_history_stop(
+                    rt->history, rt->machine.clock.cycle);
+            }
+            runtime_history_sync_observer(rt);
+            runtime_publish_history_status(rt, command->request_token);
+            break;
+
+        case RUNTIME_COMMAND_HISTORY_CLEAR:
+            runtime_history_prepare_discontinuity(rt);
+            (void)runtime_history_clear(
+                rt->history, rt->machine.clock.cycle);
+            runtime_history_sync_observer(rt);
+            runtime_publish_history_status(rt, command->request_token);
+            break;
+
+        case RUNTIME_COMMAND_HISTORY_FIND:
+            runtime_history_find_command(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_HISTORY_NEXT:
+            runtime_history_next_command(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_HISTORY_READ:
+            runtime_history_read_command(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_HISTORY_CLOSE:
+            if (command->data.history_close.cursor == 0u ||
+                command->data.history_close.cursor ==
+                    rt->history_cursor.id) {
+                memset(
+                    &rt->history_cursor, 0, sizeof(rt->history_cursor));
+            }
+            runtime_publish_history_rpc_status(
+                rt, command->request_token, RUNTIME_HISTORY_RPC_OK);
             break;
 
         case RUNTIME_COMMAND_RUN_INSTRUCTIONS:
@@ -4800,6 +5519,13 @@ int runtime_thread_main(void *userdata) {
     c64_init(&rt->machine);
     c64_set_config(&rt->machine, &rt->machine_config);
     c64_set_memory_access_callback(&rt->machine, runtime_memory_access, rt);
+    (void)runtime_history_append_marker(
+        rt->history,
+        RUNTIME_HISTORY_MARKER_RECORDER_START,
+        0u,
+        0u,
+        rt->machine.clock.cycle);
+    runtime_history_sync_observer(rt);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;
@@ -4820,7 +5546,8 @@ int runtime_thread_main(void *userdata) {
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STARTED);
     runtime_load_symbol_files(rt);
     if (runtime_load_configured_roms(rt)) {
-        runtime_reset_machine(rt);
+        runtime_reset_machine(
+            rt, RUNTIME_HISTORY_RESET_INITIAL_STARTUP);
         if (runtime_load_breakpoints_from_ini(rt)) {
             runtime_publish_breakpoints(rt);
         }
@@ -4962,9 +5689,6 @@ int runtime_thread_main(void *userdata) {
                             rt->autorun_d64_phase = 0;
                             runtime_autorun_paste(rt, "RUN\r");
                         }
-                    }
-                    if (rt->cpu_history_enabled && runtime_at_instruction_boundary(rt)) {
-                        runtime_cpu_history_record(rt);
                     }
                     if (!runtime_step_cycle(rt)) {
                         break;

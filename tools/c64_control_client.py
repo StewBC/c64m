@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal c64m control-port client (C64M/2 line protocol).
+"""Minimal c64m control-port client (C64M/3 line protocol).
 
 Debug/introspection helper for driving a headless c64m over its localhost
 control port. Written for the lft-nine VIC-II investigation
@@ -36,7 +36,7 @@ Wire format:
   error   : "<id> error <code> <message>\n"
   data    : "<id> data <type> <byte_count> [metadata]\n" + <bytes> + "\n"
 """
-import socket, time
+import socket, struct, time
 
 class Ctl:
     def __init__(self, host="127.0.0.1", port=17652, timeout=30.0):
@@ -61,6 +61,8 @@ class Ctl:
                 raise EOFError("connection closed")
             self.buf += chunk
         data = self.buf[:n]
+        if self.buf[n:n + 1] != b"\n":
+            raise ValueError("binary response missing trailing newline")
         self.buf = self.buf[n+1:]  # drop trailing newline
         return data
 
@@ -125,6 +127,155 @@ class Ctl:
         if r[0] != "data":
             raise RuntimeError(f"get-memory -> {r}")
         return r[2]
+
+    @staticmethod
+    def _metadata(text):
+        result = {}
+        if not text:
+            return result
+        for token in text.split():
+            if "=" not in token:
+                raise ValueError(f"malformed response metadata: {token!r}")
+            key, value = token.split("=", 1)
+            result[key] = value
+        return result
+
+    @staticmethod
+    def decode_hst1(payload):
+        """Decode and validate one HST1 version-1 history payload."""
+        if len(payload) < 24 or payload[:4] != b"HST1":
+            raise ValueError("invalid HST1 magic/header")
+        version, flags = struct.unpack_from("<HH", payload, 4)
+        epoch, count, reserved = struct.unpack_from("<QII", payload, 8)
+        if version != 1:
+            raise ValueError(f"unsupported HST1 version {version}")
+        if flags != 0 or reserved != 0:
+            raise ValueError("nonzero HST1 reserved header field")
+
+        records = []
+        offset = 24
+        for _ in range(count):
+            if offset + 48 > len(payload):
+                raise ValueError("truncated HST1 record header")
+            record_size = struct.unpack_from("<H", payload, offset)[0]
+            kind = payload[offset + 2]
+            record_flags = payload[offset + 3]
+            access_count = payload[offset + 35]
+            expected_size = 48 + access_count * 8
+            if kind > 3:
+                raise ValueError(f"invalid HST1 record kind {kind}")
+            if record_size != expected_size or offset + record_size > len(payload):
+                raise ValueError("invalid HST1 record size/access count")
+            if struct.unpack_from("<H", payload, offset + 38)[0] != 0:
+                raise ValueError("nonzero HST1 record reserved field")
+
+            record = {
+                "kind": kind,
+                "partial": bool(record_flags & 0x01),
+                "access_truncated": bool(record_flags & 0x02),
+                "anchor_match": bool(record_flags & 0x04),
+                "timing_truncated": bool(record_flags & 0x08),
+                "timeline": struct.unpack_from("<I", payload, offset + 4)[0],
+                "id": struct.unpack_from("<Q", payload, offset + 8)[0],
+                "machine_cycle": struct.unpack_from("<Q", payload, offset + 16)[0],
+                "pc": struct.unpack_from("<H", payload, offset + 24)[0],
+                "a": payload[offset + 26],
+                "x": payload[offset + 27],
+                "y": payload[offset + 28],
+                "sp": payload[offset + 29],
+                "p": payload[offset + 30],
+                "opcode": payload[offset + 31],
+                "operands": bytes(payload[offset + 32:offset + 34]),
+                "instruction_length": payload[offset + 34],
+                "marker_kind": struct.unpack_from("<H", payload, offset + 36)[0],
+                "marker_arg0": struct.unpack_from("<I", payload, offset + 40)[0],
+                "marker_arg1": struct.unpack_from("<I", payload, offset + 44)[0],
+                "accesses": [],
+            }
+            access_offset = offset + 48
+            for _access in range(access_count):
+                address, cycle_offset = struct.unpack_from(
+                    "<HH", payload, access_offset)
+                value = payload[access_offset + 4]
+                access_kind = payload[access_offset + 5]
+                access_reserved = struct.unpack_from(
+                    "<H", payload, access_offset + 6)[0]
+                if access_kind > 8 or access_reserved != 0:
+                    raise ValueError("invalid HST1 access entry")
+                record["accesses"].append({
+                    "address": address,
+                    "cycle_offset": cycle_offset,
+                    "value": value,
+                    "kind": access_kind,
+                })
+                access_offset += 8
+            records.append(record)
+            offset += record_size
+        if offset != len(payload):
+            raise ValueError("trailing bytes in HST1 payload")
+        return {"epoch": epoch, "records": records}
+
+    def history_info(self):
+        result = self.cmd("history-info")
+        if result[0] != "ok":
+            raise RuntimeError(f"history-info -> {result}")
+        metadata = self._metadata(result[1])
+        for key, value in list(metadata.items()):
+            if key != "reason":
+                metadata[key] = int(value, 0)
+        return metadata
+
+    def _history_result(self, command):
+        result = self.cmd(command)
+        if result[0] != "data":
+            raise RuntimeError(f"{command!r} -> {result}")
+        metadata = self._metadata(result[1])
+        for key in ("epoch", "count", "cursor", "more", "oldest", "newest"):
+            if key not in metadata:
+                raise ValueError(f"missing history metadata {key}")
+            metadata[key] = int(metadata[key], 0)
+        decoded = self.decode_hst1(result[2])
+        if decoded["epoch"] != metadata["epoch"]:
+            raise ValueError("HST1 epoch disagrees with response metadata")
+        if len(decoded["records"]) != metadata["count"]:
+            raise ValueError("HST1 count disagrees with response metadata")
+        metadata["records"] = decoded["records"]
+        return metadata
+
+    def history_find(self, **options):
+        tokens = []
+        for key, value in options.items():
+            wire_key = key[:-1] if key.endswith("_") else key
+            if wire_key == "direction" and value not in ("forward", "backward"):
+                raise ValueError("direction must be forward or backward")
+            if isinstance(value, (list, tuple)):
+                value = ",".join(str(item) for item in value)
+            tokens.append(f"{wire_key}={value}")
+        command = "history-find"
+        if tokens:
+            command += " " + " ".join(tokens)
+        return self._history_result(command)
+
+    def history_next(self, cursor, limit=64):
+        return self._history_result(
+            f"history-next {int(cursor)} limit={int(limit)}")
+
+    def history_read(self, record_id, epoch=None, before=32, after=8):
+        options = []
+        if epoch is not None:
+            options.append(f"epoch={int(epoch)}")
+        options.extend((f"before={int(before)}", f"after={int(after)}"))
+        return self._history_result(
+            f"history-read {int(record_id)} " + " ".join(options))
+
+    def history_record(self, enabled):
+        return self.ok(f"history-record {'on' if enabled else 'off'}")
+
+    def history_clear(self):
+        return self.ok("history-clear")
+
+    def history_close(self, cursor):
+        return self.ok(f"history-close {int(cursor)}")
 
     def close(self):
         try:

@@ -227,6 +227,95 @@ static void drain_runtime_events(runtime_client *client) {
     }
 }
 
+static uint16_t read_le16(const uint8_t *bytes) {
+    return (uint16_t)bytes[0] | (uint16_t)((uint16_t)bytes[1] << 8);
+}
+
+static uint32_t read_le32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+        ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static void expect_crt_history_order(runtime_client *client) {
+    runtime_history_query query;
+    runtime_event event;
+    runtime_history_rpc_meta meta;
+    uint64_t token = runtime_client_alloc_request_token(client);
+    uint8_t *payload = NULL;
+    uint32_t length = 0u;
+    uint32_t record_count;
+    size_t offset = 24u;
+    uint32_t previous_timeline = 0u;
+    bool saw_crt = false;
+    uint32_t i;
+
+    memset(&query, 0, sizeof(query));
+    query.direction = RUNTIME_HISTORY_QUERY_FORWARD;
+    expect_true(
+        "request CRT history",
+        runtime_client_history_find(
+            client,
+            &query,
+            RUNTIME_HISTORY_FROM_OLDEST,
+            0u,
+            128u,
+            token));
+    if (!poll_event(
+            client, &event, RUNTIME_EVENT_HISTORY_RESULT_RESPONSE) ||
+        event.request_token != token ||
+        event.data.history_rpc.status != RUNTIME_HISTORY_RPC_OK) {
+        fail("CRT history completion not received");
+    }
+    expect_true(
+        "claim CRT history",
+        runtime_client_claim_history_rpc(
+            client, token, &payload, &length, &meta));
+    if (length < 24u || memcmp(payload, "HST1", 4u) != 0) {
+        free(payload);
+        fail("invalid CRT history payload");
+    }
+    record_count = read_le32(payload + 16u);
+    for (i = 0u; i < record_count; ++i) {
+        uint16_t record_size;
+        uint8_t kind;
+        uint32_t timeline;
+        uint16_t marker_kind;
+        uint32_t marker_arg0;
+        if (offset + 48u > length) {
+            free(payload);
+            fail("truncated CRT history record");
+        }
+        record_size = read_le16(payload + offset);
+        kind = payload[offset + 2u];
+        timeline = read_le32(payload + offset + 4u);
+        marker_kind = read_le16(payload + offset + 36u);
+        marker_arg0 = read_le32(payload + offset + 40u);
+        if (saw_crt) {
+            if (kind != RUNTIME_HISTORY_RECORD_MARKER ||
+                marker_kind != RUNTIME_HISTORY_MARKER_RESET_COMPLETE ||
+                marker_arg0 != RUNTIME_HISTORY_RESET_CRT_ATTACH ||
+                timeline != previous_timeline + 1u) {
+                free(payload);
+                fail("CRT attach/reset history order is incorrect");
+            }
+            free(payload);
+            return;
+        }
+        if (kind == RUNTIME_HISTORY_RECORD_MARKER &&
+            marker_kind == RUNTIME_HISTORY_MARKER_CRT_ATTACH) {
+            saw_crt = true;
+            previous_timeline = timeline;
+        }
+        if (record_size < 48u || offset + record_size > length) {
+            free(payload);
+            fail("invalid CRT history record size");
+        }
+        offset += record_size;
+    }
+    free(payload);
+    fail("CRT marker not found in retained history");
+}
+
 int main(void) {
     static const char crt_path[] = "runtime crt (test).crt";
     runtime_config config = {
@@ -267,6 +356,7 @@ int main(void) {
     if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
         fail("CRT PAUSED event not received");
     }
+    expect_crt_history_order(client);
 
     expect_true(
         "request ROML map",

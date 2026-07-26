@@ -6,7 +6,8 @@
 
 enum {
     CONTROL_LINE_MAX = 512,
-    CONTROL_RESPONSE_TEXT_MAX = 256
+    CONTROL_RESPONSE_TEXT_MAX = 512,
+    CONTROL_HISTORY_MAX_OPCODE_PATTERN = 32
 };
 
 typedef enum control_command_type {
@@ -28,8 +29,13 @@ typedef enum control_command_type {
     CONTROL_COMMAND_RUN_TO,
     CONTROL_COMMAND_STEP_FRAME,
     CONTROL_COMMAND_RUN_TO_RASTER,
-    CONTROL_COMMAND_SET_CPU_HISTORY,
-    CONTROL_COMMAND_GET_CPU_HISTORY,
+    CONTROL_COMMAND_HISTORY_INFO,
+    CONTROL_COMMAND_HISTORY_RECORD,
+    CONTROL_COMMAND_HISTORY_CLEAR,
+    CONTROL_COMMAND_HISTORY_FIND,
+    CONTROL_COMMAND_HISTORY_NEXT,
+    CONTROL_COMMAND_HISTORY_READ,
+    CONTROL_COMMAND_HISTORY_CLOSE,
     CONTROL_COMMAND_SET_TURBO,
     CONTROL_COMMAND_GET_STATE,
     CONTROL_COMMAND_GET_CPU,
@@ -88,8 +94,37 @@ typedef struct control_args {
     uint16_t raster_line;
     uint16_t raster_cycle;
     bool has_raster_cycle;
-    bool cpu_history_enabled;
-    uint16_t cpu_history_count;
+    bool history_record_enabled;
+    uint16_t history_limit;
+    uint16_t history_before;
+    uint16_t history_after;
+    uint64_t history_cursor;
+    uint64_t history_id;
+    uint64_t history_epoch;
+    uint64_t history_from_id;
+    uint8_t history_from_kind;
+    bool history_query_has_epoch;
+    bool history_query_has_timeline;
+    bool history_query_has_cycle;
+    bool history_query_has_pc;
+    bool history_query_has_address;
+    bool history_query_has_access;
+    bool history_query_has_value;
+    uint64_t history_query_epoch;
+    uint32_t history_query_timeline;
+    uint64_t history_cycle_first;
+    uint64_t history_cycle_last;
+    uint16_t history_pc_first;
+    uint16_t history_pc_last;
+    uint16_t history_address_first;
+    uint16_t history_address_last;
+    uint16_t history_access_mask;
+    uint8_t history_value;
+    uint8_t history_value_mask;
+    uint8_t history_opcode_pattern_length;
+    uint8_t history_opcode_values[CONTROL_HISTORY_MAX_OPCODE_PATTERN];
+    uint8_t history_opcode_masks[CONTROL_HISTORY_MAX_OPCODE_PATTERN];
+    uint8_t history_direction;
     uint16_t start_address;
     uint16_t end_address;
     uint16_t run_address;

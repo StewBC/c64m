@@ -370,6 +370,53 @@ typedef void (*c64_memory_access_fn)(
     uint16_t address,
     uint8_t value);
 
+typedef enum c64_cpu_observer_record_kind {
+    C64_CPU_OBSERVER_INSTRUCTION = 0,
+    C64_CPU_OBSERVER_IRQ,
+    C64_CPU_OBSERVER_NMI
+} c64_cpu_observer_record_kind;
+
+typedef struct c64_cpu_observer_begin {
+    c64_cpu_observer_record_kind kind;
+    uint64_t machine_cycle;
+    uint16_t pc;
+    uint8_t a;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sp;
+    uint8_t p;
+} c64_cpu_observer_begin;
+
+typedef struct c64_cpu_observer_access {
+    uint64_t machine_cycle;
+    uint16_t address;
+    uint8_t value;
+    c6510_bus_access_kind kind;
+} c64_cpu_observer_access;
+
+typedef enum c64_cpu_observer_trap_kind {
+    C64_CPU_OBSERVER_TRAP_KERNAL_LOAD = 0,
+    C64_CPU_OBSERVER_TRAP_KERNAL_SAVE
+} c64_cpu_observer_trap_kind;
+
+typedef struct c64_cpu_observer_trap {
+    c64_cpu_observer_trap_kind kind;
+    uint16_t start_address;
+    uint32_t byte_count;
+} c64_cpu_observer_trap;
+
+typedef struct c64_cpu_observer {
+    void (*begin)(void *user, const c64_cpu_observer_begin *begin);
+    void (*access)(
+        void *user,
+        uint64_t machine_cycle,
+        uint16_t address,
+        uint8_t value,
+        c6510_bus_access_kind kind);
+    void (*complete)(void *user);
+    void (*host_trap)(void *user, const c64_cpu_observer_trap *trap);
+} c64_cpu_observer;
+
 typedef struct c64_t {
     c64_bus_t bus;
     C6510 cpu;
@@ -390,6 +437,8 @@ typedef struct c64_t {
     uint64_t restore_requests;
     c64_memory_access_fn memory_access;
     void *memory_access_user;
+    c64_cpu_observer cpu_observer;
+    void *cpu_observer_user;
     c64_cpu_instruction_trace last_cpu_trace;
     c64_cpu_instruction_trace pending_cpu_trace;
     uint64_t write_history[C64_RAM_SIZE];
@@ -481,6 +530,10 @@ void c64_set_video_output_enabled(c64_t *machine, bool enabled);
 bool c64_video_output_enabled(const c64_t *machine);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
+void c64_set_cpu_observer(
+    c64_t *machine,
+    const c64_cpu_observer *observer,
+    void *user);
 void c64_set_cpu_trace_enabled(c64_t *machine, bool enabled);
 bool c64_attach_generic_cartridge(
     c64_t *machine,

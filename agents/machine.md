@@ -45,6 +45,29 @@ the boundary between the CPU and C64-visible address decoding. The
 - PAL and NTSC are selected in `c64_config`; clock and frame constants are exposed
   by `c64_config_clock_hz()` and `c64_config_cycles_per_frame()`.
 
+## CPU observation contract
+
+`c64_set_cpu_observer()` installs the machine-level observation boundary used by
+the runtime CPU flight recorder. The observer survives `c64_reset()` but is host
+state: it is neither serialized nor restored by machine snapshots.
+
+- `begin` reports the pre-entry CPU state for a normal instruction, IRQ, or NMI.
+  It fires only after the machine has committed to that execution path.
+- `access` reports actual CPU bus accesses with their resolved address, value,
+  read/write direction, and `c6510_bus_access_kind`. Deferred compatibility
+  execution suppresses speculative callbacks and reports each replayed access
+  once.
+- `complete` fires once when the matching instruction or interrupt entry
+  finishes.
+- `host_trap` reports only successful KERNAL LOAD/SAVE host traps.
+
+Instruction stepping and repeated cycle stepping produce the same observer
+trace. Reset-vector reads are outside any execution record. The existing memory
+access callback and breakpoint behavior remain available independently.
+
+The runtime owns the recorder and records only the main C64 6510; drive CPU
+execution is outside this feature.
+
 ## Cartridges and startup
 
 - **CRT type 0 (Normal):** 8K ROML at `$8000-$9FFF` and optional 16K ROMH at
@@ -104,6 +127,10 @@ without the included-core flag still hard-resets the drives on load
 
 Paint buffers are zeroed on load; the first correct picture is the next completed
 frame. That is intentional - frames are display cache, not machine state.
+
+The CPU observer pointer and all flight-recorder state are also excluded from
+snapshots. A successful runtime load-state clears history and begins a new epoch;
+save-state does not alter it.
 
 CIA chunks store the delayed IRQ/NMI pin pipeline (`interrupt_ff`,
 `interrupt_pending_latched`, `interrupt_line`).

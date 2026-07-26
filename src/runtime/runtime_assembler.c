@@ -8,6 +8,9 @@
 
 typedef struct assembler_output_ctx {
     c64_t *machine;
+    uint16_t first_address;
+    uint32_t byte_count;
+    bool has_output;
 } assembler_output_ctx;
 
 typedef struct assembler_symbol_import {
@@ -19,6 +22,11 @@ typedef struct assembler_symbol_import {
 static void runtime_assembler_output_byte(void *user, uint16_t addr, uint8_t val) {
     assembler_output_ctx *ctx = (assembler_output_ctx *)user;
     c64_debug_write_ram(ctx->machine, addr, val);
+    if (!ctx->has_output) {
+        ctx->first_address = addr;
+        ctx->has_output = true;
+    }
+    ctx->byte_count++;
 }
 
 static void runtime_assembler_import_symbol(const char *name, uint16_t address, void *user) {
@@ -76,12 +84,14 @@ static void runtime_assembler_format_errors(const ERRORLOG *log, char *error, si
     }
 }
 
-bool c64_assemble_file(
+static bool c64_assemble_file_ex(
     c64_t *machine,
     symbol_table *symbols,
     const char *path,
     uint16_t address,
     const char *source_name,
+    uint16_t *out_start_address,
+    uint32_t *out_byte_count,
     char *error,
     size_t error_size) {
     ERRORLOG log;
@@ -101,6 +111,7 @@ bool c64_assemble_file(
     }
 
     errlog_init(&log);
+    memset(&output_ctx, 0, sizeof(output_ctx));
     output_ctx.machine = machine;
     memset(&cb, 0, sizeof(cb));
     cb.user = &output_ctx;
@@ -142,7 +153,36 @@ bool c64_assemble_file(
 
     assembler_shutdown(&assembler);
     errlog_shutdown(&log);
+    if (ok) {
+        if (out_start_address != NULL) {
+            *out_start_address =
+                output_ctx.has_output ? output_ctx.first_address : address;
+        }
+        if (out_byte_count != NULL) {
+            *out_byte_count = output_ctx.byte_count;
+        }
+    }
     return ok;
+}
+
+bool c64_assemble_file(
+    c64_t *machine,
+    symbol_table *symbols,
+    const char *path,
+    uint16_t address,
+    const char *source_name,
+    char *error,
+    size_t error_size) {
+    return c64_assemble_file_ex(
+        machine,
+        symbols,
+        path,
+        address,
+        source_name,
+        NULL,
+        NULL,
+        error,
+        error_size);
 }
 
 bool runtime_assemble_file(
@@ -154,4 +194,26 @@ bool runtime_assemble_file(
     char *error,
     size_t error_size) {
     return c64_assemble_file(machine, symbols, path, address, source_name, error, error_size);
+}
+
+bool runtime_assemble_file_ex(
+    c64_t *machine,
+    symbol_table *symbols,
+    const char *path,
+    uint16_t address,
+    const char *source_name,
+    uint16_t *out_start_address,
+    uint32_t *out_byte_count,
+    char *error,
+    size_t error_size) {
+    return c64_assemble_file_ex(
+        machine,
+        symbols,
+        path,
+        address,
+        source_name,
+        out_start_address,
+        out_byte_count,
+        error,
+        error_size);
 }

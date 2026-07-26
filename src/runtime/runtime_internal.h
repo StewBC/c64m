@@ -3,6 +3,7 @@
 #include "runtime.h"
 #include "runtime_client.h"
 #include "runtime_command.h"
+#include "runtime_history.h"
 
 #include "audio_buffer.h"
 #include "c64.h"
@@ -38,7 +39,7 @@ struct runtime_client {
     struct runtime_debug_memory_slot *debug_memory_slot;
     struct runtime_symbol_slot *symbol_slot;
     struct runtime_breakpoint_slot *breakpoint_slot;
-    struct runtime_rpc_memory_pool *rpc_memory_pool;
+    struct runtime_rpc_payload_pool *rpc_payload_pool;
     /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
     uint64_t next_request_token;
 };
@@ -96,20 +97,42 @@ typedef struct runtime_breakpoint_slot {
     uint64_t generation;
 } runtime_breakpoint_slot;
 
-/* Token-keyed bulk get-memory results (not in event queue unions). */
-typedef struct runtime_rpc_memory_slot {
+typedef enum runtime_rpc_payload_kind {
+    RUNTIME_RPC_PAYLOAD_NONE = 0,
+    RUNTIME_RPC_PAYLOAD_MEMORY,
+    RUNTIME_RPC_PAYLOAD_HISTORY
+} runtime_rpc_payload_kind;
+
+/* Token-keyed owned bulk results (never stored in event queue unions). */
+typedef struct runtime_rpc_payload_slot {
     uint64_t request_token;
-    uint16_t address;
     uint32_t length;
-    runtime_memory_mode mode;
+    runtime_rpc_payload_kind kind;
+    union {
+        struct {
+            uint16_t address;
+            runtime_memory_mode mode;
+        } memory;
+        runtime_history_rpc_meta history;
+    } meta;
     uint8_t in_use;
     uint8_t *bytes; /* owned heap buffer of `length` when in_use */
-} runtime_rpc_memory_slot;
+} runtime_rpc_payload_slot;
 
-typedef struct runtime_rpc_memory_pool {
+typedef struct runtime_rpc_payload_pool {
     mutex *mutex;
-    runtime_rpc_memory_slot slots[RUNTIME_RPC_MEMORY_POOL_CAPACITY];
-} runtime_rpc_memory_pool;
+    runtime_rpc_payload_slot slots[RUNTIME_RPC_PAYLOAD_POOL_CAPACITY];
+} runtime_rpc_payload_pool;
+
+typedef struct runtime_history_cursor {
+    runtime_history_query query;
+    uint64_t id;
+    uint64_t epoch;
+    uint64_t mutation_generation;
+    uint64_t next_id;
+    uint8_t active;
+    uint8_t stale;
+} runtime_history_cursor;
 
 typedef struct runtime_breakpoint {
     uint32_t id;
@@ -139,11 +162,18 @@ struct runtime {
     runtime_frame_slot frame_slot;
     runtime_debug_memory_slot debug_memory_slot;
     runtime_breakpoint_slot breakpoint_slot;
-    runtime_rpc_memory_pool rpc_memory_pool;
+    runtime_rpc_payload_pool rpc_payload_pool;
     c64_frame publish_frame;
     runtime_symbol_slot symbol_slot;
     symbol_table *symbols;
     c64_t machine;
+    runtime_history *history;
+    uint32_t history_memory_mb;
+    uint64_t history_mutation_generation;
+    uint64_t next_history_cursor_id;
+    runtime_history_cursor history_cursor;
+    uint8_t pending_history_trap;
+    c64_cpu_observer_trap pending_history_trap_data;
     char mounted_disk_paths[C64_DRIVE_SLOT_COUNT][RUNTIME_COMMAND_PATH_MAX];
     c64_rom_set roms;
     char *basic_rom_path;
@@ -212,11 +242,6 @@ struct runtime {
     int autorun_d64_phase;
     /* Incremented on each machine-state telemetry publish (Phase 4 stamps). */
     uint64_t runtime_seq;
-    /* Optional CPU instruction history (Phase 8); off by default. */
-    bool cpu_history_enabled;
-    runtime_cpu_history_entry cpu_history[RUNTIME_CPU_HISTORY_MAX];
-    uint16_t cpu_history_count;
-    uint16_t cpu_history_head; /* next write index */
 };
 
 int runtime_thread_main(void *userdata);

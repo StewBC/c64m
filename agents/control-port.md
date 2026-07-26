@@ -46,8 +46,8 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/2** (bulk `get-memory` length up to
-65536; token-matched deferred for `get-cpu` / `get-memory`).
+code and this document. **Current: C64M/3** (bounded HST1 CPU flight-recorder
+queries plus the C64M/2 bulk-memory/token behavior).
 
 ## Wire format
 
@@ -111,7 +111,8 @@ Wire pipelining is supported: the socket may read further requests while respons
 are still outstanding (high-water mark 16). Responses may complete out of request
 order — correlate by wire id.
 
-The standard deferred timeout is 2000 ms. Assembly uses 10000 ms. Wait commands
+The standard deferred timeout is 2000 ms. Assembly and `history-find` use
+10000 ms. Wait commands
 accept 1..600000 ms and default to 2000 ms.
 
 ### Delivery classes (control-facing summary)
@@ -224,8 +225,6 @@ N step-over
 N step-out
 N step-frame
 N run-to-raster <line 0..65535> [cycle-in-line]
-N set-cpu-history <on|off|0|1>
-N get-cpu-history [count 1..64]
 N run-cycles <positive-count>
 N run-instructions <positive-count>
 N run-to <address>
@@ -235,9 +234,9 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/2
-version      -> ok protocol=C64M/2 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia
+hello        -> ok name=c64m protocol=C64M/3
+version      -> ok protocol=C64M/3 app=0.1.0
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive
 ping         -> ok
 ```
 
@@ -264,11 +263,53 @@ Valid line ranges depend on video standard (PAL 0..311, NTSC 0..262); out-of-ran
 targets time out with a runtime error. Use `get-vic` after completion to confirm
 `raster=` / `cycle=`.
 
-`set-cpu-history on` enables a ring buffer of the last up to 64 instruction-start
-states (PC, opcode byte, A/X/Y/SP/P, cycles). **Off by default** — free-run cost is
-small but nonzero while enabled. `set-cpu-history off` clears the buffer.
-`get-cpu-history [count]` returns a text ok line with `enabled=` / `count=` and
-entries `i:pc=… op=…` (oldest first among the returned window).
+The former `set-cpu-history` and `get-cpu-history` commands do not exist in
+C64M/3. Use the flight-recorder commands below.
+
+## CPU flight recorder
+
+```text
+N history-info
+N history-record <on|off>
+N history-clear
+N history-find [key=value ...]
+N history-next <cursor> [limit=1..256]
+N history-read <id> [epoch=N] [before=0..256] [after=0..256]
+N history-close <cursor>
+```
+
+`history-info`, recording control, clear, and close may be issued while running.
+Find, next, and read require a paused machine and otherwise return
+`busy machine-running`. Searches are newest-first by default. Find keys are:
+
+```text
+epoch timeline cycle from direction pc address access value opcodes limit
+```
+
+Ranges are inclusive and non-wrapping. `from` accepts `oldest`, `newest`, or a
+retained record ID. `direction` is `backward` or `forward`. Access categories
+are `execute`, `opcode`, `operand`, `data-read`, `data-write`, `dummy-read`,
+`rmw-dummy-write`, `stack-read`, `stack-write`, and `vector-read`; aliases are
+`fetch`, `read`, `write`, and `data`. Opcode patterns contain 1..32
+comma-separated bytes with `?` nibble wildcards, for example `A9,??,8D`.
+
+Find/next/read return counted `data history` responses with metadata:
+
+```text
+epoch=N count=N cursor=N more=0|1 oldest=N newest=N
+```
+
+The payload is little-endian HST1: a 24-byte header, followed by records with a
+48-byte header and 8-byte materialized bus-access entries. Exact field offsets,
+stable marker/reset reason IDs, error strings, and lifecycle semantics are in
+`cpu-flight-recorder.md`. `tools/c64_control_client.py` validates and decodes
+HST1 through `history_info()`, `history_find()`, `history_next()`, and
+`history_read()`.
+
+There is one runtime cursor. Any execution, reset, recording control, state
+load, or direct mutation makes it stale. `history-close` is idempotent. Result
+payload ownership is token-keyed and released on claim, timeout, disconnect,
+cancellation, queue failure, or shutdown.
 
 Run/step/load/input commands return `ok accepted=1` when the runtime command was
 queued, not when the operation has completed. Follow with `wait-event`,

@@ -364,11 +364,26 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 13 && strncmp(name, "run-to-raster", length) == 0) {
         return CONTROL_COMMAND_RUN_TO_RASTER;
     }
-    if (length == 15 && strncmp(name, "set-cpu-history", length) == 0) {
-        return CONTROL_COMMAND_SET_CPU_HISTORY;
+    if (length == 12 && strncmp(name, "history-info", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_INFO;
     }
-    if (length == 15 && strncmp(name, "get-cpu-history", length) == 0) {
-        return CONTROL_COMMAND_GET_CPU_HISTORY;
+    if (length == 14 && strncmp(name, "history-record", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_RECORD;
+    }
+    if (length == 13 && strncmp(name, "history-clear", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_CLEAR;
+    }
+    if (length == 12 && strncmp(name, "history-find", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_FIND;
+    }
+    if (length == 12 && strncmp(name, "history-next", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_NEXT;
+    }
+    if (length == 12 && strncmp(name, "history-read", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_READ;
+    }
+    if (length == 13 && strncmp(name, "history-close", length) == 0) {
+        return CONTROL_COMMAND_HISTORY_CLOSE;
     }
     if (length == 9 && strncmp(name, "set-turbo", length) == 0) {
         return CONTROL_COMMAND_SET_TURBO;
@@ -585,6 +600,401 @@ static void set_parse_error(
     }
 }
 
+static bool parse_history_u16_range(
+    const char *start,
+    const char *end,
+    uint16_t *out_first,
+    uint16_t *out_last) {
+    const char *value_end;
+    uint16_t first;
+    uint16_t last;
+
+    if (!parse_u16_token(start, &value_end, &first)) {
+        return false;
+    }
+    if (value_end == end) {
+        *out_first = first;
+        *out_last = first;
+        return true;
+    }
+    if (*value_end != '-' ||
+        !parse_u16_token(value_end + 1, &value_end, &last) ||
+        value_end != end || last < first) {
+        return false;
+    }
+    *out_first = first;
+    *out_last = last;
+    return true;
+}
+
+static bool parse_history_u64_range(
+    const char *start,
+    const char *end,
+    uint64_t *out_first,
+    uint64_t *out_last) {
+    const char *value_end;
+    uint64_t first;
+    uint64_t last;
+
+    if (!parse_u64_token(start, &value_end, &first)) {
+        return false;
+    }
+    if (value_end == end) {
+        *out_first = first;
+        *out_last = first;
+        return true;
+    }
+    if (*value_end != '-' ||
+        !parse_u64_token(value_end + 1, &value_end, &last) ||
+        value_end != end || last < first) {
+        return false;
+    }
+    *out_first = first;
+    *out_last = last;
+    return true;
+}
+
+static int history_hex_nibble(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool parse_history_value(
+    const char *start,
+    const char *end,
+    uint8_t *out_value,
+    uint8_t *out_mask) {
+    int high;
+    int low;
+    int mask_high = 15;
+    int mask_low = 15;
+
+    if ((size_t)(end - start) != 2u &&
+        (size_t)(end - start) != 5u) {
+        return false;
+    }
+    high = history_hex_nibble(start[0]);
+    low = history_hex_nibble(start[1]);
+    if (high < 0 || low < 0) {
+        return false;
+    }
+    if ((size_t)(end - start) == 5u) {
+        if (start[2] != '/') {
+            return false;
+        }
+        mask_high = history_hex_nibble(start[3]);
+        mask_low = history_hex_nibble(start[4]);
+        if (mask_high < 0 || mask_low < 0) {
+            return false;
+        }
+    }
+    *out_mask = (uint8_t)((mask_high << 4) | mask_low);
+    *out_value =
+        (uint8_t)(((high << 4) | low) & *out_mask);
+    return true;
+}
+
+static bool history_access_name_mask(
+    const char *start,
+    size_t length,
+    uint16_t *out_mask) {
+    static const struct {
+        const char *name;
+        uint16_t mask;
+    } names[] = {
+        { "data-read", 1u << 0 },
+        { "data-write", 1u << 1 },
+        { "opcode", 1u << 2 },
+        { "operand", 1u << 3 },
+        { "dummy-read", 1u << 4 },
+        { "rmw-dummy-write", 1u << 5 },
+        { "stack-read", 1u << 6 },
+        { "stack-write", 1u << 7 },
+        { "vector-read", 1u << 8 },
+        { "execute", 1u << 9 },
+        { "fetch", (1u << 2) | (1u << 3) },
+        { "read", (1u << 0) | (1u << 2) | (1u << 3) |
+                  (1u << 4) | (1u << 6) | (1u << 8) },
+        { "write", (1u << 1) | (1u << 5) | (1u << 7) },
+        { "data", (1u << 0) | (1u << 1) },
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (strlen(names[i].name) == length &&
+            strncmp(start, names[i].name, length) == 0) {
+            *out_mask = names[i].mask;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_history_access_list(
+    const char *start,
+    const char *end,
+    uint16_t *out_mask) {
+    uint16_t mask = 0u;
+
+    if (start == end) {
+        return false;
+    }
+    while (start < end) {
+        const char *item_end = start;
+        uint16_t item_mask;
+        while (item_end < end && *item_end != ',') {
+            item_end++;
+        }
+        if (item_end == start ||
+            !history_access_name_mask(
+                start, (size_t)(item_end - start), &item_mask)) {
+            return false;
+        }
+        mask |= item_mask;
+        if (item_end == end) {
+            break;
+        }
+        start = item_end + 1;
+    }
+    *out_mask = mask;
+    return mask != 0u;
+}
+
+static bool parse_history_opcode_pattern(
+    const char *start,
+    const char *end,
+    control_args *args) {
+    uint8_t count = 0u;
+
+    if (start == end) {
+        return false;
+    }
+    while (start < end) {
+        const char *item_end = start;
+        int high;
+        int low;
+        uint8_t value = 0u;
+        uint8_t mask = 0u;
+        while (item_end < end && *item_end != ',') {
+            item_end++;
+        }
+        if ((size_t)(item_end - start) != 2u ||
+            count >= CONTROL_HISTORY_MAX_OPCODE_PATTERN) {
+            return false;
+        }
+        if (start[0] != '?') {
+            high = history_hex_nibble(start[0]);
+            if (high < 0) {
+                return false;
+            }
+            value |= (uint8_t)(high << 4);
+            mask |= 0xf0u;
+        }
+        if (start[1] != '?') {
+            low = history_hex_nibble(start[1]);
+            if (low < 0) {
+                return false;
+            }
+            value |= (uint8_t)low;
+            mask |= 0x0fu;
+        }
+        args->history_opcode_values[count] = value;
+        args->history_opcode_masks[count] = mask;
+        count++;
+        if (item_end == end) {
+            break;
+        }
+        start = item_end + 1;
+    }
+    args->history_opcode_pattern_length = count;
+    return count != 0u;
+}
+
+static bool parse_history_find_options(
+    const char **cursor,
+    control_args *args,
+    const char **out_message) {
+    enum {
+        SEEN_EPOCH = 1u << 0,
+        SEEN_TIMELINE = 1u << 1,
+        SEEN_CYCLE = 1u << 2,
+        SEEN_FROM = 1u << 3,
+        SEEN_DIRECTION = 1u << 4,
+        SEEN_PC = 1u << 5,
+        SEEN_ADDRESS = 1u << 6,
+        SEEN_ACCESS = 1u << 7,
+        SEEN_VALUE = 1u << 8,
+        SEEN_OPCODES = 1u << 9,
+        SEEN_LIMIT = 1u << 10
+    };
+    uint16_t seen = 0u;
+
+    args->history_limit = 64u;
+    args->history_direction = 0u;
+    args->history_from_kind = 0u;
+    for (;;) {
+        const char *start;
+        const char *end;
+        const char *equals;
+        const char *value;
+        uint16_t bit = 0u;
+        const char *value_end;
+        uint64_t number;
+
+        if (!token_bounds(*cursor, &start, &end)) {
+            break;
+        }
+        equals = start;
+        while (equals < end && *equals != '=') {
+            equals++;
+        }
+        if (equals == start || equals == end || equals + 1 == end) {
+            *out_message = "history option must be key=value";
+            return false;
+        }
+        value = equals + 1;
+        if ((size_t)(equals - start) == 5u &&
+            strncmp(start, "epoch", 5u) == 0) {
+            bit = SEEN_EPOCH;
+            if (!parse_u64_token(value, &value_end, &number) ||
+                value_end != end) {
+                *out_message = "invalid history epoch";
+                return false;
+            }
+            args->history_query_has_epoch = true;
+            args->history_query_epoch = number;
+        } else if ((size_t)(equals - start) == 8u &&
+                   strncmp(start, "timeline", 8u) == 0) {
+            bit = SEEN_TIMELINE;
+            if (!parse_u64_token(value, &value_end, &number) ||
+                value_end != end || number > UINT32_MAX) {
+                *out_message = "invalid history timeline";
+                return false;
+            }
+            args->history_query_has_timeline = true;
+            args->history_query_timeline = (uint32_t)number;
+        } else if ((size_t)(equals - start) == 5u &&
+                   strncmp(start, "cycle", 5u) == 0) {
+            bit = SEEN_CYCLE;
+            if (!parse_history_u64_range(
+                    value, end,
+                    &args->history_cycle_first,
+                    &args->history_cycle_last)) {
+                *out_message = "invalid history cycle range";
+                return false;
+            }
+            args->history_query_has_cycle = true;
+        } else if ((size_t)(equals - start) == 4u &&
+                   strncmp(start, "from", 4u) == 0) {
+            bit = SEEN_FROM;
+            if ((size_t)(end - value) == 6u &&
+                strncmp(value, "oldest", 6u) == 0) {
+                args->history_from_kind = 2u;
+            } else if ((size_t)(end - value) == 6u &&
+                       strncmp(value, "newest", 6u) == 0) {
+                args->history_from_kind = 3u;
+            } else if (parse_u64_token(value, &value_end, &number) &&
+                       value_end == end && number != 0u) {
+                args->history_from_kind = 1u;
+                args->history_from_id = number;
+            } else {
+                *out_message = "invalid history start record";
+                return false;
+            }
+        } else if ((size_t)(equals - start) == 9u &&
+                   strncmp(start, "direction", 9u) == 0) {
+            bit = SEEN_DIRECTION;
+            if ((size_t)(end - value) == 8u &&
+                strncmp(value, "backward", 8u) == 0) {
+                args->history_direction = 0u;
+            } else if ((size_t)(end - value) == 7u &&
+                       strncmp(value, "forward", 7u) == 0) {
+                args->history_direction = 1u;
+            } else {
+                *out_message = "invalid history direction";
+                return false;
+            }
+        } else if ((size_t)(equals - start) == 2u &&
+                   strncmp(start, "pc", 2u) == 0) {
+            bit = SEEN_PC;
+            if (!parse_history_u16_range(
+                    value, end,
+                    &args->history_pc_first,
+                    &args->history_pc_last)) {
+                *out_message = "invalid history PC range";
+                return false;
+            }
+            args->history_query_has_pc = true;
+        } else if ((size_t)(equals - start) == 7u &&
+                   strncmp(start, "address", 7u) == 0) {
+            bit = SEEN_ADDRESS;
+            if (!parse_history_u16_range(
+                    value, end,
+                    &args->history_address_first,
+                    &args->history_address_last)) {
+                *out_message = "invalid history address range";
+                return false;
+            }
+            args->history_query_has_address = true;
+        } else if ((size_t)(equals - start) == 6u &&
+                   strncmp(start, "access", 6u) == 0) {
+            bit = SEEN_ACCESS;
+            if (!parse_history_access_list(
+                    value, end, &args->history_access_mask)) {
+                *out_message = "invalid history access list";
+                return false;
+            }
+            args->history_query_has_access = true;
+        } else if ((size_t)(equals - start) == 5u &&
+                   strncmp(start, "value", 5u) == 0) {
+            bit = SEEN_VALUE;
+            if (!parse_history_value(
+                    value, end,
+                    &args->history_value,
+                    &args->history_value_mask)) {
+                *out_message = "invalid history value/mask";
+                return false;
+            }
+            args->history_query_has_value = true;
+        } else if ((size_t)(equals - start) == 7u &&
+                   strncmp(start, "opcodes", 7u) == 0) {
+            bit = SEEN_OPCODES;
+            if (!parse_history_opcode_pattern(value, end, args)) {
+                *out_message = "invalid history opcode pattern";
+                return false;
+            }
+        } else if ((size_t)(equals - start) == 5u &&
+                   strncmp(start, "limit", 5u) == 0) {
+            bit = SEEN_LIMIT;
+            if (!parse_u64_token(value, &value_end, &number) ||
+                value_end != end || number == 0u || number > 256u) {
+                *out_message = "history limit must be 1..256";
+                return false;
+            }
+            args->history_limit = (uint16_t)number;
+        } else {
+            *out_message = "unknown history option";
+            return false;
+        }
+        if ((seen & bit) != 0u) {
+            *out_message = "duplicate history option";
+            return false;
+        }
+        seen |= bit;
+        *cursor = end;
+        skip_spaces(cursor);
+    }
+    return true;
+}
+
 bool control_protocol_parse_request(
     const char *line,
     control_request *out_request,
@@ -653,44 +1063,126 @@ bool control_protocol_parse_request(
         while (*cursor == ' ' || *cursor == '\t') {
             cursor++;
         }
-    } else if (type == CONTROL_COMMAND_SET_CPU_HISTORY) {
+    } else if (type == CONTROL_COMMAND_HISTORY_RECORD) {
         if (strncmp(cursor, "on", 2) == 0 &&
             (cursor[2] == '\0' || cursor[2] == ' ' || cursor[2] == '\t' ||
-             cursor[2] == '\r' || cursor[2] == '\n' || cursor[2] == '1')) {
-            args.cpu_history_enabled = true;
+             cursor[2] == '\r' || cursor[2] == '\n')) {
+            args.history_record_enabled = true;
             cursor += 2;
         } else if (strncmp(cursor, "off", 3) == 0) {
-            args.cpu_history_enabled = false;
+            args.history_record_enabled = false;
             cursor += 3;
-        } else if (cursor[0] == '1' &&
-                   (cursor[1] == '\0' || cursor[1] == ' ' || cursor[1] == '\t' ||
-                    cursor[1] == '\r' || cursor[1] == '\n')) {
-            args.cpu_history_enabled = true;
-            cursor += 1;
-        } else if (cursor[0] == '0' &&
-                   (cursor[1] == '\0' || cursor[1] == ' ' || cursor[1] == '\t' ||
-                    cursor[1] == '\r' || cursor[1] == '\n')) {
-            args.cpu_history_enabled = false;
-            cursor += 1;
         } else {
-            set_parse_error(out_error, id, "bad-args", "expected on|off|0|1");
+            set_parse_error(out_error, id, "bad-args", "expected on|off");
             return false;
         }
-        while (*cursor == ' ' || *cursor == '\t') {
-            cursor++;
+        skip_spaces(&cursor);
+    } else if (type == CONTROL_COMMAND_HISTORY_FIND) {
+        const char *message = "invalid history query";
+        if (!parse_history_find_options(&cursor, &args, &message)) {
+            set_parse_error(out_error, id, "bad-args", message);
+            return false;
         }
-    } else if (type == CONTROL_COMMAND_GET_CPU_HISTORY) {
-        uint64_t count = 64;
-        if (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
-            if (!parse_u64_token(cursor, &cursor, &count) || count == 0 || count > 64) {
-                set_parse_error(out_error, id, "bad-args", "expected count 1..64");
+    } else if (type == CONTROL_COMMAND_HISTORY_NEXT) {
+        const char *start;
+        const char *end;
+        const char *value_end;
+        uint64_t value;
+        if (!parse_u64_token(cursor, &cursor, &args.history_cursor) ||
+            args.history_cursor == 0u) {
+            set_parse_error(
+                out_error, id, "bad-args", "expected nonzero history cursor");
+            return false;
+        }
+        args.history_limit = 64u;
+        skip_spaces(&cursor);
+        if (token_bounds(cursor, &start, &end)) {
+            if ((size_t)(end - start) <= 6u ||
+                strncmp(start, "limit=", 6u) != 0 ||
+                !parse_u64_token(start + 6u, &value_end, &value) ||
+                value_end != end || value == 0u || value > 256u) {
+                set_parse_error(
+                    out_error, id, "bad-args",
+                    "expected optional limit=1..256");
                 return false;
             }
-            while (*cursor == ' ' || *cursor == '\t') {
-                cursor++;
-            }
+            args.history_limit = (uint16_t)value;
+            cursor = end;
+            skip_spaces(&cursor);
         }
-        args.cpu_history_count = (uint16_t)count;
+    } else if (type == CONTROL_COMMAND_HISTORY_READ) {
+        uint8_t seen = 0u;
+        if (!parse_u64_token(cursor, &cursor, &args.history_id) ||
+            args.history_id == 0u) {
+            set_parse_error(
+                out_error, id, "bad-args", "expected retained history record ID");
+            return false;
+        }
+        args.history_before = 32u;
+        args.history_after = 8u;
+        skip_spaces(&cursor);
+        for (;;) {
+            const char *start;
+            const char *end;
+            const char *value_end;
+            uint64_t value;
+            uint8_t bit;
+            if (!token_bounds(cursor, &start, &end)) {
+                break;
+            }
+            if ((size_t)(end - start) > 6u &&
+                strncmp(start, "epoch=", 6u) == 0) {
+                bit = 1u;
+                if (!parse_u64_token(start + 6u, &value_end, &value) ||
+                    value_end != end) {
+                    set_parse_error(
+                        out_error, id, "bad-args", "invalid history epoch");
+                    return false;
+                }
+                args.history_epoch = value;
+            } else if ((size_t)(end - start) > 7u &&
+                       strncmp(start, "before=", 7u) == 0) {
+                bit = 2u;
+                if (!parse_u64_token(start + 7u, &value_end, &value) ||
+                    value_end != end || value > 256u) {
+                    set_parse_error(
+                        out_error, id, "bad-args",
+                        "history before must be 0..256");
+                    return false;
+                }
+                args.history_before = (uint16_t)value;
+            } else if ((size_t)(end - start) > 6u &&
+                       strncmp(start, "after=", 6u) == 0) {
+                bit = 4u;
+                if (!parse_u64_token(start + 6u, &value_end, &value) ||
+                    value_end != end || value > 256u) {
+                    set_parse_error(
+                        out_error, id, "bad-args",
+                        "history after must be 0..256");
+                    return false;
+                }
+                args.history_after = (uint16_t)value;
+            } else {
+                set_parse_error(
+                    out_error, id, "bad-args", "unknown history-read option");
+                return false;
+            }
+            if ((seen & bit) != 0u) {
+                set_parse_error(
+                    out_error, id, "bad-args", "duplicate history-read option");
+                return false;
+            }
+            seen |= bit;
+            cursor = end;
+            skip_spaces(&cursor);
+        }
+    } else if (type == CONTROL_COMMAND_HISTORY_CLOSE) {
+        if (!parse_u64_token(cursor, &cursor, &args.history_cursor)) {
+            set_parse_error(
+                out_error, id, "bad-args", "expected history cursor");
+            return false;
+        }
+        skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_RUN_TO_RASTER) {
         uint64_t line = 0;
         uint64_t cycle = 0;

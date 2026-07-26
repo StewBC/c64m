@@ -29,6 +29,7 @@
 #define C64M_DEFAULT_LAYOUT_SPLIT_DISPLAY_RIGHT 0.62f
 #define C64M_DEFAULT_LAYOUT_SPLIT_TOP_BOTTOM 0.58f
 #define C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC 0.55f
+#define C64M_DEFAULT_HISTORY_MEMORY_MB 256
 #define C64M_SYSTEM_ROM_SIZE 16384
 #define C64M_BASIC_ROM_SIZE 8192
 #define C64M_KERNAL_ROM_SIZE 8192
@@ -1196,6 +1197,22 @@ static void apply_config(app_options *options, config *cfg)
     /* Absent key defaults to false, so a machine with no explicit setting runs
        through BRKs (Wonderboy et al. boot without stopping). */
     options->pause_on_brk = config_get_bool(cfg, "config", "pause_on_brk", options->pause_on_brk);
+    value = config_get(cfg, "debug", "history_memory_mb");
+    if (value != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(value, &end, 0);
+        if (end == value || *end != '\0' ||
+            (parsed != 0u && (parsed < 16u || parsed > 4096u))) {
+            fprintf(
+                stderr,
+                "invalid [debug] history_memory_mb `%s`; using %d\n",
+                value,
+                C64M_DEFAULT_HISTORY_MEMORY_MB);
+            options->history_memory_mb = C64M_DEFAULT_HISTORY_MEMORY_MB;
+        } else {
+            options->history_memory_mb = (int)parsed;
+        }
+    }
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1359,6 +1376,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *audio_record_path = NULL;
     const char *turbo = NULL;
     const char *video_standard = NULL;
+    const char *history_memory = NULL;
     struct argparse argparse;
     const char *const usages[] = {
         "c64m [options]",
@@ -1375,6 +1393,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_STRING('\0', "crt", &crt_path, "load CRT cartridge at startup", NULL, 0, 0),
         OPT_INTEGER('\0', "control-port", &control_port, "enable localhost control server on port", NULL, 0, 0),
         OPT_BOOLEAN('\0', "headless", &headless, "run without creating a window; requires --control-port", NULL, 0, OPT_NONEG),
+        OPT_STRING('\0', "history-memory", &history_memory, "CPU flight-recorder memory budget in MiB (0 or 16..4096)", NULL, 0, 0),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
@@ -1489,6 +1508,18 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     if (headless) {
         options->headless = true;
     }
+    if (history_memory != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(history_memory, &end, 0);
+        if (end == history_memory || *end != '\0' ||
+            (parsed != 0u && (parsed < 16u || parsed > 4096u))) {
+            fprintf(
+                stderr,
+                "--history-memory expects 0 or a value from 16 through 4096 MiB\n");
+            return false;
+        }
+        options->history_memory_mb = (int)parsed;
+    }
     if (options->headless && options->control_port <= 0) {
         fprintf(stderr, "--headless requires --control-port PORT\n");
         return false;
@@ -1521,6 +1552,7 @@ void app_options_init(app_options *options)
     options->control_port = 0;
     options->headless = false;
     options->show_disk_leds = true;
+    options->history_memory_mb = C64M_DEFAULT_HISTORY_MEMORY_MB;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1584,6 +1616,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->control_port = src->control_port;
     dest->headless = src->headless;
     dest->keyboard_joystick_port = src->keyboard_joystick_port;
+    dest->history_memory_mb = src->history_memory_mb;
 
     if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
         !replace_string(&dest->ini_path, src->ini_path) ||
@@ -1701,6 +1734,7 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
+    config_set_int(cfg, "debug", "history_memory_mb", options->history_memory_mb);
     /* The snapshot folder is now [browse] snapshot; drop the legacy key. */
     config_remove_prefix(cfg, "state", "quicksave_folder");
     if (options->symbol_files != NULL &&

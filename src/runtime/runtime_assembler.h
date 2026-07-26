@@ -24,3 +24,14 @@ bool runtime_assemble_file(
     const char *source_name,
     char *error,
     size_t error_size);
+
+bool runtime_assemble_file_ex(
+    c64_t *machine,
+    symbol_table *symbols,
+    const char *path,
+    uint16_t address,
+    const char *source_name,
+    uint16_t *out_start_address,
+    uint32_t *out_byte_count,
+    char *error,
+    size_t error_size);

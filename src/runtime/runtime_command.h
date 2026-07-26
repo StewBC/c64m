@@ -64,8 +64,13 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_LOAD_CRT,
     RUNTIME_COMMAND_SAVE_STATE,
     RUNTIME_COMMAND_LOAD_STATE,
-    RUNTIME_COMMAND_SET_CPU_HISTORY,
-    RUNTIME_COMMAND_REQUEST_CPU_HISTORY
+    RUNTIME_COMMAND_HISTORY_INFO,
+    RUNTIME_COMMAND_HISTORY_RECORD,
+    RUNTIME_COMMAND_HISTORY_CLEAR,
+    RUNTIME_COMMAND_HISTORY_FIND,
+    RUNTIME_COMMAND_HISTORY_NEXT,
+    RUNTIME_COMMAND_HISTORY_READ,
+    RUNTIME_COMMAND_HISTORY_CLOSE
 } runtime_command_type;
 
 enum {
@@ -270,10 +275,29 @@ typedef struct runtime_command {
 
         struct {
             uint8_t enabled;
-        } set_cpu_history;
+        } history_record;
 
         struct {
-            uint16_t max_entries; /* 1..RUNTIME_CPU_HISTORY_MAX */
-        } request_cpu_history;
+            runtime_history_query query;
+            uint64_t from_id;
+            uint8_t from_kind;
+            uint16_t limit;
+        } history_find;
+
+        struct {
+            uint64_t cursor;
+            uint16_t limit;
+        } history_next;
+
+        struct {
+            uint64_t epoch;
+            uint64_t id;
+            uint16_t before;
+            uint16_t after;
+        } history_read;
+
+        struct {
+            uint64_t cursor;
+        } history_close;
     } data;
 } runtime_command;

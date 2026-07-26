@@ -2154,6 +2154,105 @@ static bool control_parse_breakpoint_definition(
     return true;
 }
 
+static const char *control_history_unavailable_reason_name(
+    runtime_history_unavailable_reason reason) {
+    switch (reason) {
+    case RUNTIME_HISTORY_UNAVAILABLE_DISABLED_BY_CONFIG:
+        return "disabled-by-config";
+    case RUNTIME_HISTORY_UNAVAILABLE_ALLOCATION_FAILED:
+        return "allocation-failed";
+    case RUNTIME_HISTORY_UNAVAILABLE_INVALID_CAPACITY:
+        return "invalid-capacity";
+    case RUNTIME_HISTORY_UNAVAILABLE_NONE:
+    default:
+        return "none";
+    }
+}
+
+static void control_format_history_status_response(
+    control_response *response,
+    uint32_t request_id,
+    const runtime_history_status *status) {
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (!status->available) {
+        snprintf(
+            text,
+            sizeof(text),
+            "available=0 recording=0 requested_bytes=%llu "
+            "capacity_bytes=0 reason=%s",
+            (unsigned long long)status->requested_bytes,
+            control_history_unavailable_reason_name(
+                status->unavailable_reason));
+    } else {
+        snprintf(
+            text,
+            sizeof(text),
+            "available=1 recording=%u requested_bytes=%llu "
+            "capacity_bytes=%llu used_bytes=%llu epoch=%llu timeline=%u "
+            "records=%llu oldest=%llu newest=%llu wrapped=%llu "
+            "partial=%llu truncated_accesses=%llu",
+            status->recording ? 1u : 0u,
+            (unsigned long long)status->requested_bytes,
+            (unsigned long long)status->capacity_bytes,
+            (unsigned long long)status->used_bytes,
+            (unsigned long long)status->epoch,
+            status->timeline,
+            (unsigned long long)status->record_count,
+            (unsigned long long)status->oldest_id,
+            (unsigned long long)status->newest_id,
+            (unsigned long long)status->wrap_count,
+            (unsigned long long)status->partial_records,
+            (unsigned long long)status->truncated_accesses);
+    }
+    control_protocol_format_ok(response, request_id, text, false);
+}
+
+static void control_format_history_rpc_error(
+    control_response *response,
+    uint32_t request_id,
+    runtime_history_rpc_status status) {
+    const char *code = "runtime";
+    const char *message = "history-query-failed";
+
+    switch (status) {
+    case RUNTIME_HISTORY_RPC_UNAVAILABLE:
+        code = "unavailable";
+        message = "history-recorder-unavailable";
+        break;
+    case RUNTIME_HISTORY_RPC_MACHINE_RUNNING:
+        code = "busy";
+        message = "machine-running";
+        break;
+    case RUNTIME_HISTORY_RPC_REQUEST_ACTIVE:
+        code = "busy";
+        message = "history-request-active";
+        break;
+    case RUNTIME_HISTORY_RPC_BAD_ARGS:
+        code = "bad-args";
+        message = "history-query-invalid";
+        break;
+    case RUNTIME_HISTORY_RPC_CURSOR_STALE:
+        code = "stale";
+        message = "history-cursor-stale";
+        break;
+    case RUNTIME_HISTORY_RPC_EPOCH_MISMATCH:
+        code = "stale";
+        message = "history-epoch-mismatch";
+        break;
+    case RUNTIME_HISTORY_RPC_RECORD_NOT_RETAINED:
+        code = "not-found";
+        message = "history-record-not-retained";
+        break;
+    case RUNTIME_HISTORY_RPC_ERROR:
+    case RUNTIME_HISTORY_RPC_OK:
+    default:
+        break;
+    }
+    control_protocol_format_error(
+        response, request_id, code, message, false);
+}
+
 static void complete_deferred_control_response(
     control_server *control,
     runtime_client *client,
@@ -2415,41 +2514,89 @@ static void complete_deferred_control_response(
             control_response_release(&response);
             SDL_Log("control: response queue full");
         }
-    } else if (deferred->command_type == CONTROL_COMMAND_GET_CPU_HISTORY &&
-               event->type == RUNTIME_EVENT_CPU_HISTORY_RESPONSE) {
-        char text[CONTROL_RESPONSE_TEXT_MAX];
-        size_t used = 0;
-        uint16_t i;
-        const runtime_cpu_history_snapshot *hist = &event->data.cpu_history;
-        used = (size_t)snprintf(
-            text,
-            sizeof(text),
-            "enabled=%u count=%u",
-            hist->enabled ? 1u : 0u,
-            (unsigned)hist->count);
-        for (i = 0; i < hist->count && used + 40u < sizeof(text); ++i) {
-            const runtime_cpu_history_entry *e = &hist->entries[i];
-            int n = snprintf(
-                text + used,
-                sizeof(text) - used,
-                " |%u:pc=%04X op=%02X a=%02X x=%02X y=%02X sp=%02X p=%02X cyc=%llu",
-                (unsigned)i,
-                e->pc,
-                e->opcode,
-                e->a,
-                e->x,
-                e->y,
-                e->sp,
-                e->p,
-                (unsigned long long)e->cycles);
-            if (n < 0) {
-                break;
-            }
-            used += (size_t)n;
+    } else if ((deferred->command_type == CONTROL_COMMAND_HISTORY_INFO ||
+                deferred->command_type == CONTROL_COMMAND_HISTORY_RECORD ||
+                deferred->command_type == CONTROL_COMMAND_HISTORY_CLEAR) &&
+               event->type == RUNTIME_EVENT_HISTORY_STATUS_RESPONSE) {
+        if (deferred->command_type != CONTROL_COMMAND_HISTORY_INFO &&
+            !event->data.history_status.available) {
+            control_protocol_format_error(
+                &response,
+                deferred->request_id,
+                "unavailable",
+                "history-recorder-unavailable",
+                false);
+        } else {
+            control_format_history_status_response(
+                &response,
+                deferred->request_id,
+                &event->data.history_status);
         }
-        control_protocol_format_ok(&response, deferred->request_id, text, false);
         if (control_server_post_response(control, &response)) {
             deferred->active = false;
+            deferred->request_token = 0u;
+        } else {
+            control_response_release(&response);
+            SDL_Log("control: response queue full");
+        }
+    } else if ((deferred->command_type == CONTROL_COMMAND_HISTORY_FIND ||
+                deferred->command_type == CONTROL_COMMAND_HISTORY_NEXT ||
+                deferred->command_type == CONTROL_COMMAND_HISTORY_READ ||
+                deferred->command_type == CONTROL_COMMAND_HISTORY_CLOSE) &&
+               event->type == RUNTIME_EVENT_HISTORY_RESULT_RESPONSE) {
+        if (event->data.history_rpc.status != RUNTIME_HISTORY_RPC_OK) {
+            control_format_history_rpc_error(
+                &response,
+                deferred->request_id,
+                event->data.history_rpc.status);
+        } else if (deferred->command_type ==
+                   CONTROL_COMMAND_HISTORY_CLOSE) {
+            control_protocol_format_ok(
+                &response, deferred->request_id, NULL, false);
+        } else {
+            uint8_t *payload = NULL;
+            uint32_t length = 0u;
+            runtime_history_rpc_meta meta;
+            char metadata[CONTROL_RESPONSE_TEXT_MAX];
+
+            if (client == NULL ||
+                !runtime_client_claim_history_rpc(
+                    client,
+                    deferred->request_token,
+                    &payload,
+                    &length,
+                    &meta)) {
+                control_protocol_format_error(
+                    &response,
+                    deferred->request_id,
+                    "runtime",
+                    "history-query-failed",
+                    false);
+            } else {
+                snprintf(
+                    metadata,
+                    sizeof(metadata),
+                    "epoch=%llu count=%u cursor=%llu more=%u "
+                    "oldest=%llu newest=%llu",
+                    (unsigned long long)meta.epoch,
+                    meta.count,
+                    (unsigned long long)meta.cursor,
+                    meta.more ? 1u : 0u,
+                    (unsigned long long)meta.oldest,
+                    (unsigned long long)meta.newest);
+                control_protocol_format_data(
+                    &response,
+                    deferred->request_id,
+                    "history",
+                    payload,
+                    length,
+                    metadata,
+                    false);
+            }
+        }
+        if (control_server_post_response(control, &response)) {
+            deferred->active = false;
+            deferred->request_token = 0u;
         } else {
             control_response_release(&response);
             SDL_Log("control: response queue full");
@@ -2823,6 +2970,7 @@ static void check_deferred_event_wait(
 
 static void cancel_deferred_control_response(
     control_server *control,
+    runtime_client *client,
     deferred_control_response *deferred,
     const char *code,
     const char *message)
@@ -2831,6 +2979,10 @@ static void cancel_deferred_control_response(
 
     if (control == NULL || deferred == NULL || !deferred->active) {
         return;
+    }
+    if (client != NULL && deferred->request_token != 0u) {
+        (void)runtime_client_cancel_rpc(
+            client, deferred->request_token);
     }
     control_protocol_format_error(
         &response,
@@ -2852,6 +3004,7 @@ static void cancel_deferred_control_response(
 
 static void check_deferred_control_session_one(
     control_server *control,
+    runtime_client *client,
     deferred_control_response *deferred)
 {
     if (control == NULL || deferred == NULL || !deferred->active) {
@@ -2862,6 +3015,10 @@ static void check_deferred_control_session_one(
     }
     if (!control_server_has_client(control) ||
         control_server_connection_epoch(control) != deferred->connection_epoch) {
+        if (client != NULL && deferred->request_token != 0u) {
+            (void)runtime_client_cancel_rpc(
+                client, deferred->request_token);
+        }
         deferred->active = false;
         deferred->request_token = 0u;
     }
@@ -2869,6 +3026,7 @@ static void check_deferred_control_session_one(
 
 static void check_deferred_control_session(
     control_server *control,
+    runtime_client *client,
     deferred_control_table *table)
 {
     size_t i;
@@ -2876,12 +3034,14 @@ static void check_deferred_control_session(
         return;
     }
     for (i = 0; i < CONTROL_DEFERRED_CAPACITY; ++i) {
-        check_deferred_control_session_one(control, &table->entries[i]);
+        check_deferred_control_session_one(
+            control, client, &table->entries[i]);
     }
 }
 
 static void check_deferred_control_timeout(
     control_server *control,
+    runtime_client *client,
     deferred_control_table *table)
 {
     size_t i;
@@ -2898,6 +3058,7 @@ static void check_deferred_control_timeout(
         }
         cancel_deferred_control_response(
             control,
+            client,
             deferred,
             "timeout",
             "deferred response timed out");
@@ -4257,7 +4418,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/2",
+                "name=c64m protocol=C64M/3",
                 false);
             break;
 
@@ -4265,7 +4426,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/2 app=0.1.0",
+                "protocol=C64M/3 app=0.1.0",
                 false);
             break;
 
@@ -4273,7 +4434,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster cpu-history power-drive",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive",
                 false);
             break;
 
@@ -4355,12 +4516,13 @@ static void dispatch_control_request(
                 request->args.raster_cycle);
             break;
 
-        case CONTROL_COMMAND_SET_CPU_HISTORY:
-            accepted = runtime_client_set_cpu_history(
-                client, request->args.cpu_history_enabled);
-            break;
-
-        case CONTROL_COMMAND_GET_CPU_HISTORY:
+        case CONTROL_COMMAND_HISTORY_INFO:
+        case CONTROL_COMMAND_HISTORY_RECORD:
+        case CONTROL_COMMAND_HISTORY_CLEAR:
+        case CONTROL_COMMAND_HISTORY_FIND:
+        case CONTROL_COMMAND_HISTORY_NEXT:
+        case CONTROL_COMMAND_HISTORY_READ:
+        case CONTROL_COMMAND_HISTORY_CLOSE:
             if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(
@@ -4369,22 +4531,120 @@ static void dispatch_control_request(
                     "busy",
                     deferred_busy_msg,
                     false);
-            } else if (runtime_client_request_cpu_history(
-                           client, request->args.cpu_history_count)) {
-                if (deferred != NULL) {
+            } else {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                bool sent = false;
+                if (token != 0u) {
+                    if (request->type == CONTROL_COMMAND_HISTORY_INFO) {
+                        sent = runtime_client_history_info(client, token);
+                    } else if (request->type ==
+                               CONTROL_COMMAND_HISTORY_RECORD) {
+                        sent = runtime_client_history_record(
+                            client,
+                            request->args.history_record_enabled,
+                            token);
+                    } else if (request->type ==
+                               CONTROL_COMMAND_HISTORY_CLEAR) {
+                        sent = runtime_client_history_clear(client, token);
+                    } else if (request->type ==
+                               CONTROL_COMMAND_HISTORY_FIND) {
+                        runtime_history_query query;
+                        size_t pattern_index;
+                        memset(&query, 0, sizeof(query));
+                        query.has_epoch =
+                            request->args.history_query_has_epoch;
+                        query.epoch = request->args.history_query_epoch;
+                        query.has_timeline =
+                            request->args.history_query_has_timeline;
+                        query.timeline =
+                            request->args.history_query_timeline;
+                        query.has_cycle =
+                            request->args.history_query_has_cycle;
+                        query.cycle_first =
+                            request->args.history_cycle_first;
+                        query.cycle_last =
+                            request->args.history_cycle_last;
+                        query.has_pc = request->args.history_query_has_pc;
+                        query.pc_first = request->args.history_pc_first;
+                        query.pc_last = request->args.history_pc_last;
+                        query.has_address =
+                            request->args.history_query_has_address;
+                        query.address_first =
+                            request->args.history_address_first;
+                        query.address_last =
+                            request->args.history_address_last;
+                        query.has_access =
+                            request->args.history_query_has_access;
+                        query.access_mask =
+                            request->args.history_access_mask;
+                        query.has_value =
+                            request->args.history_query_has_value;
+                        query.value = request->args.history_value;
+                        query.value_mask =
+                            request->args.history_value_mask;
+                        query.opcode_pattern_length =
+                            request->args.history_opcode_pattern_length;
+                        for (pattern_index = 0u;
+                             pattern_index <
+                                 query.opcode_pattern_length;
+                             ++pattern_index) {
+                            query.opcode_pattern[pattern_index].value =
+                                request->args
+                                    .history_opcode_values[pattern_index];
+                            query.opcode_pattern[pattern_index].mask =
+                                request->args
+                                    .history_opcode_masks[pattern_index];
+                        }
+                        query.direction =
+                            request->args.history_direction != 0u ?
+                                RUNTIME_HISTORY_QUERY_FORWARD :
+                                RUNTIME_HISTORY_QUERY_BACKWARD;
+                        sent = runtime_client_history_find(
+                            client,
+                            &query,
+                            (runtime_history_from_kind)
+                                request->args.history_from_kind,
+                            request->args.history_from_id,
+                            request->args.history_limit,
+                            token);
+                    } else if (request->type ==
+                               CONTROL_COMMAND_HISTORY_NEXT) {
+                        sent = runtime_client_history_next(
+                            client,
+                            request->args.history_cursor,
+                            request->args.history_limit,
+                            token);
+                    } else if (request->type ==
+                               CONTROL_COMMAND_HISTORY_READ) {
+                        sent = runtime_client_history_read(
+                            client,
+                            request->args.history_epoch,
+                            request->args.history_id,
+                            request->args.history_before,
+                            request->args.history_after,
+                            token);
+                    } else {
+                        sent = runtime_client_history_close(
+                            client,
+                            request->args.history_cursor,
+                            token);
+                    }
+                }
+                if (sent && deferred != NULL) {
                     deferred->active = true;
                     deferred->request_id = request->id;
                     deferred->command_type = request->type;
-                    deferred->deadline_ms = SDL_GetTicks64() + 2000u;
+                    deferred->request_token = token;
+                    deferred->connection_epoch =
+                        control_server_connection_epoch(control);
+                    deferred->deadline_ms = SDL_GetTicks64() +
+                        (request->type == CONTROL_COMMAND_HISTORY_FIND ?
+                            10000u : 2000u);
                     return;
                 }
-                control_protocol_format_error(
-                    &response,
-                    request->id,
-                    "internal",
-                    "deferred state unavailable",
-                    false);
-            } else {
+                if (deferred != NULL) {
+                    control_deferred_clear_slot(deferred);
+                }
                 control_protocol_format_error(
                     &response,
                     request->id,
@@ -5684,8 +5944,10 @@ static bool run_main_loop(
             &deferred_control,
             &control_cache,
             &event_latch);
-        check_deferred_control_session(control, &deferred_control);
-        check_deferred_control_timeout(control, &deferred_control);
+        check_deferred_control_session(
+            control, client, &deferred_control);
+        check_deferred_control_timeout(
+            control, client, &deferred_control);
         dispatch_control_requests(
             control,
             client,
@@ -5807,8 +6069,10 @@ static bool run_headless_loop(
             &deferred_control,
             &control_cache,
             &event_latch);
-        check_deferred_control_session(control, &deferred_control);
-        check_deferred_control_timeout(control, &deferred_control);
+        check_deferred_control_session(
+            control, client, &deferred_control);
+        check_deferred_control_timeout(
+            control, client, &deferred_control);
         dispatch_control_requests(
             control,
             client,
@@ -5912,6 +6176,8 @@ int main(int argc, char **argv) {
     runtime_cfg.audio_record_duration_seconds = options.audio_record_duration_seconds;
     runtime_cfg.audio_smoke       = options.audio_smoke ? 1 : 0;
     runtime_cfg.autorun           = options.autorun;
+    runtime_cfg.history_memory_mb = (uint32_t)options.history_memory_mb;
+    runtime_cfg.history_memory_mb_configured = true;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));
