@@ -321,6 +321,17 @@ Run the Phase 0 tools after full access recording:
 Also record actual 256 MiB retention for idle BASIC and the access-heavy
 workload. Idle BASIC must retain at least 8 million execution records.
 
+### Follow-up result
+
+A post-delivery Phase 3 revisit retained four measured hot-path changes: a
+common-case block-admission path, compiler-friendly little-endian arena
+loads/stores with a portable fallback, an observer-only access entry that omits
+already-established availability checks, and removal of redundant completion
+pointer clears. Alternating old/new binaries improved full recording from
+13.522 to 13.637 MHz on average (+0.85%). Final matched config-off/full averages
+were 14.705/13.664 MHz, about 7.1% loss. Further speculative adapter work was
+discarded after it measured worse.
+
 ## Phase 4: query engine
 
 ### Tests first

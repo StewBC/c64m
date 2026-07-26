@@ -1287,6 +1287,12 @@ static void runtime_history_flush_pending_trap(runtime *rt) {
     rt->pending_history_trap = 0u;
 }
 
+typedef char runtime_history_observer_kind_values_must_match[
+    (int)C64_CPU_OBSERVER_INSTRUCTION ==
+            (int)RUNTIME_HISTORY_RECORD_INSTRUCTION &&
+    (int)C64_CPU_OBSERVER_IRQ == (int)RUNTIME_HISTORY_RECORD_IRQ &&
+    (int)C64_CPU_OBSERVER_NMI == (int)RUNTIME_HISTORY_RECORD_NMI ? 1 : -1];
+
 static void runtime_history_observer_begin(
     void *user,
     const c64_cpu_observer_begin *observed) {
@@ -1296,19 +1302,8 @@ static void runtime_history_observer_begin(
     if (rt == NULL || observed == NULL) {
         return;
     }
-    memset(&begin, 0, sizeof(begin));
-    switch (observed->kind) {
-    case C64_CPU_OBSERVER_IRQ:
-        begin.kind = RUNTIME_HISTORY_RECORD_IRQ;
-        break;
-    case C64_CPU_OBSERVER_NMI:
-        begin.kind = RUNTIME_HISTORY_RECORD_NMI;
-        break;
-    case C64_CPU_OBSERVER_INSTRUCTION:
-    default:
-        begin.kind = RUNTIME_HISTORY_RECORD_INSTRUCTION;
-        break;
-    }
+    /* Machine and recorder execution-kind values intentionally match. */
+    begin.kind = (runtime_history_record_kind)observed->kind;
     begin.machine_cycle = observed->machine_cycle;
     begin.pc = observed->pc;
     begin.a = observed->a;
@@ -1329,7 +1324,7 @@ static void runtime_history_observer_access(
     if (rt == NULL) {
         return;
     }
-    (void)runtime_history_append_access(
+    (void)runtime_history_append_observed_access(
         rt->history,
         kind,
         address,

@@ -243,6 +243,14 @@ bool runtime_history_append_access(
     uint16_t address,
     uint8_t value,
     uint64_t machine_cycle);
+/* Hot observer entry: recorder availability/recording were established when
+   the observer was installed; only an active execution record is required. */
+bool runtime_history_append_observed_access(
+    runtime_history *history,
+    c6510_bus_access_kind kind,
+    uint16_t address,
+    uint8_t value,
+    uint64_t machine_cycle);
 bool runtime_history_complete_record(runtime_history *history);
 bool runtime_history_seal_partial(runtime_history *history);
 bool runtime_history_append_marker(

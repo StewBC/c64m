@@ -77,27 +77,53 @@ static size_t history_align_up(size_t value, size_t alignment) {
     return (value + mask) & ~mask;
 }
 
+/* memcpy lets little-endian targets use efficient unaligned halfword/word
+   accesses while the explicit fallback preserves the arena's LE encoding. */
 static void history_write_u16(uint8_t *p, uint16_t value) {
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    memcpy(p, &value, sizeof(value));
+#else
     p[0] = (uint8_t)(value & 0xffu);
     p[1] = (uint8_t)(value >> 8);
+#endif
 }
 
 static void history_write_u32(uint8_t *p, uint32_t value) {
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    memcpy(p, &value, sizeof(value));
+#else
     p[0] = (uint8_t)(value & 0xffu);
     p[1] = (uint8_t)((value >> 8) & 0xffu);
     p[2] = (uint8_t)((value >> 16) & 0xffu);
     p[3] = (uint8_t)(value >> 24);
+#endif
 }
 
 static uint16_t history_read_u16(const uint8_t *p) {
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    uint16_t value;
+    memcpy(&value, p, sizeof(value));
+    return value;
+#else
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+#endif
 }
 
 static uint32_t history_read_u32(const uint8_t *p) {
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    uint32_t value;
+    memcpy(&value, p, sizeof(value));
+    return value;
+#else
     return (uint32_t)p[0] |
         ((uint32_t)p[1] << 8) |
         ((uint32_t)p[2] << 16) |
         ((uint32_t)p[3] << 24);
+#endif
 }
 
 static uint8_t *history_block_bytes(
@@ -534,20 +560,34 @@ bool runtime_history_begin_record(
         begin->kind == RUNTIME_HISTORY_RECORD_MARKER) {
         return false;
     }
-    if (!history_ensure_space(history, begin->machine_cycle, HISTORY_MAX_RECORD_SIZE)) {
-        return false;
+    if (history->has_current_block) {
+        block = &history->blocks[history->current_block];
+        delta = begin->machine_cycle >= block->base_cycle ?
+            begin->machine_cycle - block->base_cycle : UINT64_MAX;
+        if (block->epoch != history->epoch ||
+            block->timeline != history->timeline ||
+            delta > UINT32_MAX ||
+            HISTORY_MAX_RECORD_SIZE > history->block_size - block->used) {
+            block = NULL;
+        }
+    } else {
+        block = NULL;
     }
-    block = &history->blocks[history->current_block];
+    if (block == NULL) {
+        if (!history_ensure_space(
+                history,
+                begin->machine_cycle,
+                HISTORY_MAX_RECORD_SIZE)) {
+            return false;
+        }
+        block = &history->blocks[history->current_block];
+        delta = begin->machine_cycle - block->base_cycle;
+    }
     bytes = history_block_bytes(history, history->current_block) + block->used;
     memset(bytes, 0, HISTORY_EXEC_HEADER_SIZE);
-    delta = begin->machine_cycle - block->base_cycle;
     history_write_u32(bytes + 0, (uint32_t)delta);
     history_write_u16(bytes + 4, begin->pc);
-    bytes[6] = begin->a;
-    bytes[7] = begin->x;
-    bytes[8] = begin->y;
-    bytes[9] = begin->sp;
-    bytes[10] = begin->p;
+    memcpy(bytes + 6, &begin->a, 5u);
     history_write_u16(bytes + 14, UINT16_MAX);
     history_write_u16(bytes + 16, UINT16_MAX);
     history_write_u16(bytes + 18, UINT16_MAX);
@@ -569,7 +609,7 @@ bool runtime_history_begin_record(
     return true;
 }
 
-bool runtime_history_append_access(
+bool runtime_history_append_observed_access(
     runtime_history *history,
     c6510_bus_access_kind kind,
     uint16_t address,
@@ -582,14 +622,10 @@ bool runtime_history_append_access(
     uint16_t offset;
     runtime_history_record_kind record_kind;
 
-    if (history == NULL || !history->available || !history->recording ||
-        !history->has_active_record) {
+    if (!history->has_active_record) {
         return false;
     }
-    header = history_active_bytes(history);
-    if (header == NULL) {
-        return false;
-    }
+    header = history->active_header;
     tag = header[21];
     record_kind =
         (runtime_history_record_kind)(tag & HISTORY_TAG_KIND_MASK);
@@ -658,21 +694,25 @@ bool runtime_history_append_access(
     return true;
 }
 
-bool runtime_history_complete_record(runtime_history *history) {
-    uint8_t *header;
+bool runtime_history_append_access(
+    runtime_history *history,
+    c6510_bus_access_kind kind,
+    uint16_t address,
+    uint8_t value,
+    uint64_t machine_cycle) {
+    if (history == NULL || !history->available || !history->recording) {
+        return false;
+    }
+    return runtime_history_append_observed_access(
+        history, kind, address, value, machine_cycle);
+}
 
+bool runtime_history_complete_record(runtime_history *history) {
     if (history == NULL || !history->has_active_record) {
         return false;
     }
-    header = history_active_bytes(history);
-    if (header == NULL) {
-        return false;
-    }
-    header[21] &= (uint8_t)~HISTORY_TAG_PARTIAL;
+    history->active_header[21] &= (uint8_t)~HISTORY_TAG_PARTIAL;
     history->has_active_record = 0u;
-    history->active_block = NULL;
-    history->active_header = NULL;
-    history->active_access_cursor = NULL;
     return true;
 }
 

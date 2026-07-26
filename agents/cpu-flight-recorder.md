@@ -955,6 +955,11 @@ disabled by configuration and 13.593/13.634 MHz with full access recording,
 about a 7.4% throughput loss. This is above the 5% goal but below the 10% hard
 ceiling and was explicitly accepted without further optimization.
 
+A Phase 3 follow-up pass recovered about 0.85% enabled throughput in direct
+old/new binary comparisons. Final matched averages were 14.705 MHz with
+recorder capacity disabled and 13.664 MHz with full recording, about a 7.1%
+loss. The encoding and retention contract did not change.
+
 The 256 MiB arena retains about 9.51 million records in the measured workload.
 A full-store exact-address miss took 219.734 ms; a newest hit took 0.020 ms, a
 PC query 1.4 ms, and a three-opcode pattern 0.058 ms. The linear query engine is
