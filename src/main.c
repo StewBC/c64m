@@ -190,6 +190,9 @@ typedef struct control_event_latch {
     uint64_t assemble_error_seq;
     uint64_t step_complete_seq;
     uint64_t run_complete_seq;
+    uint64_t paused_seq;
+    uint64_t running_seq;
+    uint64_t breakpoints_seq;
     bool has_load_state_complete;
     bool has_save_state_complete;
     bool has_reset_complete;
@@ -197,6 +200,13 @@ typedef struct control_event_latch {
     bool has_assemble_error;
     bool has_step_complete;
     bool has_run_complete;
+    /* Execution-state events toggle constantly, so unlike the one-shot
+       completion events these are cross-cleared in note(): a resume (running)
+       invalidates a stale paused/breakpoints latch so a later wait targets the
+       NEXT stop, not a previous one. */
+    bool has_paused;
+    bool has_running;
+    bool has_breakpoints;
 } control_event_latch;
 
 static void sdl_c64_controller_send_ports(
@@ -2653,6 +2663,24 @@ static void control_event_latch_note(
             latch->run_complete_seq = seq;
             latch->has_run_complete = true;
             break;
+        case RUNTIME_EVENT_RUNNING:
+            latch->running_seq = seq;
+            latch->has_running = true;
+            /* A resume makes any prior stop stale: drop paused/breakpoints so a
+               later wait matches the next stop, not the previous one. run always
+               emits RUNNING before the following PAUSED, so this ordering holds. */
+            latch->has_paused = false;
+            latch->has_breakpoints = false;
+            break;
+        case RUNTIME_EVENT_PAUSED:
+            latch->paused_seq = seq;
+            latch->has_paused = true;
+            latch->has_running = false;
+            break;
+        case RUNTIME_EVENT_BREAKPOINTS_RESPONSE:
+            latch->breakpoints_seq = seq;
+            latch->has_breakpoints = true;
+            break;
         default:
             break;
     }
@@ -2718,6 +2746,27 @@ static bool control_event_latch_consume(
             *out_seq = latch->run_complete_seq;
         }
         latch->has_run_complete = false;
+        return true;
+    }
+    if (strcmp(event_name, "paused") == 0 && latch->has_paused) {
+        if (out_seq != NULL) {
+            *out_seq = latch->paused_seq;
+        }
+        latch->has_paused = false;
+        return true;
+    }
+    if (strcmp(event_name, "running") == 0 && latch->has_running) {
+        if (out_seq != NULL) {
+            *out_seq = latch->running_seq;
+        }
+        latch->has_running = false;
+        return true;
+    }
+    if (strcmp(event_name, "breakpoints") == 0 && latch->has_breakpoints) {
+        if (out_seq != NULL) {
+            *out_seq = latch->breakpoints_seq;
+        }
+        latch->has_breakpoints = false;
         return true;
     }
     return false;
@@ -4141,6 +4190,32 @@ static bool control_command_mutates_machine(control_command_type type)
     }
 }
 
+/* Commands that change run/stop state and therefore produce a fresh running or
+   paused (and possibly breakpoints) event the caller may wait for. Dispatching
+   one must invalidate the still-latched execution-state events from a previous
+   stop, otherwise a `run` + `wait-event paused` issued back to back could
+   consume the PRIOR pause immediately, before the new stop's events even exist. */
+static bool control_command_is_execution_control(control_command_type type)
+{
+    switch (type) {
+        case CONTROL_COMMAND_RESET:
+        case CONTROL_COMMAND_RUN:
+        case CONTROL_COMMAND_PAUSE:
+        case CONTROL_COMMAND_STEP_CYCLE:
+        case CONTROL_COMMAND_STEP_INSTRUCTION:
+        case CONTROL_COMMAND_STEP_OVER:
+        case CONTROL_COMMAND_STEP_OUT:
+        case CONTROL_COMMAND_RUN_CYCLES:
+        case CONTROL_COMMAND_RUN_INSTRUCTIONS:
+        case CONTROL_COMMAND_RUN_TO:
+        case CONTROL_COMMAND_STEP_FRAME:
+        case CONTROL_COMMAND_RUN_TO_RASTER:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void dispatch_control_request(
     control_server *control,
     runtime_client *client,
@@ -4165,6 +4240,16 @@ static void dispatch_control_request(
        re-seals the barrier (Phase 6). */
     if (control_command_mutates_machine(request->type)) {
         control_cache_invalidate_hot(control_cache);
+    }
+
+    /* Drop stale execution-state latches so a wait-event issued after this
+       command targets the stop it produces, not the previous one. Fresh
+       running/paused/breakpoints events (drained below or matched live) re-latch. */
+    if (event_latch != NULL &&
+        control_command_is_execution_control(request->type)) {
+        event_latch->has_paused = false;
+        event_latch->has_running = false;
+        event_latch->has_breakpoints = false;
     }
 
     switch (request->type) {

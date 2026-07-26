@@ -123,7 +123,9 @@ accept 1..600000 ms and default to 2000 ms.
   cancel / `busy`). Completions are reliable: queue saturation yields `busy` or
   error, not a silent hang until timeout only.
 - **Waits** use sticky latches for completion events (`load-state-complete`,
-  `step-complete`, …) and non-sticky matching for continuous events (`frame`).
+  `step-complete`, …) and execution-state events (`paused`, `running`,
+  `breakpoints`, cleared by the next execution-control command), and non-sticky
+  matching for continuous events (`frame`).
   Only one wait may be outstanding.
 
 Bulk memory and multi-outstanding RPC use a result pool keyed by internal token;
@@ -546,6 +548,16 @@ Useful event names are `running`, `paused`, `reset-complete`, `step-complete`,
 fixes the race where `load-state` finishes before `wait-event load-state-complete`
 is registered. Continuous events such as `frame` are not sticky: they only match
 while a wait is active. A successful sticky wait includes `seq=<n>`.
+
+**Sticky execution-state events.** `paused`, `running`, and `breakpoints` are
+also latched, so `run` then `wait-event paused` (or `breakpoints`) catches the
+stop even when it happens before the wait registers — e.g. a breakpoint or BRK
+hit only a few cycles into the run. To avoid returning a *previous* stop, any
+execution-control command (`reset`, `run`, `pause`, the `step-*`, `run-*`, and
+`run-to*` commands) clears these latches when dispatched, so the wait targets the
+stop that command produces. Previously a fast hit could time out the wait while
+`get-cpu` already showed the PC parked on the breakpoint; polling was the
+workaround, and is no longer needed.
 
 `wait-paused` completes only after a machine-state snapshot so `stop=` reflects
 the real stop reason (breakpoint, step, pause-command, …), not a stale `none`
