@@ -50,7 +50,7 @@ plays after the mapper lands.
 | Done | Type | Short name | Count (OneLoad64 v5) |
 |------|-----:|------------|---------------------:|
 | [X] | 0 | Normal (generic 8K/16K) | 234 |
-| [ ] | 5 | Ocean type 1 | 22 |
+| [X] | 5 | Ocean type 1 | 22 |
 | [ ] | 7 | Fun Play / Power Play | 2 |
 | [ ] | 8 | Super Games | 2 |
 | [ ] | 15 | C64 Game System / System 3 | 4 |
@@ -81,9 +81,9 @@ needs them. REU is intentionally absent (not a CRT hardware_type for game dumps)
 | Layer | Location | Behavior |
 |-------|----------|----------|
 | Parse | `src/tools/crt/crt.c` | Full header + CHIP parse; `crt_image_is_generic_supported`, `crt_image_is_magic_desk_supported`, `crt_image_is_supported` |
-| Load | `runtime_load_crt()` in `runtime_thread.c` | Type 0 generic attach; type 19 Magic Desk multi-bank attach |
-| Attach | `c64_attach_generic_cartridge` / `c64_attach_magic_desk_cartridge` | Type 0: one ROML ± ROMH; type 19: N×8K banks |
-| Bus | `c64_bus` | Multi-bank ROML heap; IO1 `$DE00–$DEFF` for Magic Desk; ROML window cache |
+| Load | `runtime_load_crt()` in `runtime_thread.c` | Type 0 / 5 Ocean / 19 Magic Desk attach |
+| Attach | `c64_attach_generic_cartridge` / ocean / magic_desk | Type 0: one ROML ± ROMH; 5/19: N×8K banks |
+| Bus | `c64_bus` | Multi-bank ROML heap; IO1 `$DE00–$DEFF` for Ocean and Magic Desk |
 | Snapshot | `c64_snapshot` v13 | Hardware type, bank count/mask/latch, multi-bank ROM, optional ROMH |
 
 Type 0 status notes:
@@ -171,8 +171,8 @@ Type 0 and type 19 share heap multi-bank storage + ROML window; type 0 is a sing
 Driven by OneLoad counts, not by CRT ID number:
 
 1. **32 EasyFlash** — 385 files; multi-load / modern dumps. Larger than Magic Desk.  
-2. **5 Ocean** — 22 files; close cousin of banked 8K ROML games.  
-3. Long tail: 17, 15, 7, 8, 18, 60 — only if a title you care about needs them.
+2. Long tail: 17, 15, 7, 8, 18, 60 — only if a title you care about needs them.
+   (Ocean type 5 is done.)
 
 Each new type: add mapper ops, validation, tests, checklist `[X]`, census count stays
 as historical unlock size unless re-tallied.

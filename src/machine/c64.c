@@ -2299,6 +2299,27 @@ bool c64_attach_magic_desk_cartridge(
     return true;
 }
 
+bool c64_attach_ocean_cartridge(
+    c64_t *machine,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_ocean_cartridge(
+            &machine->bus, banks, bank_count, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported Ocean cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
 void c64_detach_cartridge(c64_t *machine) {
     assert(machine);
 

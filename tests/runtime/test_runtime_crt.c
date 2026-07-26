@@ -142,6 +142,44 @@ static void write_magic_desk_crt(const char *path) {
     fclose(file);
 }
 
+static void write_ocean_crt(const char *path) {
+    FILE *file = fopen(path, "wb");
+    size_t bank;
+    size_t i;
+
+    if (file == NULL) {
+        fail("failed to create Ocean CRT test file");
+    }
+
+    fwrite("C64 CARTRIDGE   ", 1, 16, file);
+    put_be32(file, 0x40);
+    put_be16(file, 0x0100);
+    put_be16(file, 5); /* Ocean */
+    fputc(0x00, file); /* EXROM */
+    fputc(0x00, file); /* GAME=0 => 16K mirror in tests */
+    for (i = 0; i < 6; ++i) {
+        fputc(0x00, file);
+    }
+    fwrite("OCEAN CRT TEST  ", 1, 16, file);
+    for (i = 0; i < 16; ++i) {
+        fputc(0x00, file);
+    }
+
+    for (bank = 0; bank < 4; ++bank) {
+        fwrite("CHIP", 1, 4, file);
+        put_be32(file, 0x2010);
+        put_be16(file, 0x0000);
+        put_be16(file, (uint16_t)bank);
+        put_be16(file, 0x8000);
+        put_be16(file, 0x2000);
+        for (i = 0; i < 0x2000u; ++i) {
+            fputc((int)(((bank + 2u) << 4) | (i & 0x0fu)), file);
+        }
+    }
+
+    fclose(file);
+}
+
 static void write_test_prg(const char *path) {
     FILE *file = fopen(path, "wb");
 
@@ -340,6 +378,39 @@ int main(void) {
         expect_u8("Magic Desk bank0 byte0", 0x10, event.data.memory.bytes[0]);
         expect_u8("Magic Desk bank0 byte1", 0x11, event.data.memory.bytes[1]);
         remove(md_path);
+    }
+
+    /* Ocean type 1: multi-bank with ROML/ROMH mirror. */
+    {
+        static const char ocean_path[] = "runtime ocean (test).crt";
+        write_ocean_crt(ocean_path);
+        expect_true("load Ocean CRT", runtime_client_load_crt(client, ocean_path));
+        if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+            fail("Ocean RESET_COMPLETE not received");
+        }
+        if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+            fail("Ocean RUNNING not received");
+        }
+        expect_true("pause after Ocean", runtime_client_pause(client));
+        if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+            fail("Ocean PAUSED not received");
+        }
+        expect_true(
+            "request Ocean ROML",
+            runtime_client_request_memory(client, 0x8000, 2, RUNTIME_MEMORY_MODE_CPU_MAP));
+        if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+            fail("Ocean ROML memory response not received");
+        }
+        /* Bank 0: ((0+2)<<4)|0 = 0x20 */
+        expect_u8("Ocean bank0 roml0", 0x20, event.data.memory.bytes[0]);
+        expect_true(
+            "request Ocean ROMH",
+            runtime_client_request_memory(client, 0xa000, 1, RUNTIME_MEMORY_MODE_CPU_MAP));
+        if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+            fail("Ocean ROMH memory response not received");
+        }
+        expect_u8("Ocean bank0 romh0", 0x20, event.data.memory.bytes[0]);
+        remove(ocean_path);
     }
 
     runtime_client_quit(client);

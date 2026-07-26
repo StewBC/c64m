@@ -35,7 +35,7 @@ Useful flags:
 | `--disk <drive>=<image[,image...]>` | Mount a D64/G64 image at startup, e.g. `--disk 8=game.d64`; comma-separated to pre-load a queue. Empty path (`--disk 8=`) soft-powers that unit without media |
 | `--prg <file>` / `-p`  | Load a file as PRG at startup                       |
 | `--basic <file>` / `-B`| Load a file as BASIC program at startup             |
-| `--crt <file>`         | Attach a CRT cartridge at startup (types 0 and 19)  |
+| `--crt <file>`         | Attach a CRT cartridge at startup (types 0, 5, 19)  |
 | `--sna <file>`         | Load a machine snapshot (`.c64state`) at startup    |
 | `--autorun` / `-a`     | Run automatically after load (combine with `--prg`, `--basic`, or `--disk`) |
 | `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
@@ -111,6 +111,10 @@ c64m supports these `.crt` hardware types:
 
 - **Type 0 (Normal):** generic 8K and 16K cartridges. ROML maps at `$8000-$9FFF` and, for
   16K cartridges, ROMH at `$A000-$BFFF`.
+- **Type 5 (Ocean type 1):** multi-bank game cartridges. Banks are selected by writing
+  to `$DE00` (bit 7 ignored). Mode is by size (VICE): non-512K images use 16K game
+  (same bank at `$8000` and `$A000`); 512K images use 8K. Cart ROM follows the PLA
+  (ROML needs LORAM+HIRAM; ROMH needs HIRAM) so loaders can depack into underlay RAM.
 - **Type 19 (Magic Desk / Domark / HES):** multi-bank 8K cartridges. ROML maps at
   `$8000-$9FFF`; the game selects banks by writing to `$DE00`. Bit 7 of that register
   can disable the cartridge so RAM appears at `$8000` instead.
@@ -158,7 +162,7 @@ The file extension determines how the file is handled:
 | `.d64`    | Mount the image on device 8 (replaces any previously mounted disk) |
 | `.g64`    | Mount the G64 image on device 8 (same as D64; use media path for GCR) |
 | `.c64state` | Load a saved machine state snapshot                         |
-| `.crt`    | Attach a supported CRT (types 0 and 19) and reset with it running |
+| `.crt`    | Attach a supported CRT (types 0, 5, 19) and reset with it running |
 | `.bas`    | Load as a BASIC program (reset, boot to BASIC, inject, update `$2B-$2E`) |
 | `.t64`    | Extract the first loadable T64 entry and load it like a PRG |
 | anything else | Load as a PRG (reset, boot to BASIC, inject at embedded load address, auto-run) |

@@ -444,6 +444,85 @@ static int test_parse_magic_desk(void)
     return failures;
 }
 
+static uint8_t *make_ocean_crt(size_t bank_count, size_t *out_size)
+{
+    size_t i;
+    size_t size;
+    uint8_t *bytes;
+    size_t offset;
+
+    if (bank_count == 0) {
+        return NULL;
+    }
+
+    size = CRT_TEST_HEADER_SIZE +
+        bank_count * (CRT_TEST_CHIP_HEADER_SIZE + 0x2000u);
+    bytes = (uint8_t *)calloc(1, size);
+    if (bytes == NULL) {
+        return NULL;
+    }
+
+    memcpy(bytes, "C64 CARTRIDGE   ", 16);
+    put_be32(&bytes[0x10], CRT_TEST_HEADER_SIZE);
+    put_be16(&bytes[0x14], 0x0100);
+    put_be16(&bytes[0x16], 5); /* Ocean */
+    bytes[0x18] = 0;
+    bytes[0x19] = 0; /* 16K game lines common for Ocean type A */
+    snprintf((char *)&bytes[0x20], 32, "%s", "OCEAN TEST");
+
+    offset = CRT_TEST_HEADER_SIZE;
+    for (i = 0; i < bank_count; ++i) {
+        size_t j;
+        memcpy(&bytes[offset], "CHIP", 4);
+        put_be32(&bytes[offset + 0x04], CRT_TEST_CHIP_HEADER_SIZE + 0x2000u);
+        put_be16(&bytes[offset + 0x08], 0);
+        put_be16(&bytes[offset + 0x0a], (uint16_t)i);
+        put_be16(&bytes[offset + 0x0c], 0x8000);
+        put_be16(&bytes[offset + 0x0e], 0x2000);
+        for (j = 0; j < 0x2000u; ++j) {
+            bytes[offset + CRT_TEST_CHIP_HEADER_SIZE + j] =
+                (uint8_t)((i << 4) | (j & 0x0fu));
+        }
+        offset += CRT_TEST_CHIP_HEADER_SIZE + 0x2000u;
+    }
+
+    *out_size = size;
+    return bytes;
+}
+
+static int test_parse_ocean(void)
+{
+    int failures = 0;
+    uint8_t *bytes;
+    size_t size = 0;
+    crt_result result;
+    crt_image *image;
+    const crt_header *header;
+
+    bytes = make_ocean_crt(8, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_result(result, CRT_OK, "ocean parse");
+    failures += expect_true(image != NULL, "ocean image");
+    header = crt_image_header(image);
+    failures += expect_true(header != NULL, "ocean header");
+    if (header != NULL) {
+        failures += expect_u16(header->hardware_type, 5, "ocean type");
+    }
+    failures += expect_size(crt_image_chip_count(image), 8, "ocean chips");
+    failures += expect_true(crt_image_is_ocean_supported(image), "ocean supported");
+    failures += expect_true(crt_image_is_supported(image), "ocean is_supported");
+    failures += expect_false(crt_image_is_generic_supported(image), "ocean not generic");
+    failures += expect_false(crt_image_is_magic_desk_supported(image), "ocean not magic desk");
+
+    crt_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -458,6 +537,7 @@ int main(void)
     failures += test_parses_unsupported_hardware();
     failures += test_classifies_unsupported_load_address();
     failures += test_parse_magic_desk();
+    failures += test_parse_ocean();
 
     return failures == 0 ? 0 : 1;
 }

@@ -15,8 +15,9 @@ is in `src/machine/c64.c`, `c1541.c`, `c1541_media.c`, and runtime disk code.
   fallback when 1541 emulation is disabled or no usable 1541 ROM is loaded.
 - T64 is host convenience loading only: the first loadable entry is extracted.
   There is no mounted tape/Datasette state or T64 KERNAL trap.
-- CRT supports hardware type 0 (generic 8K/16K) and type 19 (Magic Desk multi-bank
-  8K) through the machine cart path; it is not a disk/file injection.
+- CRT supports hardware types 0 (generic 8K/16K), 5 (Ocean type 1 multi-bank), and
+  19 (Magic Desk multi-bank 8K) through the machine cart path; it is not a
+  disk/file injection.
 
 Useful runtime entry points are `c64_mount_d64_ex()`, `c64_mount_g64()`,
 `c64_set_drive_writable()`, `c64_unmount_drive()`, `c64_copy_drive_status()`, and

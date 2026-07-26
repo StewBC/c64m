@@ -29,7 +29,10 @@ enum {
     C64_CARTRIDGE_ROM_BANK_SIZE = 0x2000,
     /* VICE Magic Desk max: 128 × 8 KiB (1 MiB homebrew / DDI variants). */
     C64_CARTRIDGE_MAX_BANKS = 128,
+    /* VICE Ocean type 1 max: 64 × 8 KiB (512 KiB Terminator 2 class). */
+    C64_CARTRIDGE_OCEAN_MAX_BANKS = 64,
     C64_CARTRIDGE_HW_NORMAL = 0,
+    C64_CARTRIDGE_HW_OCEAN = 5,
     C64_CARTRIDGE_HW_MAGIC_DESK = 19
 };
 
@@ -168,9 +171,16 @@ bool c64_bus_attach_magic_desk_cartridge(
     size_t bank_count,
     uint8_t exrom,
     uint8_t game);
+/* Ocean type 1 (CRT type 5): contiguous 8 KiB banks; 512K=8K else 16K mirror. */
+bool c64_bus_attach_ocean_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game);
 void c64_bus_detach_cartridge(c64_bus_t *bus);
-/* Re-apply mapper power-on state (Magic Desk: bank 0, cart enabled). */
+/* Re-apply mapper power-on state (bank 0 for banked mappers). */
 void c64_bus_cartridge_reset(c64_bus_t *bus);
-/* Apply current Magic Desk IO latch to mode + ROML window (no-op for other mappers). */
+/* Apply current IO latch to mode + ROML/ROMH windows. */
 void c64_bus_cartridge_apply_banking(c64_bus_t *bus);
 bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out_value);

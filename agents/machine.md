@@ -49,6 +49,11 @@ the boundary between the CPU and C64-visible address decoding. The
 
 - **CRT type 0 (Normal):** 8K ROML at `$8000-$9FFF` and optional 16K ROMH at
   `$A000-$BFFF`; EXROM/GAME mapping is modeled.
+- **CRT type 5 (Ocean type 1):** multi-bank 8K banks (max 64). Write to IO1
+  `$DE00–$DEFF` selects bank (`value & mask & $3F`); bit 7 is ignored. Mode follows
+  image size only (VICE): 512K => 8K ROML; otherwise 16K with the same bank mirrored
+  at ROML+ROMH (CRT GAME is ignored). PLA: ROML needs LORAM+HIRAM; 16K ROMH needs
+  HIRAM — so `$01=$25` shows underlay RAM for Ocean loaders. Power-on / plain reset: bank 0.
 - **CRT type 19 (Magic Desk / Domark / HES):** multi-bank 8K ROML at `$8000-$9FFF`
   (EXROM=0, GAME=1). Bank select is write-only at IO1 `$DE00–$DEFF`: bits 0–6
   select bank (masked per VICE bankmask from highest bank index), bit 7 disables

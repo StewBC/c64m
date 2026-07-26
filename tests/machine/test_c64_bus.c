@@ -401,6 +401,107 @@ static void test_magic_desk_banking(void) {
     c64_detach_cartridge(&machine);
 }
 
+static void test_ocean_banking(void) {
+    c64_t machine;
+    uint8_t banks[16 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    /* 16 banks (128 KiB): VICE uses 16K game, same bank at ROML and ROMH. */
+    memset(banks, 0, sizeof(banks));
+    for (i = 0; i < 16; ++i) {
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x40u + (uint8_t)i);
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE + 1] = (uint8_t)(0xc0u + (uint8_t)i);
+    }
+
+    /* GAME=0 => 16K mirror (Chase HQ II class). */
+    expect_true(
+        "attach ocean 16k",
+        c64_attach_ocean_cartridge(&machine, banks, 16, 0, 0, error, sizeof(error)));
+    expect_u8("ocean bank0 roml", 0x40, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("ocean bank0 romh mirror", 0x40, c64_bus_read(&machine.bus, 0xa000));
+
+    c64_bus_write(&machine.bus, 0xde00, 0x05);
+    expect_u8("ocean bank5 roml", 0x45, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("ocean bank5 romh", 0x45, c64_bus_read(&machine.bus, 0xa000));
+    expect_u8("ocean bank5 second", 0xc5, c64_bus_read(&machine.bus, 0x8001));
+
+    /* Bit 7 ignored (unlike Magic Desk). */
+    c64_bus_write(&machine.bus, 0xde00, (uint8_t)(0x80u | 0x03u));
+    expect_u8("ocean bit7 ignored bank3", 0x43, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Mask 0x0f for 16 banks: write 0x15 -> bank 5. */
+    c64_bus_write(&machine.bus, 0xde00, 0x15);
+    expect_u8("ocean masked bank", 0x45, c64_bus_read(&machine.bus, 0x8000));
+
+    /* LORAM clear => $8000 is underlay RAM, not cart. */
+    c64_debug_write_ram(&machine, 0x8000, 0xee);
+    c64_bus_write(&machine.bus, 0x0001, 0x20); /* LORAM off */
+    expect_u8("ocean loram off shows ram", 0xee, c64_bus_read(&machine.bus, 0x8000));
+    c64_bus_write(&machine.bus, 0x0001, 0x37);
+    expect_u8("ocean loram+hiram shows cart", 0x45, c64_bus_read(&machine.bus, 0x8000));
+
+    /* $01=$25: LORAM on, HIRAM off => underlay at $8000 and $A000 (Pang IRQ path). */
+    c64_debug_write_ram(&machine, 0x8000, 0x11);
+    c64_debug_write_ram(&machine, 0xa000, 0x22);
+    c64_bus_write(&machine.bus, 0x0001, 0x25);
+    expect_u8("ocean $25 roml underlay", 0x11, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("ocean $25 romh underlay", 0x22, c64_bus_read(&machine.bus, 0xa000));
+    c64_bus_write(&machine.bus, 0x0001, 0x37);
+    expect_u8("ocean $37 roml cart", 0x45, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("ocean $37 romh cart", 0x45, c64_bus_read(&machine.bus, 0xa000));
+
+    c64_bus_write(&machine.bus, 0xde00, 0x0a);
+    {
+        c64_rom_set roms;
+        size_t j;
+        c64_rom_set_init(&roms);
+        for (j = 0; j < sizeof(roms.basic); j++) {
+            roms.basic[j] = 0xea;
+        }
+        for (j = 0; j < sizeof(roms.character); j++) {
+            roms.character[j] = 0x00;
+        }
+        for (j = 0; j < sizeof(roms.kernal); j++) {
+            roms.kernal[j] = 0xea;
+        }
+        roms.kernal[0x1ffc] = 0x00;
+        roms.kernal[0x1ffd] = 0xe0;
+        roms.has_basic = true;
+        roms.has_character = true;
+        roms.has_kernal = true;
+        expect_true("ocean roms", c64_install_roms(&machine, &roms, error, sizeof(error)));
+        expect_true("ocean reset", c64_reset(&machine, error, sizeof(error)));
+    }
+    expect_u8("ocean reset bank0", 0x40, c64_bus_read(&machine.bus, 0x8000));
+
+    /* CRT GAME is ignored: 128K stays 16K even when header GAME=1 (Pang). */
+    expect_true(
+        "attach ocean game1 still 16k",
+        c64_attach_ocean_cartridge(&machine, banks, 16, 0, 1, error, sizeof(error)));
+    expect_u8("ocean game1 roml", 0x40, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("ocean game1 romh mirror", 0x40, c64_bus_read(&machine.bus, 0xa000));
+
+    /* 512K (64 banks): 8K game, no ROMH. */
+    {
+        uint8_t *banks64 = (uint8_t *)calloc(64u, C64_CARTRIDGE_ROM_BANK_SIZE);
+        expect_true("ocean 512k alloc", banks64 != NULL);
+        banks64[0] = 0x70;
+        expect_true(
+            "attach ocean 512k",
+            c64_attach_ocean_cartridge(&machine, banks64, 64, 0, 0, error, sizeof(error)));
+        free(banks64);
+        expect_u8("ocean 512k roml", 0x70, c64_bus_read(&machine.bus, 0x8000));
+        /* 8K: $A000 is BASIC ($EA from install above). */
+        expect_u8("ocean 512k no romh", 0xea, c64_bus_read(&machine.bus, 0xa000));
+    }
+
+    c64_detach_cartridge(&machine);
+}
+
 int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
@@ -415,5 +516,6 @@ int main(void) {
     test_combined_system_rom();
     test_debugcart_d7ff();
     test_magic_desk_banking();
+    test_ocean_banking();
     return 0;
 }

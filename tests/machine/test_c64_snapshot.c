@@ -143,6 +143,7 @@ static void prepare_interesting_state(c64_t *machine) {
     fill_pattern(machine->bus.ram, sizeof(machine->bus.ram), 0x10);
     fill_pattern(machine->bus.color_ram, sizeof(machine->bus.color_ram), 0x02);
     machine->bus.cpu_port_direction = 0x3f;
+    /* $35: LORAM on, HIRAM off — cart ROML/ROMH hidden by PLA (underlay RAM). */
     machine->bus.cpu_port_data = 0x35;
     machine->bus.screen_ram_writes = 11;
     machine->bus.color_ram_writes = 12;
@@ -361,7 +362,13 @@ static void assert_restored_state(const c64_t *machine) {
     expect_u8("restored sid reg", 0x77, machine->sid.regs[0]);
     expect_u8("restored sid osc", 0x88, machine->sid.voice3_osc_read);
     expect_true("restored cartridge attached", c64_cartridge_attached(machine));
-    expect_u8("restored cartridge roml", 0x80, c64_debug_read_cpu_map(machine, 0x8000));
+    /* $01=$35 keeps HIRAM clear, so CPU map at $8000 is underlay RAM, not cart. */
+    expect_u8(
+        "restored underlay at $8000 with HIRAM off",
+        machine->bus.ram[0x8000],
+        c64_debug_read_cpu_map(machine, 0x8000));
+    expect_u8("restored cart roml window", 0x80, machine->bus.cartridge_roml[0]);
+    expect_u8("restored cart romh window", 0xa0, machine->bus.cartridge_romh[0]);
     expect_true("restored drive mounted", machine->drives[0].mounted);
     expect_u64("restored drive image size", C64_DRIVE_D64_STANDARD_SIZE, machine->drives[0].image_size);
     expect_u8("restored drive byte", 0x31, machine->drives[0].image_bytes[0]);

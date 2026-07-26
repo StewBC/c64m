@@ -85,6 +85,18 @@ static c64_cartridge_mode c64_bus_cartridge_mode_from_lines(uint8_t exrom, uint8
     return C64_CARTRIDGE_MODE_NONE;
 }
 
+/* PLA LORAM / HIRAM ($01 bits 0 and 1). For 8K and 16K game configs, VICE's
+   c64meminit table maps ROML only when both LORAM and HIRAM are set; 16K ROMH
+   needs HIRAM alone. $01=$25 (LORAM on, HIRAM off) therefore shows RAM underlay
+   at $8000/$A000 — required by Ocean loaders (e.g. Pang IRQ JSR $A000). */
+static bool c64_bus_loram_enabled(const c64_bus_t *bus) {
+    return (bus->cpu_port_data & 0x01u) != 0;
+}
+
+static bool c64_bus_hiram_enabled(const c64_bus_t *bus) {
+    return (bus->cpu_port_data & 0x02u) != 0;
+}
+
 /* VICE magicdesk.c: bankmask from highest bank index present in the image. */
 static uint8_t c64_bus_magic_desk_bank_mask(size_t last_bank_index) {
     if (last_bank_index >= 64u) {
@@ -137,6 +149,45 @@ static void c64_bus_magic_desk_apply_latch(c64_bus_t *bus) {
             bus->cartridge_rom_banks + offset,
             C64_CARTRIDGE_ROM_BANK_SIZE);
         bus->cartridge_roml_present = true;
+    }
+}
+
+/* VICE ocean.c: bank = value & io1_mask & 0x3f; bit 7 has no effect.
+   512K (Terminator 2): 8K game. All other sizes: 16K game with the same bank
+   mirrored to ROML and ROMH (CRT GAME line is ignored — see ocean_config_init). */
+static void c64_bus_ocean_apply_latch(c64_bus_t *bus) {
+    uint8_t bank;
+    size_t offset;
+    const uint8_t *src;
+    c64_cartridge_mode mode;
+
+    assert(bus);
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN);
+
+    bank = (uint8_t)(bus->cartridge_io_latch & bus->cartridge_bank_mask & 0x3fu);
+    if (bus->cartridge_rom_banks == NULL || bus->cartridge_bank_count == 0) {
+        return;
+    }
+    if (bank >= bus->cartridge_bank_count) {
+        bank = (uint8_t)(bank % (uint8_t)bus->cartridge_bank_count);
+    }
+    offset = (size_t)bank * C64_CARTRIDGE_ROM_BANK_SIZE;
+    src = bus->cartridge_rom_banks + offset;
+    memcpy(bus->cartridge_roml, src, C64_CARTRIDGE_ROM_BANK_SIZE);
+    bus->cartridge_roml_present = true;
+
+    mode = bus->cartridge_mode;
+    if (mode == C64_CARTRIDGE_MODE_16K) {
+        memcpy(bus->cartridge_romh, src, C64_CARTRIDGE_ROM_BANK_SIZE);
+        bus->cartridge_romh_present = true;
+        bus->cartridge_exrom = 0;
+        bus->cartridge_game = 0;
+    } else {
+        memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+        bus->cartridge_romh_present = false;
+        bus->cartridge_exrom = 0;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_8K;
     }
 }
 
@@ -216,12 +267,15 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
         return;
     }
 
-    /* Magic Desk / Domark / HES: bank register at IO1 $DE00–$DEFF. */
-    if (address >= 0xde00u && address <= 0xdeffu &&
-        bus->cartridge_mounted &&
-        bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
-        bus->cartridge_io_latch = value;
-        c64_bus_magic_desk_apply_latch(bus);
+    /* Magic Desk / Ocean: bank register at IO1 $DE00–$DEFF. */
+    if (address >= 0xde00u && address <= 0xdeffu && bus->cartridge_mounted) {
+        if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
+            bus->cartridge_io_latch = value;
+            c64_bus_magic_desk_apply_latch(bus);
+        } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
+            bus->cartridge_io_latch = value;
+            c64_bus_ocean_apply_latch(bus);
+        }
     }
 }
 
@@ -490,6 +544,58 @@ bool c64_bus_attach_magic_desk_cartridge(
     return true;
 }
 
+bool c64_bus_attach_ocean_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    uint8_t *storage;
+    size_t bytes;
+    size_t rom_size;
+    bool mode_16k;
+
+    assert(bus);
+
+    if (banks == NULL || bank_count == 0 || bank_count > C64_CARTRIDGE_OCEAN_MAX_BANKS) {
+        return false;
+    }
+    if (exrom != 0) {
+        return false;
+    }
+
+    bytes = bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    storage = (uint8_t *)malloc(bytes);
+    if (storage == NULL) {
+        return false;
+    }
+    memcpy(storage, banks, bytes);
+
+    c64_bus_detach_cartridge(bus);
+
+    rom_size = bytes;
+    /*
+     * Mode selection (VICE ocean_config_init / ocean.c comments):
+     * - 512 KiB (Terminator 2): 8K game.
+     * - Otherwise always 16K game with the same bank at ROML and ROMH.
+     * CRT header GAME is ignored for Ocean type 1 (Pang dumps often say GAME=1).
+     */
+    (void)game;
+    mode_16k = (rom_size != 0x80000u);
+
+    bus->cartridge_rom_banks = storage;
+    bus->cartridge_bank_count = (uint16_t)bank_count;
+    /* VICE: io1_mask = (rom_size >> 13) - 1. */
+    bus->cartridge_bank_mask = (uint8_t)((rom_size >> 13) - 1u);
+    bus->cartridge_hardware_type = C64_CARTRIDGE_HW_OCEAN;
+    bus->cartridge_mode = mode_16k ? C64_CARTRIDGE_MODE_16K : C64_CARTRIDGE_MODE_8K;
+    bus->cartridge_mounted = true;
+    bus->cartridge_io_latch = 0;
+    c64_bus_ocean_apply_latch(bus);
+    return true;
+}
+
 void c64_bus_detach_cartridge(c64_bus_t *bus) {
     assert(bus);
 
@@ -513,6 +619,9 @@ void c64_bus_cartridge_reset(c64_bus_t *bus) {
     if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
         bus->cartridge_io_latch = 0;
         c64_bus_magic_desk_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
+        bus->cartridge_io_latch = 0;
+        c64_bus_ocean_apply_latch(bus);
     }
 }
 
@@ -524,6 +633,8 @@ void c64_bus_cartridge_apply_banking(c64_bus_t *bus) {
     }
     if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
         c64_bus_magic_desk_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
+        c64_bus_ocean_apply_latch(bus);
     } else if (
         bus->cartridge_rom_banks != NULL &&
         bus->cartridge_bank_count > 0 &&
@@ -547,6 +658,11 @@ bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out
         (bus->cartridge_mode == C64_CARTRIDGE_MODE_8K ||
          bus->cartridge_mode == C64_CARTRIDGE_MODE_16K ||
          bus->cartridge_mode == C64_CARTRIDGE_MODE_ULTIMAX)) {
+        /* 8K/16K game: ROML only when LORAM and HIRAM are both set (VICE PLA). */
+        if (bus->cartridge_mode != C64_CARTRIDGE_MODE_ULTIMAX &&
+            !(c64_bus_loram_enabled(bus) && c64_bus_hiram_enabled(bus))) {
+            return false;
+        }
         *out_value = bus->cartridge_roml[address - 0x8000u];
         return true;
     }
@@ -554,6 +670,10 @@ bool c64_bus_cartridge_read(const c64_bus_t *bus, uint16_t address, uint8_t *out
     if (address >= 0xa000u && address <= 0xbfffu &&
         bus->cartridge_romh_present &&
         bus->cartridge_mode == C64_CARTRIDGE_MODE_16K) {
+        /* 16K ROMH needs HIRAM; with HIRAM clear, $A000 is underlay RAM. */
+        if (!c64_bus_hiram_enabled(bus)) {
+            return false;
+        }
         *out_value = bus->cartridge_romh[address - 0xa000u];
         return true;
     }

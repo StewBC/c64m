@@ -2717,10 +2717,12 @@ static bool runtime_copy_generic_crt_roms(
     return true;
 }
 
-/* Flatten Magic Desk CHIP packets into bank_count contiguous 8 KiB banks. */
-static bool runtime_copy_magic_desk_banks(
+/* Flatten multi-bank CHIP packets into bank_count contiguous 8 KiB banks. */
+static bool runtime_copy_multibank_crt(
     runtime *rt,
     const crt_image *image,
+    size_t max_banks,
+    const char *label,
     uint8_t **out_banks,
     size_t *out_bank_count)
 {
@@ -2729,6 +2731,7 @@ static bool runtime_copy_magic_desk_banks(
     int max_bank = -1;
     size_t bank_count;
     uint8_t *banks;
+    char message[128];
 
     *out_banks = NULL;
     *out_bank_count = 0;
@@ -2738,22 +2741,25 @@ static bool runtime_copy_magic_desk_banks(
         crt_chip chip;
 
         if (crt_image_chip(image, i, &chip) != CRT_OK) {
-            runtime_publish_error(rt, "failed to read Magic Desk CRT CHIP");
+            snprintf(message, sizeof(message), "failed to read %s CRT CHIP", label);
+            runtime_publish_error(rt, message);
             return false;
         }
         if ((int)chip.bank > max_bank) {
             max_bank = (int)chip.bank;
         }
     }
-    if (max_bank < 0 || max_bank >= (int)C64_CARTRIDGE_MAX_BANKS) {
-        runtime_publish_error(rt, "unsupported Magic Desk bank count");
+    if (max_bank < 0 || (size_t)max_bank >= max_banks) {
+        snprintf(message, sizeof(message), "unsupported %s bank count", label);
+        runtime_publish_error(rt, message);
         return false;
     }
 
     bank_count = (size_t)max_bank + 1u;
     banks = (uint8_t *)calloc(bank_count, C64_CARTRIDGE_ROM_BANK_SIZE);
     if (banks == NULL) {
-        runtime_publish_error(rt, "out of memory for Magic Desk banks");
+        snprintf(message, sizeof(message), "out of memory for %s banks", label);
+        runtime_publish_error(rt, message);
         return false;
     }
 
@@ -2763,7 +2769,8 @@ static bool runtime_copy_magic_desk_banks(
 
         if (crt_image_chip(image, i, &chip) != CRT_OK) {
             free(banks);
-            runtime_publish_error(rt, "failed to read Magic Desk CRT CHIP");
+            snprintf(message, sizeof(message), "failed to read %s CRT CHIP", label);
+            runtime_publish_error(rt, message);
             return false;
         }
         offset = (size_t)chip.bank * C64_CARTRIDGE_ROM_BANK_SIZE;
@@ -2822,11 +2829,38 @@ static bool runtime_attach_magic_desk_crt(runtime *rt, const crt_image *image, c
     size_t bank_count = 0;
     char error[256];
 
-    if (!runtime_copy_magic_desk_banks(rt, image, &banks, &bank_count)) {
+    if (!runtime_copy_multibank_crt(
+            rt, image, C64_CARTRIDGE_MAX_BANKS, "Magic Desk", &banks, &bank_count)) {
         return false;
     }
 
     if (!c64_attach_magic_desk_cartridge(
+            &rt->machine,
+            banks,
+            bank_count,
+            header->exrom,
+            header->game,
+            error,
+            sizeof(error))) {
+        free(banks);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(banks);
+    return true;
+}
+
+static bool runtime_attach_ocean_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    uint8_t *banks = NULL;
+    size_t bank_count = 0;
+    char error[256];
+
+    if (!runtime_copy_multibank_crt(
+            rt, image, C64_CARTRIDGE_OCEAN_MAX_BANKS, "Ocean", &banks, &bank_count)) {
+        return false;
+    }
+
+    if (!c64_attach_ocean_cartridge(
             &rt->machine,
             banks,
             bank_count,
@@ -2881,6 +2915,8 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
         attached = runtime_attach_generic_crt(rt, image, header);
     } else if (crt_image_is_magic_desk_supported(image)) {
         attached = runtime_attach_magic_desk_crt(rt, image, header);
+    } else if (crt_image_is_ocean_supported(image)) {
+        attached = runtime_attach_ocean_crt(rt, image, header);
     } else {
         crt_image_destroy(image);
         runtime_publish_error(rt, "unsupported CRT cartridge type");

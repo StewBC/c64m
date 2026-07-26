@@ -19,8 +19,10 @@ enum {
     CRT_CHIP_LOAD_OFFSET = 0x0c,
     CRT_CHIP_SIZE_OFFSET = 0x0e,
     CRT_HARDWARE_TYPE_NORMAL = 0,
+    CRT_HARDWARE_TYPE_OCEAN = 5,
     CRT_HARDWARE_TYPE_MAGIC_DESK = 19,
-    CRT_MAGIC_DESK_MAX_BANKS = 128
+    CRT_MAGIC_DESK_MAX_BANKS = 128,
+    CRT_OCEAN_MAX_BANKS = 64
 };
 
 typedef struct crt_chip_record {
@@ -374,7 +376,41 @@ bool crt_image_is_magic_desk_supported(const crt_image *image) {
     return max_bank >= 0;
 }
 
+bool crt_image_is_ocean_supported(const crt_image *image) {
+    size_t i;
+    int max_bank = -1;
+
+    if (image == NULL ||
+        image->header.hardware_type != CRT_HARDWARE_TYPE_OCEAN ||
+        image->chip_count == 0) {
+        return false;
+    }
+
+    for (i = 0; i < image->chip_count; ++i) {
+        const crt_chip_record *chip = &image->chips[i];
+
+        if (chip->type != CRT_CHIP_TYPE_ROM) {
+            return false;
+        }
+        if (chip->bank >= CRT_OCEAN_MAX_BANKS) {
+            return false;
+        }
+        if (chip->rom_size != 0x2000u) {
+            return false;
+        }
+        if (chip->load_address != 0x8000u && chip->load_address != 0xa000u) {
+            return false;
+        }
+        if ((int)chip->bank > max_bank) {
+            max_bank = (int)chip->bank;
+        }
+    }
+
+    return max_bank >= 0;
+}
+
 bool crt_image_is_supported(const crt_image *image) {
     return crt_image_is_generic_supported(image) ||
-        crt_image_is_magic_desk_supported(image);
+        crt_image_is_magic_desk_supported(image) ||
+        crt_image_is_ocean_supported(image);
 }
