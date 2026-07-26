@@ -624,16 +624,32 @@ policy). Sticky latches remain one-consumer.
 ## Assembler and symbols
 
 ```text
-N assemble [address=<hex>] [run-address=<hex>] [auto-run=0|1] [reset=0|1] <source-path>
+N assemble [address=<hex>] [run-address=<hex>] [auto-run=0|1] [basic-run=0|1] [reset=0|1] <source-path>
 N find-symbol <exact-name>
 ```
 
-Defaults are address `$8000`, run address equal to address, `auto-run=0`, and
-`reset=1`. The control server pauses before assembly. A successful response is
-`N ok address=$C000`; assembly errors are `N error assemble-error <diagnostic>`.
-Successful assembly publishes the symbol snapshot used by `find-symbol`.
-`find-symbol` returns `not-ready` before any symbol snapshot and `not-found` for
-an absent exact name.
+Defaults are address `$8000`, run address equal to address, `auto-run=0`,
+`basic-run=0`, and `reset=1`. The control server pauses before assembly.
+
+**Run modes** (`auto-run` and `basic-run` are mutually exclusive; passing both
+is `bad-args`):
+- `auto-run=1` — after assembling, poke PC to `run-address` and resume (jumps
+  straight into ML; skips the BASIC/KERNAL boot ceremony).
+- `basic-run=1` — after assembling, stage the image as a LOAD would (fix the
+  BASIC pointers TXTTAB/VARTAB/ARYTAB/STREND from the emitted origin and end)
+  and `RUN` it through the BASIC editor via paste — no PC poke. This is the
+  right mode for a BASIC-stub program (`10 SYS ....`). It needs the machine at a
+  READY prompt: with `reset=1` (the default) that is guaranteed; the reset is
+  skipped only when the machine is already at a fresh, undisturbed READY (e.g.
+  right after launch), so a just-launched emulator does not pay for a redundant
+  reset.
+
+A successful response is `N ok address=$0801`, where the reported address is the
+**actual emitted origin** (lowest emitted byte), not the requested `address=`
+default that the source overrides. Assembly errors are
+`N error assemble-error <diagnostic>`. Successful assembly publishes the symbol
+snapshot used by `find-symbol`. `find-symbol` returns `not-ready` before any
+symbol snapshot and `not-found` for an absent exact name.
 
 ## Failure handling and source-level constraints
 

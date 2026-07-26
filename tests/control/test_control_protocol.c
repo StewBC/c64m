@@ -397,8 +397,18 @@ static void test_parse_assemble_and_symbol(void)
     expect_u32("assemble opt address", 0xc000u, request.args.address);
     expect_u32("assemble opt run-address default", 0xc000u, request.args.run_address);
     expect_true("assemble opt auto-run", request.args.auto_run);
+    expect_false("assemble opt basic-run default", request.args.basic_run);
     expect_false("assemble opt reset", request.args.reset_first);
     expect_string("assemble opt path", "prog.asm", request.args.text);
+
+    /* basic-run is a distinct run mode from auto-run. */
+    expect_true("parse assemble basic-run", control_protocol_parse_request("65 assemble basic-run=1 reset=0 prog.asm", &request, &error));
+    expect_true("assemble basic-run set", request.args.basic_run);
+    expect_false("assemble basic-run auto-run clear", request.args.auto_run);
+
+    /* auto-run and basic-run are mutually exclusive. */
+    expect_false("reject assemble both run modes",
+                 control_protocol_parse_request("66 assemble auto-run=1 basic-run=1 prog.asm", &request, &error));
 
     /* Explicit run-address overrides the address default. */
     expect_true("parse assemble run-address", control_protocol_parse_request("62 assemble address=$0801 run-address=$080D prog.asm", &request, &error));

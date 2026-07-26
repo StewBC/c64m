@@ -1179,6 +1179,7 @@ static bool frontend_push_assemble_run_intent(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
+    bool basic_run,
     bool reset_first,
     bool rearm_oneshots);
 
@@ -1623,6 +1624,7 @@ static bool frontend_push_assemble_run_intent(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
+    bool basic_run,
     bool reset_first,
     bool rearm_oneshots)
 {
@@ -1646,6 +1648,7 @@ static bool frontend_push_assemble_run_intent(
     ui->intents[ui->intent_write].assemble_address = address;
     ui->intents[ui->intent_write].assemble_run_address = run_address;
     ui->intents[ui->intent_write].assemble_auto_run = auto_run;
+    ui->intents[ui->intent_write].assemble_basic_run = basic_run;
     ui->intents[ui->intent_write].assemble_reset_first = reset_first;
     ui->intents[ui->intent_write].assemble_rearm_oneshots = rearm_oneshots;
     ui->intent_write = next;
@@ -1683,6 +1686,7 @@ bool frontend_trigger_assembler(frontend *ui)
         assemble_address,
         (uint16_t)strtoul(asm_state->run_address_buf, NULL, 16),
         asm_state->auto_run,
+        asm_state->basic_run,
         asm_state->reset_first,
         asm_state->rearm_oneshots);
 }
@@ -7430,6 +7434,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
         asm_state->use_address = true;
         asm_state->run_address_user_edited = false;
         asm_state->auto_run = false;
+        asm_state->basic_run = false;
         asm_state->reset_first = true;
         asm_state->rearm_oneshots = false;
         asm_state->initialized = true;
@@ -7480,6 +7485,11 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
     nk_layout_row_end(ctx);
 
+    /* Capture the run-mode state before drawing its two mutually-exclusive
+       checkboxes so we can tell which one the user just toggled on. */
+    bool prev_auto_run = asm_state->auto_run;
+    bool prev_basic_run = asm_state->basic_run;
+
     /* [x] Auto-run at [address] */
     nk_layout_row_begin(ctx, NK_DYNAMIC, 24.0f, 2);
     nk_layout_row_push(ctx, 0.50f);
@@ -7506,6 +7516,22 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
     nk_layout_row_end(ctx);
 
+    /* [x] Run BASIC (fix pointers + paste RUN). */
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    frontend_checkbox_bool(ctx, "Run BASIC (paste RUN)", &asm_state->basic_run);
+
+    /* Enforce mutual exclusivity: the box the user just enabled this frame wins,
+       so toggling one on clears the other. */
+    if (asm_state->auto_run && asm_state->basic_run) {
+        if (asm_state->basic_run && !prev_basic_run) {
+            asm_state->auto_run = false;
+        } else if (asm_state->auto_run && !prev_auto_run) {
+            asm_state->basic_run = false;
+        } else {
+            asm_state->basic_run = false;
+        }
+    }
+
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     frontend_checkbox_bool(ctx, "Reset C64", &asm_state->reset_first);
 
@@ -7526,6 +7552,7 @@ static void frontend_draw_misc_assembler(frontend *ui)
                 assemble_address,
                 run_address,
                 asm_state->auto_run,
+                asm_state->basic_run,
                 asm_state->reset_first,
                 asm_state->rearm_oneshots);
         }
@@ -7966,6 +7993,11 @@ void frontend_set_assembler_options(frontend *ui, const frontend_assembler_optio
     s->use_address = opts->use_address;
     s->run_address_user_edited = (opts->run_address[0] != '\0');
     s->auto_run = opts->auto_run;
+    s->basic_run = opts->basic_run;
+    /* Guard against a stale INI that persisted both run modes. */
+    if (s->auto_run && s->basic_run) {
+        s->basic_run = false;
+    }
     s->reset_first = opts->reset_first;
     s->rearm_oneshots = opts->rearm_oneshots;
     s->initialized = true;
@@ -7985,6 +8017,7 @@ void frontend_get_assembler_options(frontend *ui, frontend_assembler_options *ou
     snprintf(out->run_address, sizeof(out->run_address), "%s", s->run_address_buf);
     out->use_address = s->use_address;
     out->auto_run = s->auto_run;
+    out->basic_run = s->basic_run;
     out->reset_first = s->reset_first;
     out->rearm_oneshots = s->rearm_oneshots;
 }

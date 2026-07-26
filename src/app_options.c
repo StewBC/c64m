@@ -1235,6 +1235,8 @@ static void apply_config(app_options *options, config *cfg)
         cfg, "assembler", "use_address", options->assembler_use_address);
     options->assembler_auto_run = config_get_bool(
         cfg, "assembler", "auto_run", options->assembler_auto_run);
+    options->assembler_basic_run = config_get_bool(
+        cfg, "assembler", "basic_run", options->assembler_basic_run);
     options->assembler_reset_first = config_get_bool(
         cfg, "assembler", "reset", options->assembler_reset_first);
     options->assembler_rearm_oneshots = config_get_bool(
@@ -1547,6 +1549,7 @@ void app_options_init(app_options *options)
     options->layout_split_memory_misc = C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC;
     options->assembler_use_address = true;
     options->assembler_auto_run = false;
+    options->assembler_basic_run = false;
     options->assembler_reset_first = true;
     options->assembler_rearm_oneshots = false;
     options->control_port = 0;
@@ -1611,6 +1614,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
 
     dest->assembler_use_address = src->assembler_use_address;
     dest->assembler_auto_run = src->assembler_auto_run;
+    dest->assembler_basic_run = src->assembler_basic_run;
     dest->assembler_reset_first = src->assembler_reset_first;
     dest->assembler_rearm_oneshots = src->assembler_rearm_oneshots;
     dest->control_port = src->control_port;
@@ -1808,6 +1812,7 @@ bool app_options_save_shutdown(const app_options *options)
     }
     config_set_bool(cfg, "assembler", "use_address", options->assembler_use_address);
     config_set_bool(cfg, "assembler", "auto_run", options->assembler_auto_run);
+    config_set_bool(cfg, "assembler", "basic_run", options->assembler_basic_run);
     config_set_bool(cfg, "assembler", "reset", options->assembler_reset_first);
     config_set_bool(cfg, "assembler", "rearm_oneshots", options->assembler_rearm_oneshots);
 

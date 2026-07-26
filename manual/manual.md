@@ -1005,7 +1005,8 @@ The Assembler tab provides access to the integrated two-pass 6502 assembler.
 |--------------|----------------------------------------------------------------|
 | File Name    | Path to the root assembly source file, shown relative to the INI directory; use **Browse...** to pick |
 | Assemble at  | Optional host origin. When checked, assemble with this hex default (default `$8000`). When unchecked, the source must set its own origin (`* =` / `.org`); the host supplies `$0000` as a placeholder only |
-| Auto-run at  | When checked, after a successful assembly sets PC to this hex address and resumes |
+| Auto-run at  | When checked, after a successful assembly sets PC to this hex address and resumes (jumps straight into ML). Mutually exclusive with Run BASIC |
+| Run BASIC (paste RUN) | When checked, after a successful assembly fixes the BASIC program pointers as a LOAD would and RUNs the program through the BASIC editor (no PC poke). Use this for a BASIC-stub program such as `10 SYS ....`. Mutually exclusive with Auto-run at |
 | Reset C64       | If checked, resets the machine and waits for BASIC (`$E38B`) before assembling |
 | Rearm one-shots | If checked, re-enables every auto-disabled one-shot breakpoint (`repeat = 0`) and resets its hit counter before assembling |
 | **[Assemble]**  | Assembles the source and loads bytes into C64 RAM            |
@@ -1015,6 +1016,18 @@ before writing code. This is the safe path for programs that expect a clean BASI
 environment. When **Reset C64** is unchecked, the assembler writes directly into live
 RAM in whatever state the machine is in. If **Auto-run at** is also set, the emulator
 immediately jumps to that address and resumes execution.
+
+**Run BASIC (paste RUN)** is the counterpart to Auto-run for programs that start
+with a BASIC stub (`10 SYS ....`). Assembling is not the same as loading a PRG:
+it writes bytes into RAM but does not update the BASIC text/variable pointers, so
+a plain `RUN` would find no program. With this box checked, after a successful
+assembly the emulator sets `TXTTAB`/`VARTAB`/`ARYTAB`/`STREND` from the emitted
+image (exactly as a LOAD would) and then types `RUN` through the BASIC editor, so
+the program starts the same way a human would start it - no PC poke. Because the
+pasted `RUN` needs the machine at a READY prompt, leave **Reset C64** checked (the
+default); the reset is skipped automatically when the machine is already sitting
+at a fresh, undisturbed READY (for example right after launch), so you do not pay
+for a redundant reset.
 
 If the host supplies a default origin (Assemble at checked, or the control-port
 `address=` default) and the source has not yet emitted any bytes, a later `* = $nnnn`
@@ -1043,6 +1056,7 @@ address        = 8000                 ; hex load/assembly origin address
 use_address    = yes                  ; apply address as host origin (default: yes)
 run_address    = 8000                 ; hex auto-run address
 auto_run       = no                   ; jump to run address after assembly (default: no)
+basic_run      = no                   ; fix BASIC pointers and paste RUN after assembly (default: no)
 reset          = yes                  ; Reset C64 before assembling (default: yes)
 rearm_oneshots = no                   ; Rearm one-shot breakpoints before assembling (default: no)
 ```

@@ -709,6 +709,7 @@ bool runtime_client_assemble_file_full(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
+    bool basic_run,
     bool reset_first) {
     runtime_command command = {
         .type = RUNTIME_COMMAND_ASSEMBLE_FILE,
@@ -722,6 +723,7 @@ bool runtime_client_assemble_file_full(
     command.data.assemble_file.address = address;
     command.data.assemble_file.run_address = run_address;
     command.data.assemble_file.auto_run = auto_run ? 1u : 0u;
+    command.data.assemble_file.basic_run = basic_run ? 1u : 0u;
     command.data.assemble_file.reset_first = reset_first ? 1u : 0u;
     return message_queue_push(client->command_queue, &command);
 }

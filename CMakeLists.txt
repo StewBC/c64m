@@ -777,6 +777,22 @@ target_link_libraries(test_runtime_real_1541_autorun PRIVATE
 
 add_test(NAME runtime_real_1541_autorun COMMAND test_runtime_real_1541_autorun)
 
+add_executable(test_runtime_basic_run
+    tests/runtime/test_runtime_basic_run.c
+)
+
+target_compile_features(test_runtime_basic_run PRIVATE c_std_99)
+
+target_compile_definitions(test_runtime_basic_run PRIVATE
+    C64M_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_runtime_basic_run PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_basic_run COMMAND test_runtime_basic_run)
+
 add_executable(test_runtime_assembler
     tests/runtime/test_runtime_assembler.c
 )

@@ -560,6 +560,10 @@ static int parse_assemble_option(const char **cursor, control_args *args)
         if (!parse_bool_token(start + 9, &value_end, &args->auto_run) || value_end != end) {
             return -1;
         }
+    } else if (length > 10 && strncmp(start, "basic-run=", 10) == 0) {
+        if (!parse_bool_token(start + 10, &value_end, &args->basic_run) || value_end != end) {
+            return -1;
+        }
     } else if (length > 6 && strncmp(start, "reset=", 6) == 0) {
         if (!parse_bool_token(start + 6, &value_end, &args->reset_first) || value_end != end) {
             return -1;
@@ -1596,6 +1600,13 @@ bool control_protocol_parse_request(
         }
         if (!args.has_run_address) {
             args.run_address = args.address;
+        }
+        /* auto-run (jump to run-address) and basic-run (fix BASIC pointers and
+           paste RUN) are mutually exclusive run modes. */
+        if (args.auto_run && args.basic_run) {
+            set_parse_error(out_error, id, "bad-args",
+                            "auto-run and basic-run are mutually exclusive");
+            return false;
         }
         if (!copy_rest_argument(cursor, &cursor, args.text, sizeof(args.text))) {
             set_parse_error(out_error, id, "bad-args", "expected source path");

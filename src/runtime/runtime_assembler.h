@@ -25,6 +25,9 @@ bool runtime_assemble_file(
     char *error,
     size_t error_size);
 
+/* out_start_address: lowest/first emitted origin (where code landed).
+   out_end_address:   one past the highest emitted byte (BASIC VARTAB target).
+   out_byte_count:    total bytes emitted. Any out-param may be NULL. */
 bool runtime_assemble_file_ex(
     c64_t *machine,
     symbol_table *symbols,
@@ -32,6 +35,7 @@ bool runtime_assemble_file_ex(
     uint16_t address,
     const char *source_name,
     uint16_t *out_start_address,
+    uint16_t *out_end_address,
     uint32_t *out_byte_count,
     char *error,
     size_t error_size);

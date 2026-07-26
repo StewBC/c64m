@@ -1899,6 +1899,8 @@ static bool runtime_reset_machine(
 
     runtime_audio_reset(rt);
 
+    /* Post-reset the machine is mid-boot, not yet at READY; re-armed at $E38B. */
+    rt->basic_ready = false;
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_RESET;
     rt->breakpoint_hit_pending = false;
@@ -3021,6 +3023,8 @@ static void runtime_set_cpu_register(runtime *rt, const runtime_command *command
             rt->machine.cpu.micro_phase = 0;
             rt->machine.cpu.cpu.opcode_active = 0;
             rt->machine.cpu.cpu.pc = command->data.set_cpu_register.value;
+            /* User redirected execution; no longer a known-clean READY prompt. */
+            rt->basic_ready = false;
             break;
 
         case RUNTIME_CPU_REGISTER_SP:
@@ -3786,6 +3790,8 @@ static void runtime_load_prg(runtime *rt, const runtime_command *command) {
 static void runtime_autorun_paste(runtime *rt, const char *text) {
     paste_state *p = &rt->paste;
     size_t len = strlen(text);
+    /* A pasted command (RUN, LOAD, ...) takes the machine off the READY prompt. */
+    rt->basic_ready = false;
     if (len > RUNTIME_PASTE_TEXT_MAX) {
         len = RUNTIME_PASTE_TEXT_MAX;
     }
@@ -3878,14 +3884,31 @@ static void runtime_publish_assemble_error(runtime *rt, const char *message) {
     runtime_publish_event(rt, &event);
 }
 
+/* Leave the BASIC text/variable pointers in a clean post-CLR state so a freshly
+   assembled BASIC-stub image can be RUN exactly as if it had been LOADed:
+   TXTTAB at the load origin and VARTAB/ARYTAB/STREND one past the image end. */
+static void runtime_set_basic_program_pointers(
+    runtime *rt, uint16_t load_addr, uint16_t end_addr) {
+    c64_debug_write_ram(&rt->machine, 0x2Bu, (uint8_t)(load_addr & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Cu, (uint8_t)((load_addr >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Du, (uint8_t)(end_addr & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Eu, (uint8_t)((end_addr >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x2Fu, (uint8_t)(end_addr & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x30u, (uint8_t)((end_addr >> 8) & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x31u, (uint8_t)(end_addr & 0xFFu));
+    c64_debug_write_ram(&rt->machine, 0x32u, (uint8_t)((end_addr >> 8) & 0xFFu));
+}
+
 static void runtime_complete_pending_asm(runtime *rt, char *path) {
     char error[4096];
     bool ok;
     uint16_t address = rt->pending_asm_address;
     uint16_t run_address = rt->pending_asm_run_address;
     uint16_t assembled_start = address;
+    uint16_t assembled_end = address;
     uint32_t assembled_count = 0u;
     bool auto_run = rt->pending_asm_auto_run;
+    bool basic_run = rt->pending_asm_basic_run;
 
     runtime_history_prepare_discontinuity(rt);
     ok = runtime_assemble_file_ex(
@@ -3895,6 +3918,7 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
         address,
         path,
         &assembled_start,
+        &assembled_end,
         &assembled_count,
         error,
         sizeof(error));
@@ -3910,6 +3934,12 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
         if (auto_run) {
             rt->machine.cpu.cpu.pc = run_address;
             rt->machine.cpu.cpu.sp = 0x0100u + 0xFFu;
+            rt->basic_ready = false;
+        } else if (basic_run) {
+            /* We are here at the $E38B READY prompt: stage the image as a LOAD
+               would, then RUN it through the BASIC editor (no PC poke). */
+            runtime_set_basic_program_pointers(rt, assembled_start, assembled_end);
+            runtime_autorun_paste(rt, "RUN\r");
         }
     }
 
@@ -3921,8 +3951,11 @@ static void runtime_complete_pending_asm(runtime *rt, char *path) {
     runtime_publish_machine_state(rt);
 
     if (ok) {
-        runtime_publish_assemble_complete(rt, path, address);
-        runtime_publish_memory(rt, address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
+        /* Report where code actually landed (first emitted byte), not the
+           requested default origin, which the source overrides for any real
+           program. See assembled_start from runtime_assemble_file_ex. */
+        runtime_publish_assemble_complete(rt, path, assembled_start);
+        runtime_publish_memory(rt, assembled_start, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     } else {
         runtime_publish_assemble_error(rt, error[0] != '\0' ? error : "assembly failed");
     }
@@ -3943,9 +3976,20 @@ static void runtime_publish_assemble_complete(runtime *rt, const char *path, uin
 static void runtime_assemble_file_command(runtime *rt, const runtime_command *command) {
     char error[4096];
     uint16_t assembled_start = command->data.assemble_file.address;
+    uint16_t assembled_end = command->data.assemble_file.address;
     uint32_t assembled_count = 0u;
+    bool auto_run = command->data.assemble_file.auto_run != 0;
+    bool basic_run = command->data.assemble_file.basic_run != 0;
+    bool want_reset = command->data.assemble_file.reset_first != 0;
 
-    if (command->data.assemble_file.reset_first) {
+    /* BASIC-run pastes RUN through the editor, which only works at a READY
+       prompt. A reset guarantees that state; skip the reset only when the
+       machine is already sitting at a fresh, undisturbed BASIC READY. */
+    if (basic_run && want_reset && rt->basic_ready) {
+        want_reset = false;
+    }
+
+    if (want_reset) {
         /* Reset machine, run to BASIC ($E38B), then assemble (like PRG load). */
         if (!runtime_reset_machine(
                 rt, RUNTIME_HISTORY_RESET_ASSEMBLE_RESET_FIRST)) {
@@ -3959,7 +4003,8 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
         }
         rt->pending_asm_address     = command->data.assemble_file.address;
         rt->pending_asm_run_address = command->data.assemble_file.run_address;
-        rt->pending_asm_auto_run    = command->data.assemble_file.auto_run != 0;
+        rt->pending_asm_auto_run    = auto_run;
+        rt->pending_asm_basic_run   = basic_run;
         rt->exec_state = RUNTIME_EXEC_RUNNING;
         rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
         runtime_reset_pacer(rt);
@@ -3975,6 +4020,7 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
             command->data.assemble_file.address,
             command->data.assemble_file.path,
             &assembled_start,
+            &assembled_end,
             &assembled_count,
             error,
             sizeof(error))) {
@@ -3989,16 +4035,27 @@ static void runtime_assemble_file_command(runtime *rt, const runtime_command *co
         assembled_count,
         rt->machine.clock.cycle);
     runtime_publish_symbols(rt);
-    if (command->data.assemble_file.auto_run) {
+    if (auto_run) {
         rt->machine.cpu.cpu.pc = command->data.assemble_file.run_address;
         rt->machine.cpu.cpu.sp = 0x0100u + 0xFFu;
+        rt->basic_ready = false;
         rt->exec_state = RUNTIME_EXEC_RUNNING;
         rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
         runtime_reset_pacer(rt);
         runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
+    } else if (basic_run) {
+        /* Stage the image as a LOAD would and RUN it through the BASIC editor.
+           Requires the machine to be at a READY prompt (see want_reset above). */
+        runtime_set_basic_program_pointers(rt, assembled_start, assembled_end);
+        rt->exec_state = RUNTIME_EXEC_RUNNING;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
+        runtime_reset_pacer(rt);
+        runtime_autorun_paste(rt, "RUN\r");
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
     }
-    runtime_publish_assemble_complete(rt, command->data.assemble_file.path, command->data.assemble_file.address);
-    runtime_publish_memory(rt, command->data.assemble_file.address, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
+    /* Report the actual emitted origin, not the requested default address. */
+    runtime_publish_assemble_complete(rt, command->data.assemble_file.path, assembled_start);
+    runtime_publish_memory(rt, assembled_start, RUNTIME_MEMORY_SNAPSHOT_MAX, RUNTIME_MEMORY_MODE_RAM);
     runtime_publish_machine_state(rt);
 }
 
@@ -5837,6 +5894,12 @@ int runtime_thread_main(void *userdata) {
                             runtime_publish_step_complete(rt);
                             break;
                         }
+                    }
+                    if (rt->machine.cpu.cpu.pc == 0xE38Bu) {
+                        /* Reached the BASIC warm-start READY prompt. Mark the
+                           machine as safe to paste RUN into; any pending
+                           auto-run/paste handlers below clear it again. */
+                        rt->basic_ready = true;
                     }
                     if (rt->pending_prg_path != NULL &&
                         rt->machine.cpu.cpu.pc == 0xE38Bu) {

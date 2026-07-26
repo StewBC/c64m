@@ -122,11 +122,60 @@ static int test_assemble_reports_errors(void) {
     return failures;
 }
 
+/* Regression: the _ex reporting must describe where code actually landed
+   (lowest emitted origin and one-past-the-end), not the requested host default
+   that the source overrides. This is what assemble-complete reports and what
+   BASIC-run uses to set VARTAB. */
+static int test_assemble_reports_emitted_extent(void) {
+    char path[128];
+    char error[1024];
+    c64_t machine;
+    int failures = 0;
+    uint16_t start = 0xffff;
+    uint16_t end = 0;
+    uint32_t count = 0;
+    /* Requested address is the $8000 host default, but the source re-anchors to
+       $0801 and emits 5 bytes (2 + 3). */
+    const char *source =
+        "* = $0801\n"
+        "    lda #$01\n"   /* 2 bytes: $0801,$0802 */
+        "    sta $d020\n"; /* 3 bytes: $0803,$0804,$0805 */
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    c64_init(&machine);
+    if (!runtime_assemble_file_ex(&machine, NULL, path, 0x8000, "current",
+                                  &start, &end, &count, error, sizeof(error))) {
+        fprintf(stderr, "runtime_assemble_file_ex failed: %s\n", error);
+        c64m_test_remove_file(path);
+        return 1;
+    }
+
+    if (start != 0x0801u) {
+        fprintf(stderr, "emitted start: expected $0801, got $%04x\n", start);
+        failures++;
+    }
+    if (end != 0x0806u) {
+        fprintf(stderr, "emitted end: expected $0806, got $%04x\n", end);
+        failures++;
+    }
+    if (count != 5u) {
+        fprintf(stderr, "emitted count: expected 5, got %u\n", count);
+        failures++;
+    }
+
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 int main(void) {
     int failures = 0;
 
     failures += test_assemble_imports_symbols();
     failures += test_assemble_reports_errors();
+    failures += test_assemble_reports_emitted_extent();
 
     return failures == 0 ? 0 : 1;
 }

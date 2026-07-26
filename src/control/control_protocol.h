@@ -143,6 +143,7 @@ typedef struct control_args {
     bool write_file_address;
     bool include_write_history;
     bool auto_run;
+    bool basic_run;
     bool has_run_address;
     char text[1024];
 } control_args;

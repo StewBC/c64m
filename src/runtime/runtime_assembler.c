@@ -9,6 +9,7 @@
 typedef struct assembler_output_ctx {
     c64_t *machine;
     uint16_t first_address;
+    uint16_t last_address;
     uint32_t byte_count;
     bool has_output;
 } assembler_output_ctx;
@@ -24,7 +25,15 @@ static void runtime_assembler_output_byte(void *user, uint16_t addr, uint8_t val
     c64_debug_write_ram(ctx->machine, addr, val);
     if (!ctx->has_output) {
         ctx->first_address = addr;
+        ctx->last_address = addr;
         ctx->has_output = true;
+    } else {
+        if (addr < ctx->first_address) {
+            ctx->first_address = addr;
+        }
+        if (addr > ctx->last_address) {
+            ctx->last_address = addr;
+        }
     }
     ctx->byte_count++;
 }
@@ -91,6 +100,7 @@ static bool c64_assemble_file_ex(
     uint16_t address,
     const char *source_name,
     uint16_t *out_start_address,
+    uint16_t *out_end_address,
     uint32_t *out_byte_count,
     char *error,
     size_t error_size) {
@@ -158,6 +168,11 @@ static bool c64_assemble_file_ex(
             *out_start_address =
                 output_ctx.has_output ? output_ctx.first_address : address;
         }
+        if (out_end_address != NULL) {
+            *out_end_address = output_ctx.has_output
+                ? (uint16_t)(output_ctx.last_address + 1u)
+                : address;
+        }
         if (out_byte_count != NULL) {
             *out_byte_count = output_ctx.byte_count;
         }
@@ -179,6 +194,7 @@ bool c64_assemble_file(
         path,
         address,
         source_name,
+        NULL,
         NULL,
         NULL,
         error,
@@ -203,6 +219,7 @@ bool runtime_assemble_file_ex(
     uint16_t address,
     const char *source_name,
     uint16_t *out_start_address,
+    uint16_t *out_end_address,
     uint32_t *out_byte_count,
     char *error,
     size_t error_size) {
@@ -213,6 +230,7 @@ bool runtime_assemble_file_ex(
         address,
         source_name,
         out_start_address,
+        out_end_address,
         out_byte_count,
         error,
         error_size);

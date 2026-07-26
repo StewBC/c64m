@@ -148,6 +148,7 @@ bool runtime_client_assemble_file_full(
     uint16_t address,
     uint16_t run_address,
     bool auto_run,
+    bool basic_run,
     bool reset_first);
 bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out);
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length);

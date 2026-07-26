@@ -4091,6 +4091,7 @@ static void dispatch_debugger_intents(
                     intent.assemble_address,
                     intent.assemble_run_address,
                     intent.assemble_auto_run,
+                    intent.assemble_basic_run,
                     intent.assemble_reset_first);
                 }
                 break;
@@ -5531,6 +5532,7 @@ static void dispatch_control_request(
                         request->args.address,
                         request->args.run_address,
                         request->args.auto_run,
+                        request->args.basic_run,
                         request->args.reset_first)) {
                     if (deferred != NULL) {
                         deferred->active = true;
@@ -6344,6 +6346,7 @@ int main(int argc, char **argv) {
         }
         asm_opts.use_address = options.assembler_use_address;
         asm_opts.auto_run = options.assembler_auto_run;
+        asm_opts.basic_run = options.assembler_basic_run;
         asm_opts.reset_first = options.assembler_reset_first;
         asm_opts.rearm_oneshots = options.assembler_rearm_oneshots;
         frontend_set_assembler_options(ui, &asm_opts);
@@ -6413,6 +6416,7 @@ int main(int argc, char **argv) {
             asm_opts.run_address[0] ? asm_opts.run_address : NULL);
         options.assembler_use_address = asm_opts.use_address;
         options.assembler_auto_run = asm_opts.auto_run;
+        options.assembler_basic_run = asm_opts.basic_run;
         options.assembler_reset_first = asm_opts.reset_first;
         options.assembler_rearm_oneshots = asm_opts.rearm_oneshots;
     }
