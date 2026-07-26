@@ -142,6 +142,100 @@ static void write_magic_desk_crt(const char *path) {
     fclose(file);
 }
 
+/* Generic 8K-bank writer: each chip filled entirely with fill_bytes[c]. */
+static void write_banked_8k_crt(
+    const char *path,
+    uint16_t hw_type,
+    uint8_t exrom,
+    uint8_t game,
+    const uint16_t *bank_values,
+    const uint8_t *fill_bytes,
+    size_t count)
+{
+    FILE *file = fopen(path, "wb");
+    size_t c;
+    size_t i;
+
+    if (file == NULL) {
+        fail("failed to create banked 8K CRT test file");
+    }
+
+    fwrite("C64 CARTRIDGE   ", 1, 16, file);
+    put_be32(file, 0x40);
+    put_be16(file, 0x0100);
+    put_be16(file, hw_type);
+    fputc(exrom, file);
+    fputc(game, file);
+    for (i = 0; i < 6; ++i) {
+        fputc(0x00, file);
+    }
+    fwrite("LONGTAIL CRT TST", 1, 16, file);
+    for (i = 0; i < 16; ++i) {
+        fputc(0x00, file);
+    }
+
+    for (c = 0; c < count; ++c) {
+        fwrite("CHIP", 1, 4, file);
+        put_be32(file, 0x2010);
+        put_be16(file, 0x0000);
+        put_be16(file, bank_values[c]);
+        put_be16(file, 0x8000);
+        put_be16(file, 0x2000);
+        for (i = 0; i < 0x2000u; ++i) {
+            fputc((int)fill_bytes[c], file);
+        }
+    }
+
+    fclose(file);
+}
+
+/* Super Games writer: 16K chips, low 8K = roml_bytes[b], high 8K = romh_bytes[b]. */
+static void write_super_games_crt(
+    const char *path,
+    const uint8_t *roml_bytes,
+    const uint8_t *romh_bytes,
+    size_t bank_count)
+{
+    FILE *file = fopen(path, "wb");
+    size_t b;
+    size_t i;
+
+    if (file == NULL) {
+        fail("failed to create Super Games CRT test file");
+    }
+
+    fwrite("C64 CARTRIDGE   ", 1, 16, file);
+    put_be32(file, 0x40);
+    put_be16(file, 0x0100);
+    put_be16(file, 8); /* Super Games */
+    fputc(0x00, file);
+    fputc(0x00, file);
+    for (i = 0; i < 6; ++i) {
+        fputc(0x00, file);
+    }
+    fwrite("SUPER GAMES TEST", 1, 16, file);
+    for (i = 0; i < 16; ++i) {
+        fputc(0x00, file);
+    }
+
+    for (b = 0; b < bank_count; ++b) {
+        fwrite("CHIP", 1, 4, file);
+        put_be32(file, 0x4010);
+        put_be16(file, 0x0000);
+        put_be16(file, (uint16_t)b);
+        put_be16(file, 0x8000);
+        put_be16(file, 0x4000);
+        for (i = 0; i < 0x2000u; ++i) {
+            fputc((int)roml_bytes[b], file);
+        }
+        for (i = 0; i < 0x2000u; ++i) {
+            fputc((int)romh_bytes[b], file);
+        }
+    }
+
+    fclose(file);
+}
+
 static void write_ocean_crt(const char *path) {
     FILE *file = fopen(path, "wb");
     size_t bank;
@@ -314,6 +408,56 @@ static void expect_crt_history_order(runtime_client *client) {
     }
     free(payload);
     fail("CRT marker not found in retained history");
+}
+
+/* A paused write_memory_byte publishes a memory echo event; consume it so a
+   following read's poll_event does not pick up the write's echo by mistake. */
+static void write_cpu_map_byte(runtime_client *client, uint16_t address, uint8_t value) {
+    runtime_event event;
+
+    if (!runtime_client_write_memory_byte(client, address, value, RUNTIME_MEMORY_MODE_CPU_MAP)) {
+        fail("write_memory_byte command failed");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("write echo not received");
+    }
+}
+
+static void load_crt_and_pause(runtime_client *client, const char *path, const char *label) {
+    runtime_event event;
+
+    if (!runtime_client_load_crt(client, path)) {
+        fail("load CRT command failed");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RESET_COMPLETE)) {
+        fail("CRT RESET_COMPLETE not received");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_RUNNING)) {
+        fail("CRT RUNNING not received");
+    }
+    if (!runtime_client_pause(client)) {
+        fail("pause after CRT load failed");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_PAUSED)) {
+        fail("CRT PAUSED not received");
+    }
+    /* The machine free-runs (executing cart bytes) before we pause, leaving the
+       CPU port in an arbitrary banking state. Force $01=$37 (LORAM+HIRAM+CHAREN)
+       so IO and the cart window are deterministically visible for our probes. */
+    write_cpu_map_byte(client, 0x0001, 0x37);
+    (void)label;
+}
+
+static uint8_t read_cpu_map_byte(runtime_client *client, uint16_t address) {
+    runtime_event event;
+
+    if (!runtime_client_request_memory(client, address, 1, RUNTIME_MEMORY_MODE_CPU_MAP)) {
+        fail("request_memory command failed");
+    }
+    if (!poll_event(client, &event, RUNTIME_EVENT_MEMORY_RESPONSE)) {
+        fail("memory response not received");
+    }
+    return event.data.memory.bytes[0];
 }
 
 int main(void) {
@@ -501,6 +645,83 @@ int main(void) {
         }
         expect_u8("Ocean bank0 romh0", 0x20, event.data.memory.bytes[0]);
         remove(ocean_path);
+    }
+
+    /* C64GS (type 15): bank from address on write; verify bank switch. */
+    {
+        static const char path[] = "runtime c64gs (test).crt";
+        uint16_t banks[8];
+        uint8_t fills[8];
+        size_t i;
+        for (i = 0; i < 8; ++i) {
+            banks[i] = (uint16_t)i;
+            fills[i] = (uint8_t)(0x20u + i);
+        }
+        write_banked_8k_crt(path, 15, 0, 1, banks, fills, 8);
+        load_crt_and_pause(client, path, "C64GS");
+        expect_u8("C64GS power-on bank0", 0x20, read_cpu_map_byte(client, 0x8000));
+        /* Write to $DE05 selects bank 5 (address bits, value ignored). */
+        write_cpu_map_byte(client, 0xde05, 0x00);
+        expect_u8("C64GS bank5", 0x25, read_cpu_map_byte(client, 0x8000));
+        remove(path);
+    }
+
+    /* Dinamic (type 17): bank switches on READ of $de00-$de0f. */
+    {
+        static const char path[] = "runtime dinamic (test).crt";
+        uint16_t banks[16];
+        uint8_t fills[16];
+        size_t i;
+        for (i = 0; i < 16; ++i) {
+            banks[i] = (uint16_t)i;
+            fills[i] = (uint8_t)(0x30u + i);
+        }
+        write_banked_8k_crt(path, 17, 0, 1, banks, fills, 16);
+        load_crt_and_pause(client, path, "Dinamic");
+        /* Dinamic switches banks only on a real CPU read of $de00-$de0f; the
+           debug memory inspector is side-effect-free (peek), so it cannot drive
+           the switch here — that path is covered by test_c64_bus.c. This block
+           verifies the load/copy/attach wiring produces bank 0 at power-on. */
+        expect_u8("Dinamic power-on bank0", 0x30, read_cpu_map_byte(client, 0x8000));
+        remove(path);
+    }
+
+    /* Fun Play (type 7): CRT chip.bank is the scrambled register value; the
+       runtime de-scrambles to linear on load. Verify a non-zero bank. */
+    {
+        static const char path[] = "runtime funplay (test).crt";
+        uint16_t banks[16];
+        uint8_t fills[16];
+        size_t linear;
+        for (linear = 0; linear < 16; ++linear) {
+            uint8_t scrambled =
+                (uint8_t)(((linear & 7u) << 3) | ((linear >> 3) & 1u));
+            banks[linear] = scrambled;      /* CRT stores the register value */
+            fills[linear] = (uint8_t)(0x40u + linear); /* data tags the linear index */
+        }
+        write_banked_8k_crt(path, 7, 0, 0, banks, fills, 16);
+        load_crt_and_pause(client, path, "Fun Play");
+        expect_u8("Fun Play power-on bank0", 0x40, read_cpu_map_byte(client, 0x8000));
+        /* Register value $08 de-scrambles to linear bank 1. */
+        write_cpu_map_byte(client, 0xde00, 0x08);
+        expect_u8("Fun Play linear bank1", 0x41, read_cpu_map_byte(client, 0x8000));
+        remove(path);
+    }
+
+    /* Super Games (type 8): 16K chips split into ROML+ROMH; IO2 $DF00 control. */
+    {
+        static const char path[] = "runtime super games (test).crt";
+        uint8_t roml[4] = { 0x50, 0x51, 0x52, 0x53 };
+        uint8_t romh[4] = { 0x60, 0x61, 0x62, 0x63 };
+        write_super_games_crt(path, roml, romh, 4);
+        load_crt_and_pause(client, path, "Super Games");
+        expect_u8("Super Games bank0 roml", 0x50, read_cpu_map_byte(client, 0x8000));
+        expect_u8("Super Games bank0 romh", 0x60, read_cpu_map_byte(client, 0xa000));
+        /* $DF00 = $01: bank 1, 16K enabled. */
+        write_cpu_map_byte(client, 0xdf00, 0x01);
+        expect_u8("Super Games bank1 roml", 0x51, read_cpu_map_byte(client, 0x8000));
+        expect_u8("Super Games bank1 romh", 0x61, read_cpu_map_byte(client, 0xa000));
+        remove(path);
     }
 
     runtime_client_quit(client);

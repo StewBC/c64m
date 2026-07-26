@@ -191,6 +191,109 @@ static void c64_bus_ocean_apply_latch(c64_bus_t *bus) {
     }
 }
 
+/* Copy one 8 KiB ROML bank into the active window (banks wrap on overflow). */
+static void c64_bus_copy_roml_bank(c64_bus_t *bus, uint8_t bank) {
+    size_t offset;
+
+    if (bus->cartridge_rom_banks == NULL || bus->cartridge_bank_count == 0) {
+        return;
+    }
+    if (bank >= bus->cartridge_bank_count) {
+        bank = (uint8_t)(bank % (uint8_t)bus->cartridge_bank_count);
+    }
+    offset = (size_t)bank * C64_CARTRIDGE_ROM_BANK_SIZE;
+    memcpy(
+        bus->cartridge_roml,
+        bus->cartridge_rom_banks + offset,
+        C64_CARTRIDGE_ROM_BANK_SIZE);
+    bus->cartridge_roml_present = true;
+}
+
+/* Single-bank 8K-game mappers (C64GS, Dinamic): EXROM active, GAME inactive. */
+static void c64_bus_apply_banked_8k_rom(c64_bus_t *bus, uint8_t bank) {
+    bus->cartridge_exrom = 0;
+    bus->cartridge_game = 1;
+    bus->cartridge_mode = C64_CARTRIDGE_MODE_8K;
+    c64_bus_copy_roml_bank(bus, bank);
+}
+
+/* VICE gs.c: bank = accessed IO1 address & $3f (latched on read or write). */
+static void c64_bus_c64gs_apply_latch(c64_bus_t *bus) {
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_C64GS);
+    c64_bus_apply_banked_8k_rom(bus, (uint8_t)(bus->cartridge_io_latch & 0x3fu));
+}
+
+/* VICE dinamic.c: bank = accessed IO1 address & $0f (latched on read of $de0x). */
+static void c64_bus_dinamic_apply_latch(c64_bus_t *bus) {
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_DINAMIC);
+    c64_bus_apply_banked_8k_rom(bus, (uint8_t)(bus->cartridge_io_latch & 0x0fu));
+}
+
+/* VICE funplay.c: bank = ((v>>3)&7)|((v&1)<<3); $86-masked value turns ROM off.
+   The register value is stored in io_latch; the bank always switches, only the
+   EXROM/GAME lines depend on the mode bits (unknown values leave lines as-is). */
+static void c64_bus_funplay_apply_latch(c64_bus_t *bus) {
+    uint8_t value;
+    uint8_t bank;
+
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_FUNPLAY);
+    value = bus->cartridge_io_latch;
+    bank = (uint8_t)(((value >> 3) & 7u) | ((value & 1u) << 3));
+    c64_bus_copy_roml_bank(bus, bank);
+
+    if ((value & 0xc6u) == 0x00u) {
+        bus->cartridge_exrom = 0;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_8K;
+    } else if ((value & 0xc6u) == 0x86u) {
+        bus->cartridge_exrom = 1;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+    }
+    /* Other values: VICE warns and leaves the port config unchanged. */
+}
+
+/* VICE supergames.c: bank=v&3; bit2=0 -> 16K game (EXROM+GAME active), bit2=1 ->
+   cart disabled. Storage is 2 interleaved 8 KiB slots per bank: [ROML,ROMH]. */
+static void c64_bus_super_games_apply_latch(c64_bus_t *bus) {
+    uint8_t value;
+    uint8_t bank;
+    bool enabled;
+    size_t roml_slot;
+    size_t romh_slot;
+
+    assert(bus->cartridge_hardware_type == C64_CARTRIDGE_HW_SUPER_GAMES);
+    value = bus->cartridge_io_latch;
+    bank = (uint8_t)(value & 0x03u);
+    enabled = ((value >> 2) & 1u) == 0u;
+    roml_slot = (size_t)bank * 2u;
+    romh_slot = roml_slot + 1u;
+
+    if (bus->cartridge_rom_banks != NULL &&
+        (size_t)bus->cartridge_bank_count > romh_slot) {
+        memcpy(
+            bus->cartridge_roml,
+            bus->cartridge_rom_banks + roml_slot * C64_CARTRIDGE_ROM_BANK_SIZE,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+        memcpy(
+            bus->cartridge_romh,
+            bus->cartridge_rom_banks + romh_slot * C64_CARTRIDGE_ROM_BANK_SIZE,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+        bus->cartridge_roml_present = true;
+        bus->cartridge_romh_present = true;
+    }
+
+    if (enabled) {
+        bus->cartridge_exrom = 0;
+        bus->cartridge_game = 0;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_16K;
+    } else {
+        bus->cartridge_exrom = 1;
+        bus->cartridge_game = 1;
+        bus->cartridge_mode = C64_CARTRIDGE_MODE_NONE;
+    }
+}
+
 static void c64_bus_free_cartridge_banks(c64_bus_t *bus) {
     free(bus->cartridge_rom_banks);
     bus->cartridge_rom_banks = NULL;
@@ -219,6 +322,24 @@ static uint8_t c64_io_read(c64_bus_t *bus, uint16_t address) {
 
     if (address >= C64_CIA2_BASE && address <= C64_CIA2_END && bus->cia2) {
         return cia_read_register(bus->cia2, address);
+    }
+
+    /* IO1 read side-effects: C64GS and Dinamic latch their bank from the
+       accessed address on a read (VICE gs.c / dinamic.c). Read value is 0. */
+    if (address >= 0xde00u && address <= 0xdeffu && bus->cartridge_mounted) {
+        if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_C64GS) {
+            bus->cartridge_io_latch = (uint8_t)(address & 0x3fu);
+            c64_bus_c64gs_apply_latch(bus);
+            return 0;
+        }
+        if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_DINAMIC) {
+            uint8_t offset = (uint8_t)(address & 0xffu);
+            if (offset <= 0x0fu) {
+                bus->cartridge_io_latch = offset;
+                c64_bus_dinamic_apply_latch(bus);
+            }
+            return 0;
+        }
     }
 
     /* Magic Desk IO1 is write-only (VICE: read never valid). */
@@ -267,7 +388,9 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
         return;
     }
 
-    /* Magic Desk / Ocean: bank register at IO1 $DE00–$DEFF. */
+    /* Bank registers at IO1 $DE00–$DEFF. C64GS latches the address (bits 0-5);
+       Magic Desk / Ocean / Fun Play latch the written value. Dinamic ignores
+       writes (its bank switches on reads only). */
     if (address >= 0xde00u && address <= 0xdeffu && bus->cartridge_mounted) {
         if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_MAGIC_DESK) {
             bus->cartridge_io_latch = value;
@@ -275,7 +398,25 @@ static void c64_io_write(c64_bus_t *bus, uint16_t address, uint8_t value) {
         } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
             bus->cartridge_io_latch = value;
             c64_bus_ocean_apply_latch(bus);
+        } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_C64GS) {
+            bus->cartridge_io_latch = (uint8_t)(address & 0x3fu);
+            c64_bus_c64gs_apply_latch(bus);
+        } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_FUNPLAY) {
+            bus->cartridge_io_latch = value;
+            c64_bus_funplay_apply_latch(bus);
         }
+        return;
+    }
+
+    /* Super Games: control register at IO2 $DF00–$DFFF. Bit 3 write-protects the
+       register until the next hardware reset. */
+    if (address >= 0xdf00u && address <= 0xdfffu && bus->cartridge_mounted) {
+        if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_SUPER_GAMES &&
+            (bus->cartridge_io_latch & 0x08u) == 0u) {
+            bus->cartridge_io_latch = value;
+            c64_bus_super_games_apply_latch(bus);
+        }
+        return;
     }
 }
 
@@ -596,6 +737,138 @@ bool c64_bus_attach_ocean_cartridge(
     return true;
 }
 
+/* Shared setup for the linear 8K-bank ROML mappers (C64GS, Fun Play, Dinamic).
+   The mapper drives its own 8K game config, so header EXROM/GAME are ignored. */
+static bool c64_bus_attach_banked_8k(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    size_t max_banks,
+    uint16_t hardware_type,
+    uint8_t bank_mask)
+{
+    uint8_t *storage;
+    size_t bytes;
+
+    assert(bus);
+
+    if (banks == NULL || bank_count == 0 || bank_count > max_banks) {
+        return false;
+    }
+
+    bytes = bank_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    storage = (uint8_t *)malloc(bytes);
+    if (storage == NULL) {
+        return false;
+    }
+    memcpy(storage, banks, bytes);
+
+    c64_bus_detach_cartridge(bus);
+
+    bus->cartridge_rom_banks = storage;
+    bus->cartridge_bank_count = (uint16_t)bank_count;
+    bus->cartridge_bank_mask = bank_mask;
+    bus->cartridge_hardware_type = hardware_type;
+    bus->cartridge_romh_present = false;
+    memset(bus->cartridge_romh, 0, sizeof(bus->cartridge_romh));
+    bus->cartridge_mounted = true;
+    bus->cartridge_io_latch = 0;
+    return true;
+}
+
+bool c64_bus_attach_c64gs_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    (void)exrom;
+    (void)game;
+    if (!c64_bus_attach_banked_8k(
+            bus, banks, bank_count, C64_CARTRIDGE_OCEAN_MAX_BANKS,
+            C64_CARTRIDGE_HW_C64GS, 0x3fu)) {
+        return false;
+    }
+    c64_bus_c64gs_apply_latch(bus);
+    return true;
+}
+
+bool c64_bus_attach_funplay_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    (void)exrom;
+    (void)game;
+    if (!c64_bus_attach_banked_8k(
+            bus, banks, bank_count, 16u,
+            C64_CARTRIDGE_HW_FUNPLAY, 0x0fu)) {
+        return false;
+    }
+    c64_bus_funplay_apply_latch(bus);
+    return true;
+}
+
+bool c64_bus_attach_dinamic_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    (void)exrom;
+    (void)game;
+    if (!c64_bus_attach_banked_8k(
+            bus, banks, bank_count, 16u,
+            C64_CARTRIDGE_HW_DINAMIC, 0x0fu)) {
+        return false;
+    }
+    c64_bus_dinamic_apply_latch(bus);
+    return true;
+}
+
+bool c64_bus_attach_super_games_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *slots,
+    size_t slot_count,
+    uint8_t exrom,
+    uint8_t game)
+{
+    uint8_t *storage;
+    size_t bytes;
+
+    assert(bus);
+
+    (void)exrom;
+    (void)game;
+    /* slot_count = 2 × logical 16K banks (max 4): [ROML,ROMH] per bank. */
+    if (slots == NULL || slot_count == 0 || slot_count > 8u ||
+        (slot_count & 1u) != 0u) {
+        return false;
+    }
+
+    bytes = slot_count * C64_CARTRIDGE_ROM_BANK_SIZE;
+    storage = (uint8_t *)malloc(bytes);
+    if (storage == NULL) {
+        return false;
+    }
+    memcpy(storage, slots, bytes);
+
+    c64_bus_detach_cartridge(bus);
+
+    bus->cartridge_rom_banks = storage;
+    bus->cartridge_bank_count = (uint16_t)slot_count;
+    bus->cartridge_bank_mask = 0x03u;
+    bus->cartridge_hardware_type = C64_CARTRIDGE_HW_SUPER_GAMES;
+    bus->cartridge_mounted = true;
+    bus->cartridge_io_latch = 0;
+    c64_bus_super_games_apply_latch(bus);
+    return true;
+}
+
 void c64_bus_detach_cartridge(c64_bus_t *bus) {
     assert(bus);
 
@@ -622,6 +895,19 @@ void c64_bus_cartridge_reset(c64_bus_t *bus) {
     } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
         bus->cartridge_io_latch = 0;
         c64_bus_ocean_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_C64GS) {
+        bus->cartridge_io_latch = 0;
+        c64_bus_c64gs_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_FUNPLAY) {
+        bus->cartridge_io_latch = 0;
+        c64_bus_funplay_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_DINAMIC) {
+        bus->cartridge_io_latch = 0;
+        c64_bus_dinamic_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_SUPER_GAMES) {
+        /* Clears the write-protect latch (bit 3) on hardware reset. */
+        bus->cartridge_io_latch = 0;
+        c64_bus_super_games_apply_latch(bus);
     }
 }
 
@@ -635,6 +921,14 @@ void c64_bus_cartridge_apply_banking(c64_bus_t *bus) {
         c64_bus_magic_desk_apply_latch(bus);
     } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_OCEAN) {
         c64_bus_ocean_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_C64GS) {
+        c64_bus_c64gs_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_FUNPLAY) {
+        c64_bus_funplay_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_DINAMIC) {
+        c64_bus_dinamic_apply_latch(bus);
+    } else if (bus->cartridge_hardware_type == C64_CARTRIDGE_HW_SUPER_GAMES) {
+        c64_bus_super_games_apply_latch(bus);
     } else if (
         bus->cartridge_rom_banks != NULL &&
         bus->cartridge_bank_count > 0 &&

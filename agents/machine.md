@@ -82,6 +82,26 @@ execution is outside this feature.
   select bank (masked per VICE bankmask from highest bank index), bit 7 disables
   cart ROM so RAM appears at `$8000`. Power-on / plain reset: bank 0, cart enabled.
   Up to 128 × 8 KiB banks (VICE max). See `crt-type19-plan.md` for the mapper roadmap.
+- **CRT type 15 (C64GS / System 3):** up to 64 × 8K ROML at `$8000` (permanent 8K
+  game). Any IO1 `$DE00–$DEFF` access — read **or** write — latches bank = accessed
+  `address & $3F` (value ignored). No disable line. Power-on / reset: bank 0.
+- **CRT type 7 (Fun Play / Power Play):** 16 × 8K ROML at `$8000`. IO1 **write**
+  latches bank = `((v>>3)&7)|((v&1)<<3)` (scrambled); `(v & $C6)==$86` turns ROM off
+  (RAM at `$8000`). CRT `chip.bank` is the scrambled register value — the loader
+  de-scrambles to a linear index. Header EXROM/GAME are ignored. Power-on: bank 0, 8K.
+- **CRT type 8 (Super Games):** 4 × 16K banks at `$8000-$BFFF`. Control at **IO2**
+  `$DF00–$DFFF`: bits 0–1 bank; bit 2 = 0 → 16K game (EXROM+GAME active), bit 2 = 1 →
+  cart disabled (RAM); bit 3 = write-protect latch (register frozen until hardware
+  reset). Stored internally as 2×N interleaved 8 KiB slots `[ROML,ROMH]`. Power-on /
+  reset: latch cleared, bank 0, 16K enabled.
+- **CRT type 17 (Dinamic):** 16 × 8K ROML at `$8000` (permanent 8K game). IO1
+  **read** of `$DE00–$DE0F` latches bank = `address & $0F`; reads above `$DE0F` and
+  all writes are ignored. Read returns 0. Power-on / reset: bank 0.
+- Types 15/7/8/17 snapshot needs no format bump — each is fully described by the
+  existing v13 fields (`hardware_type`, `bank_count`, `bank_mask`, `io_latch`, ROML
+  blob, ROMH window); restore recomputes windows/lines from `io_latch` via
+  `c64_bus_cartridge_apply_banking`. Super Games' internal 2×N interleaved
+  `[ROML,ROMH]` slot layout also rides in the ROML blob, so no new fields.
 - Cartridge ROM is read-only; writes update shadow RAM underneath. Plain reset
   preserves a cartridge (Magic Desk re-applies bank 0). PRG/BASIC/T64 injection
   detaches it first. The frontend reset flow can explicitly detach or preserve it.

@@ -33,6 +33,10 @@ enum {
     C64_CARTRIDGE_OCEAN_MAX_BANKS = 64,
     C64_CARTRIDGE_HW_NORMAL = 0,
     C64_CARTRIDGE_HW_OCEAN = 5,
+    C64_CARTRIDGE_HW_FUNPLAY = 7,
+    C64_CARTRIDGE_HW_SUPER_GAMES = 8,
+    C64_CARTRIDGE_HW_C64GS = 15,
+    C64_CARTRIDGE_HW_DINAMIC = 17,
     C64_CARTRIDGE_HW_MAGIC_DESK = 19
 };
 
@@ -166,6 +170,34 @@ bool c64_bus_attach_generic_cartridge(
     uint8_t game);
 /* Magic Desk (CRT type 19): banks is bank_count contiguous 8 KiB ROML images. */
 bool c64_bus_attach_magic_desk_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game);
+/* C64GS (CRT type 15): up to 64 contiguous 8 KiB ROML banks; 8K game. */
+bool c64_bus_attach_c64gs_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game);
+/* Fun Play (CRT type 7): 16 contiguous 8 KiB ROML banks (linear order). */
+bool c64_bus_attach_funplay_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game);
+/* Super Games (CRT type 8): 2*N interleaved 8 KiB slots [ROML,ROMH] per bank. */
+bool c64_bus_attach_super_games_cartridge(
+    c64_bus_t *bus,
+    const uint8_t *slots,
+    size_t slot_count,
+    uint8_t exrom,
+    uint8_t game);
+/* Dinamic (CRT type 17): 16 contiguous 8 KiB ROML banks; 8K game. */
+bool c64_bus_attach_dinamic_cartridge(
     c64_bus_t *bus,
     const uint8_t *banks,
     size_t bank_count,

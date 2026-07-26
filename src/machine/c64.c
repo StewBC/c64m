@@ -2443,6 +2443,90 @@ bool c64_attach_ocean_cartridge(
     return true;
 }
 
+bool c64_attach_c64gs_cartridge(
+    c64_t *machine,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_c64gs_cartridge(
+            &machine->bus, banks, bank_count, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported C64GS cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
+bool c64_attach_funplay_cartridge(
+    c64_t *machine,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_funplay_cartridge(
+            &machine->bus, banks, bank_count, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported Fun Play cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
+bool c64_attach_super_games_cartridge(
+    c64_t *machine,
+    const uint8_t *slots,
+    size_t slot_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_super_games_cartridge(
+            &machine->bus, slots, slot_count, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported Super Games cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
+bool c64_attach_dinamic_cartridge(
+    c64_t *machine,
+    const uint8_t *banks,
+    size_t bank_count,
+    uint8_t exrom,
+    uint8_t game,
+    char *error,
+    size_t error_size)
+{
+    assert(machine);
+
+    if (!c64_bus_attach_dinamic_cartridge(
+            &machine->bus, banks, bank_count, exrom, game)) {
+        c64_set_error(error, error_size, "unsupported Dinamic cartridge layout");
+        return false;
+    }
+
+    c64_set_error(error, error_size, "");
+    return true;
+}
+
 void c64_detach_cartridge(c64_t *machine) {
     assert(machine);
 

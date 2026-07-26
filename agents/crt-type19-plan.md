@@ -51,10 +51,10 @@ plays after the mapper lands.
 |------|-----:|------------|---------------------:|
 | [X] | 0 | Normal (generic 8K/16K) | 234 |
 | [X] | 5 | Ocean type 1 | 22 |
-| [ ] | 7 | Fun Play / Power Play | 2 |
-| [ ] | 8 | Super Games | 2 |
-| [ ] | 15 | C64 Game System / System 3 | 4 |
-| [ ] | 17 | Dinamic | 5 |
+| [X] | 7 | Fun Play / Power Play | 2 |
+| [X] | 8 | Super Games | 2 |
+| [X] | 15 | C64 Game System / System 3 | 4 |
+| [X] | 17 | Dinamic | 5 |
 | [ ] | 18 | Zaxxon | 2 |
 | [X] | **19** | **Magic Desk / Domark / HES** | **2171** |
 | [ ] | 32 | EasyFlash | 385 |
@@ -171,8 +171,10 @@ Type 0 and type 19 share heap multi-bank storage + ROML window; type 0 is a sing
 Driven by OneLoad counts, not by CRT ID number:
 
 1. **32 EasyFlash** — 385 files; multi-load / modern dumps. Larger than Magic Desk.  
-2. Long tail: 17, 15, 7, 8, 18, 60 — only if a title you care about needs them.
-   (Ocean type 5 is done.)
+2. Long tail: 17, 15, 7, 8 are **done** (see the cartridge section of `machine.md`
+   for their register contracts). Remaining: 18 Zaxxon (ROML-read side-effect),
+   60 GMod2 (serial-EEPROM save) — different mechanisms; do only if a title needs
+   them. (Ocean type 5 is done.)
 
 Each new type: add mapper ops, validation, tests, checklist `[X]`, census count stays
 as historical unlock size unless re-tallied.

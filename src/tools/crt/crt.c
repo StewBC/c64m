@@ -20,9 +20,17 @@ enum {
     CRT_CHIP_SIZE_OFFSET = 0x0e,
     CRT_HARDWARE_TYPE_NORMAL = 0,
     CRT_HARDWARE_TYPE_OCEAN = 5,
+    CRT_HARDWARE_TYPE_FUNPLAY = 7,
+    CRT_HARDWARE_TYPE_SUPER_GAMES = 8,
+    CRT_HARDWARE_TYPE_C64GS = 15,
+    CRT_HARDWARE_TYPE_DINAMIC = 17,
     CRT_HARDWARE_TYPE_MAGIC_DESK = 19,
     CRT_MAGIC_DESK_MAX_BANKS = 128,
-    CRT_OCEAN_MAX_BANKS = 64
+    CRT_OCEAN_MAX_BANKS = 64,
+    CRT_C64GS_MAX_BANKS = 64,
+    CRT_FUNPLAY_MAX_BANKS = 16,
+    CRT_SUPER_GAMES_MAX_BANKS = 4,
+    CRT_DINAMIC_MAX_BANKS = 16
 };
 
 typedef struct crt_chip_record {
@@ -409,8 +417,130 @@ bool crt_image_is_ocean_supported(const crt_image *image) {
     return max_bank >= 0;
 }
 
+uint8_t crt_funplay_descramble_bank(uint8_t register_value) {
+    return (uint8_t)(((register_value >> 3) & 7u) | ((register_value & 1u) << 3));
+}
+
+/* Shared shape check for the single-bank 8K ROML mappers (15, 17). Header
+   EXROM/GAME lines are not trusted here: the mapper drives 8K game itself. */
+static bool crt_image_is_banked_8k_supported(
+    const crt_image *image,
+    uint16_t hardware_type,
+    uint16_t max_banks)
+{
+    size_t i;
+    int max_bank = -1;
+
+    if (image == NULL ||
+        image->header.hardware_type != hardware_type ||
+        image->chip_count == 0) {
+        return false;
+    }
+
+    for (i = 0; i < image->chip_count; ++i) {
+        const crt_chip_record *chip = &image->chips[i];
+
+        if (chip->type != CRT_CHIP_TYPE_ROM) {
+            return false;
+        }
+        if (chip->bank >= max_banks) {
+            return false;
+        }
+        if (chip->rom_size != 0x2000u || chip->load_address != 0x8000u) {
+            return false;
+        }
+        if ((int)chip->bank > max_bank) {
+            max_bank = (int)chip->bank;
+        }
+    }
+
+    return max_bank >= 0;
+}
+
+bool crt_image_is_c64gs_supported(const crt_image *image) {
+    return crt_image_is_banked_8k_supported(
+        image, CRT_HARDWARE_TYPE_C64GS, CRT_C64GS_MAX_BANKS);
+}
+
+bool crt_image_is_dinamic_supported(const crt_image *image) {
+    return crt_image_is_banked_8k_supported(
+        image, CRT_HARDWARE_TYPE_DINAMIC, CRT_DINAMIC_MAX_BANKS);
+}
+
+bool crt_image_is_funplay_supported(const crt_image *image) {
+    size_t i;
+    int max_bank = -1;
+
+    if (image == NULL ||
+        image->header.hardware_type != CRT_HARDWARE_TYPE_FUNPLAY ||
+        image->chip_count == 0) {
+        return false;
+    }
+
+    for (i = 0; i < image->chip_count; ++i) {
+        const crt_chip_record *chip = &image->chips[i];
+        uint8_t linear;
+
+        if (chip->type != CRT_CHIP_TYPE_ROM) {
+            return false;
+        }
+        if (chip->bank > 0xffu) {
+            return false;
+        }
+        /* CRT stores the scrambled register value; de-scramble to a linear
+           index and bound it to the 16-bank window. */
+        linear = crt_funplay_descramble_bank((uint8_t)chip->bank);
+        if (linear >= CRT_FUNPLAY_MAX_BANKS) {
+            return false;
+        }
+        if (chip->rom_size != 0x2000u || chip->load_address != 0x8000u) {
+            return false;
+        }
+        if ((int)linear > max_bank) {
+            max_bank = (int)linear;
+        }
+    }
+
+    return max_bank >= 0;
+}
+
+bool crt_image_is_super_games_supported(const crt_image *image) {
+    size_t i;
+    int max_bank = -1;
+
+    if (image == NULL ||
+        image->header.hardware_type != CRT_HARDWARE_TYPE_SUPER_GAMES ||
+        image->chip_count == 0) {
+        return false;
+    }
+
+    for (i = 0; i < image->chip_count; ++i) {
+        const crt_chip_record *chip = &image->chips[i];
+
+        if (chip->type != CRT_CHIP_TYPE_ROM) {
+            return false;
+        }
+        if (chip->bank >= CRT_SUPER_GAMES_MAX_BANKS) {
+            return false;
+        }
+        /* 16K chips: 8K ROML + 8K ROMH mapped to $8000-$BFFF. */
+        if (chip->rom_size != 0x4000u || chip->load_address != 0x8000u) {
+            return false;
+        }
+        if ((int)chip->bank > max_bank) {
+            max_bank = (int)chip->bank;
+        }
+    }
+
+    return max_bank >= 0;
+}
+
 bool crt_image_is_supported(const crt_image *image) {
     return crt_image_is_generic_supported(image) ||
         crt_image_is_magic_desk_supported(image) ||
-        crt_image_is_ocean_supported(image);
+        crt_image_is_ocean_supported(image) ||
+        crt_image_is_c64gs_supported(image) ||
+        crt_image_is_funplay_supported(image) ||
+        crt_image_is_super_games_supported(image) ||
+        crt_image_is_dinamic_supported(image);
 }

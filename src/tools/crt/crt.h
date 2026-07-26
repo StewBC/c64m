@@ -57,5 +57,17 @@ bool crt_image_is_generic_supported(const crt_image *image);
 bool crt_image_is_magic_desk_supported(const crt_image *image);
 /* CRT hardware type 5 (Ocean type 1): multi-bank 8K, max 64 banks. */
 bool crt_image_is_ocean_supported(const crt_image *image);
+/* CRT hardware type 15 (C64GS / System 3): up to 64 × 8K @ $8000. */
+bool crt_image_is_c64gs_supported(const crt_image *image);
+/* CRT hardware type 7 (Fun Play / Power Play): 16 × 8K @ $8000, scrambled banks. */
+bool crt_image_is_funplay_supported(const crt_image *image);
+/* CRT hardware type 8 (Super Games): 4 × 16K @ $8000. */
+bool crt_image_is_super_games_supported(const crt_image *image);
+/* CRT hardware type 17 (Dinamic): 16 × 8K @ $8000. */
+bool crt_image_is_dinamic_supported(const crt_image *image);
 /* True if c64m can attach this image with a known mapper. */
 bool crt_image_is_supported(const crt_image *image);
+
+/* Fun Play CRT chip.bank / IO register value <-> linear bank index.
+   VICE funplay.c: linear = ((v >> 3) & 7) | ((v & 1) << 3). */
+uint8_t crt_funplay_descramble_bank(uint8_t register_value);

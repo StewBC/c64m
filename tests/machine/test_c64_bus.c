@@ -502,6 +502,181 @@ static void test_ocean_banking(void) {
     c64_detach_cartridge(&machine);
 }
 
+static void test_c64gs_banking(void) {
+    c64_t machine;
+    uint8_t banks[8 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    memset(banks, 0, sizeof(banks));
+    for (i = 0; i < 8; ++i) {
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x20u + (uint8_t)i);
+    }
+
+    expect_true(
+        "attach c64gs",
+        c64_attach_c64gs_cartridge(&machine, banks, 8, 0, 1, error, sizeof(error)));
+    expect_u8("c64gs bank0 power-on", 0x20, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Bank comes from the ADDRESS (value ignored) on write. */
+    c64_bus_write(&machine.bus, 0xde05, 0xff);
+    expect_u8("c64gs write $de05 -> bank5", 0x25, c64_bus_read(&machine.bus, 0x8000));
+
+    /* A READ of IO1 also latches the bank (VICE gs.c). */
+    (void)c64_bus_read(&machine.bus, 0xde03);
+    expect_u8("c64gs read $de03 -> bank3", 0x23, c64_bus_read(&machine.bus, 0x8000));
+    (void)c64_bus_read(&machine.bus, 0xde00);
+    expect_u8("c64gs read $de00 -> bank0", 0x20, c64_bus_read(&machine.bus, 0x8000));
+
+    /* No disable line: $A000 stays BASIC ($EA/$A? from fill_roms), $8000 always cart. */
+    c64_bus_write(&machine.bus, 0xde07, 0x00);
+    expect_u8("c64gs bank7", 0x27, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_bus_cartridge_reset(&machine.bus);
+    expect_u8("c64gs reset -> bank0", 0x20, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_detach_cartridge(&machine);
+}
+
+static void test_dinamic_banking(void) {
+    c64_t machine;
+    uint8_t banks[16 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    memset(banks, 0, sizeof(banks));
+    for (i = 0; i < 16; ++i) {
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x30u + (uint8_t)i);
+    }
+
+    expect_true(
+        "attach dinamic",
+        c64_attach_dinamic_cartridge(&machine, banks, 16, 0, 1, error, sizeof(error)));
+    expect_u8("dinamic bank0 power-on", 0x30, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Bank switches on READ of $de00-$de0f. */
+    (void)c64_bus_read(&machine.bus, 0xde07);
+    expect_u8("dinamic read $de07 -> bank7", 0x37, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Reads above $de0f do nothing (unknown mirrors). */
+    (void)c64_bus_read(&machine.bus, 0xde10);
+    expect_u8("dinamic read $de10 no change", 0x37, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Writes are ignored (bank switches on reads only). */
+    c64_bus_write(&machine.bus, 0xde02, 0x02);
+    expect_u8("dinamic write ignored", 0x37, c64_bus_read(&machine.bus, 0x8000));
+
+    (void)c64_bus_read(&machine.bus, 0xde00);
+    expect_u8("dinamic read $de00 -> bank0", 0x30, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_bus_cartridge_reset(&machine.bus);
+    expect_u8("dinamic reset -> bank0", 0x30, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_detach_cartridge(&machine);
+}
+
+static void test_funplay_banking(void) {
+    c64_t machine;
+    uint8_t banks[16 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t i;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    memset(banks, 0, sizeof(banks));
+    for (i = 0; i < 16; ++i) {
+        banks[i * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x40u + (uint8_t)i);
+    }
+
+    /* Banks passed linearly (runtime de-scrambles CRT chip.bank before attach). */
+    expect_true(
+        "attach funplay",
+        c64_attach_funplay_cartridge(&machine, banks, 16, 0, 0, error, sizeof(error)));
+    expect_u8("funplay bank0 power-on", 0x40, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Register value is scrambled: $08 -> bank1, $10 -> bank2, $01 -> bank8. */
+    c64_bus_write(&machine.bus, 0xde00, 0x08);
+    expect_u8("funplay $08 -> bank1", 0x41, c64_bus_read(&machine.bus, 0x8000));
+    c64_bus_write(&machine.bus, 0xde00, 0x10);
+    expect_u8("funplay $10 -> bank2", 0x42, c64_bus_read(&machine.bus, 0x8000));
+    c64_bus_write(&machine.bus, 0xde00, 0x01);
+    expect_u8("funplay $01 -> bank8", 0x48, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Value $86 turns ROM off -> RAM at $8000. */
+    c64_debug_write_ram(&machine, 0x8000, 0x55);
+    c64_bus_write(&machine.bus, 0xde00, 0x86);
+    expect_u8("funplay $86 ROM off shows ram", 0x55, c64_bus_read(&machine.bus, 0x8000));
+
+    /* $00 re-enables 8K game at bank0. */
+    c64_bus_write(&machine.bus, 0xde00, 0x00);
+    expect_u8("funplay $00 -> bank0", 0x40, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_bus_cartridge_reset(&machine.bus);
+    expect_u8("funplay reset -> bank0", 0x40, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_detach_cartridge(&machine);
+}
+
+static void test_super_games_banking(void) {
+    c64_t machine;
+    uint8_t slots[8 * C64_CARTRIDGE_ROM_BANK_SIZE];
+    char error[256];
+    size_t b;
+
+    c64_init(&machine);
+    fill_roms(&machine.bus);
+
+    /* 4 banks × [ROML,ROMH] interleaved 8K slots. */
+    memset(slots, 0, sizeof(slots));
+    for (b = 0; b < 4; ++b) {
+        slots[(b * 2u) * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x50u + (uint8_t)b);
+        slots[(b * 2u + 1u) * C64_CARTRIDGE_ROM_BANK_SIZE] = (uint8_t)(0x60u + (uint8_t)b);
+    }
+
+    expect_true(
+        "attach super games",
+        c64_attach_super_games_cartridge(&machine, slots, 8, 0, 0, error, sizeof(error)));
+    /* Power-on: bank0, 16K enabled (ROML at $8000, ROMH at $A000). */
+    expect_u8("sg bank0 roml", 0x50, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("sg bank0 romh", 0x60, c64_bus_read(&machine.bus, 0xa000));
+
+    /* Bank = value & 3, mode bit2=0 keeps 16K enabled. */
+    c64_bus_write(&machine.bus, 0xdf00, 0x01);
+    expect_u8("sg bank1 roml", 0x51, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("sg bank1 romh", 0x61, c64_bus_read(&machine.bus, 0xa000));
+
+    /* Bit2 set disables the cart -> RAM at $8000. */
+    c64_debug_write_ram(&machine, 0x8000, 0x55);
+    c64_bus_write(&machine.bus, 0xdf00, 0x04);
+    expect_u8("sg disabled shows ram", 0x55, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Re-enable bank2. */
+    c64_bus_write(&machine.bus, 0xdf00, 0x02);
+    expect_u8("sg bank2 roml", 0x52, c64_bus_read(&machine.bus, 0x8000));
+    expect_u8("sg bank2 romh", 0x62, c64_bus_read(&machine.bus, 0xa000));
+
+    /* Bit3 write-protect latch: select bank3 + latch, then further writes ignored. */
+    c64_bus_write(&machine.bus, 0xdf00, 0x0b); /* bank3, enabled, latched */
+    expect_u8("sg bank3 latched", 0x53, c64_bus_read(&machine.bus, 0x8000));
+    c64_bus_write(&machine.bus, 0xdf00, 0x00); /* would be bank0, but latched */
+    expect_u8("sg latch blocks write", 0x53, c64_bus_read(&machine.bus, 0x8000));
+
+    /* Reset clears the latch and returns to bank0; writes work again. */
+    c64_bus_cartridge_reset(&machine.bus);
+    expect_u8("sg reset -> bank0", 0x50, c64_bus_read(&machine.bus, 0x8000));
+    c64_bus_write(&machine.bus, 0xdf00, 0x01);
+    expect_u8("sg post-reset write works", 0x51, c64_bus_read(&machine.bus, 0x8000));
+
+    c64_detach_cartridge(&machine);
+}
+
 int main(void) {
     test_ram_roundtrip();
     test_rom_visibility();
@@ -517,5 +692,9 @@ int main(void) {
     test_debugcart_d7ff();
     test_magic_desk_banking();
     test_ocean_banking();
+    test_c64gs_banking();
+    test_dinamic_banking();
+    test_funplay_banking();
+    test_super_games_banking();
     return 0;
 }

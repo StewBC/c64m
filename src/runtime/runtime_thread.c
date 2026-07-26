@@ -3479,6 +3479,179 @@ static bool runtime_attach_ocean_crt(runtime *rt, const crt_image *image, const 
     return true;
 }
 
+static bool runtime_attach_c64gs_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    uint8_t *banks = NULL;
+    size_t bank_count = 0;
+    char error[256];
+
+    if (!runtime_copy_multibank_crt(
+            rt, image, C64_CARTRIDGE_OCEAN_MAX_BANKS, "C64GS", &banks, &bank_count)) {
+        return false;
+    }
+
+    if (!c64_attach_c64gs_cartridge(
+            &rt->machine, banks, bank_count,
+            header->exrom, header->game, error, sizeof(error))) {
+        free(banks);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(banks);
+    return true;
+}
+
+static bool runtime_attach_dinamic_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    uint8_t *banks = NULL;
+    size_t bank_count = 0;
+    char error[256];
+
+    if (!runtime_copy_multibank_crt(
+            rt, image, 16u, "Dinamic", &banks, &bank_count)) {
+        return false;
+    }
+
+    if (!c64_attach_dinamic_cartridge(
+            &rt->machine, banks, bank_count,
+            header->exrom, header->game, error, sizeof(error))) {
+        free(banks);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(banks);
+    return true;
+}
+
+/* Fun Play CRT chip.bank is the scrambled IO register value; de-scramble to a
+   linear index (VICE funplay.c) before storing so the mapper sees linear banks. */
+static bool runtime_attach_funplay_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    size_t i;
+    size_t chip_count;
+    int max_bank = -1;
+    size_t bank_count;
+    uint8_t *banks;
+    char error[256];
+
+    chip_count = crt_image_chip_count(image);
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+        uint8_t linear;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            runtime_publish_error(rt, "failed to read Fun Play CRT CHIP");
+            return false;
+        }
+        linear = crt_funplay_descramble_bank((uint8_t)chip.bank);
+        if ((int)linear > max_bank) {
+            max_bank = (int)linear;
+        }
+    }
+    if (max_bank < 0 || max_bank >= 16) {
+        runtime_publish_error(rt, "unsupported Fun Play bank count");
+        return false;
+    }
+
+    bank_count = (size_t)max_bank + 1u;
+    banks = (uint8_t *)calloc(bank_count, C64_CARTRIDGE_ROM_BANK_SIZE);
+    if (banks == NULL) {
+        runtime_publish_error(rt, "out of memory for Fun Play banks");
+        return false;
+    }
+
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+        size_t offset;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            free(banks);
+            runtime_publish_error(rt, "failed to read Fun Play CRT CHIP");
+            return false;
+        }
+        offset = (size_t)crt_funplay_descramble_bank((uint8_t)chip.bank) *
+            C64_CARTRIDGE_ROM_BANK_SIZE;
+        memcpy(banks + offset, chip.bytes, C64_CARTRIDGE_ROM_BANK_SIZE);
+    }
+
+    if (!c64_attach_funplay_cartridge(
+            &rt->machine, banks, bank_count,
+            header->exrom, header->game, error, sizeof(error))) {
+        free(banks);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(banks);
+    return true;
+}
+
+/* Super Games CRT chips are 16K; split each into two interleaved 8 KiB slots
+   [ROML, ROMH] so the bank window fits the 8K-bank heap (see crt-longtail-plan). */
+static bool runtime_attach_super_games_crt(runtime *rt, const crt_image *image, const crt_header *header) {
+    size_t i;
+    size_t chip_count;
+    int max_bank = -1;
+    size_t slot_count;
+    uint8_t *slots;
+    char error[256];
+
+    chip_count = crt_image_chip_count(image);
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            runtime_publish_error(rt, "failed to read Super Games CRT CHIP");
+            return false;
+        }
+        if ((int)chip.bank > max_bank) {
+            max_bank = (int)chip.bank;
+        }
+    }
+    if (max_bank < 0 || max_bank >= 4) {
+        runtime_publish_error(rt, "unsupported Super Games bank count");
+        return false;
+    }
+
+    slot_count = ((size_t)max_bank + 1u) * 2u;
+    slots = (uint8_t *)calloc(slot_count, C64_CARTRIDGE_ROM_BANK_SIZE);
+    if (slots == NULL) {
+        runtime_publish_error(rt, "out of memory for Super Games banks");
+        return false;
+    }
+
+    for (i = 0; i < chip_count; ++i) {
+        crt_chip chip;
+        size_t roml_slot;
+
+        if (crt_image_chip(image, i, &chip) != CRT_OK) {
+            free(slots);
+            runtime_publish_error(rt, "failed to read Super Games CRT CHIP");
+            return false;
+        }
+        if (chip.rom_size != 0x4000u) {
+            free(slots);
+            runtime_publish_error(rt, "unsupported Super Games CHIP size");
+            return false;
+        }
+        roml_slot = (size_t)chip.bank * 2u;
+        memcpy(
+            slots + roml_slot * C64_CARTRIDGE_ROM_BANK_SIZE,
+            chip.bytes,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+        memcpy(
+            slots + (roml_slot + 1u) * C64_CARTRIDGE_ROM_BANK_SIZE,
+            chip.bytes + C64_CARTRIDGE_ROM_BANK_SIZE,
+            C64_CARTRIDGE_ROM_BANK_SIZE);
+    }
+
+    if (!c64_attach_super_games_cartridge(
+            &rt->machine, slots, slot_count,
+            header->exrom, header->game, error, sizeof(error))) {
+        free(slots);
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    free(slots);
+    return true;
+}
+
 static void runtime_load_crt(runtime *rt, const runtime_command *command) {
     uint8_t *bytes;
     size_t length;
@@ -3522,6 +3695,14 @@ static void runtime_load_crt(runtime *rt, const runtime_command *command) {
         attached = runtime_attach_magic_desk_crt(rt, image, header);
     } else if (crt_image_is_ocean_supported(image)) {
         attached = runtime_attach_ocean_crt(rt, image, header);
+    } else if (crt_image_is_c64gs_supported(image)) {
+        attached = runtime_attach_c64gs_crt(rt, image, header);
+    } else if (crt_image_is_funplay_supported(image)) {
+        attached = runtime_attach_funplay_crt(rt, image, header);
+    } else if (crt_image_is_super_games_supported(image)) {
+        attached = runtime_attach_super_games_crt(rt, image, header);
+    } else if (crt_image_is_dinamic_supported(image)) {
+        attached = runtime_attach_dinamic_crt(rt, image, header);
     } else {
         crt_image_destroy(image);
         runtime_publish_error(rt, "unsupported CRT cartridge type");

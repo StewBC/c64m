@@ -523,6 +523,193 @@ static int test_parse_ocean(void)
     return failures;
 }
 
+/* Flexible builder: arbitrary hardware type, chip size, and per-chip bank word. */
+static uint8_t *make_banked_crt(
+    uint16_t hw_type,
+    uint8_t exrom,
+    uint8_t game,
+    uint16_t chip_size,
+    const uint16_t *bank_values,
+    size_t count,
+    size_t *out_size)
+{
+    size_t i;
+    size_t size;
+    size_t offset;
+    uint8_t *bytes;
+
+    if (count == 0) {
+        return NULL;
+    }
+
+    size = CRT_TEST_HEADER_SIZE +
+        count * (CRT_TEST_CHIP_HEADER_SIZE + (size_t)chip_size);
+    bytes = (uint8_t *)calloc(1, size);
+    if (bytes == NULL) {
+        return NULL;
+    }
+
+    memcpy(bytes, "C64 CARTRIDGE   ", 16);
+    put_be32(&bytes[0x10], CRT_TEST_HEADER_SIZE);
+    put_be16(&bytes[0x14], 0x0100);
+    put_be16(&bytes[0x16], hw_type);
+    bytes[0x18] = exrom;
+    bytes[0x19] = game;
+    snprintf((char *)&bytes[0x20], 32, "%s", "LONGTAIL TEST");
+
+    offset = CRT_TEST_HEADER_SIZE;
+    for (i = 0; i < count; ++i) {
+        size_t j;
+        memcpy(&bytes[offset], "CHIP", 4);
+        put_be32(&bytes[offset + 0x04],
+                 CRT_TEST_CHIP_HEADER_SIZE + (uint32_t)chip_size);
+        put_be16(&bytes[offset + 0x08], 0); /* ROM */
+        put_be16(&bytes[offset + 0x0a], bank_values[i]);
+        put_be16(&bytes[offset + 0x0c], 0x8000);
+        put_be16(&bytes[offset + 0x0e], chip_size);
+        for (j = 0; j < chip_size; ++j) {
+            bytes[offset + CRT_TEST_CHIP_HEADER_SIZE + j] =
+                (uint8_t)((bank_values[i] << 4) | (j & 0x0fu));
+        }
+        offset += CRT_TEST_CHIP_HEADER_SIZE + (size_t)chip_size;
+    }
+
+    *out_size = size;
+    return bytes;
+}
+
+static int test_parse_c64gs(void)
+{
+    int failures = 0;
+    uint16_t banks[8];
+    uint8_t *bytes;
+    size_t size = 0;
+    crt_result result;
+    crt_image *image;
+    size_t i;
+
+    for (i = 0; i < 8; ++i) {
+        banks[i] = (uint16_t)i;
+    }
+    bytes = make_banked_crt(15, 0, 1, 0x2000, banks, 8, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_result(result, CRT_OK, "c64gs parse");
+    failures += expect_true(image != NULL, "c64gs image");
+    failures += expect_true(crt_image_is_c64gs_supported(image), "c64gs supported");
+    failures += expect_true(crt_image_is_supported(image), "c64gs is_supported");
+    failures += expect_false(crt_image_is_magic_desk_supported(image), "c64gs not md");
+    failures += expect_false(crt_image_is_generic_supported(image), "c64gs not generic");
+
+    crt_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
+static int test_parse_dinamic(void)
+{
+    int failures = 0;
+    uint16_t banks[16];
+    uint8_t *bytes;
+    size_t size = 0;
+    crt_result result;
+    crt_image *image;
+    size_t i;
+
+    for (i = 0; i < 16; ++i) {
+        banks[i] = (uint16_t)i;
+    }
+    bytes = make_banked_crt(17, 0, 1, 0x2000, banks, 16, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_result(result, CRT_OK, "dinamic parse");
+    failures += expect_true(crt_image_is_dinamic_supported(image), "dinamic supported");
+    failures += expect_true(crt_image_is_supported(image), "dinamic is_supported");
+    failures += expect_false(crt_image_is_c64gs_supported(image), "dinamic not c64gs");
+
+    crt_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
+static int test_parse_funplay(void)
+{
+    int failures = 0;
+    /* Real Fun Play scrambled register values for linear banks 0..15. */
+    static const uint16_t banks[16] = {
+        0, 8, 16, 24, 32, 40, 48, 56, 1, 9, 17, 25, 33, 41, 49, 57
+    };
+    uint16_t bad_bank = 0x0100; /* > $ff: rejected */
+    uint8_t *bytes;
+    size_t size = 0;
+    crt_result result;
+    crt_image *image;
+
+    /* De-scramble helper matches VICE. */
+    failures += expect_u8(crt_funplay_descramble_bank(0x08), 1, "descramble $08");
+    failures += expect_u8(crt_funplay_descramble_bank(0x01), 8, "descramble $01");
+    failures += expect_u8(crt_funplay_descramble_bank(0x39), 15, "descramble $39");
+
+    bytes = make_banked_crt(7, 0, 0, 0x2000, banks, 16, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_result(result, CRT_OK, "funplay parse");
+    failures += expect_true(crt_image_is_funplay_supported(image), "funplay supported");
+    failures += expect_true(crt_image_is_supported(image), "funplay is_supported");
+    crt_image_destroy(image);
+    free(bytes);
+
+    /* A bank word above $ff is out of range. */
+    bytes = make_banked_crt(7, 0, 0, 0x2000, &bad_bank, 1, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_false(crt_image_is_funplay_supported(image), "funplay bad bank rejected");
+    crt_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
+static int test_parse_super_games(void)
+{
+    int failures = 0;
+    uint16_t banks[4] = { 0, 1, 2, 3 };
+    uint8_t *bytes;
+    size_t size = 0;
+    crt_result result;
+    crt_image *image;
+
+    /* 16K chips. */
+    bytes = make_banked_crt(8, 0, 0, 0x4000, banks, 4, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_result(result, CRT_OK, "super games parse");
+    failures += expect_true(crt_image_is_super_games_supported(image), "super games supported");
+    failures += expect_true(crt_image_is_supported(image), "super games is_supported");
+    crt_image_destroy(image);
+    free(bytes);
+
+    /* 8K chips for type 8 are the wrong size -> unsupported. */
+    bytes = make_banked_crt(8, 0, 0, 0x2000, banks, 4, &size);
+    if (bytes == NULL) {
+        return 1;
+    }
+    image = crt_image_create(bytes, size, &result);
+    failures += expect_false(crt_image_is_super_games_supported(image), "super games 8k rejected");
+    crt_image_destroy(image);
+    free(bytes);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -538,6 +725,10 @@ int main(void)
     failures += test_classifies_unsupported_load_address();
     failures += test_parse_magic_desk();
     failures += test_parse_ocean();
+    failures += test_parse_c64gs();
+    failures += test_parse_dinamic();
+    failures += test_parse_funplay();
+    failures += test_parse_super_games();
 
     return failures == 0 ? 0 : 1;
 }
