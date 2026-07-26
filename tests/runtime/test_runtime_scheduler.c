@@ -303,6 +303,9 @@ static runtime *start_runtime(runtime_client **out_client) {
     runtime_config config = {
         .system_rom_path = "scheduler_64c.bin",
         .char_rom_path = "scheduler_character.bin",
+        /* BRK auto-pause is opt-in (default off). These scheduler tests exercise
+           the debugger's BRK-pause behavior, so enable it explicitly. */
+        .machine_config = { .pause_on_brk = 1 },
     };
     runtime *rt;
     runtime_client *client;

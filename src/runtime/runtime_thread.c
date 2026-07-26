@@ -1910,7 +1910,18 @@ static bool runtime_pause_if_breakpoint_pending(runtime *rt) {
     return true;
 }
 
+/* Free-run BRK auto-pause is opt-in (Config -> Machine -> "Pause on BRK").
+   Off by default so carts that hit a KERNAL-handled BRK during boot run through
+   it like hardware; see runtime_step_cycles_free_run and the simple free-run
+   loop for the matching gates. */
+static bool runtime_pause_on_brk_enabled(const runtime *rt) {
+    return rt->machine.config.pause_on_brk != 0;
+}
+
 static bool runtime_brk_pending(runtime *rt) {
+    if (!runtime_pause_on_brk_enabled(rt)) {
+        return false;
+    }
     if (rt->suppress_execute_bp) {
         return false;
     }
@@ -1980,8 +1991,11 @@ static uint32_t runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
     if (count == 0u) {
         return 0u;
     }
-    /* BRK-aware: may run fewer than count cycles and stop at $00 boundary. */
-    if (!c64_step_cycles_ex(&rt->machine, count, &ran, C64_STEP_STOP_BEFORE_BRK,
+    /* BRK-aware only when "Pause on BRK" is on: may run fewer than count cycles
+       and stop at a $00 boundary. Off => execute BRK like hardware. */
+    unsigned step_flags =
+        runtime_pause_on_brk_enabled(rt) ? C64_STEP_STOP_BEFORE_BRK : 0u;
+    if (!c64_step_cycles_ex(&rt->machine, count, &ran, step_flags,
                             error, sizeof(error))) {
         rt->exec_state = RUNTIME_EXEC_PAUSED;
         runtime_publish_error(rt, error);
@@ -4836,7 +4850,8 @@ int runtime_thread_main(void *userdata) {
                     uint32_t n = 1u;
                     uint32_t room = (uint32_t)(batch - i);
 
-                    if (!rt->machine.cpu.micro_active &&
+                    if (runtime_pause_on_brk_enabled(rt) &&
+                        !rt->machine.cpu.micro_active &&
                         !rt->machine.pending_cpu_trace_active &&
                         !rt->suppress_execute_bp &&
                         c64_debug_peek_cpu_byte(
@@ -4878,7 +4893,8 @@ int runtime_thread_main(void *userdata) {
                         }
                         i += (int)ran;
                     }
-                    if (!rt->machine.cpu.micro_active &&
+                    if (runtime_pause_on_brk_enabled(rt) &&
+                        !rt->machine.cpu.micro_active &&
                         !rt->machine.pending_cpu_trace_active &&
                         !rt->suppress_execute_bp &&
                         c64_debug_peek_cpu_byte(

@@ -95,6 +95,12 @@ typedef struct c64_config {
     c64_video_standard video_standard;
     int emulate_1541;   /* 1 = route disk I/O through genuine 1541 ROM; 0 = KERNAL trap */
     int media_1541;     /* 1 = GCR tracks/rotation/SYNC (opt-in media path) */
+    /* 1 = free-run auto-pauses when the next opcode is BRK ($00) (a debug aid);
+       0 = execute BRK like hardware (KERNAL handler runs). Some cartridges/games
+       hit a KERNAL-handled BRK during boot (e.g. Ocean carts like Wonderboy),
+       so 0 lets them run. Runtime-only policy: read by the runtime BRK-pause
+       path, not by the CPU/bus core, and not serialized in snapshots. */
+    int pause_on_brk;
 } c64_config;
 
 /* Returns the master clock frequency in Hz for the given config.

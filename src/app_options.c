@@ -1193,6 +1193,9 @@ static void apply_config(app_options *options, config *cfg)
     options->emulate_1541 = config_get_bool(cfg, "disk", "emulate_1541", options->emulate_1541);
     options->media_1541 = config_get_bool(cfg, "disk", "media_1541", options->media_1541);
     options->show_disk_leds = config_get_bool(cfg, "disk", "show_disk_leds", options->show_disk_leds);
+    /* Absent key defaults to false, so a machine with no explicit setting runs
+       through BRKs (Wonderboy et al. boot without stopping). */
+    options->pause_on_brk = config_get_bool(cfg, "config", "pause_on_brk", options->pause_on_brk);
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1392,7 +1395,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     };
 
     argparse_init(&argparse, parse_options, usages, 0);
-    argparse_describe(&argparse, "Commodore 64 emulator written by Codex and Claude Code, produced by Stefan Wessels, 2026.", NULL);
+    argparse_describe(&argparse, "A Commodore 64 emulator written by Codex, Claude Code and Grok, produced by Stefan Wessels, 2026.", NULL);
     argparse_parse(&argparse, argc, (const char **)argv);
 
     if (defaults) {
@@ -1556,6 +1559,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->emulate_1541 = src->emulate_1541;
     dest->media_1541 = src->media_1541;
     dest->show_disk_leds = src->show_disk_leds;
+    dest->pause_on_brk = src->pause_on_brk;
     dest->true_aspect = src->true_aspect;
     dest->crt_smoothing = src->crt_smoothing;
     dest->crt_scanlines = src->crt_scanlines;
@@ -1746,6 +1750,12 @@ bool app_options_save_shutdown(const app_options *options)
         config_set_bool(cfg, "disk", "media_1541", true);
     } else {
         config_remove_prefix(cfg, "disk", "media_1541");
+    }
+    /* Default is false; only persist when set, so an absent key means false. */
+    if (options->pause_on_brk) {
+        config_set_bool(cfg, "config", "pause_on_brk", true);
+    } else {
+        config_remove_prefix(cfg, "config", "pause_on_brk");
     }
     /* Always persist so a false value survives (default is true). */
     config_set_bool(cfg, "disk", "show_disk_leds", options->show_disk_leds);

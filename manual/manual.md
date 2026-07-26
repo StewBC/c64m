@@ -819,18 +819,22 @@ present.
 
 ### BRK
 
-A `BRK` opcode ($00) always pauses the emulator, with no breakpoint needed. The CPU does
-not execute it; the instruction is intercepted before the stack is touched, and the
-window title (see **Window Title**) ends with `Paused (BRK)`.
+When **Pause on BRK** is enabled (Config -> Machine, or `[config] pause_on_brk`), a `BRK`
+opcode ($00) pauses the emulator with no breakpoint needed. The CPU does not execute it;
+the instruction is intercepted before the stack is touched, and the window title (see
+**Window Title**) ends with `Paused (BRK)`.
 
 This usually indicates that execution has reached uninitialized memory, passed the end of
 a program, or followed a corrupted jump vector. Letting it execute can repeatedly push to
 the stack and wrap the stack pointer through `$0100-$01FF`. Pausing at the first BRK lets
 you inspect the failure before the stack is overwritten.
 
-This applies only to free-running execution (Run, Step Over, Step Out, and run-N
-commands). A single explicit step (**F11**) still executes a BRK normally, since you asked
-for that exact instruction.
+**Pause on BRK is off by default.** Some cartridges and games execute a `BRK` during
+normal boot and rely on the KERNAL handler to recover (for example Ocean carts such as
+Wonderboy); with the pause off they run through it like real hardware. Turn it on when you
+want the crash aid described above. Either way, a single explicit step (**F11**) always
+executes a BRK normally, since you asked for that exact instruction; when the pause is on,
+it also applies to free-running execution (Run, Step Over, Step Out, and run-N commands).
 
 ### Breakpoint List Format
 
@@ -1326,6 +1330,7 @@ below the tab body on every tab.
 | Video             | Select `NTSC` or `PAL`; changes take effect on reboot |
 | Keyboard Joystick | Select `Off`, `Port 1`, or `Port 2`, plus the `Numpad` or `WASD` key layout |
 | Turbo Modes       | Comma-separated mode list, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
+| Pause on BRK      | Auto-pause free-run at the next `BRK` (`$00`) as a crash aid; off by default so carts that hit a KERNAL-handled BRK during boot (e.g. Ocean's Wonderboy) keep running; applies live |
 | Emulate 1541      | Route disk I/O through the real 1541 DOS ROM (needs a 1541 ROM); applies live |
 | 1541 media (GCR)  | When Emulate 1541 is on: GCR tracks, rotation, SYNC, motor/head; enables G64 |
 | Show disk LEDs    | Draw green (read) and red (write) activity LEDs in the window corner |
@@ -1429,6 +1434,7 @@ emulator removes comments.
 | `scroll_wheel_lines` | Integer; lines scrolled per wheel click             |
 | `symbol_files`    | Comma-separated list of symbol file paths              |
 | `turbo_speeds`    | Comma-separated turbo modes, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
+| `pause_on_brk`    | `true`/`false`; when true, free-run auto-pauses at the next `BRK` (`$00`). Absent/false (default) executes BRK like hardware so carts that hit a KERNAL-handled BRK during boot keep running |
 
 ### [Video]
 

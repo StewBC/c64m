@@ -1144,6 +1144,7 @@ static c64_config machine_config_from_options(const app_options *options) {
     if (options != NULL) {
         config.emulate_1541 = options->emulate_1541 ? 1 : 0;
         config.media_1541 = options->media_1541 ? 1 : 0;
+        config.pause_on_brk = options->pause_on_brk ? 1 : 0;
     }
     return config;
 }

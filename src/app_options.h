@@ -79,6 +79,10 @@ typedef struct app_options {
     bool media_1541;
     /* When true, draw shared disk activity LEDs in the UI window corner. */
     bool show_disk_leds;
+    /* When true, free-run auto-pauses when the next opcode is BRK ($00) — a
+       debugging aid. When false (default), BRK executes like hardware so carts
+       that hit a KERNAL-handled BRK during boot (e.g. Ocean's Wonderboy) run. */
+    bool pause_on_brk;
     /* Assembler tab persistent state */
     char *assembler_file;
     char *assembler_address;
