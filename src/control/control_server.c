@@ -55,31 +55,6 @@ static void control_server_set_stopping(control_server *server, bool stopping)
     mutex_unlock(server->lock);
 }
 
-static void control_server_set_connection(
-    control_server *server,
-    platform_socket_connection *connection)
-{
-    if (server == NULL || server->lock == NULL) {
-        return;
-    }
-    mutex_lock(server->lock);
-    server->connection = connection;
-    mutex_unlock(server->lock);
-}
-
-static platform_socket_connection *control_server_get_connection(control_server *server)
-{
-    platform_socket_connection *connection;
-
-    if (server == NULL || server->lock == NULL) {
-        return NULL;
-    }
-    mutex_lock(server->lock);
-    connection = server->connection;
-    mutex_unlock(server->lock);
-    return connection;
-}
-
 /* Read one line. Returns 1=complete, 0=would-block (partial kept in *used),
    -1=error/eof. *used is the partial length carried across calls. */
 static int control_server_read_line_nb(
@@ -487,8 +462,13 @@ static int control_server_thread_main(void *userdata)
         server->connection = connection;
         mutex_unlock(server->lock);
         control_server_handle_connection(server, connection);
-        control_server_set_connection(server, NULL);
+        /* Clear and free the connection under the lock so this destroy cannot
+           race control_server_stop() closing the same pointer from the main
+           thread (heap-use-after-free on teardown / client-disconnect). */
+        mutex_lock(server->lock);
+        server->connection = NULL;
         platform_socket_connection_destroy(connection);
+        mutex_unlock(server->lock);
     }
 
     return 0;
@@ -558,12 +538,16 @@ void control_server_stop(control_server *server)
     }
 
     control_server_set_stopping(server, true);
-    {
-        platform_socket_connection *connection = control_server_get_connection(server);
-        if (connection != NULL) {
-            platform_socket_connection_close(connection);
-        }
+    /* Close the active connection while holding the lock so we cannot close a
+       pointer the worker thread is concurrently destroying (see the matching
+       locked destroy in control_server_thread_main). Close is idempotent and
+       only shuts the socket down to wake a blocked read; the worker still owns
+       the free. */
+    mutex_lock(server->lock);
+    if (server->connection != NULL) {
+        platform_socket_connection_close(server->connection);
     }
+    mutex_unlock(server->lock);
     if (server->listener != NULL) {
         platform_socket_listener_close(server->listener);
     }
