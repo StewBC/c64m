@@ -1154,7 +1154,7 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.endscope`             | Close the innermost scope (and end any output redirect)     |
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
-| `.segdef "n",addr[,noemit]` | Define a named segment at `addr`; `noemit` suppresses output |
+| `.segdef "n",addr[,flags]` | Define a named segment at `addr`. Flags (comma-separated) are any of `emit`/`noemit` (suppress output) and `locked` (pin the address; never auto-moved) |
 | `.segment "n"`          | Activate the named segment; `.segment ""` returns to native mode |
 | `.6502`                 | Restrict to 6502 opcodes (default)                           |
 | `.65c02`                | Allow 65C02 opcodes                                          |
@@ -1256,6 +1256,18 @@ starts are applied temporarily and pass 1 is restarted up to three times. This
 re-evaluates `.align` padding at each new start, so a first approximation that changes
 segment sizes can converge on a later retry. The lowest segment remains the packing
 anchor; subsequent emitted segments are packed contiguously in address order.
+
+A `locked` segment is an anchor whose start address is never changed by auto-adjust --
+use it for regions the hardware requires at a fixed address, such as a bitmap or
+sprite data that VIC-II reads from a specific location. Lower segments are still
+packed around a locked segment, but if they grow enough to overrun it, auto-adjust
+does not attempt to reshuffle the layout around the anchor: assembly fails with an
+error naming the locked segment, leaving the fix to the author.
+
+```
+.segdef "CODE",   $0810
+.segdef "HIRES",  $2000, locked   ; VIC bitmap -- must stay at $2000
+```
 
 ### Strcode
 

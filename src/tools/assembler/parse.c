@@ -1112,7 +1112,8 @@ static void dot_segdef(ASSEMBLER *as) {
         segment.segment_name_length,
         start);
     int do_not_emit = 0;
-    if(as->token.op == ',') {
+    int is_locked = 0;
+    while(as->token.op == ',') {
         next_token(as);
         if(as->token.type == TOKEN_VAR &&
            as->token.name_length == 4 &&
@@ -1124,8 +1125,13 @@ static void dot_segdef(ASSEMBLER *as) {
                   0 == asm_strnicmp(as->token.name, "noemit", 6)) {
             do_not_emit = 1;
             next_token(as);
+        } else if(as->token.type == TOKEN_VAR &&
+                  as->token.name_length == 6 &&
+                  0 == asm_strnicmp(as->token.name, "locked", 6)) {
+            is_locked = 1;
+            next_token(as);
         } else {
-            asm_err(as, ASM_ERR_RESOLVE, "The optional parameter to .segdef after the name and start is either emit or noemit");
+            asm_err(as, ASM_ERR_RESOLVE, "The optional .segdef flags after the name and start are any of emit, noemit or locked, separated by commas");
             return;
         }
     }
@@ -1160,6 +1166,7 @@ static void dot_segdef(ASSEMBLER *as) {
     new_segment->segment_output_address = start;
     new_segment->segment_init = 1;
     new_segment->do_not_emit = do_not_emit;
+    new_segment->is_locked = is_locked;
     if(ASM_OK != ARRAY_ADD(&as->active_target->segments, new_segment)) {
         free((char *)new_segment->segment_name);
         free(new_segment);

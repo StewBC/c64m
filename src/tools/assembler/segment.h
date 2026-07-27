@@ -16,6 +16,7 @@ typedef struct {
     uint16_t segment_start_address;
     uint16_t segment_output_address;
     int do_not_emit;
+    int is_locked;
     int segment_init;
 } SEGMENT;
 

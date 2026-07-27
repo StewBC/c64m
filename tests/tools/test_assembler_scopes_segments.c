@@ -316,6 +316,134 @@ static int test_segment_auto_adjust_converges(void)
     return failures;
 }
 
+static int errorlog_contains(const ERRORLOG *log, const char *needle)
+{
+    for (size_t i = 0; i < log->log_array.items; i++) {
+        const ERROR_ENTRY *e = ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
+        if (e->err_str && strstr(e->err_str, needle) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A locked segment is an anchor auto-adjust must not move. When lower segments
+   overrun it, the reorder is abandoned and assembly fails naming the anchor -
+   rather than reshuffling the layout around the pinned address. */
+static int test_segment_locked_blocks_reorder(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    ASSEMBLER as;
+    CB_ASM_CTX cb;
+    int failures = 0;
+    const char *source =
+        ".segdef \"CODE\", $1000\n"
+        ".segdef \"HIRES\", $1080, locked\n"
+        ".segment \"CODE\"\n"
+        "    .res $100\n"
+        "    .byte $c0\n"
+        ".segment \"HIRES\"\n"
+        "    .byte $11\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    memset(&mem, 0, sizeof(mem));
+    memset(&cb, 0, sizeof(cb));
+    cb.user = &mem;
+    cb.output_byte = output_byte;
+    errlog_init(&log);
+    if (assembler_init(&as, &log, &cb) != ASM_OK) {
+        fprintf(stderr, "assembler_init failed for locked-block test\n");
+        errlog_shutdown(&log);
+        c64m_test_remove_file(path);
+        return 1;
+    }
+    assembler_set_auto_adjust_segments(&as, 1);
+    if (assembler_assemble(&as, path, 0x0801) != ASM_ERR) {
+        fprintf(stderr, "auto-adjust moved a locked segment instead of failing\n");
+        failures++;
+    }
+    if (!errorlog_contains(&log, "Locked segment")) {
+        fprintf(stderr, "locked overrun did not report the anchor\n");
+        failures++;
+    }
+    assembler_shutdown(&as);
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
+/* An overlap among non-locked segments still auto-adjusts around a locked
+   anchor: the anchor keeps its declared address (no adjustment entry) while the
+   lower segments are compacted. */
+static int test_segment_locked_allows_reorder(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    ASSEMBLER as;
+    CB_ASM_CTX cb;
+    adjustment_capture capture;
+    int failures = 0;
+    const char *source =
+        ".segdef \"A\", $1000\n"
+        ".segdef \"B\", $1080\n"
+        ".segdef \"HIRES\", $2000, emit, locked\n"
+        ".segment \"A\"\n"
+        "    .res $100\n"
+        "    .byte $a1\n"
+        ".segment \"B\"\n"
+        "    .byte $b1\n"
+        ".segment \"HIRES\"\n"
+        "    .byte $11\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    memset(&mem, 0, sizeof(mem));
+    memset(&capture, 0, sizeof(capture));
+    memset(&cb, 0, sizeof(cb));
+    cb.user = &mem;
+    cb.output_byte = output_byte;
+    errlog_init(&log);
+    if (assembler_init(&as, &log, &cb) != ASM_OK) {
+        fprintf(stderr, "assembler_init failed for locked-allow test\n");
+        errlog_shutdown(&log);
+        c64m_test_remove_file(path);
+        return 1;
+    }
+    assembler_set_auto_adjust_segments(&as, 1);
+    if (assembler_assemble(&as, path, 0x0801) != ASM_OK) {
+        fprintf(stderr, "auto-adjust around a locked anchor failed with %zu errors\n",
+                log.log_array.items);
+        failures++;
+    }
+    assembler_walk_segment_adjustments(&as, capture_adjustment, &capture);
+    /* A and B are compacted; the locked HIRES anchor is never suggested. */
+    if (capture.count != 2 ||
+        strcmp(capture.name[0], "A") != 0 || capture.address[0] != 0x1000 ||
+        strcmp(capture.name[1], "B") != 0 || capture.address[1] != 0x1101) {
+        fprintf(stderr, "locked-anchor adjustment map mismatch (count %zu)\n",
+                capture.count);
+        failures++;
+    }
+    if (mem.memory[0x1100] != 0xa1 ||
+        mem.memory[0x1101] != 0xb1 ||
+        mem.memory[0x2000] != 0x11) {
+        fprintf(stderr, "locked-anchor output landed at wrong addresses\n");
+        failures++;
+    }
+    assembler_shutdown(&as);
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -325,6 +453,8 @@ int main(void)
     failures += test_segments();
     failures += test_scope_segment_errors();
     failures += test_segment_auto_adjust_converges();
+    failures += test_segment_locked_blocks_reorder();
+    failures += test_segment_locked_allows_reorder();
 
     return failures == 0 ? 0 : 1;
 }

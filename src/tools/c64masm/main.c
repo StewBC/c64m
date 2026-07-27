@@ -182,11 +182,12 @@ static void dump_segments(FILE *fp, DYNARRAY *targets) {
             if(s->segment_output_address == s->segment_start_address) {
                 continue;
             }
-            fprintf(fp, "\n  %.*s [%04X-%04X)%s",
+            fprintf(fp, "\n  %.*s [%04X-%04X)%s%s",
                     (int)s->segment_name_length,
                     s->segment_name ? s->segment_name : "",
                     s->segment_start_address, s->segment_output_address,
-                    s->do_not_emit ? " (noemit)" : "");
+                    s->do_not_emit ? " (noemit)" : "",
+                    s->is_locked ? " (locked)" : "");
         }
         fprintf(fp, "\n}\n");
     }

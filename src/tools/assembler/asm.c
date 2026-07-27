@@ -17,6 +17,7 @@ typedef struct {
 typedef struct {
     int overlaps;
     int wraps;
+    int locked_conflict;
     int allocation_failed;
 } SEGMENT_CHECK_RESULT;
 
@@ -370,6 +371,49 @@ static SEGMENT_CHECK_RESULT check_segment_overlaps(
         result.wraps += target_wraps;
 
         if(target_overlaps > 0) {
+            // A locked segment is an anchor: it must stay at its declared
+            // start. If compacting the lower segments would run into a locked
+            // segment, we do not attempt to reorder around it -- that is left
+            // to the author. We report it and let assembly fail.
+            int target_locked_conflict = 0;
+            {
+                uint16_t next_addr = segs[0]->segment_start_address;
+                for(int i = 0; i < count; i++) {
+                    if(segs[i]->segment_output_address < segs[i]->segment_start_address) {
+                        continue;
+                    }
+                    uint16_t size = segs[i]->segment_output_address - segs[i]->segment_start_address;
+                    if(segs[i]->is_locked) {
+                        if(next_addr > segs[i]->segment_start_address) {
+                            target_locked_conflict = 1;
+                            if(log_issues) {
+                                const char *lname = segs[i]->segment_name ?
+                                    segs[i]->segment_name : "<default>";
+                                asm_log_direct(
+                                    as,
+                                    "Locked segment \"%.*s\" at $%04X would be overrun by lower segments (they need up to $%04X) -- reorder aborted, adjust the layout by hand",
+                                    (int)segs[i]->segment_name_length,
+                                    lname,
+                                    segs[i]->segment_start_address,
+                                    next_addr);
+                            }
+                            break;
+                        }
+                        next_addr = segs[i]->segment_start_address + size;
+                    } else {
+                        next_addr += size;
+                    }
+                }
+            }
+
+            if(target_locked_conflict) {
+                result.locked_conflict++;
+                if(suggestions) {
+                    segment_adjustments_remove_target(suggestions, ti);
+                }
+                continue;
+            }
+
             if(suggestions) {
                 segment_adjustments_remove_target(suggestions, ti);
             }
@@ -383,6 +427,11 @@ static SEGMENT_CHECK_RESULT check_segment_overlaps(
                 }
                 const char *name = segs[i]->segment_name ? segs[i]->segment_name : "<default>";
                 uint16_t size = segs[i]->segment_output_address - segs[i]->segment_start_address;
+                if(segs[i]->is_locked) {
+                    // Anchor stays put: no suggestion, just advance past it.
+                    next_addr = segs[i]->segment_start_address + size;
+                    continue;
+                }
                 if(log_issues) {
                     asm_log_direct(
                         as,
@@ -621,7 +670,7 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
             segment_adjustments_clear(&suggestions);
             return ASM_ERR;
         }
-        if(layout.wraps > 0) {
+        if(layout.wraps > 0 || layout.locked_conflict > 0) {
             segment_adjustments_clear(&suggestions);
             (void)check_segment_overlaps(as, NULL, 1);
             return ASM_ERR;

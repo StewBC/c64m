@@ -7,6 +7,9 @@
   in-emulator host. Its opt-in segment auto-adjust mode performs up to three
   fresh pass-1 layout retries using structured overlap suggestions; pass 2 only
   runs after layout stabilizes, and hosts can walk the applied address map.
+  Segments tagged `locked` in `.segdef` are anchors auto-adjust never moves; if
+  lower segments overrun a locked segment the retry is abandoned and assembly
+  fails naming the anchor rather than reshuffling around it.
 - `src/tools/disasm_6502`: 6502 disassembly and opcode addressing-mode metadata.
   The frontend adds effective-address/value annotations from copied CPU/memory
   snapshots.
