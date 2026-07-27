@@ -2864,7 +2864,14 @@ static void vicii_fetch_g_or_idle_access(vicii *v, const c64_bus_t *bus, uint32_
         } else {
             uint16_t char_base = (uint16_t)(vic_bank +
                 ((v->registers[VICII_REG_MEMORY_POINTER] >> 1) & 0x07u) * 0x0800u);
-            uint8_t code = v->video_matrix[v->vmli];
+            /* vmli is a capped 0..40 counter (see vicii.h); the terminal 40 has
+               no matrix cell. In free-run vmli tracks col and is always < 40
+               across the g-access window, but a snapshot can restore a vmli that
+               is inconsistent with cycle_in_line and run it forward, driving vmli
+               to 40 mid-window. Guard the read like the c-access/idle paths do. */
+            uint8_t code = (v->vmli < (uint8_t)VICII_TEXT_COLUMNS)
+                ? v->video_matrix[v->vmli]
+                : 0u;
             if (ecm) {
                 code &= 0x3fu;
             }
