@@ -504,6 +504,19 @@ set_tests_properties(history_control_integration PROPERTIES
     TIMEOUT 20
 )
 
+add_test(
+    NAME run_to_raster_control_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/control/test_run_to_raster_control.py
+        $<TARGET_FILE:c64m>
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(run_to_raster_control_integration PROPERTIES
+    TIMEOUT 30
+)
+
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c
 )

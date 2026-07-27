@@ -115,6 +115,14 @@ The standard deferred timeout is 2000 ms. Assembly and `history-find` use
 10000 ms. Wait commands
 accept 1..600000 ms and default to 2000 ms.
 
+Every accepted request must produce exactly one response with its own wire id;
+a command that returns no response (or one with the wrong id) desyncs the client
+and leaves the request permanently outstanding. As a backstop, when the client
+disconnects the single-client connection handler waits at most 3000 ms (> the
+2000 ms deferred timeout, so genuine completions still flush) for outstanding
+responses to drain, then abandons the connection so the next client is served —
+one lost or misrouted response cannot wedge the control port.
+
 ### Delivery classes (control-facing summary)
 
 - **Immediate** responses (parser errors, `get-state` from cache, `get-frame`

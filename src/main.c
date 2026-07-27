@@ -5615,6 +5615,7 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_RUN_INSTRUCTIONS:
         case CONTROL_COMMAND_RUN_TO:
         case CONTROL_COMMAND_STEP_FRAME:
+        case CONTROL_COMMAND_RUN_TO_RASTER:
         case CONTROL_COMMAND_KEY_DOWN:
         case CONTROL_COMMAND_KEY_UP:
         case CONTROL_COMMAND_RESTORE:

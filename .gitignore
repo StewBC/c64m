@@ -3,6 +3,8 @@
 assets/
 build-trace/
 build/
+# Out-of-tree sanitizer / experimental build dirs (e.g. build-asan, build-tsan)
+build-*/
 disks/
 JiffyDos/
 md-files/

@@ -15,7 +15,12 @@ enum {
     CONTROL_QUEUE_CAPACITY = 32,
     CONTROL_RESPONSE_LINE_MAX = 512,
     /* Match deferred table capacity: max outstanding pipelined requests. */
-    CONTROL_PIPELINE_HIGH_WATER = CONTROL_DEFERRED_CAPACITY
+    CONTROL_PIPELINE_HIGH_WATER = CONTROL_DEFERRED_CAPACITY,
+    /* After the client disconnects, wait at most this long for outstanding
+       responses to drain before abandoning the connection. Must exceed the
+       main-thread deferred timeout (2000 ms) so genuine completions still
+       flush; it only backstops responses that never arrive. */
+    CONTROL_DISCONNECT_DRAIN_MS = 3000
 };
 
 struct control_server {
@@ -291,6 +296,7 @@ static bool control_server_handle_connection(
     uint32_t outstanding_ids[CONTROL_PIPELINE_HIGH_WATER];
     size_t outstanding = 0;
     bool read_closed = false;
+    uint64_t read_closed_deadline = 0;
 
     if (!platform_socket_set_nonblocking(connection, true)) {
         /* Fall back to legacy one-in-flight blocking loop. */
@@ -399,11 +405,25 @@ static bool control_server_handle_connection(
                     outstanding_ids[outstanding++] = request.id;
                 }
             } else if (line_rc < 0) {
+                if (!read_closed) {
+                    /* Peer hung up. Give outstanding deferred work a bounded
+                       grace period to post its responses (the main-thread
+                       deferred timeout is shorter, so legitimate completions
+                       still flush), then abandon the connection regardless.
+                       Without this, a single response that never arrives - a
+                       lost or misrouted completion - would keep this handler
+                       looping forever and, because only one client is served
+                       at a time, wedge the control port for every future
+                       client. */
+                    read_closed_deadline =
+                        SDL_GetTicks64() + CONTROL_DISCONNECT_DRAIN_MS;
+                }
                 read_closed = true;
             }
         }
 
-        if (read_closed && outstanding == 0) {
+        if (read_closed &&
+            (outstanding == 0 || SDL_GetTicks64() >= read_closed_deadline)) {
             break;
         }
 
