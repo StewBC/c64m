@@ -1,5 +1,7 @@
 #include "d64.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -355,7 +357,8 @@ static int test_blank_fixture(void)
 
     snprintf(path, sizeof(path), "%s/assets/disks/blank.d64", C64M_SOURCE_DIR);
     if (read_file(path, &bytes, &size) != 0) {
-        return 1;
+        fprintf(stderr, "SKIP: required asset not present: %s\n", path);
+        return -1; /* skip sentinel: gitignored copyrighted fixture absent */
     }
 
     image = d64_image_create(bytes, size, &result);
@@ -418,7 +421,8 @@ static int test_odell_fixture(void)
 
     snprintf(path, sizeof(path), "%s/assets/disks/ODELLLAK.D64", C64M_SOURCE_DIR);
     if (read_file(path, &bytes, &size) != 0) {
-        return 1;
+        fprintf(stderr, "SKIP: required asset not present: %s\n", path);
+        return -1; /* skip sentinel: gitignored copyrighted fixture absent */
     }
 
     image = d64_image_create(bytes, size, &result);
@@ -648,10 +652,18 @@ static int test_short_prg(void)
 int main(void)
 {
     int failures = 0;
+    int skipped = 0;
+    int r;
 
+    /* In-memory parser subtests always run. The blank.d64 / ODELLLAK.D64
+       fixtures are copyrighted, gitignored assets; their subtests return a
+       negative skip sentinel when absent, and the whole test then reports
+       skipped (not failed) provided nothing else failed. */
     failures += test_geometry_and_size();
-    failures += test_blank_fixture();
-    failures += test_odell_fixture();
+    r = test_blank_fixture();
+    if (r < 0) { skipped = 1; } else { failures += r; }
+    r = test_odell_fixture();
+    if (r < 0) { skipped = 1; } else { failures += r; }
     failures += test_generated_minimal_prg();
     failures += test_malformed_directory_pointer();
     failures += test_directory_loop();
@@ -660,5 +672,8 @@ int main(void)
     failures += test_write_prg_round_trip();
     failures += test_write_prg_replace_and_duplicate();
 
-    return failures == 0 ? 0 : 1;
+    if (failures != 0) {
+        return 1;
+    }
+    return skipped ? C64M_TEST_SKIP : 0;
 }

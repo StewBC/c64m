@@ -131,6 +131,7 @@ target_link_libraries(test_c64_snapshot_1541_midload PRIVATE
 )
 
 add_test(NAME c64_snapshot_1541_midload COMMAND test_c64_snapshot_1541_midload)
+set_tests_properties(c64_snapshot_1541_midload PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_sid
     tests/machine/test_sid.c
@@ -301,6 +302,7 @@ target_link_libraries(test_c64_disk_load PRIVATE
 )
 
 add_test(NAME c64_disk_load COMMAND test_c64_disk_load)
+set_tests_properties(c64_disk_load PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_c64_real_1541_load
     tests/machine/test_c64_real_1541_load.c
@@ -317,6 +319,7 @@ target_link_libraries(test_c64_real_1541_load PRIVATE
 )
 
 add_test(NAME c64_real_1541_load COMMAND test_c64_real_1541_load)
+set_tests_properties(c64_real_1541_load PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_c64_robocop_g64
     tests/machine/test_c64_robocop_g64.c
@@ -333,6 +336,7 @@ target_link_libraries(test_c64_robocop_g64 PRIVATE
 )
 
 add_test(NAME c64_robocop_g64 COMMAND test_c64_robocop_g64)
+set_tests_properties(c64_robocop_g64 PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(probe_c64_arkanoid_g64
     tests/machine/probe_c64_arkanoid_g64.c
@@ -350,6 +354,7 @@ target_link_libraries(probe_c64_arkanoid_g64 PRIVATE
 
 add_test(NAME c64_arkanoid_g64 COMMAND probe_c64_arkanoid_g64)
 add_test(NAME c64_arkanoid_alt_g64 COMMAND probe_c64_arkanoid_g64 alt)
+set_tests_properties(c64_arkanoid_g64 c64_arkanoid_alt_g64 PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_frontend_input
     tests/frontend/test_frontend_input.c
@@ -538,6 +543,7 @@ target_link_libraries(test_d64 PRIVATE
 )
 
 add_test(NAME d64 COMMAND test_d64)
+set_tests_properties(d64 PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_t64
     tests/tools/test_t64.c
@@ -554,6 +560,7 @@ target_link_libraries(test_t64 PRIVATE
 )
 
 add_test(NAME t64 COMMAND test_t64)
+set_tests_properties(t64 PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_crt
     tests/tools/test_crt.c
@@ -748,6 +755,7 @@ target_link_libraries(test_runtime_disk PRIVATE
 )
 
 add_test(NAME runtime_disk COMMAND test_runtime_disk)
+set_tests_properties(runtime_disk PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_runtime_crt
     tests/runtime/test_runtime_crt.c
@@ -776,6 +784,7 @@ target_link_libraries(test_runtime_real_1541_autorun PRIVATE
 )
 
 add_test(NAME runtime_real_1541_autorun COMMAND test_runtime_real_1541_autorun)
+set_tests_properties(runtime_real_1541_autorun PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_runtime_basic_run
     tests/runtime/test_runtime_basic_run.c

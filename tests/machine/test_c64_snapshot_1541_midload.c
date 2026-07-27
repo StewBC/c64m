@@ -9,6 +9,8 @@
 #include "c64_rom.h"
 #include "c64_snapshot.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -177,6 +179,15 @@ int main(void) {
     int mid_ok = 0;
     size_t i;
     uint8_t control_ram[0x10000];
+
+    {
+        char asset_path[512];
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/arkanoid[imagine_1988](pal).g64", C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+    }
 
     /* 1) Never-snapshotted control run. */
     run_control_to_handoff(&control);

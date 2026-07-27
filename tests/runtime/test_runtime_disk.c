@@ -2,6 +2,8 @@
 #include "runtime_client.h"
 #include "runtime_internal.h"
 
+#include "../test_asset.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -295,6 +297,19 @@ static void test_autorun_does_not_rearm_on_disk_replacement(void) {
 }
 
 int main(void) {
+    {
+        char asset_path[512];
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/blank.d64", C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/ODELLLAK.D64", C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+    }
     write_runtime_roms();
     test_mount_replace_unmount_and_failure();
     test_autorun_does_not_rearm_on_disk_replacement();

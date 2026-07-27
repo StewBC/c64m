@@ -2,6 +2,8 @@
 #include "c64_rom.h"
 #include "d64.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -649,6 +651,19 @@ static void test_kernal_save_trap_writes_prg(void) {
 }
 
 int main(void) {
+    {
+        char asset_path[512];
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/ODELLLAK.D64", C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/blank.d64", C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+    }
     test_load_prg_secondary_one();
     test_load_prg_basic_semantics();
     test_failures_and_device_fallthrough();

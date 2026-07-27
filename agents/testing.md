@@ -15,6 +15,21 @@ rerun the suite merely to validate these handoffs when another agent is actively
 working in the tree; use the owner-provided baseline unless explicitly asked to
 verify it.
 
+### Tests that need gitignored media SKIP, not fail
+
+Copyrighted disk/tape/CRT media under `assets/` is gitignored, so it is absent on
+clean checkouts, git worktrees, and CI. Tests that require such a file check for
+it up front and return `C64M_TEST_SKIP` (77) when it is missing; those tests are
+marked `SKIP_RETURN_CODE 77` in `CMakeLists.txt`, so CTest reports them as
+**Skipped** rather than **Failed**. See the helper `tests/test_asset.h`. The
+asset-gated tests are `c64_snapshot_1541_midload`, `c64_disk_load`,
+`c64_real_1541_load`, `c64_robocop_g64`, `c64_arkanoid_g64`,
+`c64_arkanoid_alt_g64`, `d64`, `t64`, `runtime_disk`, and
+`runtime_real_1541_autorun`. `d64` and `t64` still run their in-memory parser
+subtests and only skip the fixture-backed ones. On a machine with `assets/`
+present the full suite runs; a run showing these ten as Skipped is a missing-asset
+environment, not a regression.
+
 ## High-value test groups
 
 - Machine/CPU/bus: `c64_bus`, `c64_cpu_validation`, `c64_boot_progression`,

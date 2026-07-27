@@ -12,6 +12,8 @@
 #include "c64.h"
 #include "c64_rom.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,6 +202,15 @@ static void test_robocop_load1_matches_vice(void) {
 }
 
 int main(void) {
+    {
+        char asset_path[512];
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/robocop[data_east_1987](ntsc)(alt)(!).g64",
+                 C64M_SOURCE_DIR);
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+    }
     test_robocop_load1_matches_vice();
     return 0;
 }

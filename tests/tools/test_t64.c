@@ -1,5 +1,7 @@
 #include "t64.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,9 +152,15 @@ static void test_extract_snakebyt_sample(void) {
 }
 
 int main(void) {
+    /* In-memory parser tests always run. The SNAKEBYT.T64 fixture is a
+       copyrighted, gitignored asset, so skip that subtest (and report the whole
+       test as skipped) when it is absent rather than failing. */
     test_extract_minimal();
     test_extracts_with_bogus_end_address();
     test_rejects_bad_range();
+    if (c64m_test_asset_missing(C64M_SOURCE_DIR "/assets/tapes/SNAKEBYT.T64")) {
+        return C64M_TEST_SKIP;
+    }
     test_extract_snakebyt_sample();
     return 0;
 }

@@ -15,6 +15,8 @@
 #include "c64.h"
 #include "c64_rom.h"
 
+#include "../test_asset.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +137,16 @@ int main(int argc, char **argv) {
     uint64_t cycle;
     int alt = argc > 1 && strcmp(argv[1], "alt") == 0;
     int saw_9400 = 0;
+
+    {
+        char asset_path[512];
+        snprintf(asset_path, sizeof(asset_path),
+                 "%s/assets/disks/arkanoid[imagine_1988](pal)%s.g64",
+                 C64M_SOURCE_DIR, alt ? "(alt)" : "");
+        if (c64m_test_asset_missing(asset_path)) {
+            return C64M_TEST_SKIP;
+        }
+    }
 
     install_media_pal(&machine);
     mount_arkanoid(&machine, alt);

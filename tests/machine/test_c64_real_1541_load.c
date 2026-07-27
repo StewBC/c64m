@@ -2,6 +2,8 @@
 #include "c64_rom.h"
 #include "c1541_media.h"
 
+#include "../test_asset.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -525,6 +527,23 @@ static void test_g64_dos_write_footprint_next_header_intact(void) {
 }
 
 int main(void) {
+    {
+        static const char *const required[] = {
+            "GALENCIA.D64",
+            "blank.d64",
+            "robocop[data_east_1987](ntsc)(alt)(!).g64",
+            "blank_dos.g64",
+        };
+        char asset_path[512];
+        size_t i;
+        for (i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
+            snprintf(asset_path, sizeof(asset_path),
+                     "%s/assets/disks/%s", C64M_SOURCE_DIR, required[i]);
+            if (c64m_test_asset_missing(asset_path)) {
+                return C64M_TEST_SKIP;
+            }
+        }
+    }
     test_real_1541_star_load_returns();
     test_real_1541_media_star_load_returns();
     test_real_1541_media_save_small_prg();
