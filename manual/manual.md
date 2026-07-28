@@ -870,6 +870,14 @@ CPU's current mapping matches. `Map` means fire regardless of mapping.
 **Range**: check to enter a second address; any access in `[start, end]` triggers the
 breakpoint.
 
+**Conditions** (control port only): a breakpoint created over the control port can
+carry a guard (`when=`) so it only fires under a stated circumstance, such as a write
+that happens inside an IRQ handler or on a given raster line. Guards are stored in the
+INI as a `when=` item and keep working across restarts, but this editor cannot show or
+change them. Saving a guarded breakpoint from this dialog clears its guard, because the
+dialog rebuilds the whole definition from the fields shown here. See the control port
+documentation for the condition syntax.
+
 **Actions**:
 
 | Action  | Parameter field | Effect                                                  |

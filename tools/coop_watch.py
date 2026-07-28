@@ -34,10 +34,23 @@ WORKFLOW
     you reproduce: the machine auto-freezes at the exact instruction and the
     next SNAP is the smoking gun (stop=breakpoint) rather than the aftermath.
 
+    `[opts]` are passed through to `break-create`, so a watchpoint can carry a
+    guard and freeze only on the circumstance you described - up to 4 ANDed
+    terms over the CPU registers, P flags, the written byte, one memory byte,
+    and the VIC beam position (see agents/control-port.md):
+
+        arm write $D021 when=i==1                     only inside an IRQ
+        arm write $D010 when=value!&1,mem($D000)>$F0  XMSB cleared, sprite 0 right
+        arm write $00C3 when=raster>=250              only in the lower border
+        count write $D015 when=raster<50              how often, no pause
+
+    A guard is what turns "it glitched a second ago" into a freeze at the
+    instruction that did it.
+
 INBOX PROTOCOL (append one command per line to build/debug/coop_inbox)
     resume                         run and go back to watching
-    arm  <access> <addr> [end=A]   break-create ... actions=break  (access: exec|read|write|read-write)
-    count <access> <addr> [end=A]  break-create ... actions=none   (count-only, no pause)
+    arm  <access> <addr> [opts]    break-create ... actions=break  (access: exec|read|write|read-write)
+    count <access> <addr> [opts]   break-create ... actions=none   (count-only, no pause)
     clear                          break-clear-all
     dump <addr> <len> [mode]       extra get-memory into the current snap file
     hist <addr> [access] [limit]   extra history-find/read into the current snap file

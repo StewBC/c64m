@@ -1225,6 +1225,8 @@ static void test_runtime_create_update_duplicate_breakpoint_definitions(void) {
 
     rt = start_runtime(&client);
 
+    memset(&definition, 0, sizeof(definition));
+
     definition.enabled = 1;
     definition.start_address = 0xd000;
     definition.end_address = 0xd0ff;
@@ -1257,6 +1259,8 @@ static void test_runtime_create_update_duplicate_breakpoint_definitions(void) {
         fail("duplicate breakpoint reused runtime id");
     }
 
+    memset(&definition, 0, sizeof(definition));
+
     definition.enabled = 0;
     definition.start_address = 0xc000;
     definition.end_address = 0xc000;
@@ -1286,6 +1290,8 @@ static void test_runtime_execute_breakpoint_supports_ranges_and_mapping(void) {
 
     write_runtime_roms();
     rt = start_runtime(&client);
+
+    memset(&definition, 0, sizeof(definition));
 
     definition.enabled = 1;
     definition.start_address = 0xe000;
@@ -1327,6 +1333,8 @@ static void test_runtime_read_write_watchpoints_use_access_and_mapping(void) {
     write_runtime_roms();
     patch_runtime_kernal_reset_code(lda_abs_2000, sizeof(lda_abs_2000));
     rt = start_runtime(&client);
+
+    memset(&definition, 0, sizeof(definition));
 
     definition.enabled = 1;
     definition.start_address = 0x2000;
@@ -1387,6 +1395,8 @@ static void test_runtime_breakpoint_counters_gate_triggers(void) {
     write_runtime_roms();
     rt = start_runtime(&client);
 
+    memset(&definition, 0, sizeof(definition));
+
     definition.enabled = 1;
     definition.start_address = 0xe000;
     definition.end_address = 0xe0ff;
@@ -1440,6 +1450,8 @@ static void test_runtime_breakpoint_counter_zero_and_disabled_rules(void) {
     write_runtime_roms();
     rt = start_runtime(&client);
 
+    memset(&definition, 0, sizeof(definition));
+
     definition.enabled = 1;
     definition.start_address = TEST_RESET_VECTOR;
     definition.end_address = TEST_RESET_VECTOR;
@@ -1467,6 +1479,8 @@ static void test_runtime_breakpoint_counter_zero_and_disabled_rules(void) {
     write_runtime_roms();
     rt = start_runtime(&client);
 
+    /* Reuses the address/access/action fields set above; only the counter
+       behavior changes. */
     definition.enabled = 0;
     definition.initial_count = 2;
     definition.reset_count = 2;
@@ -1498,6 +1512,8 @@ static void test_runtime_non_break_actions_do_not_pause(void) {
 
     write_runtime_roms();
     rt = start_runtime(&client);
+
+    memset(&definition, 0, sizeof(definition));
 
     definition.enabled = 1;
     definition.start_address = TEST_RESET_VECTOR;
@@ -1651,6 +1667,8 @@ static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
     expect_true("clear loaded breakpoint before save test", runtime_client_clear_all_breakpoints(client));
     poll_breakpoint_count(client, &event, &bps, 0);
 
+    memset(&definition, 0, sizeof(definition));
+
     definition.enabled = 1;
     definition.start_address = 0xc000;
     definition.end_address = 0xc000;
@@ -1664,6 +1682,8 @@ static void test_runtime_saves_breakpoints_to_ini_with_suffixes(void) {
     expect_true("create save breakpoint 1", runtime_client_create_breakpoint(client, &definition));
     poll_breakpoint_count(client, &event, &bps, 1);
 
+    /* Deliberately reuses the address fields above so this lands on C000 as a
+       duplicate (the saved key gets the `.1` suffix asserted below). */
     definition.enabled = 0;
     definition.access = RUNTIME_BREAKPOINT_ACCESS_READ | RUNTIME_BREAKPOINT_ACCESS_WRITE;
     definition.mapping = RUNTIME_BREAKPOINT_MAPPING_RAM;

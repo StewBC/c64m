@@ -1,0 +1,177 @@
+# Frame ring plan (Tier 1B)
+
+**Status:** proposed (2026-07-28). Not implemented. Test-first work breakdown;
+source and tests are authoritative once code lands.
+
+## Why this exists
+
+The CPU flight recorder answers "what *executed* before it went wrong". It cannot
+answer the two questions that matter for VIC / sprite-multiplexer / one-frame
+glitches:
+
+> What did the screen actually **show** three frames ago?
+>
+> What VIC **internal** state produced that frame — which sprite DMA'd on line N,
+> was it a badline, was the XMSB latched at display time different from the
+> shadow register the CPU wrote?
+
+A human pausing "a second late" is ≈50 PAL frames past the glitch, and the bad
+frame's pixels are gone the instant the beam moves on. Sprite **register** writes
+(`$D000..$D02E`) are already in the flight recorder (they are CPU bus writes, and
+`coop_watch.py` already decodes them), so this plan does **not** re-record those.
+It records the two things that are genuinely unreconstructable: the **pixels over
+time** and the **VIC derived state over time**.
+
+"Modern machines have 16 GB, just log everything" is practical here — see sizing.
+
+## Two rings, one cycle axis
+
+Both rings are keyed by `machine_cycle` **and** `frame_number` so they
+cross-reference each other and the flight recorder. Given a bad `frame#` you can
+pull: its pixels (frame ring), its per-line VIC state (VIC ring), and the CPU
+records for its cycle span (flight recorder) — the full picture of one frame.
+
+### Ring A — framebuffer ring (the pixels black box)
+
+An N-deep ring of **completed `indexed8` frames** (palette index 0..15, one byte
+per pixel — the oracle-compare format, and 4x smaller than ARGB).
+
+- Tap point: `runtime_publish_completed_frame` /
+  `runtime_publish_completed_frame_turbo` (`src/runtime/runtime_thread.c`, ~1160,
+  ~1207). The completed snapshot already exists there; the ring stores an
+  `indexed8` reduction (or stores ARGB and converts on read — decide by cost;
+  indexed8 storage is preferred for size).
+- Each slot: `{ frame_number, machine_cycle, width, height, uint8 pixels[] }`.
+- **Only records at turbo 1/2.** Warp (turbo 3) disables the live ARGB renderer
+  (`agents/control-port.md` § turbo), so there are no real pixels to store; the
+  ring pauses and `frame-ring-info` reports `live=0`. Coop play is turbo 1, which
+  is the target workflow, so this is not a practical limit.
+
+### Ring B — VIC derived-state ring (the "why" black box)
+
+A per-line (or per-line-of-interest) ring of VIC **internal** state that CPU
+writes cannot reveal. Fields (superset of `c64_vicii_hardware_snapshot`,
+`src/machine/c64.h:253`):
+
+- `frame_number`, `raster_line`, `machine_cycle`
+- sprite enable / x / y / **latched msb at display time** / x-expand / y-expand /
+  priority / multicolor
+- which sprite(s) actually DMA'd this line, sprite pointer bytes
+- `badline`, display-vs-idle, `d011`/`d016`/`mem`, IRQ status/enable
+- border/bg colors as latched
+
+The value over Ring A: pixels say *that* a frame is wrong; Ring B says *why* —
+e.g. "on line 130, sprite 0's latched XMSB was 0 while the shadow `$D010` bit 0
+was 1" is the entire one-frame-left bug, and it is invisible to both the pixel
+ring and the CPU recorder.
+
+Sampling granularity is configurable: `all` lines (full fidelity, ~3 MB/3 s) or
+`sprite-active` lines only (cheaper). Default `all` — the budget is trivial.
+
+## Sizing (the "gobs of RAM" check)
+
+| Ring | Per unit | 3 s real-time (150 PAL frames) | 10 s |
+|------|----------|-------------------------------|------|
+| A framebuffer (`indexed8`, 504×312) | 157,248 B/frame | ~23 MB | ~77 MB |
+| B VIC state (`all` lines, ~64 B/line × 312) | ~20 KB/frame | ~3 MB | ~10 MB |
+
+Both are governed by a configurable byte budget (like the recorder's 256 MiB
+budget) with a documented default (proposal: A = 64 MiB ≈ 8 s, B = 16 MiB). The
+ring drops oldest-first when full and reports `dropped=` so a scrub knows if the
+window undershot the glitch.
+
+## Cost (perf gate)
+
+Ring A: one reduce+copy of an already-produced frame snapshot, at frame rate
+(50/s at turbo 1). Negligible. At turbo 2 frames complete faster but the copy is
+still O(frame) and dwarfed by the frame's own composition cost.
+
+Ring B: per-line, so it is on a hotter path than Ring A. It must be a plain field
+capture into a preallocated ring slot — **no allocation, formatting, or locking on
+the per-line path**, same discipline as the flight recorder hot path. **Gate:
+turbo-2 throughput loss ≤ the recorder's own budget (target ≤5%, hard ceiling
+10%) with both rings enabled**, measured against `agents/perf-baseline-turbo2.md`.
+If Ring B `all` cannot meet the gate, ship `sprite-active` as the default and
+`all` as opt-in.
+
+## Wire protocol
+
+Mirror the flight-recorder command shape (`history-*`). New commands:
+
+```text
+frame-ring-info
+    -> ok depthA=<n> oldestA=<frame> newestA=<frame> droppedA=<n>
+          depthB=<n> oldestB=<frame> newestB=<frame> droppedB=<n>
+          live=0|1 budgetA=<bytes> budgetB=<bytes>
+
+frame-ring-record <on|off>          # default on; symmetric with history-record
+frame-ring-clear
+
+get-frame-at <frame|cycle> [format=indexed8|argb8888]
+    -> data frame (nearest slot with frame_number/machine_cycle <= target),
+       same metadata shape as get-frame plus target= and actual= keys
+
+vic-ring-find [frame=<n>] [raster=<a>[-<b>]] [limit=1..312]
+    -> data vic-ring (counted records, Ring B slots for that frame/line window)
+```
+
+`get-frame-at` and `vic-ring-find` require a **paused** machine (like
+`history-find`) and otherwise return `busy machine-running`. Payload ownership is
+token-keyed and released on claim/timeout/disconnect, reusing the bulk-memory RPC
+pool pattern (never a fat event-queue union). **Protocol bump to C64M/4** (shared
+with the guarded-breakpoints change if they land together; otherwise C64M/5).
+Add capability tokens `frame-ring vic-ring` to the `capabilities` string.
+
+State-load and reset clear both rings (like the recorder — history is never
+serialized into a snapshot).
+
+## coop_watch.py integration
+
+- On freeze, `frame-ring-info` into the snap header (window coverage + `dropped=`
+  so the pack states whether the glitch is even in range).
+- New inbox verbs:
+  - `scrub [count]` — walk Ring A backward from newest, writing each
+    `indexed8` frame to `build/debug/snap-NNN/frame-<f>.idx8` (+ a tiny PNG via
+    the palette) so the human can eyeball which frame is the bad one.
+  - `frame <f>` — pull `get-frame-at <f>` and `vic-ring-find frame=<f>` into the
+    pack, and pull flight-recorder records for that frame's cycle span. This is
+    the one-shot "assemble everything about frame f" convenience (Tier 3 glue).
+
+No game change; pure control-port orchestration, consistent with coop's charter.
+
+## Tests (test-first)
+
+1. Ring A: after N completed frames, `frame-ring-info` reports correct
+   depth/oldest/newest; `get-frame-at <newest>` returns that frame; `get-frame-at`
+   a cycle between two frames returns the nearest `<=` slot with `actual=`.
+2. Ring A wrap: exceed budget → oldest dropped, `droppedA` increments, newest
+   still exact.
+3. Ring A warp: turbo 3 → `live=0`, ring does not advance; back to turbo 1/2 →
+   resumes.
+4. Ring B: per-line records for a known frame have expected raster coverage;
+   `vic-ring-find raster=a-b` returns only that window.
+5. Ring B captures **latched** msb distinct from shadow `$D010` on a crafted
+   frame that writes `$D010` mid-line (the one-frame-left repro pin).
+6. Cross-index: a `frame#` maps to a cycle span that the flight recorder can
+   query (integration test, paused).
+7. Wire: `busy machine-running` when not paused; token-keyed payload release on
+   disconnect; `hello` reports the bumped protocol.
+
+## Acceptance checklist
+
+- [ ] `ctest --test-dir build` green (baseline + new tests).
+- [ ] Perf gate met with both rings enabled (turbo-2, vs perf baseline).
+- [ ] Default budgets documented and configurable; `dropped=` surfaced.
+- [ ] `agents/control-port.md` updated: new commands, C64M bump, capability
+      tokens, paused-only rule, and the § Oracle/automation traps note about
+      one-frame aliasing gains a pointer to the frame ring.
+- [ ] `agents/README.md` baseline count / protocol version updated.
+- [ ] `coop_watch.py` `scrub`/`frame` verbs documented in its module docstring.
+
+## Non-goals
+
+- Not reverse execution or state restore — the ring is read-only forensic pixels
+  and VIC state, not a time machine (that stays a separate checkpoint/replay
+  feature, per the recorder spec).
+- Not audio/SID history (separate ring if ever needed).
+- Not drive-VIC (there is none) or drive-CPU frames.

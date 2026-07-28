@@ -89,7 +89,7 @@ def test_matching_id(port, Ctl):
     """run-to-raster must answer with the request's own wire id and accepted=1."""
     client = Ctl(port=port, timeout=5.0)
     try:
-        assert "protocol=C64M/3" in require_ok(client.cmd("hello"), "hello")
+        assert "protocol=C64M/4" in require_ok(client.cmd("hello"), "hello")
         # Ctl.cmd asserts the response id equals the request id; the id-0
         # regression tripped "id mismatch" here.
         body = require_ok(client.cmd("run-to-raster 100"), "run-to-raster")
@@ -116,7 +116,7 @@ def test_no_wedge_after_inflight_disconnect(executable, directory, Ctl, port):
         try:
             client = Ctl(port=port, timeout=4.0)
             try:
-                assert "protocol=C64M/3" in require_ok(
+                assert "protocol=C64M/4" in require_ok(
                     client.cmd("hello"), "post-disconnect hello")
                 require_ok(client.cmd("run-to-raster 150"),
                            "post-disconnect run-to-raster")

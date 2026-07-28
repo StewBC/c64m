@@ -1882,7 +1882,10 @@ static void control_format_breakpoints_response(
 {
     uint8_t *payload;
     char *cursor;
-    size_t payload_size = 1u + (size_t)RUNTIME_BREAKPOINT_SNAPSHOT_MAX * 192u;
+    /* Per record: ~180 bytes of fixed fields plus `when=` carrying a condition
+       up to RUNTIME_BREAKPOINT_CONDITION_TEXT_MAX. Undersizing this silently
+       drops breakpoints from the listing. */
+    size_t payload_size = 1u + (size_t)RUNTIME_BREAKPOINT_SNAPSHOT_MAX * 384u;
     size_t used = 0;
     char metadata[64];
     uint16_t i;
@@ -1898,10 +1901,17 @@ static void control_format_breakpoints_response(
     cursor = (char *)payload;
     for (i = 0; i < breakpoints->count && i < RUNTIME_BREAKPOINT_SNAPSHOT_MAX; i++) {
         const runtime_breakpoint_snapshot_entry *entry = &breakpoints->entries[i];
-        int written = snprintf(
+        char condition_text[RUNTIME_BREAKPOINT_CONDITION_TEXT_MAX];
+        int written;
+
+        if (!runtime_bp_condition_format(
+                &entry->condition, condition_text, sizeof(condition_text))) {
+            condition_text[0] = '\0';
+        }
+        written = snprintf(
             cursor + used,
             payload_size - used,
-            "id=%u enabled=%u start=%04X end=%04X has_end=%u access=%u mapping=%u actions=%u use_counter=%u hits=%u initial=%u reset=%u counter=%u\n",
+            "id=%u enabled=%u start=%04X end=%04X has_end=%u access=%u mapping=%u actions=%u use_counter=%u hits=%u initial=%u reset=%u counter=%u cond=%u when=%s\n",
             entry->id,
             entry->enabled,
             entry->start_address,
@@ -1914,7 +1924,9 @@ static void control_format_breakpoints_response(
             entry->current_hits,
             entry->initial_count,
             entry->reset_count,
-            entry->counter);
+            entry->counter,
+            (unsigned)entry->condition.term_count,
+            condition_text);
         if (written < 0 || (size_t)written >= payload_size - used) {
             break;
         }
@@ -2077,13 +2089,21 @@ static bool control_parse_breakpoint_access(const char *token, uint32_t *out_acc
     return false;
 }
 
+/* `error` receives a specific diagnostic where one is available (currently the
+   condition grammar, which is the part a caller is most likely to get wrong);
+   it is left empty when only the generic message applies. */
 static bool control_parse_breakpoint_definition(
     const char *text,
-    runtime_breakpoint_definition *definition)
+    runtime_breakpoint_definition *definition,
+    char *error,
+    size_t error_size)
 {
     char buffer[1024];
     char *token;
 
+    if (error != NULL && error_size > 0u) {
+        error[0] = '\0';
+    }
     if (text == NULL || definition == NULL) {
         return false;
     }
@@ -2147,9 +2167,26 @@ static bool control_parse_breakpoint_definition(
             } else {
                 return false;
             }
+        } else if (strcmp(key, "when") == 0) {
+            if (!runtime_bp_condition_parse(
+                    value, &definition->condition, error, error_size)) {
+                return false;
+            }
         } else {
             return false;
         }
+    }
+
+    /* An instruction fetch carries no accessed byte, so a `value` term could
+       never hold on an exec breakpoint. Reject it rather than arm a guard that
+       can only ever be false. */
+    if ((definition->access & RUNTIME_BREAKPOINT_ACCESS_EXECUTE) != 0 &&
+        runtime_bp_condition_uses_value(&definition->condition)) {
+        if (error != NULL && error_size > 0u) {
+            snprintf(error, error_size,
+                     "`value` has no meaning on an exec breakpoint");
+        }
+        return false;
     }
     return true;
 }
@@ -4430,7 +4467,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/3",
+                "name=c64m protocol=C64M/4",
                 false);
             break;
 
@@ -4438,7 +4475,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/3 app=0.1.0",
+                "protocol=C64M/4 app=0.1.0",
                 false);
             break;
 
@@ -5348,8 +5385,14 @@ static void dispatch_control_request(
 
         case CONTROL_COMMAND_BREAK_CREATE: {
             runtime_breakpoint_definition definition;
-            if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
-                control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
+            char definition_error[192];
+            if (!control_parse_breakpoint_definition(
+                    request->args.text, &definition,
+                    definition_error, sizeof(definition_error))) {
+                char message[CONTROL_RESPONSE_TEXT_MAX];
+                snprintf(message, sizeof(message), "invalid breakpoint definition%s%s",
+                         definition_error[0] != '\0' ? ": " : "", definition_error);
+                control_protocol_format_error(&response, request->id, "bad-args", message, false);
             } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);
@@ -5375,8 +5418,14 @@ static void dispatch_control_request(
 
         case CONTROL_COMMAND_BREAK_UPDATE: {
             runtime_breakpoint_definition definition;
-            if (!control_parse_breakpoint_definition(request->args.text, &definition)) {
-                control_protocol_format_error(&response, request->id, "bad-args", "invalid breakpoint definition", false);
+            char definition_error[192];
+            if (!control_parse_breakpoint_definition(
+                    request->args.text, &definition,
+                    definition_error, sizeof(definition_error))) {
+                char message[CONTROL_RESPONSE_TEXT_MAX];
+                snprintf(message, sizeof(message), "invalid breakpoint definition%s%s",
+                         definition_error[0] != '\0' ? ": " : "", definition_error);
+                control_protocol_format_error(&response, request->id, "bad-args", message, false);
             } else if ((deferred = deferred_begin(deferred_table, request->type, &deferred_busy_msg),
                  deferred_table != NULL && deferred == NULL)) {
                 control_protocol_format_error(&response, request->id, "busy", deferred_busy_msg, false);

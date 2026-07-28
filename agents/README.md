@@ -90,6 +90,14 @@ Component handoffs:
   forensic recorder and C64M/3 query/API contract
 - `cpu-flight-recorder-plan.md` - completed test-first implementation record,
   performance gates, measurements, and acceptance checklist
+- `guarded-breakpoints-plan.md` - **implemented** (Tier 1A): condition-guarded
+  breakpoints (`when=`, bounded AND-list of CPU/flag/value/mem/raster terms);
+  the "machine stops itself on nuance" primitive. Wire syntax and semantics
+  live in `control-port.md`; the source is
+  `src/runtime/runtime_breakpoint_condition.{c,h}`.
+- `frame-ring-plan.md` - proposed (Tier 1B): rolling in-RAM rings of completed
+  `indexed8` frames and per-line VIC derived state so a one-frame glitch
+  survives a human pause seconds late. Not current code.
 - `crt-type19-plan.md` - CRT mapper roadmap: type 19 Magic Desk first, type
   checklist with OneLoad64 unlock counts; implement later, not current code
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
@@ -99,10 +107,10 @@ Component handoffs:
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.
 
-Current baseline is 60/60 passing (includes `c64_snapshot_1541_midload`, the
-C64M/3 history integration test, and the machine/runtime recorder tests). That
-baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full 1541
-drive-object snapshot paths.
+Current baseline is 65/65 passing (includes `c64_snapshot_1541_midload`, the
+history integration test, the machine/runtime recorder tests, and the guarded-
+breakpoint condition/ini/control tests). That baseline includes the real 1541
+ROM/IEC, G64, Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
 
 The verification command is:
 

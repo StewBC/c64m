@@ -517,6 +517,19 @@ set_tests_properties(run_to_raster_control_integration PROPERTIES
     TIMEOUT 30
 )
 
+add_test(
+    NAME guarded_breakpoint_control_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/control/test_guarded_breakpoint_control.py
+        $<TARGET_FILE:c64m>
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(guarded_breakpoint_control_integration PROPERTIES
+    TIMEOUT 60
+)
+
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c
 )
@@ -925,6 +938,30 @@ target_link_libraries(test_runtime_flight_recorder PRIVATE
 )
 
 add_test(NAME runtime_flight_recorder COMMAND test_runtime_flight_recorder)
+
+add_executable(test_runtime_breakpoint_condition
+    tests/runtime/test_runtime_breakpoint_condition.c
+)
+
+target_compile_features(test_runtime_breakpoint_condition PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_breakpoint_condition PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_breakpoint_condition COMMAND test_runtime_breakpoint_condition)
+
+add_executable(test_runtime_breakpoint_ini
+    tests/runtime/test_runtime_breakpoint_ini.c
+)
+
+target_compile_features(test_runtime_breakpoint_ini PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_breakpoint_ini PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_breakpoint_ini COMMAND test_runtime_breakpoint_ini)
 
 add_executable(test_runtime_history
     tests/runtime/test_runtime_history.c

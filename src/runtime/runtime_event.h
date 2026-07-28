@@ -1,6 +1,7 @@
 #pragma once
 
 #include "c64.h"
+#include "runtime_breakpoint_condition.h"
 #include "runtime_history.h"
 
 #include <stdint.h>
@@ -135,6 +136,9 @@ typedef struct runtime_breakpoint_definition {
     uint8_t swap_relative; /* 1 if +/- was explicit (relative movement), 0 if bare number (absolute index) */
     char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX]; /* trace file path; empty = default "trace.log" */
     char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX]; /* text to inject via Type action */
+    /* Guard evaluated after address/access/mapping already matched. An empty
+       condition (term_count 0) is an unguarded breakpoint. */
+    runtime_bp_condition condition;
 } runtime_breakpoint_definition;
 
 typedef struct runtime_cpu_snapshot {
@@ -258,6 +262,7 @@ typedef struct runtime_breakpoint_snapshot_entry {
     uint8_t swap_relative;
     char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX];
     char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX];
+    runtime_bp_condition condition;
 
     /* Phase 12 compatibility aliases. Prefer start_address and initial_count. */
     uint16_t address;

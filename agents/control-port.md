@@ -46,8 +46,9 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/3** (bounded HST1 CPU flight-recorder
-queries plus the C64M/2 bulk-memory/token behavior).
+code and this document. **Current: C64M/4** (guarded breakpoints: `when=`
+conditions plus the `cond=`/`when=` fields on breakpoint records, on top of the
+C64M/3 HST1 flight-recorder queries and C64M/2 bulk-memory/token behavior).
 
 ## Wire format
 
@@ -242,8 +243,8 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/3
-version      -> ok protocol=C64M/3 app=0.1.0
+hello        -> ok name=c64m protocol=C64M/4
+version      -> ok protocol=C64M/4 app=0.1.0
 capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive
 ping         -> ok
 ```
@@ -272,7 +273,7 @@ targets time out with a runtime error. Use `get-vic` after completion to confirm
 `raster=` / `cycle=`.
 
 The former `set-cpu-history` and `get-cpu-history` commands do not exist in
-C64M/3. Use the flight-recorder commands below.
+C64M/3 or later. Use the flight-recorder commands below.
 
 ## CPU flight recorder
 
@@ -526,8 +527,8 @@ N break-list
 N get-breakpoints                 # alias for break-list
 N break-clear-all
 N rearm-oneshots
-N break-create <access> <address> [enabled=0|1] [end=<address>] [actions=<list>] [counter=<n>] [reset=<n>] [mapping=map|rom|ram]
-N break-update <id> <access> <address> [enabled=0|1] [end=<address>] [actions=<list>] [counter=<n>] [reset=<n>] [mapping=map|rom|ram]
+N break-create <access> <address> [enabled=0|1] [end=<address>] [actions=<list>] [counter=<n>] [reset=<n>] [mapping=map|rom|ram] [when=<condition>]
+N break-update <id> <access> <address> [enabled=0|1] [end=<address>] [actions=<list>] [counter=<n>] [reset=<n>] [mapping=map|rom|ram] [when=<condition>]
 ```
 
 `<access>` is one of:
@@ -559,14 +560,78 @@ N pause
 N break-list
 ```
 
+### Guarded breakpoints (`when=`)
+
+`when=` adds a **bounded AND-list of up to 4 comparison terms**, evaluated only
+*after* the address/access/mapping test already matched. That keeps the CPU hot
+path untouched: a guard on `$D021` does work on the handful of accesses that hit
+`$D021`, never on the general bus stream. Measured cost versus the same
+watchpoint unguarded is under 1% for one term (see § Guarded-breakpoint cost).
+
+This is not an expression language — no OR, no grouping, no precedence. If a
+case needs OR, arm two breakpoints.
+
+```text
+when=<term>[,<term>...]      term = <lhs><op><imm>
+```
+
+| LHS | Meaning |
+|-----|---------|
+| `a` `x` `y` `sp` `p` | CPU registers |
+| `n` `v` `b` `d` `i` `z` `c` | individual P flag bits, as 0 or 1 |
+| `value` | the byte carried by the matching access |
+| `mem($addr)` | one CPU-map byte read at match time |
+| `raster` | VIC-II raster line |
+| `vic_cycle` | VIC-II cycle within the line |
+
+| Op | Meaning |
+|----|---------|
+| `==` `!=` `<` `>` `<=` `>=` | integer compare |
+| `&` | mask set: `(lhs & imm) != 0` |
+| `!&` | mask clear: `(lhs & imm) == 0` |
+
+Immediates accept `$hex`, `0x`, and decimal, and must fit 16 bits. **No
+whitespace is allowed inside the condition** (the definition is whitespace
+tokenized). Terms may be separated by `;` as well as `,` — the `.ini` breakpoint
+value is itself a comma-separated list, so persisted conditions use `;`.
+
+```text
+break-create write $D021 when=i==1
+break-create write $D010 when=value!&1,mem($D000)>$F0
+break-create write $00C3 when=raster>=250
+```
+
+`value` has no meaning on an instruction fetch, so combining it with `exec`
+access is rejected. Rejections name the actual problem rather than only
+`bad-args`:
+
+```text
+error bad-args invalid breakpoint definition: unknown condition term
+error bad-args invalid breakpoint definition: unknown condition operator
+error bad-args invalid breakpoint definition: condition needs a 16-bit immediate
+error bad-args invalid breakpoint definition: too many condition terms (max 4)
+error bad-args invalid breakpoint definition: mem() needs a 16-bit address
+error bad-args invalid breakpoint definition: `value` has no meaning on an exec breakpoint
+```
+
+The guard is evaluated **before** the hit counter, so `hits=` and `counter=`
+only advance on guarded matches — a count-only guarded breakpoint
+(`actions=none`) counts exactly the accesses that satisfy the condition.
+
+Guarded definitions round-trip through the debug `.ini`.
+
 Richer frontend breakpoint parameters (Type text, Swap param, Tron path) are
 persisted by the UI but are not all expressible through this control syntax.
 Breakpoint data responses are newline-separated text records with metadata
 `count=N`:
 
 ```text
-id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0
+id=1 enabled=1 start=C000 end=C000 has_end=0 access=1 mapping=0 actions=1 use_counter=0 hits=0 initial=0 reset=1 counter=0 cond=0 when=
 ```
+
+`cond=` is the number of guard terms (0 for an unguarded breakpoint) and `when=`
+echoes the condition in parse syntax, so a client can read back what it armed.
+Immediates are echoed in hex, so `when=value==$06` reads back as `value==$6`.
 
 `access` is a bit mask: **1=exec, 2=read, 4=write**. Do not reuse VICE checkpoint
 op-mask numbers — VICE uses `load=1, store=2, exec=4` (the reverse assignment).
@@ -625,7 +690,8 @@ policy). Sticky latches remain one-consumer.
   turn exceeds a frame period. Prefer **`step-frame`** for consecutive frames.
 - `run` → `wait-frame` → `pause` can still **overshoot by a frame** (pause is
   accepted after the wait). Not fixed by bulk memory or pipelining.
-- There is no expression-guarded breakpoint (VICE-style `CONDITION_SET`).
+- Breakpoints accept a bounded guard (`when=`, see § Guarded breakpoints), not a
+  general VICE-style `CONDITION_SET` expression: up to 4 ANDed terms, no OR.
 - c64m vs VICE workflow: match VIC models and load flags in **`vice-oracle.md`**.
   Comparison friction is often VICE-side; that note is the mitigation.
 

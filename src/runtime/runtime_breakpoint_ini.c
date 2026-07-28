@@ -258,6 +258,16 @@ static bool runtime_ini_parse_breakpoint_item(
             return false;
         }
         state->saw_reset = true;
+    } else if (strncmp(item, "when=", 5) == 0) {
+        char condition_error[128];
+        if (!runtime_bp_condition_parse(
+                item + 5,
+                &definition->condition,
+                condition_error,
+                sizeof(condition_error))) {
+            runtime_ini_warn(key, "invalid condition");
+            return false;
+        }
     } else if (*item != '\0') {
         runtime_ini_warn(key, "unknown keyword ignored");
     }
@@ -432,6 +442,10 @@ static bool runtime_add_loaded_breakpoint(runtime *rt, const runtime_breakpoint_
     breakpoint->swap_relative = definition->swap_relative;
     snprintf(breakpoint->tron_path, sizeof(breakpoint->tron_path), "%s", definition->tron_path);
     snprintf(breakpoint->type_text, sizeof(breakpoint->type_text), "%s", definition->type_text);
+    breakpoint->condition = definition->condition;
+    if (!runtime_bp_condition_is_valid(&breakpoint->condition)) {
+        memset(&breakpoint->condition, 0, sizeof(breakpoint->condition));
+    }
     rt->breakpoint_count++;
     return true;
 }
@@ -604,6 +618,26 @@ static void runtime_format_breakpoint_value(
         runtime_append_token(out, out_size, counter);
         snprintf(counter, sizeof(counter), "reset=%u", breakpoint->reset_count);
         runtime_append_token(out, out_size, counter);
+    }
+
+    if (breakpoint->condition.term_count != 0u) {
+        char condition_text[RUNTIME_BREAKPOINT_CONDITION_TEXT_MAX];
+        char condition_token[RUNTIME_BREAKPOINT_CONDITION_TEXT_MAX + 8];
+
+        if (runtime_bp_condition_format(
+                &breakpoint->condition, condition_text, sizeof(condition_text))) {
+            /* Terms are separated with ';' here: this value is itself a
+               comma-separated item list, and the parser accepts both. */
+            char *scan;
+            for (scan = condition_text; *scan != '\0'; ++scan) {
+                if (*scan == ',') {
+                    *scan = ';';
+                }
+            }
+            snprintf(condition_token, sizeof(condition_token),
+                     "when=%s", condition_text);
+            runtime_append_token(out, out_size, condition_token);
+        }
     }
 }
 

@@ -766,6 +766,7 @@ static void runtime_publish_breakpoints(runtime *rt) {
             sizeof(snap.entries[i].type_text),
             "%s",
             rt->breakpoints[i].type_text);
+        snap.entries[i].condition = rt->breakpoints[i].condition;
     }
 
     if (slot->mutex != NULL) {
@@ -2226,6 +2227,13 @@ static void runtime_breakpoint_apply_definition(
     breakpoint->swap_relative = definition->swap_relative;
     snprintf(breakpoint->tron_path, sizeof(breakpoint->tron_path), "%s", definition->tron_path);
     snprintf(breakpoint->type_text, sizeof(breakpoint->type_text), "%s", definition->type_text);
+    /* Definitions are built field by field by several callers; a caller that
+       forgot to zero the struct must not arm a garbage guard that could never
+       hold (which would look like a breakpoint that silently never fires). */
+    breakpoint->condition = definition->condition;
+    if (!runtime_bp_condition_is_valid(&breakpoint->condition)) {
+        memset(&breakpoint->condition, 0, sizeof(breakpoint->condition));
+    }
 }
 
 static bool runtime_add_breakpoint(
@@ -2472,19 +2480,57 @@ static bool runtime_execute_breakpoint_actions(runtime *rt, const runtime_breakp
     return false;
 }
 
+static uint8_t runtime_breakpoint_condition_read(void *user, uint16_t address) {
+    return c64_debug_read_cpu_map((const c64_t *)user, address);
+}
+
+/* Build the guard's view of the machine. Only called after an address match,
+   so this never runs on the general bus stream. */
+static bool runtime_breakpoint_condition_matches(
+    runtime *rt,
+    const runtime_breakpoint *breakpoint,
+    bool has_value,
+    uint8_t value) {
+    runtime_bp_eval_context context;
+
+    if (breakpoint->condition.term_count == 0u) {
+        return true;
+    }
+
+    memset(&context, 0, sizeof(context));
+    context.a = rt->machine.cpu.cpu.A;
+    context.x = rt->machine.cpu.cpu.X;
+    context.y = rt->machine.cpu.cpu.Y;
+    context.sp = (uint8_t)(rt->machine.cpu.cpu.sp & 0xffu);
+    context.p = rt->machine.cpu.cpu.flags;
+    context.has_value = has_value;
+    context.value = value;
+    context.raster = (uint16_t)rt->machine.vic.timing.raster_line;
+    context.vic_cycle = (uint16_t)rt->machine.vic.timing.cycle_in_line;
+    context.mem_read = runtime_breakpoint_condition_read;
+    context.mem_read_user = &rt->machine;
+
+    return runtime_bp_condition_eval(&breakpoint->condition, &context);
+}
+
 static bool runtime_breakpoint_matches_access(
     runtime *rt,
     runtime_breakpoint_access access,
-    uint16_t address) {
+    uint16_t address,
+    bool has_value,
+    uint8_t value) {
     size_t i;
 
     for (i = 0; i < rt->breakpoint_count; ++i) {
         runtime_breakpoint *breakpoint = &rt->breakpoints[i];
 
+        /* The condition is evaluated before record_match so that hits= and the
+           counter only advance on guarded matches. */
         if (breakpoint->enabled &&
             (breakpoint->access_mask & access) != 0 &&
             runtime_breakpoint_address_matches(breakpoint, address) &&
             runtime_breakpoint_mapping_matches(rt, breakpoint, address) &&
+            runtime_breakpoint_condition_matches(rt, breakpoint, has_value, value) &&
             runtime_breakpoint_record_match(rt, breakpoint)) {
             return runtime_execute_breakpoint_actions(rt, breakpoint);
         }
@@ -2501,10 +2547,14 @@ static bool runtime_breakpoint_matches_pc(runtime *rt) {
     if (!runtime_at_instruction_boundary(rt)) {
         return false;
     }
+    /* An instruction fetch carries no accessed byte, so `value` terms cannot
+       hold here; definitions combining them are rejected at creation. */
     return runtime_breakpoint_matches_access(
         rt,
         RUNTIME_BREAKPOINT_ACCESS_EXECUTE,
-        rt->machine.cpu.cpu.pc);
+        rt->machine.cpu.cpu.pc,
+        false,
+        0u);
 }
 
 static void runtime_memory_access(
@@ -2515,8 +2565,6 @@ static void runtime_memory_access(
     runtime *rt = user;
     runtime_breakpoint_access breakpoint_access;
 
-    (void)value;
-
     if (rt == NULL || rt->breakpoint_hit_pending) {
         return;
     }
@@ -2525,7 +2573,8 @@ static void runtime_memory_access(
         RUNTIME_BREAKPOINT_ACCESS_WRITE :
         RUNTIME_BREAKPOINT_ACCESS_READ;
 
-    if (runtime_breakpoint_matches_access(rt, breakpoint_access, address)) {
+    if (runtime_breakpoint_matches_access(
+            rt, breakpoint_access, address, true, value)) {
         rt->breakpoint_hit_pending = true;
     }
 }
@@ -2896,6 +2945,10 @@ static void runtime_set_execute_breakpoint(runtime *rt, const runtime_command *c
         return;
     }
 
+    /* Zero first: the definition carries optional fields (condition, swap,
+       tron/type text) that this path does not set, and stack garbage in them
+       would otherwise reach the breakpoint table. */
+    memset(&definition, 0, sizeof(definition));
     definition.enabled = command->data.set_execute_breakpoint.enabled;
     definition.start_address = command->data.set_execute_breakpoint.address;
     definition.end_address = command->data.set_execute_breakpoint.address;

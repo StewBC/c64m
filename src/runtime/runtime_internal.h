@@ -152,6 +152,9 @@ typedef struct runtime_breakpoint {
     uint8_t swap_relative;
     char tron_path[RUNTIME_BREAKPOINT_TRON_PATH_MAX];
     char type_text[RUNTIME_BREAKPOINT_TYPE_TEXT_MAX];
+    /* Guard evaluated only after address/access/mapping matched, so an armed
+       condition costs nothing on accesses that miss the watched address. */
+    runtime_bp_condition condition;
 } runtime_breakpoint;
 
 struct runtime {

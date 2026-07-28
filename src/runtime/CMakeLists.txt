@@ -3,6 +3,7 @@
 add_library(runtime STATIC
     runtime_assembler.c
     runtime_client.c
+    runtime_breakpoint_condition.c
     runtime_breakpoint_ini.c
     runtime_command.c
     runtime_event.c
