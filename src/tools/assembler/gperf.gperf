@@ -75,7 +75,7 @@ jsr,        GPERF_OPCODE_JSR    ,16, 0, 0
 lda,        GPERF_OPCODE_LDA    , 8, 0, 0
 ldx,        GPERF_OPCODE_LDX    , 8, 0, 0
 ldy,        GPERF_OPCODE_LDY    , 8, 0, 0
-lsr,        GPERF_OPCODE_LSR    , 0, 0, 0
+lsr,        GPERF_OPCODE_LSR    , 8, 0, 0
 nop,        GPERF_OPCODE_NOP    , 0, 0, 0
 ora,        GPERF_OPCODE_ORA    , 8, 0, 0
 pha,        GPERF_OPCODE_PHA    , 0, 0, 0

@@ -406,8 +406,16 @@ static void decode_abs_rel_zp_opcode(ASSEMBLER *as) {
                 as->opcode_info.addressing_mode++;
             } else if(is_register_token(as, 'y')) {
                 if(as->opcode_info.width < 16 && as->opcode_info.addressing_mode == ADDRESS_MODE_ZEROPAGE) {
-                    as->opcode_info.addressing_mode = ADDRESS_MODE_ABSOLUTE_Y;
-                    as->opcode_info.width = 16;
+                    /* zeropage,Y exists only for LDX/STX; every other opcode's
+                     * ,Y on a zeropage-sized base encodes as absolute,Y. Prefer
+                     * the zeropage,Y form when the opcode actually has one so we
+                     * emit two bytes (e.g. STX has no absolute,Y at all). */
+                    if((int8_t)asm_opcode[as->opcode_info.opcode_id][ADDRESS_MODE_ZEROPAGE_Y] != -1) {
+                        as->opcode_info.addressing_mode = ADDRESS_MODE_ZEROPAGE_Y;
+                    } else {
+                        as->opcode_info.addressing_mode = ADDRESS_MODE_ABSOLUTE_Y;
+                        as->opcode_info.width = 16;
+                    }
                 } else {
                     as->opcode_info.addressing_mode += 2;
                 }

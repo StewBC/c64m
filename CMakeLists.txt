@@ -669,6 +669,21 @@ target_link_libraries(test_assembler_expressions PRIVATE
 
 add_test(NAME assembler_expressions COMMAND test_assembler_expressions)
 
+# Standing opcode/addressing-mode coverage matrix. Built with the tree so it
+# cannot bitrot, but intentionally NOT registered with add_test(): it is a
+# manual tool for assembler work, not a CI gate. To promote it to a gate, add:
+#   add_test(NAME assembler_opcode_matrix COMMAND test_assembler_opcode_matrix)
+add_executable(test_assembler_opcode_matrix
+    tests/tools/test_assembler_opcode_matrix.c
+)
+
+target_compile_features(test_assembler_opcode_matrix PRIVATE c_std_99)
+
+target_link_libraries(test_assembler_opcode_matrix PRIVATE
+    assembler
+    disasm_6502
+)
+
 add_executable(test_assembler_targets
     tests/tools/test_assembler_targets.c
 )

@@ -291,7 +291,7 @@ in_word_set (register const char *str, register unsigned int len)
 #line 88 "src/tools/assembler/gperf.gperf"
       {"rts",        GPERF_OPCODE_RTS    , 0, 0, 0},
 #line 78 "src/tools/assembler/gperf.gperf"
-      {"lsr",        GPERF_OPCODE_LSR    , 0, 0, 0},
+      {"lsr",        GPERF_OPCODE_LSR    , 8, 0, 0},
       {""}, {""}, {""},
 #line 51 "src/tools/assembler/gperf.gperf"
       {"beq",        GPERF_OPCODE_BEQ    , 1, 0, 0},

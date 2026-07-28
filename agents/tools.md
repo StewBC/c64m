@@ -53,3 +53,19 @@ CMake builds component static libraries and 49 registered tests. Add a focused t
 with a new behavior; do not use documentation or a phase name as evidence that an
 old implementation still exists. Current parser/assembler tests are under
 `tests/tools`; audio/BASIC/paste tests are under `tests/util`.
+
+When touching the assembler's opcode/addressing tables (`gperf`, `opcode.c`,
+`parse.c`), run the standing coverage matrix
+`tests/tools/test_assembler_opcode_matrix.c`. It is built with the tree but is
+**not** an `add_test` gate - run it by hand:
+
+```text
+cmake --build build --target test_assembler_opcode_matrix
+./build/test_assembler_opcode_matrix        # PASS 151/151 when clean
+```
+
+It round-trips every documented NMOS opcode through the *disassembler's*
+independent 256-entry table (assemble the disassembly, check opcode byte and
+length), so it catches silent encoding drift a table-vs-itself check cannot -
+e.g. `lsr <zp>` dropping its operand byte, or `ldx/stx <zp>,y` mis-promoting to
+absolute,Y. 65c02-only variants have no disasm oracle and are not covered.
