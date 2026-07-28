@@ -1105,39 +1105,89 @@ static void dot_segdef(ASSEMBLER *as) {
         return;
     }
 
-    uint16_t start = (uint16_t)expr_full_evaluate(as);
-    start = assembler_adjust_segment_start(
-        as,
-        segment.segment_name,
-        segment.segment_name_length,
-        start);
+    uint16_t start = 0;
     int do_not_emit = 0;
     int is_locked = 0;
-    while(as->token.op == ',') {
+    int is_reclaim = 0;
+    const char *host_name = NULL;
+    int host_name_len = 0;
+
+    next_token(as);
+    if(as->token.type == TOKEN_VAR &&
+       as->token.name_length == 7 &&
+       0 == asm_strnicmp(as->token.name, "reclaim", 7)) {
+        // A reclaim segment piggybacks on an emitted "host" segment: it takes the
+        // host's start address (following it across any auto-adjust move, because
+        // the host's .segdef re-runs earlier in this pass) and is implicitly
+        // noemit. It carries no address or flags of its own.
+        is_reclaim = 1;
+        do_not_emit = 1;
         next_token(as);
-        if(as->token.type == TOKEN_VAR &&
-           as->token.name_length == 4 &&
-           0 == asm_strnicmp(as->token.name, "emit", 4)) {
-            do_not_emit = 0;
-            next_token(as);
-        } else if(as->token.type == TOKEN_VAR &&
-                  as->token.name_length == 6 &&
-                  0 == asm_strnicmp(as->token.name, "noemit", 6)) {
-            do_not_emit = 1;
-            next_token(as);
-        } else if(as->token.type == TOKEN_VAR &&
-                  as->token.name_length == 6 &&
-                  0 == asm_strnicmp(as->token.name, "locked", 6)) {
-            is_locked = 1;
-            next_token(as);
-        } else {
-            asm_err(as, ASM_ERR_RESOLVE, "The optional .segdef flags after the name and start are any of emit, noemit or locked, separated by commas");
+        expect_op(as, '=');
+        if(as->token.type != TOKEN_STR) {
+            asm_err(as, ASM_ERR_RESOLVE, ".segdef reclaim= must be followed by a host segment name in quotes");
             return;
         }
-    }
-    if(!token_is_line_end(as)) {
-        asm_err(as, ASM_ERR_RESOLVE, "Unexpected token after .segdef");
-        return;
+        host_name = as->token.name;
+        host_name_len = (int)as->token.name_length;
+
+        SEGMENT host_key;
+        memset(&host_key, 0, sizeof(host_key));
+        host_key.segment_name = as->token.name;
+        host_key.segment_name_length = as->token.name_length;
+        SEGMENT *host = segment_find(&as->active_target->segments, &host_key);
+        if(!host) {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    "reclaim host segment \"%.*s\" is not defined -- define it before reclaiming it",
+                    host_name_len, host_name);
+            return;
+        }
+        if(host->do_not_emit) {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    "reclaim host segment \"%.*s\" must be an emitted segment",
+                    host_name_len, host_name);
+            return;
+        }
+        start = host->segment_start_address;
+
+        next_token(as);
+        if(!token_is_line_end(as)) {
+            asm_err(as, ASM_ERR_RESOLVE, "a reclaim segment takes no address or flags after reclaim=\"host\"");
+            return;
+        }
+    } else {
+        start = (uint16_t)expr_evaluate(as);
+        start = assembler_adjust_segment_start(
+            as,
+            segment.segment_name,
+            segment.segment_name_length,
+            start);
+        while(as->token.op == ',') {
+            next_token(as);
+            if(as->token.type == TOKEN_VAR &&
+               as->token.name_length == 4 &&
+               0 == asm_strnicmp(as->token.name, "emit", 4)) {
+                do_not_emit = 0;
+                next_token(as);
+            } else if(as->token.type == TOKEN_VAR &&
+                      as->token.name_length == 6 &&
+                      0 == asm_strnicmp(as->token.name, "noemit", 6)) {
+                do_not_emit = 1;
+                next_token(as);
+            } else if(as->token.type == TOKEN_VAR &&
+                      as->token.name_length == 6 &&
+                      0 == asm_strnicmp(as->token.name, "locked", 6)) {
+                is_locked = 1;
+                next_token(as);
+            } else {
+                asm_err(as, ASM_ERR_RESOLVE, "The optional .segdef flags after the name and start are any of emit, noemit or locked, separated by commas");
+                return;
+            }
+        }
+        if(!token_is_line_end(as)) {
+            asm_err(as, ASM_ERR_RESOLVE, "Unexpected token after .segdef");
+            return;
+        }
     }
 
     SEGMENT *existing = segment_find(&as->active_target->segments, &segment);
@@ -1167,8 +1217,19 @@ static void dot_segdef(ASSEMBLER *as) {
     new_segment->segment_init = 1;
     new_segment->do_not_emit = do_not_emit;
     new_segment->is_locked = is_locked;
+    new_segment->is_reclaim = is_reclaim;
+    if(is_reclaim) {
+        if(!set_name((char **)&new_segment->reclaim_host_name, host_name, host_name_len)) {
+            free((char *)new_segment->segment_name);
+            free(new_segment);
+            asm_err(as, ASM_ERR_FATAL, "Out of memory storing reclaim host name");
+            return;
+        }
+        new_segment->reclaim_host_name_length = (uint32_t)host_name_len;
+    }
     if(ASM_OK != ARRAY_ADD(&as->active_target->segments, new_segment)) {
         free((char *)new_segment->segment_name);
+        free((char *)new_segment->reclaim_host_name);
         free(new_segment);
         asm_err(as, ASM_ERR_FATAL, "Out of memory tracking segment");
     }

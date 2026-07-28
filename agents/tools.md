@@ -9,7 +9,14 @@
   runs after layout stabilizes, and hosts can walk the applied address map.
   Segments tagged `locked` in `.segdef` are anchors auto-adjust never moves; if
   lower segments overrun a locked segment the retry is abandoned and assembly
-  fails naming the anchor rather than reshuffling around it.
+  fails naming the anchor rather than reshuffling around it. A plain `noemit`
+  segment may not overlap any segment (checked, hard error). The sanctioned
+  overlay is a reclaim segment, `.segdef "n", reclaim="host"`: implicitly noemit,
+  it inherits the emitted host's start (re-read on each auto-adjust re-parse, so
+  it follows the host with no extra machinery) and is validated to be no larger
+  than the host. The noemit/reclaim rules are enforced by `check_noemit_reclaim`
+  separately from the emit-only overlap/auto-adjust machinery, which continues to
+  ignore all `do_not_emit` segments.
 - `src/tools/disasm_6502`: 6502 disassembly and opcode addressing-mode metadata.
   The frontend adds effective-address/value annotations from copied CPU/memory
   snapshots.

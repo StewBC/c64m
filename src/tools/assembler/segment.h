@@ -17,6 +17,9 @@ typedef struct {
     uint16_t segment_output_address;
     int do_not_emit;
     int is_locked;
+    int is_reclaim;                    // piggybacks on reclaim_host; implies do_not_emit
+    const char *reclaim_host_name;     // name of the emitted segment it reclaims
+    uint32_t reclaim_host_name_length;
     int segment_init;
 } SEGMENT;
 

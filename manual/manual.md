@@ -1155,6 +1155,7 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
 | `.segdef "n",addr[,flags]` | Define a named segment at `addr`. Flags (comma-separated) are any of `emit`/`noemit` (suppress output) and `locked` (pin the address; never auto-moved) |
+| `.segdef "n",reclaim="host"` | Define a reclaim segment overlaying an emitted `host`: implicitly `noemit`, inherits the host's start, sized no larger than the host, and moves with it if auto-adjust relocates the host |
 | `.segment "n"`          | Activate the named segment; `.segment ""` returns to native mode |
 | `.6502`                 | Restrict to 6502 opcodes (default)                           |
 | `.65c02`                | Allow 65C02 opcodes                                          |
@@ -1248,7 +1249,29 @@ table:  .byte $01,$02,$03
 ```
 
 `noemit` segments advance the location counter but produce no output -- useful for
-mapping zero-page variables without emitting placeholder bytes.
+mapping zero-page variables without emitting placeholder bytes. A `noemit` segment
+may not overlap any other segment; to overlay memory intentionally, use a reclaim
+segment (below).
+
+A **reclaim** segment piggybacks on an emitted "host" segment so a region can be
+reused at runtime once the host's contents are consumed. The classic case is a title
+image loaded as part of the executable and then relocated (say, under the KERNAL) as
+the program starts, freeing its load area for buffers and variables:
+
+```
+.segdef "TITLE", $5000              ; the image, emitted into the program
+.segdef "REUSE", reclaim="TITLE"    ; buffers that reuse TITLE's space at runtime
+
+.segment "REUSE"
+buffer: .res $100                    ; lives at $5000, emits nothing
+```
+
+A reclaim segment is implicitly `noemit`, takes no address of its own (its labels
+resolve into the host's memory), and is sized no larger than its host. It follows the
+host automatically: if auto-adjust moves the host, the reclaim segment moves with it.
+The host must be a previously defined, emitted segment. Consuming or relocating the
+host before the reclaimed region is used is the programmer's responsibility -- the
+assembler enforces only the address and size relationship, not the runtime ordering.
 
 Emitted segments are checked for overlap. Normally an overlap fails assembly and
 prints a compacted set of suggested starts. With segment auto-adjust enabled, those

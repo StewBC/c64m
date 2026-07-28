@@ -459,6 +459,85 @@ static SEGMENT_CHECK_RESULT check_segment_overlaps(
     return result;
 }
 
+// Validate the noemit/reclaim rules that the emit-only overlap machinery above
+// deliberately ignores. Two rules, both hard errors (never auto-adjusted):
+//   * a plain noemit segment may not overlap any other segment -- overlaying
+//     memory is only sanctioned through an explicit reclaim binding;
+//   * a reclaim segment may not be larger than the host it piggybacks on.
+// Returns the number of issues found; issues are also logged so the caller's
+// error count reflects them. Reclaim segments are excluded from the noemit
+// overlap scan -- sitting on their host is exactly what they are for.
+static int check_noemit_reclaim(ASSEMBLER *as) {
+    int issues = 0;
+
+    for(size_t ti = 0; ti < as->targets.items; ti++) {
+        TARGET *target = *ARRAY_GET(&as->targets, TARGET*, ti);
+        if(!target) {
+            continue;
+        }
+
+        for(size_t ai = 0; ai < target->segments.items; ai++) {
+            SEGMENT *a = *ARRAY_GET(&target->segments, SEGMENT*, ai);
+            if(a->is_reclaim || a->segment_output_address <= a->segment_start_address) {
+                continue;
+            }
+            for(size_t bi = ai + 1; bi < target->segments.items; bi++) {
+                SEGMENT *b = *ARRAY_GET(&target->segments, SEGMENT*, bi);
+                if(b->is_reclaim || b->segment_output_address <= b->segment_start_address) {
+                    continue;
+                }
+                if(!a->do_not_emit && !b->do_not_emit) {
+                    continue;  // emit-vs-emit is the auto-adjust machinery's job
+                }
+                if(a->segment_start_address < b->segment_output_address &&
+                   b->segment_start_address < a->segment_output_address) {
+                    const char *na = a->segment_name ? a->segment_name : "<default>";
+                    const char *nb = b->segment_name ? b->segment_name : "<default>";
+                    asm_log_direct(
+                        as,
+                        "noemit segment \"%.*s\" [$%04X..$%04X) overlaps \"%.*s\" [$%04X..$%04X) -- use reclaim=\"host\" to overlay intentionally",
+                        (int)a->segment_name_length, na,
+                        a->segment_start_address, a->segment_output_address,
+                        (int)b->segment_name_length, nb,
+                        b->segment_start_address, b->segment_output_address);
+                    issues++;
+                }
+            }
+        }
+
+        for(size_t ri = 0; ri < target->segments.items; ri++) {
+            SEGMENT *r = *ARRAY_GET(&target->segments, SEGMENT*, ri);
+            if(!r->is_reclaim) {
+                continue;
+            }
+            SEGMENT key;
+            memset(&key, 0, sizeof(key));
+            key.segment_name = r->reclaim_host_name;
+            key.segment_name_length = r->reclaim_host_name_length;
+            SEGMENT *host = segment_find(&target->segments, &key);
+            uint16_t r_size = r->segment_output_address > r->segment_start_address ?
+                (uint16_t)(r->segment_output_address - r->segment_start_address) : 0;
+            uint16_t h_size = 0;
+            if(host && host->segment_output_address > host->segment_start_address) {
+                h_size = (uint16_t)(host->segment_output_address - host->segment_start_address);
+            }
+            if(r_size > h_size) {
+                const char *nr = r->segment_name ? r->segment_name : "<default>";
+                asm_log_direct(
+                    as,
+                    "reclaim segment \"%.*s\" ($%04X bytes) overflows host \"%.*s\" ($%04X bytes)",
+                    (int)r->segment_name_length, nr, r_size,
+                    (int)r->reclaim_host_name_length,
+                    r->reclaim_host_name ? r->reclaim_host_name : "<host>",
+                    h_size);
+                issues++;
+            }
+        }
+    }
+
+    return issues;
+}
+
 static void assembler_program_state_destroy(ASSEMBLER *as) {
     free(as->root_dir);
     as->root_dir = NULL;
@@ -706,6 +785,7 @@ int assembler_assemble(ASSEMBLER *as, const char *input_file, uint16_t address) 
         if(final_layout.allocation_failed) {
             return ASM_ERR;
         }
+        (void)check_noemit_reclaim(as);
     }
 
     return as->errorlog && as->errorlog->log_array.items > initial_errors ?

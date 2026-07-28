@@ -444,6 +444,211 @@ static int test_segment_locked_allows_reorder(void)
     return failures;
 }
 
+/* A reclaim segment piggybacks on an emitted host: it takes the host's start
+   address, is implicitly noemit (writes nothing), and its labels resolve into
+   the host's memory so runtime buffers can reuse that region. */
+static int test_segment_reclaim(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    int failures = 0;
+    const char *source =
+        ".segdef \"TITLE\", $5000\n"
+        ".segdef \"REUSE\", reclaim=\"TITLE\"\n"
+        ".segment \"TITLE\"\n"
+        "    .byte $11, $22, $33, $44\n"
+        ".segment \"REUSE\"\n"
+        "buf:\n"
+        "    .res 2\n"
+        ".segment \"\"\n"
+        "    .word buf\n";
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) != ASM_OK) {
+        fprintf(stderr, "reclaim assembly failed with %zu errors\n", log.log_array.items);
+        failures++;
+    }
+    /* buf resolves to TITLE's start ($5000). */
+    if (mem.memory[0x0801] != 0x00 || mem.memory[0x0802] != 0x50) {
+        fprintf(stderr, "reclaim label did not resolve to host start\n");
+        failures++;
+    }
+    /* TITLE bytes intact -- the noemit reclaim segment wrote nothing over them. */
+    if (mem.memory[0x5000] != 0x11 || mem.memory[0x5003] != 0x44) {
+        fprintf(stderr, "reclaim host bytes clobbered or missing\n");
+        failures++;
+    }
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
+/* A reclaim segment may not be larger than the host it piggybacks on. */
+static int test_segment_reclaim_overflow(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    int failures = 0;
+    const char *source =
+        ".segdef \"TITLE\", $5000\n"
+        ".segdef \"REUSE\", reclaim=\"TITLE\"\n"
+        ".segment \"TITLE\"\n"
+        "    .byte $11, $22\n"
+        ".segment \"REUSE\"\n"
+        "    .res 4\n";
+
+    memset(&mem, 0, sizeof(mem));
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    errlog_init(&log);
+    if (assemble_file(path, &mem, &log) != ASM_ERR) {
+        fprintf(stderr, "reclaim overflow was not rejected\n");
+        failures++;
+    }
+    if (!errorlog_contains(&log, "overflows host")) {
+        fprintf(stderr, "reclaim overflow did not name the host overflow\n");
+        failures++;
+    }
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
+/* An auto-adjust move of the host drags its reclaim segment along, because the
+   reclaim .segdef simply re-reads the host's (now adjusted) start on the retry
+   re-parse. A grows past B, B is packed after A, and B's reclaim buffer follows
+   B to its new address. */
+static int test_segment_reclaim_follows_host(void)
+{
+    char path[128];
+    test_memory mem;
+    ERRORLOG log;
+    ASSEMBLER as;
+    CB_ASM_CTX cb;
+    int failures = 0;
+    const char *source =
+        ".segdef \"A\", $1000\n"
+        ".segdef \"B\", $1040\n"
+        ".segdef \"BR\", reclaim=\"B\"\n"
+        ".segdef \"CHECK\", $4000, locked\n"
+        ".segment \"A\"\n"
+        "    .res $80\n"
+        "    .byte $a1\n"
+        ".segment \"B\"\n"
+        "    .byte $b1\n"
+        ".segment \"BR\"\n"
+        "bufb:\n"
+        "    .res 1\n"
+        ".segment \"CHECK\"\n"
+        "    .word bufb\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+
+    memset(&mem, 0, sizeof(mem));
+    memset(&cb, 0, sizeof(cb));
+    cb.user = &mem;
+    cb.output_byte = output_byte;
+    errlog_init(&log);
+    if (assembler_init(&as, &log, &cb) != ASM_OK) {
+        fprintf(stderr, "assembler_init failed for reclaim-follows test\n");
+        errlog_shutdown(&log);
+        c64m_test_remove_file(path);
+        return 1;
+    }
+    assembler_set_auto_adjust_segments(&as, 1);
+    if (assembler_assemble(&as, path, 0x0801) != ASM_OK) {
+        fprintf(stderr, "reclaim-follows assembly failed with %zu errors\n",
+                log.log_array.items);
+        failures++;
+    }
+    /* B packed after A ($1000 + $81) = $1081; bufb rides along. The word is held
+       in a locked high segment so it does not anchor the packer itself. */
+    if (mem.memory[0x4000] != 0x81 || mem.memory[0x4001] != 0x10) {
+        fprintf(stderr, "reclaim buffer did not follow host to $1081\n");
+        failures++;
+    }
+    if (mem.memory[0x1081] != 0xb1) {
+        fprintf(stderr, "host byte landed at wrong address after adjust\n");
+        failures++;
+    }
+    assembler_shutdown(&as);
+    errlog_shutdown(&log);
+    c64m_test_remove_file(path);
+    return failures;
+}
+
+/* reclaim= must name a defined, emitted host; a plain noemit segment may not
+   overlap anything (that is what reclaim is for). */
+static int test_segment_reclaim_and_noemit_errors(void)
+{
+    struct {
+        const char *name;
+        const char *source;
+        const char *needle;
+    } cases[] = {
+        {"reclaim undefined host",
+         ".segdef \"R\", reclaim=\"NOPE\"\n",
+         "is not defined"},
+        {"reclaim noemit host",
+         ".segdef \"H\", $1000, noemit\n"
+         ".segdef \"R\", reclaim=\"H\"\n",
+         "must be an emitted segment"},
+        {"noemit overlaps emit",
+         ".segdef \"CODE\", $1000\n"
+         ".segdef \"VARS\", $1002, noemit\n"
+         ".segment \"CODE\"\n"
+         "    .byte $01,$02,$03,$04\n"
+         ".segment \"VARS\"\n"
+         "    .res 2\n",
+         "noemit segment"},
+        {"noemit overlaps noemit",
+         ".segdef \"V1\", $1000, noemit\n"
+         ".segdef \"V2\", $1001, noemit\n"
+         ".segment \"V1\"\n"
+         "    .res 4\n"
+         ".segment \"V2\"\n"
+         "    .res 4\n",
+         "noemit segment"},
+    };
+    int failures = 0;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[128];
+        test_memory mem;
+        ERRORLOG log;
+
+        memset(&mem, 0, sizeof(mem));
+        if (write_source(path, sizeof(path), cases[i].source) != 0) {
+            failures++;
+            continue;
+        }
+
+        errlog_init(&log);
+        if (assemble_file(path, &mem, &log) != ASM_ERR) {
+            fprintf(stderr, "%s was not rejected\n", cases[i].name);
+            failures++;
+        } else if (!errorlog_contains(&log, cases[i].needle)) {
+            fprintf(stderr, "%s did not report \"%s\"\n", cases[i].name, cases[i].needle);
+            failures++;
+        }
+        errlog_shutdown(&log);
+        c64m_test_remove_file(path);
+    }
+
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -455,6 +660,10 @@ int main(void)
     failures += test_segment_auto_adjust_converges();
     failures += test_segment_locked_blocks_reorder();
     failures += test_segment_locked_allows_reorder();
+    failures += test_segment_reclaim();
+    failures += test_segment_reclaim_overflow();
+    failures += test_segment_reclaim_follows_host();
+    failures += test_segment_reclaim_and_noemit_errors();
 
     return failures == 0 ? 0 : 1;
 }
