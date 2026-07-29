@@ -44,6 +44,10 @@ typedef enum control_command_type {
     CONTROL_COMMAND_FRAME_RING_INFO,
     CONTROL_COMMAND_FRAME_RING_RECORD,
     CONTROL_COMMAND_FRAME_RING_CLEAR,
+    CONTROL_COMMAND_VIC_RING_INFO,
+    CONTROL_COMMAND_VIC_RING_RECORD,
+    CONTROL_COMMAND_VIC_RING_CLEAR,
+    CONTROL_COMMAND_VIC_RING_FIND,
     CONTROL_COMMAND_GET_VIC,
     CONTROL_COMMAND_GET_CIA,
     CONTROL_COMMAND_GET_MEMORY,
@@ -142,6 +146,12 @@ typedef struct control_args {
     uint64_t frame_ring_target;
     bool frame_ring_by_cycle;
     bool frame_ring_record_enabled;
+    uint64_t vic_ring_frame;
+    bool vic_ring_has_frame;
+    uint16_t vic_ring_raster_first;
+    uint16_t vic_ring_raster_last;
+    uint32_t vic_ring_limit;
+    bool vic_ring_record_enabled;
     uint8_t cia_index; /* 1 or 2 for get-cia */
     bool power_drive_on; /* power-drive: true=on (default), false=off */
     bool use_file_address;

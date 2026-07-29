@@ -2354,6 +2354,16 @@ void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callbac
     machine->memory_access_user = user;
 }
 
+void c64_set_vicii_line_observer(
+    c64_t *machine,
+    vicii_line_observer_fn observer,
+    void *user) {
+    assert(machine);
+
+    machine->vic.line_observer = observer;
+    machine->vic.line_observer_user = user;
+}
+
 void c64_set_cpu_observer(
     c64_t *machine,
     const c64_cpu_observer *observer,

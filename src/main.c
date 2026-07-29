@@ -1684,6 +1684,111 @@ static void control_format_frame_at_response(
         response, request_id, frame, frame_format, extra);
 }
 
+static size_t control_append_u8_list(
+    char *out,
+    size_t out_size,
+    const char *key,
+    const uint8_t *values,
+    size_t count)
+{
+    size_t used = (size_t)snprintf(out, out_size, "%s=", key);
+    size_t i;
+
+    for (i = 0; i < count && used < out_size; ++i) {
+        used += (size_t)snprintf(
+            out + used, out_size - used, "%s%02X",
+            i == 0u ? "" : ",", values[i]);
+    }
+    return used;
+}
+
+/* One text line per raster line. The flight recorder uses a binary format
+   because it holds millions of records; this holds hundreds, so readable
+   key=value text is worth more than a decoder. */
+static void control_format_vic_ring_response(
+    control_response *response,
+    uint32_t request_id,
+    const vicii_line_record *records,
+    uint32_t count)
+{
+    enum { RECORD_TEXT_MAX = 512 };
+    uint8_t *payload;
+    size_t payload_size = 1u + (size_t)count * RECORD_TEXT_MAX;
+    size_t used = 0;
+    char metadata[64];
+    uint32_t i;
+
+    if (response == NULL) {
+        return;
+    }
+    payload = (uint8_t *)malloc(payload_size);
+    if (payload == NULL) {
+        control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
+        return;
+    }
+
+    for (i = 0; i < count; ++i) {
+        const vicii_line_record *r = &records[i];
+        char line[RECORD_TEXT_MAX];
+        size_t at = 0;
+        int written;
+        uint8_t n;
+
+        at += (size_t)snprintf(
+            line + at, sizeof(line) - at,
+            "frame=%llu raster=%u cycle=%llu "
+            "badline=%u allow_bl=%u display=%u vborder=%u mborder=%u "
+            "d011=%02X d016=%02X d018=%02X vc=%04X vcbase=%04X rc=%u vmli=%u "
+            "border=%X bg=%X,%X,%X,%X irq=%02X/%02X "
+            "spr_en=%02X spr_vis=%02X spr_act=%02X spr_pri=%02X "
+            "spr_mc=%02X spr_xe=%02X spr_yeff=%02X ",
+            (unsigned long long)r->frame_number,
+            (unsigned)r->raster_line,
+            (unsigned long long)r->machine_cycle,
+            r->bad_line, r->allow_bad_lines, r->display_state,
+            r->vertical_border, r->main_border_ff,
+            r->d011, r->d016, r->d018,
+            r->vc, r->vc_base, r->rc, r->vmli,
+            r->border_color,
+            r->background[0], r->background[1], r->background[2], r->background[3],
+            r->irq_status, r->irq_enable,
+            r->sprite_enabled, r->sprite_visible, r->sprite_active,
+            r->sprite_priority, r->sprite_multicolor,
+            r->sprite_x_expand, r->sprite_y_expand_ff);
+
+        /* The latched X is the reason this ring exists: it is what the line was
+           painted with, which a mid-frame $D010 write can make differ from the
+           register the CPU last wrote. */
+        at += (size_t)snprintf(line + at, sizeof(line) - at, "spr_x=");
+        for (n = 0; n < 8u && at < sizeof(line); ++n) {
+            at += (size_t)snprintf(
+                line + at, sizeof(line) - at, "%s%04X",
+                n == 0u ? "" : ",", r->sprite_x[n]);
+        }
+        at += (size_t)snprintf(line + at, sizeof(line) - at, " ");
+        at += control_append_u8_list(line + at, sizeof(line) - at, "spr_y", r->sprite_y, 8u);
+        at += (size_t)snprintf(line + at, sizeof(line) - at, " ");
+        at += control_append_u8_list(line + at, sizeof(line) - at, "spr_ptr", r->sprite_pointer, 8u);
+        at += (size_t)snprintf(line + at, sizeof(line) - at, " ");
+        at += control_append_u8_list(line + at, sizeof(line) - at, "spr_col", r->sprite_color, 8u);
+        at += (size_t)snprintf(line + at, sizeof(line) - at, " ");
+        at += control_append_u8_list(line + at, sizeof(line) - at, "spr_mcnt", r->sprite_mc, 8u);
+        at += (size_t)snprintf(line + at, sizeof(line) - at, " ");
+        (void)control_append_u8_list(line + at, sizeof(line) - at, "spr_mcbase", r->sprite_mcbase, 8u);
+
+        written = snprintf(
+            (char *)payload + used, payload_size - used, "%s\n", line);
+        if (written < 0 || (size_t)written >= payload_size - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
+
+    snprintf(metadata, sizeof(metadata), "count=%u", count);
+    control_protocol_format_data(
+        response, request_id, "vic-ring", payload, used, metadata, false);
+}
+
 static void control_format_debug_memory_response(
     control_response *response,
     uint32_t request_id,
@@ -4504,7 +4609,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/5",
+                "name=c64m protocol=C64M/6",
                 false);
             break;
 
@@ -4512,7 +4617,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/5 app=0.1.0",
+                "protocol=C64M/6 app=0.1.0",
                 false);
             break;
 
@@ -4520,7 +4625,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring",
                 false);
             break;
 
@@ -4942,6 +5047,75 @@ static void dispatch_control_request(
                     false);
             }
             free(frame);
+            break;
+        }
+
+        case CONTROL_COMMAND_VIC_RING_INFO: {
+            runtime_vic_ring_info info;
+            char text[CONTROL_RESPONSE_TEXT_MAX];
+
+            runtime_client_get_vic_ring_info(client, &info);
+            snprintf(
+                text,
+                sizeof(text),
+                "capacity=%u count=%u dropped=%llu recording=%u bytes=%llu "
+                "oldest_frame=%llu newest_frame=%llu "
+                "oldest_raster=%u newest_raster=%u "
+                "oldest_cycle=%llu newest_cycle=%llu",
+                info.capacity,
+                info.count,
+                (unsigned long long)info.dropped,
+                info.recording ? 1u : 0u,
+                (unsigned long long)info.bytes,
+                (unsigned long long)info.oldest_frame,
+                (unsigned long long)info.newest_frame,
+                (unsigned)info.oldest_raster,
+                (unsigned)info.newest_raster,
+                (unsigned long long)info.oldest_cycle,
+                (unsigned long long)info.newest_cycle);
+            control_protocol_format_ok(&response, request->id, text, false);
+            break;
+        }
+
+        case CONTROL_COMMAND_VIC_RING_RECORD:
+            runtime_client_set_vic_ring_recording(
+                client, request->args.vic_ring_record_enabled);
+            control_protocol_format_ok(
+                &response,
+                request->id,
+                request->args.vic_ring_record_enabled ?
+                    "recording=1" : "recording=0",
+                false);
+            break;
+
+        case CONTROL_COMMAND_VIC_RING_CLEAR:
+            runtime_client_clear_vic_ring(client);
+            control_protocol_format_ok(&response, request->id, "cleared=1", false);
+            break;
+
+        case CONTROL_COMMAND_VIC_RING_FIND: {
+            uint32_t limit = request->args.vic_ring_limit;
+            vicii_line_record *records =
+                (vicii_line_record *)malloc((size_t)limit * sizeof(*records));
+
+            if (records == NULL) {
+                control_protocol_format_error(
+                    &response, request->id, "memory", "allocation failed", false);
+                break;
+            }
+            {
+                uint32_t count = runtime_client_copy_vic_lines(
+                    client,
+                    request->args.vic_ring_has_frame,
+                    request->args.vic_ring_frame,
+                    request->args.vic_ring_raster_first,
+                    request->args.vic_ring_raster_last,
+                    limit,
+                    records);
+                control_format_vic_ring_response(
+                    &response, request->id, records, count);
+            }
+            free(records);
             break;
         }
 
@@ -6366,6 +6540,8 @@ int main(int argc, char **argv) {
     runtime_cfg.history_memory_mb_configured = true;
     runtime_cfg.frame_ring_memory_mb = (uint32_t)options.frame_ring_memory_mb;
     runtime_cfg.frame_ring_memory_mb_configured = true;
+    runtime_cfg.vic_ring_memory_mb = (uint32_t)options.vic_ring_memory_mb;
+    runtime_cfg.vic_ring_memory_mb_configured = true;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));

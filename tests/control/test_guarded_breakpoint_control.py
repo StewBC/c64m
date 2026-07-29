@@ -258,7 +258,7 @@ def main():
         try:
             client = Ctl(port=port, timeout=15.0)
             try:
-                assert "protocol=C64M/5" in require_ok(
+                assert "protocol=C64M/6" in require_ok(
                     client.cmd("hello"), "hello")
                 test_invalid_guards_are_rejected(client)
                 test_break_list_echoes_the_guard(client)

@@ -46,10 +46,10 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/5** (the frame ring: `frame-ring-info`,
-`frame-ring-record`, `frame-ring-clear`, and `get-frame-at`, on top of the
-C64M/4 guarded breakpoints, C64M/3 HST1 flight-recorder queries, and C64M/2
-bulk-memory/token behavior).
+code and this document. **Current: C64M/6** (the per-line VIC ring:
+`vic-ring-info`, `vic-ring-record`, `vic-ring-clear`, and `vic-ring-find`, on
+top of the C64M/5 frame ring, C64M/4 guarded breakpoints, C64M/3 HST1
+flight-recorder queries, and C64M/2 bulk-memory/token behavior).
 
 ## Wire format
 
@@ -244,9 +244,9 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/5
-version      -> ok protocol=C64M/5 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring
+hello        -> ok name=c64m protocol=C64M/6
+version      -> ok protocol=C64M/6 app=0.1.0
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring
 ping         -> ok
 ```
 
@@ -410,6 +410,73 @@ Cost is one frame copy per completed frame: measured at **+0.22%** of turbo-2
 free-run throughput, and nothing at turbo 1 (50 copies/sec). The default budget
 is resident memory, so lower `frame_ring_memory_mb` if that matters more than
 window length.
+
+## VIC ring (per-line derived state)
+
+```text
+N vic-ring-info
+N vic-ring-record <on|off>
+N vic-ring-clear
+N vic-ring-find [frame=<n>] [raster=<line>|<first>-<last>] [limit=1..2048]
+```
+
+The frame ring shows *that* a frame is wrong; this shows *why*. It retains the
+VIC-II's end-of-line derived state — the things register writes cannot tell you:
+which sprites actually had fetched data on a line, whether it was a bad line,
+the sequencer counters, and above all **the sprite X (including the `$D010` MSB)
+actually latched for painting that line**. A sprite that flashes at the left edge
+for one frame is exactly a latched X that disagrees with the register the game
+believes it wrote, and neither the framebuffer ring nor the CPU flight recorder
+can show that.
+
+Records carry `cycle`, the same axis as the frame ring and the recorder, so one
+moment can be examined from all three.
+
+```text
+N ok capacity=161319 count=116846 dropped=0 recording=1 bytes=16777176
+    oldest_frame=0 newest_frame=444 oldest_raster=0 newest_raster=73
+    oldest_cycle=64 newest_cycle=7594989
+```
+
+`vic-ring-find` returns a counted `data vic-ring` payload of newline-separated
+`key=value` text records, oldest-first, one per raster line — the flight recorder
+uses binary because it holds millions of records; this holds hundreds, so
+readable text beats a decoder:
+
+```text
+frame=408 raster=60 cycle=6978724 badline=0 allow_bl=0 display=0 vborder=1
+  mborder=1 d011=00 d016=00 d018=15 vc=0000 vcbase=0000 rc=0 vmli=0 border=6
+  bg=E,0,0,0 irq=01/00 spr_en=01 spr_vis=01 spr_act=01 spr_pri=00 spr_mc=00
+  spr_xe=00 spr_yeff=01 spr_x=0050,0000,... spr_y=32,00,... spr_ptr=00,00,...
+  spr_col=00,00,... spr_mcnt=1E,00,... spr_mcbase=1E,00,...
+```
+
+(one record per line in the payload; wrapped here for reading). The per-sprite
+lists are always 8 entries, sprite 0 first. `spr_en`/`spr_vis`/`spr_act` are
+bitmasks: enabled as latched for the line, actually had data (painted), and
+sequencer still active. `spr_mcnt`/`spr_mcbase` are the sprite data counters.
+
+All keys are optional. Omitting `frame=` matches the raster window in **every**
+retained frame, which is how a per-line effect is spotted across frames:
+
+```text
+vic-ring-find frame=408                 whole frame, every line
+vic-ring-find frame=408 raster=100-109  one window
+vic-ring-find raster=60 limit=20        line 60 across the last 20 frames
+```
+
+Like the frame ring these answer immediately and work while running (the ring
+owns a mutex); the window moves under a running machine, so pause for a stable
+view. Loading a machine state clears the ring.
+
+**Cost.** This is a much hotter path than the frame ring: one record per raster
+line, ~15.6k/s at turbo 1 and ~280k/s at turbo 2. Measured **2.64%** of turbo-2
+free-run throughput, and nothing measurable at turbo 1. Note that
+`vic-ring-record off` stops *storing* but does **not** remove that cost — the
+record is still built each line. To get the throughput back, disable the ring
+with `[debug] vic_ring_memory_mb=0`, which leaves one NULL test per line and
+measures identical to a build without the feature. Default budget is 16 MiB
+(~161k lines, about 500 PAL frames / 10 s at 50 fps).
 
 ## State, memory, and frames
 

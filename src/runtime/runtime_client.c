@@ -1210,3 +1210,48 @@ void runtime_client_clear_frame_ring(runtime_client *client) {
     }
     runtime_frame_ring_clear(client->frame_ring);
 }
+
+/* -- VIC line ring ------------------------------------------------------- */
+
+void runtime_client_get_vic_ring_info(
+    runtime_client *client,
+    runtime_vic_ring_info *out_info) {
+    if (out_info == NULL) {
+        return;
+    }
+    if (client == NULL || client->vic_ring == NULL) {
+        memset(out_info, 0, sizeof(*out_info));
+        return;
+    }
+    runtime_vic_ring_get_info(client->vic_ring, out_info);
+}
+
+uint32_t runtime_client_copy_vic_lines(
+    runtime_client *client,
+    bool has_frame,
+    uint64_t frame_number,
+    uint16_t raster_first,
+    uint16_t raster_last,
+    uint32_t limit,
+    vicii_line_record *out) {
+    if (client == NULL || client->vic_ring == NULL) {
+        return 0u;
+    }
+    return runtime_vic_ring_copy_range(
+        client->vic_ring, has_frame, frame_number,
+        raster_first, raster_last, limit, out);
+}
+
+void runtime_client_set_vic_ring_recording(runtime_client *client, bool recording) {
+    if (client == NULL || client->vic_ring == NULL) {
+        return;
+    }
+    runtime_vic_ring_set_recording(client->vic_ring, recording);
+}
+
+void runtime_client_clear_vic_ring(runtime_client *client) {
+    if (client == NULL || client->vic_ring == NULL) {
+        return;
+    }
+    runtime_vic_ring_clear(client->vic_ring);
+}

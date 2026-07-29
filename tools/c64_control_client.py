@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal c64m control-port client (C64M/5 line protocol).
+"""Minimal c64m control-port client (C64M/6 line protocol).
 
 Debug/introspection helper for driving a headless c64m over its localhost
 control port. Written for the lft-nine VIC-II investigation

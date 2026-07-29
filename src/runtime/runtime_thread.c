@@ -1371,6 +1371,27 @@ static const c64_cpu_observer runtime_history_observer = {
     .host_trap = runtime_history_observer_host_trap,
 };
 
+static void runtime_vic_line_observer(void *user, const vicii_line_record *record) {
+    runtime *rt = (runtime *)user;
+
+    if (rt == NULL) {
+        return;
+    }
+    (void)runtime_vic_ring_push(&rt->vic_ring, record);
+}
+
+/* Install the hook only when the ring can actually store something, so a
+   disabled ring costs one NULL test per raster line inside the VIC. */
+static void runtime_vic_ring_sync_observer(runtime *rt) {
+    if (rt == NULL) {
+        return;
+    }
+    c64_set_vicii_line_observer(
+        &rt->machine,
+        rt->vic_ring.capacity > 0u ? runtime_vic_line_observer : NULL,
+        rt->vic_ring.capacity > 0u ? rt : NULL);
+}
+
 static void runtime_history_sync_observer(runtime *rt) {
     runtime_history_status status;
 
@@ -4884,6 +4905,7 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
        loaded state restarts the cycle counter, so keeping them would let a
        lookup match a frame from a different run. */
     runtime_frame_ring_clear(&rt->frame_ring);
+    runtime_vic_ring_clear(&rt->vic_ring);
     rt->pending_history_trap = 0u;
     runtime_history_sync_observer(rt);
     runtime_clear_host_transients_after_state_load(rt);
@@ -5861,6 +5883,7 @@ int runtime_thread_main(void *userdata) {
         0u,
         rt->machine.clock.cycle);
     runtime_history_sync_observer(rt);
+    runtime_vic_ring_sync_observer(rt);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;

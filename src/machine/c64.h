@@ -530,6 +530,13 @@ void c64_set_video_output_enabled(c64_t *machine, bool enabled);
 bool c64_video_output_enabled(const c64_t *machine);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
+/* Install a per-raster-line VIC-II derived-state observer (NULL disables).
+   Preserved across snapshot load like the memory-access hook. */
+void c64_set_vicii_line_observer(
+    c64_t *machine,
+    vicii_line_observer_fn observer,
+    void *user);
+
 void c64_set_cpu_observer(
     c64_t *machine,
     const c64_cpu_observer *observer,

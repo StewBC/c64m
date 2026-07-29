@@ -76,6 +76,64 @@ typedef struct c64_vicii_snapshot {
     uint8_t background_color;
 } c64_vicii_snapshot;
 
+/* Per-raster-line snapshot of VIC-II *derived* state, emitted at end of line.
+ *
+ * The point of this record is the state that CPU writes cannot reveal. The
+ * clearest example is `sprite_x`: it is the X (including the $D010 MSB) that
+ * was actually latched for painting this line, which is not necessarily what
+ * $D000..$D010 hold now. A sprite that appears for one frame at the left edge
+ * is exactly that disagreement, and it is invisible to both the framebuffer
+ * ring and the CPU flight recorder.
+ *
+ * `machine_cycle` is the shared axis with the frame ring and the flight
+ * recorder, so a line found here can be correlated with both. */
+typedef struct vicii_line_record {
+    uint64_t machine_cycle;
+    uint64_t frame_number;
+    uint16_t raster_line;
+
+    uint16_t vc;
+    uint16_t vc_base;
+    uint8_t  rc;
+    uint8_t  vmli;
+
+    uint8_t  d011;
+    uint8_t  d016;
+    uint8_t  d018;
+    uint8_t  border_color;
+    uint8_t  background[4];
+
+    uint8_t  irq_status;
+    uint8_t  irq_enable;
+
+    uint8_t  bad_line;
+    uint8_t  allow_bad_lines;
+    uint8_t  display_state;
+    uint8_t  vertical_border;
+    uint8_t  main_border_ff;
+
+    /* Bitmasks, bit n = sprite n. */
+    uint8_t  sprite_enabled;   /* $D015 as latched for this line */
+    uint8_t  sprite_visible;   /* had fetched data, i.e. actually painted */
+    uint8_t  sprite_active;    /* sequencer still active for future lines */
+    uint8_t  sprite_priority;
+    uint8_t  sprite_multicolor;
+    uint8_t  sprite_x_expand;
+    uint8_t  sprite_y_expand_ff;
+
+    /* Per sprite, as latched for this line. */
+    uint16_t sprite_x[8];      /* includes the $D010 MSB actually used */
+    uint8_t  sprite_y[8];
+    uint8_t  sprite_pointer[8];
+    uint8_t  sprite_color[8];
+    uint8_t  sprite_mc[8];
+    uint8_t  sprite_mcbase[8];
+} vicii_line_record;
+
+typedef void (*vicii_line_observer_fn)(
+    void *user,
+    const vicii_line_record *record);
+
 struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
@@ -216,11 +274,20 @@ struct vicii {
        a same-cycle Phi2 $D016 MCM write into the current span (see the mode
        resolution in vicii_finish_cycle). Not snapshotted; re-set every cycle. */
     const c64_bus_t *paint_bus;
+    /* Stashed alongside paint_bus so finish_cycle can stamp the per-line
+       observer record with the absolute machine cycle. Not snapshotted. */
+    uint64_t paint_abs_cycle;
 
     /* Transient line class recomputed at cycle 0. Not snapshotted.
        0 = full accuracy path; 1 = deep vertical-border idle (no sprites, away
        from top/bottom compares, outside badline window). */
     uint8_t line_class;
+
+    /* Host-side per-line observer. Not snapshotted; preserved across snapshot
+       load the same way as c64_t::memory_access. NULL disables the hook, which
+       is the only cost when nothing is recording. */
+    vicii_line_observer_fn line_observer;
+    void *line_observer_user;
 };
 
 enum {

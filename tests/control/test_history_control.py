@@ -76,7 +76,7 @@ def run_available(executable, directory, Ctl):
     try:
         client = Ctl(port=port, timeout=5.0)
         hello = require_ok(client.cmd("hello"), "hello")
-        assert "protocol=C64M/5" in hello
+        assert "protocol=C64M/6" in hello
         assert "history" in require_ok(
             client.cmd("capabilities"), "capabilities").split()
 

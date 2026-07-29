@@ -1419,6 +1419,8 @@ static void snapshot_clear_trace(c64_cpu_instruction_trace *trace) {
 
 static void apply_loaded_machine(c64_t *dst, c64_t *src, bool restore_1541_core) {
     c64_memory_access_fn memory_access = dst->memory_access;
+    vicii_line_observer_fn vic_line_observer = dst->vic.line_observer;
+    void *vic_line_observer_user = dst->vic.line_observer_user;
     void *memory_access_user = dst->memory_access_user;
     bool cpu_trace_enabled = dst->cpu_trace_enabled;
     uint8_t basic_rom[C64_BASIC_ROM_SIZE];
@@ -1476,6 +1478,10 @@ static void apply_loaded_machine(c64_t *dst, c64_t *src, bool restore_1541_core)
     dst->bus.cartridge_mode = src->bus.cartridge_mode;
     dst->cpu.cpu = src->cpu.cpu;
     dst->vic = src->vic;
+    /* Host-side hook, not machine state: restore it after the copy so a
+       state load does not silently stop per-line recording. */
+    dst->vic.line_observer = vic_line_observer;
+    dst->vic.line_observer_user = vic_line_observer_user;
     dst->cia1 = src->cia1;
     dst->cia2 = src->cia2;
     dst->sid = src->sid;

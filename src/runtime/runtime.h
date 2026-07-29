@@ -55,6 +55,9 @@ typedef struct runtime_config {
        disables the ring. */
     uint32_t frame_ring_memory_mb;
     bool frame_ring_memory_mb_configured;
+    /* Startup-only per-line VIC ring budget; 0 disables. */
+    uint32_t vic_ring_memory_mb;
+    bool vic_ring_memory_mb_configured;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

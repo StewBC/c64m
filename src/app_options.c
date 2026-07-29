@@ -31,6 +31,7 @@
 #define C64M_DEFAULT_LAYOUT_SPLIT_MEMORY_MISC 0.55f
 #define C64M_DEFAULT_HISTORY_MEMORY_MB 256
 #define C64M_DEFAULT_FRAME_RING_MEMORY_MB 128
+#define C64M_DEFAULT_VIC_RING_MEMORY_MB 16
 #define C64M_SYSTEM_ROM_SIZE 16384
 #define C64M_BASIC_ROM_SIZE 8192
 #define C64M_KERNAL_ROM_SIZE 8192
@@ -1230,6 +1231,22 @@ static void apply_config(app_options *options, config *cfg)
             options->frame_ring_memory_mb = (int)parsed;
         }
     }
+    value = config_get(cfg, "debug", "vic_ring_memory_mb");
+    if (value != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(value, &end, 0);
+        if (end == value || *end != '\0' ||
+            (parsed != 0u && (parsed < 1u || parsed > 1024u))) {
+            fprintf(
+                stderr,
+                "invalid [debug] vic_ring_memory_mb `%s`; using %d\n",
+                value,
+                C64M_DEFAULT_VIC_RING_MEMORY_MB);
+            options->vic_ring_memory_mb = C64M_DEFAULT_VIC_RING_MEMORY_MB;
+        } else {
+            options->vic_ring_memory_mb = (int)parsed;
+        }
+    }
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1578,6 +1595,7 @@ void app_options_init(app_options *options)
     options->show_disk_leds = true;
     options->history_memory_mb = C64M_DEFAULT_HISTORY_MEMORY_MB;
     options->frame_ring_memory_mb = C64M_DEFAULT_FRAME_RING_MEMORY_MB;
+    options->vic_ring_memory_mb = C64M_DEFAULT_VIC_RING_MEMORY_MB;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1646,6 +1664,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->keyboard_joystick_port = src->keyboard_joystick_port;
     dest->history_memory_mb = src->history_memory_mb;
     dest->frame_ring_memory_mb = src->frame_ring_memory_mb;
+    dest->vic_ring_memory_mb = src->vic_ring_memory_mb;
 
     if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
         !replace_string(&dest->ini_path, src->ini_path) ||
@@ -1765,6 +1784,7 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
     config_set_int(cfg, "debug", "history_memory_mb", options->history_memory_mb);
     config_set_int(cfg, "debug", "frame_ring_memory_mb", options->frame_ring_memory_mb);
+    config_set_int(cfg, "debug", "vic_ring_memory_mb", options->vic_ring_memory_mb);
     /* The snapshot folder is now [browse] snapshot; drop the legacy key. */
     config_remove_prefix(cfg, "state", "quicksave_folder");
     if (options->symbol_files != NULL &&

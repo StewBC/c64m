@@ -4,6 +4,7 @@
 #include "runtime_client.h"
 #include "runtime_command.h"
 #include "runtime_frame_ring.h"
+#include "runtime_vic_ring.h"
 #include "runtime_history.h"
 
 #include "audio_buffer.h"
@@ -42,6 +43,7 @@ struct runtime_client {
     struct runtime_breakpoint_slot *breakpoint_slot;
     struct runtime_rpc_payload_pool *rpc_payload_pool;
     struct runtime_frame_ring *frame_ring;
+    struct runtime_vic_ring *vic_ring;
     /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
     uint64_t next_request_token;
 };
@@ -176,6 +178,8 @@ struct runtime {
     uint32_t history_memory_mb;
     runtime_frame_ring frame_ring;
     uint32_t frame_ring_memory_mb;
+    runtime_vic_ring vic_ring;
+    uint32_t vic_ring_memory_mb;
     uint64_t history_mutation_generation;
     uint64_t next_history_cursor_id;
     runtime_history_cursor history_cursor;

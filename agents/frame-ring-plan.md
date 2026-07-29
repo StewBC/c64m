@@ -1,11 +1,88 @@
 # Frame ring plan (Tier 1B)
 
-**Status:** Ring A implemented (2026-07-28); Ring B (per-line VIC derived state)
-still proposed. The source and tests are authoritative; the wire contract lives
-in `control-port.md` § Frame ring.
+**Status:** implemented (2026-07-28), Ring A and Ring B. The source and tests are
+authoritative; the wire contracts live in `control-port.md` § Frame ring and
+§ VIC ring.
 
-Implementation record for Ring A (what shipped, and where it differs from the
-plan below):
+## Ring B implementation record
+
+The plan's premise held: c64m's VIC already maintained the latched per-line
+sprite state this ring needed (`sprite_line_x[]`, `sprite_line_enabled[]`,
+`sprite_visible[]`, `sprite_mc/mcbase[]`), so no new VIC modelling was required -
+only a way to observe it. `sprite_line_x[]` *is* the "latched XMSB vs shadow
+`$D010`" distinction the plan asked for.
+
+- **Seam:** a per-line observer (`vicii_line_observer_fn`) called at end of line
+  in `vicii_finish_cycle`, filling a `vicii_line_record` defined in `vicii.h`.
+  The machine layer owns the shape of its own derived state; the runtime just
+  copies the record into the ring. `vicii_begin_cycle` now stashes `abs_cycle`
+  alongside the existing `paint_bus` stash, because `finish_cycle` has no
+  `abs_cycle` of its own and the record must carry the shared machine-cycle axis.
+- **Snapshot safety:** the observer lives on `vicii`, which is copied wholesale
+  by `c64_snapshot_load`. It is saved and restored around that copy exactly like
+  `c64_t::memory_access`, so a state load cannot silently stop recording. The
+  serialized `.c64state` format is unaffected: `write_vic` enumerates fields.
+- **Payload is text, not binary**, unlike the flight recorder's HST1. The
+  recorder holds millions of records and needs a decoder; this holds hundreds
+  per query, so `key=value` lines that an agent (or a human reading a coop snap)
+  can consume directly are worth more than density.
+- **Query shape:** `vic-ring-find [frame=] [raster=] [limit=]`, all optional.
+  Omitting `frame=` matches the raster window in every retained frame, which is
+  how a per-line effect is compared across frames.
+
+Measured cost (Apple M2, headless, ROM enabling a sprite and toggling the
+`$D010` MSB once per frame - so the VIC does real sprite work):
+
+| Config | turbo 2 | turbo 1 |
+|---|---|---|
+| pre-Ring-B baseline | 14.142 MHz | 1.020 MHz |
+| `vic_ring_memory_mb=0` (disabled) | 14.139 MHz | 1.018 MHz |
+| ring enabled, recording on | 13.768 MHz | 1.019 MHz |
+| ring enabled, recording off | 13.743 MHz | - |
+
+**2.64%** of turbo-2 throughput, inside the recorder's ≤5% target but an order
+of magnitude more than Ring A's 0.22% - expected, since this records ~280k
+records/sec at turbo 2 versus ~900 frames/sec. Real-time is unaffected.
+
+**Resident memory note.** With both rings on, `runtime_create` now reserves
+144 MiB (128 frame + 16 VIC) on top of the recorder's 256 MiB, so a default
+runtime asks for ~400 MiB. The ring allocations fail soft (capacity 0, emulator
+runs on), but the recorder's allocation is fatal, so heavy memory pressure is
+now marginally likelier to fail runtime creation. One transient
+`runtime_scheduler` failure was seen while a second full build of the tree was
+running concurrently; it did not reproduce across three subsequent full suite
+runs or five standalone runs. Lower `frame_ring_memory_mb` if a host is tight.
+
+**Honest wart:** `vic-ring-record off` stops *storing* but does not recover the
+cost, because the record is still built each line before the ring rejects it.
+Only `vic_ring_memory_mb=0` recovers it, and that measures identical to a build
+without the feature (14.139 vs 14.142) because the observer is then never
+installed. Both facts are documented rather than papered over. Making the toggle
+a real perf control would require uninstalling the observer from the runtime
+thread, which is more plumbing than the saving justifies.
+
+Tests added:
+
+- `tests/runtime/test_runtime_vic_ring.c` - capacity, wrap and drop accounting,
+  range copy by frame and by raster window, no-frame-filter mode, limit, zero
+  limit, recording toggle, clear, null safety.
+- `tests/control/test_vic_ring_control.py` - end to end against a ROM that
+  enables sprite 0 and toggles the `$D010` MSB once per frame, so the latched X
+  must alternate `$0150`/`$0050` across frames while the live register settles on
+  one value. A ring that sampled the registers instead of the per-line latch
+  could not produce both, so that assertion is the real proof. Also full-frame
+  line coverage and ordering, raster windows, cross-frame queries, limits,
+  cross-reference fields, bad arguments, record toggle, and clear.
+
+`tools/coop_watch.py` gained a `vic <frame> [first-last]` inbox verb that appends
+the per-line state to the snap file, with a header noting that `spr_x` is the
+latched value.
+
+---
+
+## Ring A implementation record
+
+(What shipped, and where it differs from the plan below.)
 
 - **Frames are stored as ARGB, not reduced to `indexed8`.** The plan chose
   indexed8 for a 4x memory saving, but the existing ARGB->index converter is a

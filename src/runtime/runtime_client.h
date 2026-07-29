@@ -3,6 +3,7 @@
 #include "runtime_event.h"
 #include "runtime.h"
 #include "runtime_frame_ring.h"
+#include "runtime_vic_ring.h"
 
 #include "c64_frame.h"
 #include "c64.h"
@@ -268,3 +269,22 @@ bool runtime_client_copy_frame_at(
 void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording);
 
 void runtime_client_clear_frame_ring(runtime_client *client);
+
+/* Per-line VIC ring. Same threading story as the frame ring: the ring owns a
+   mutex, so these are safe from the main thread while the runtime records. */
+void runtime_client_get_vic_ring_info(
+    runtime_client *client,
+    runtime_vic_ring_info *out_info);
+
+uint32_t runtime_client_copy_vic_lines(
+    runtime_client *client,
+    bool has_frame,
+    uint64_t frame_number,
+    uint16_t raster_first,
+    uint16_t raster_last,
+    uint32_t limit,
+    vicii_line_record *out);
+
+void runtime_client_set_vic_ring_recording(runtime_client *client, bool recording);
+
+void runtime_client_clear_vic_ring(runtime_client *client);

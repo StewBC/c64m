@@ -409,6 +409,18 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 16 && strncmp(name, "frame-ring-clear", length) == 0) {
         return CONTROL_COMMAND_FRAME_RING_CLEAR;
     }
+    if (length == 13 && strncmp(name, "vic-ring-info", length) == 0) {
+        return CONTROL_COMMAND_VIC_RING_INFO;
+    }
+    if (length == 15 && strncmp(name, "vic-ring-record", length) == 0) {
+        return CONTROL_COMMAND_VIC_RING_RECORD;
+    }
+    if (length == 14 && strncmp(name, "vic-ring-clear", length) == 0) {
+        return CONTROL_COMMAND_VIC_RING_CLEAR;
+    }
+    if (length == 13 && strncmp(name, "vic-ring-find", length) == 0) {
+        return CONTROL_COMMAND_VIC_RING_FIND;
+    }
     if (length == 7 && strncmp(name, "get-vic", length) == 0) {
         return CONTROL_COMMAND_GET_VIC;
     }
@@ -1343,6 +1355,65 @@ bool control_protocol_parse_request(
         } else if (strncmp(cursor, "format=indexed8", 15) == 0) {
             args.frame_format = CONTROL_FRAME_FORMAT_INDEXED8;
             cursor += 15;
+            skip_spaces(&cursor);
+        }
+    } else if (type == CONTROL_COMMAND_VIC_RING_RECORD) {
+        if (strncmp(cursor, "on", 2) == 0 &&
+            (cursor[2] == '\0' || cursor[2] == ' ' || cursor[2] == '\t' ||
+             cursor[2] == '\r' || cursor[2] == '\n')) {
+            args.vic_ring_record_enabled = true;
+            cursor += 2;
+        } else if (strncmp(cursor, "off", 3) == 0) {
+            args.vic_ring_record_enabled = false;
+            cursor += 3;
+        } else {
+            set_parse_error(out_error, id, "bad-args", "expected on|off");
+            return false;
+        }
+        skip_spaces(&cursor);
+    } else if (type == CONTROL_COMMAND_VIC_RING_FIND) {
+        /* All keys optional: no frame filter means "this raster window in every
+           retained frame", which is how a per-line effect is spotted. */
+        args.vic_ring_raster_first = 0u;
+        args.vic_ring_raster_last = 0xffffu;
+        args.vic_ring_limit = 312u;
+        skip_spaces(&cursor);
+        while (*cursor != '\0' && *cursor != '\r' && *cursor != '\n') {
+            if (strncmp(cursor, "frame=", 6) == 0) {
+                cursor += 6;
+                if (!parse_u64_token(cursor, &cursor, &args.vic_ring_frame)) {
+                    set_parse_error(out_error, id, "bad-args", "expected frame=<number>");
+                    return false;
+                }
+                args.vic_ring_has_frame = true;
+            } else if (strncmp(cursor, "raster=", 7) == 0) {
+                const char *start;
+                const char *end;
+                cursor += 7;
+                if (!token_bounds(cursor, &start, &end) ||
+                    !parse_history_u16_range(
+                        start, end,
+                        &args.vic_ring_raster_first,
+                        &args.vic_ring_raster_last)) {
+                    set_parse_error(out_error, id, "bad-args",
+                        "expected raster=<line> or raster=<first>-<last>");
+                    return false;
+                }
+                cursor = end;
+            } else if (strncmp(cursor, "limit=", 6) == 0) {
+                uint64_t limit = 0;
+                cursor += 6;
+                if (!parse_u64_token(cursor, &cursor, &limit) ||
+                    limit == 0u || limit > 2048u) {
+                    set_parse_error(out_error, id, "bad-args", "expected limit=1..2048");
+                    return false;
+                }
+                args.vic_ring_limit = (uint32_t)limit;
+            } else {
+                set_parse_error(out_error, id, "bad-args",
+                    "expected frame=, raster=, or limit=");
+                return false;
+            }
             skip_spaces(&cursor);
         }
     } else if (type == CONTROL_COMMAND_FRAME_RING_RECORD) {

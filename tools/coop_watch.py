@@ -56,6 +56,7 @@ INBOX PROTOCOL (append one command per line to build/debug/coop_inbox)
     hist <addr> [access] [limit]   extra history-find/read into the current snap file
     scrub [count]                  write the last N ring frames to snap-NNN-frames/
     frame <n>                      pull one ring frame + its VIC/CPU context
+    vic <frame> [first-last]       per-line VIC state for that frame (latched sprite X)
     note <text...>                 append a line (e.g. your description) into the snap file
     quit                           clean shutdown
 
@@ -64,6 +65,17 @@ INBOX PROTOCOL (append one command per line to build/debug/coop_inbox)
     `scrub 60` dumps the preceding second to disk and you can find the bad frame
     by eye; `frame <n>` then pulls that frame's pixels together with the machine
     cycle you need to search the flight recorder for the same moment.
+
+    `vic <frame>` answers the next question - *why* that frame is wrong. It
+    dumps the VIC's per-line state for the frame, including the sprite X (with
+    the $D010 MSB) actually latched for painting each line. A sprite that flashes
+    at the left edge for one frame shows up as a latched X that disagrees with
+    the register the game thinks it wrote.
+
+    So the three black boxes line up on one machine cycle:
+      scrub/frame -> which frame, and when
+      vic         -> what the VIC did on each line of it
+      hist        -> what the CPU executed around that moment
 
 Commands are consumed only while the machine is paused (i.e. after a freeze),
 which is exactly when arming/poking is valid. Anything you append while you are
@@ -389,6 +401,9 @@ class CoopWatch:
                 self._scrub_frames(count)
             elif cmd == "frame":
                 self._pull_frame(int(parts[1]))
+            elif cmd == "vic":
+                rasters = parts[2] if len(parts) > 2 else None
+                self._pull_vic_lines(int(parts[1]), rasters)
             elif cmd == "note":
                 self._append_snap("NOTE: " + " ".join(parts[1:]))
             else:
@@ -452,6 +467,26 @@ class CoopWatch:
             f"    png={path}\n"
             f"    (search the recorder around cycle {meta.get('cycle', '?')})")
         self._log(f"frame {number} -> {path} (cycle {meta.get('cycle', '?')})")
+
+    def _pull_vic_lines(self, frame, rasters=None):
+        """Append the per-line VIC state for a frame (or a raster window)."""
+        query = f"frame={frame}"
+        if rasters:
+            query += f" raster={rasters}"
+        query += " limit=2048"
+        r = self.c.cmd(f"vic-ring-find {query}")
+        if r[0] != "data":
+            self._log(f"vic {frame}: {r}")
+            self._append_snap(f"--- vic frame={frame}: {r}")
+            return
+        body = r[2].decode("latin1").rstrip()
+        count = len(body.splitlines()) if body else 0
+        self._append_snap(
+            f"--- vic-ring {query}  ({count} lines)\n"
+            f"    spr_x is the X LATCHED for painting that line, including the\n"
+            f"    $D010 MSB; it need not match the current register.\n"
+            + body)
+        self._log(f"vic {frame}: {count} lines appended")
 
     def _append_snap(self, text):
         target = self.cur_snap or os.path.join(self.out_dir, "coop_extra.txt")

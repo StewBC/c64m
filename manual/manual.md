@@ -2048,6 +2048,37 @@ normal or max speed. Loading a machine state clears the ring.
 Each retained frame carries its machine cycle, which is the key for searching the
 flight recorder for the same moment.
 
+### VIC Ring
+
+The frame ring shows that a frame is wrong; the VIC ring shows why. It retains
+the VIC-II state at the end of each raster line, including the sprite X position
+(with its high bit from $D010) that was actually latched for painting that line.
+That latched value need not match what the sprite registers hold afterwards, and
+a sprite that appears at the wrong edge for a single frame is exactly that
+disagreement. Neither the frame ring nor the flight recorder can show it.
+
+The default budget is 16 MiB, roughly 161000 lines or 500 PAL frames. Set it with
+`[debug] vic_ring_memory_mb`; `0` disables the ring and other valid values are 1
+through 1024.
+
+| Command | Meaning |
+|---------|---------|
+| `vic-ring-info` | Report capacity, retained lines, dropped lines, recording state, and the retained frame, raster, and cycle range |
+| `vic-ring-record <on\|off>` | Resume or stop storing lines |
+| `vic-ring-clear` | Discard retained lines |
+| `vic-ring-find [frame=N] [raster=L or F-L] [limit=1..2048]` | Fetch matching lines as text records |
+
+Every key is optional. Omitting the frame matches the raster window in every
+retained frame, which is how a per-line effect is compared across frames. Records
+are returned oldest first, one text line per raster line, and each carries the
+machine cycle that ties it to the frame ring and the flight recorder.
+
+This records far more often than the frame ring, once per raster line rather than
+once per frame, and costs about 2.6 percent of maximum free-run speed. Real-time
+speed is unaffected. Turning recording off stops storing lines but does not
+recover that cost, because the record is still built each line. To recover it,
+disable the ring with a budget of `0`.
+
 ### State and Snapshots
 
 | Command | Response |

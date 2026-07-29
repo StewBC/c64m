@@ -2989,6 +2989,11 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
 
     assert(v);
 
+    /* finish_cycle has no abs_cycle of its own; stash it here so the per-line
+       observer record can be stamped with the machine cycle that ties it to
+       the frame ring and the CPU flight recorder. */
+    v->paint_abs_cycle = abs_cycle;
+
     cycle = v->timing.cycle_in_line;
     cf = vicii_cycle_flags(v, cycle);
 
@@ -3355,6 +3360,75 @@ void vicii_begin_cycle(vicii *v, const c64_bus_t *bus, uint64_t abs_cycle) {
     v->reg11_delay = v->registers[VICII_REG_CONTROL_1];
 }
 
+/* Fill and emit one end-of-line derived-state record. Only reached when an
+   observer is installed, so a machine with nothing recording pays one NULL
+   test per raster line. */
+static void vicii_emit_line_record(vicii *v) {
+    vicii_line_record record;
+    uint8_t n;
+    uint8_t enabled = 0u;
+    uint8_t visible = 0u;
+    uint8_t y_exp_ff = 0u;
+
+    memset(&record, 0, sizeof(record));
+    record.machine_cycle = v->paint_abs_cycle;
+    record.frame_number = v->timing.frame_number;
+    record.raster_line = (uint16_t)v->timing.raster_line;
+
+    record.vc = v->vc;
+    record.vc_base = v->vc_base;
+    record.rc = v->rc;
+    record.vmli = v->vmli;
+
+    record.d011 = v->registers[0x11];
+    record.d016 = v->registers[0x16];
+    record.d018 = v->registers[0x18];
+    record.border_color = (uint8_t)(v->registers[0x20] & 0x0Fu);
+    record.background[0] = (uint8_t)(v->registers[0x21] & 0x0Fu);
+    record.background[1] = (uint8_t)(v->registers[0x22] & 0x0Fu);
+    record.background[2] = (uint8_t)(v->registers[0x23] & 0x0Fu);
+    record.background[3] = (uint8_t)(v->registers[0x24] & 0x0Fu);
+
+    record.irq_status = v->irq_status;
+    record.irq_enable = v->irq_enable;
+
+    record.bad_line = v->bad_line ? 1u : 0u;
+    record.allow_bad_lines = v->allow_bad_lines ? 1u : 0u;
+    record.display_state = v->display_state ? 1u : 0u;
+    record.vertical_border = v->vertical_border_active ? 1u : 0u;
+    record.main_border_ff = v->main_border_ff ? 1u : 0u;
+
+    record.sprite_active = v->sprite_active_mask;
+    record.sprite_priority = v->sprite_priority;
+    record.sprite_x_expand = v->registers[VICII_REG_SPR_X_EXPAND];
+    record.sprite_multicolor = v->registers[VICII_REG_SPR_MULTICOLOR];
+
+    for (n = 0; n < 8u; n++) {
+        if (v->sprite_line_enabled[n]) {
+            enabled |= (uint8_t)(1u << n);
+        }
+        if (v->sprite_visible[n]) {
+            visible |= (uint8_t)(1u << n);
+        }
+        if (v->sprite_y_exp_ff[n]) {
+            y_exp_ff |= (uint8_t)(1u << n);
+        }
+        /* The latched X, not the live register: this is the value the line was
+           actually painted with. */
+        record.sprite_x[n] = v->sprite_line_x[n];
+        record.sprite_y[n] = v->registers[(uint8_t)(n * 2u + 1u)];
+        record.sprite_pointer[n] = v->sprite_pointer[n];
+        record.sprite_color[n] = v->sprite_line_color[n];
+        record.sprite_mc[n] = v->sprite_mc[n];
+        record.sprite_mcbase[n] = v->sprite_mcbase[n];
+    }
+    record.sprite_enabled = enabled;
+    record.sprite_visible = visible;
+    record.sprite_y_expand_ff = y_exp_ff;
+
+    v->line_observer(v->line_observer_user, &record);
+}
+
 void vicii_finish_cycle(vicii *v) {
     uint32_t cyc;
     uint8_t old_i;
@@ -3611,6 +3685,13 @@ advance_raster:
      * model above); no Bauer cycle-63 dual-write needed.
      * ------------------------------------------------------------------ */
     v->timing.cycle_in_line = 0;
+
+    /* The line is complete, so every per-line latch (notably sprite_line_x,
+       which carries the $D010 MSB actually used for painting) has its final
+       value for this raster. */
+    if (v->line_observer != NULL) {
+        vicii_emit_line_record(v);
+    }
 
     v->timing.raster_line++;
     if (v->timing.raster_line < v->timing.lines_per_frame) {
