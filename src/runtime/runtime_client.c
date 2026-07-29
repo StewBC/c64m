@@ -1168,3 +1168,45 @@ bool runtime_client_paste_events(runtime_client *client, const paste_event_t *ev
 bool runtime_client_request_call_stack(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_REQUEST_CALL_STACK);
 }
+
+/* -- frame ring ---------------------------------------------------------- */
+
+void runtime_client_get_frame_ring_info(
+    runtime_client *client,
+    runtime_frame_ring_info *out_info) {
+    if (out_info == NULL) {
+        return;
+    }
+    if (client == NULL || client->frame_ring == NULL) {
+        memset(out_info, 0, sizeof(*out_info));
+        return;
+    }
+    runtime_frame_ring_get_info(client->frame_ring, out_info);
+}
+
+bool runtime_client_copy_frame_at(
+    runtime_client *client,
+    uint64_t target,
+    bool by_cycle,
+    c64_frame *out_frame) {
+    if (client == NULL || client->frame_ring == NULL || out_frame == NULL) {
+        return false;
+    }
+    return by_cycle ?
+        runtime_frame_ring_copy_by_cycle(client->frame_ring, target, out_frame) :
+        runtime_frame_ring_copy_by_frame(client->frame_ring, target, out_frame);
+}
+
+void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording) {
+    if (client == NULL || client->frame_ring == NULL) {
+        return;
+    }
+    runtime_frame_ring_set_recording(client->frame_ring, recording);
+}
+
+void runtime_client_clear_frame_ring(runtime_client *client) {
+    if (client == NULL || client->frame_ring == NULL) {
+        return;
+    }
+    runtime_frame_ring_clear(client->frame_ring);
+}

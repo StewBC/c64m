@@ -50,6 +50,11 @@ typedef struct runtime_config {
        runtime_create uses RUNTIME_HISTORY_DEFAULT_MEMORY_MB. */
     uint32_t history_memory_mb;
     bool history_memory_mb_configured;
+    /* Startup-only frame-ring budget. When frame_ring_memory_mb_configured is
+       false, runtime_create uses RUNTIME_FRAME_RING_DEFAULT_MEMORY_MB. 0
+       disables the ring. */
+    uint32_t frame_ring_memory_mb;
+    bool frame_ring_memory_mb_configured;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

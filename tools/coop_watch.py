@@ -54,8 +54,16 @@ INBOX PROTOCOL (append one command per line to build/debug/coop_inbox)
     clear                          break-clear-all
     dump <addr> <len> [mode]       extra get-memory into the current snap file
     hist <addr> [access] [limit]   extra history-find/read into the current snap file
+    scrub [count]                  write the last N ring frames to snap-NNN-frames/
+    frame <n>                      pull one ring frame + its VIC/CPU context
     note <text...>                 append a line (e.g. your description) into the snap file
     quit                           clean shutdown
+
+    `scrub` is the answer to "the glitch was gone before I could pause". The
+    frame ring keeps the last few seconds of real frames, so after you freeze,
+    `scrub 60` dumps the preceding second to disk and you can find the bad frame
+    by eye; `frame <n>` then pulls that frame's pixels together with the machine
+    cycle you need to search the flight recorder for the same moment.
 
 Commands are consumed only while the machine is paused (i.e. after a freeze),
 which is exactly when arming/poking is valid. Anything you append while you are
@@ -93,6 +101,43 @@ CONFIG = {
     ],
     "trace_limit": 48,          # history records per traced address
 }
+
+
+# Pepto palette, matching vicii.c / the control port's indexed8 mapping.
+C64_PALETTE = [
+    (0x00, 0x00, 0x00), (0xFF, 0xFF, 0xFF), (0x81, 0x33, 0x38), (0x75, 0xCE, 0xC8),
+    (0x8E, 0x3C, 0x97), (0x56, 0xAC, 0x4D), (0x2E, 0x2C, 0x9B), (0xED, 0xF1, 0x71),
+    (0x8E, 0x50, 0x29), (0x55, 0x38, 0x00), (0xC4, 0x6C, 0x71), (0x4A, 0x4A, 0x4A),
+    (0x7B, 0x7B, 0x7B), (0xA9, 0xFF, 0x9F), (0x70, 0x6D, 0xEB), (0xB2, 0xB2, 0xB2),
+]
+
+
+def write_indexed_png(path, width, height, pixels):
+    """Write an indexed8 frame as a paletted PNG. Stdlib only (zlib/struct)."""
+    import struct
+    import zlib
+
+    if not pixels or len(pixels) < width * height:
+        return False
+
+    def chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload +
+                struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)  # filter type 0 (None)
+        raw += pixels[y * width:(y + 1) * width]
+
+    palette = b"".join(bytes(rgb) for rgb in C64_PALETTE)
+    png = (b"\x89PNG\r\n\x1a\n" +
+           chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0)) +
+           chunk(b"PLTE", palette) +
+           chunk(b"IDAT", zlib.compress(bytes(raw), 6)) +
+           chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
+    return True
 
 
 def hexdump(addr, data):
@@ -339,6 +384,11 @@ class CoopWatch:
                         for r in res["records"]]
                 self._append_snap(f"--- hist ${addr:04X} {access} (newest first)\n"
                                   + "\n".join(body))
+            elif cmd == "scrub":
+                count = int(parts[1]) if len(parts) > 1 else 50
+                self._scrub_frames(count)
+            elif cmd == "frame":
+                self._pull_frame(int(parts[1]))
             elif cmd == "note":
                 self._append_snap("NOTE: " + " ".join(parts[1:]))
             else:
@@ -346,6 +396,62 @@ class CoopWatch:
         except Exception as exc:
             self._log(f"inbox command failed ({line!r}): {exc}")
         return None
+
+    # -- frame ring ---------------------------------------------------------
+    def _ring_info(self):
+        r = self.c.cmd("frame-ring-info")
+        return Ctl._metadata(r[1]) if r[0] == "ok" else {}
+
+    def _frame_at(self, number):
+        """Return (metadata, indexed8 pixels) for one retained frame."""
+        r = self.c.cmd(f"get-frame-at frame={number} format=indexed8")
+        if r[0] != "data":
+            return None, None
+        return Ctl._metadata(r[1]), r[2]
+
+    def _scrub_frames(self, count):
+        """Dump the last `count` retained frames as PNGs for eyeballing."""
+        info = self._ring_info()
+        if not info or int(info.get("count", 0)) == 0:
+            self._log("scrub: frame ring is empty")
+            return
+        newest = int(info["newest_frame"])
+        oldest = int(info["oldest_frame"])
+        first = max(oldest, newest - count + 1)
+        out_dir = os.path.splitext(self.cur_snap or "frames")[0] + "-frames"
+        os.makedirs(out_dir, exist_ok=True)
+
+        written = 0
+        for number in range(first, newest + 1):
+            meta, pixels = self._frame_at(number)
+            if meta is None:
+                continue
+            path = os.path.join(out_dir, f"frame-{number:06d}.png")
+            if write_indexed_png(path, int(meta["width"]), int(meta["height"]),
+                                 pixels):
+                written += 1
+        self._append_snap(
+            f"--- scrub frames {first}..{newest} -> {out_dir} "
+            f"({written} written, ring dropped={info.get('dropped', '?')})")
+        self._log(f"scrub: wrote {written} frames to {out_dir}")
+
+    def _pull_frame(self, number):
+        meta, pixels = self._frame_at(number)
+        if meta is None:
+            self._log(f"frame {number}: not in the ring")
+            self._append_snap(f"--- frame {number}: not in the retained window")
+            return
+        out_dir = os.path.splitext(self.cur_snap or "frames")[0] + "-frames"
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"frame-{number:06d}.png")
+        write_indexed_png(path, int(meta["width"]), int(meta["height"]), pixels)
+        # The machine cycle is the key that ties this frame to the recorder.
+        self._append_snap(
+            f"--- frame {number}\n"
+            f"    {' '.join(f'{k}={v}' for k, v in meta.items())}\n"
+            f"    png={path}\n"
+            f"    (search the recorder around cycle {meta.get('cycle', '?')})")
+        self._log(f"frame {number} -> {path} (cycle {meta.get('cycle', '?')})")
 
     def _append_snap(self, text):
         target = self.cur_snap or os.path.join(self.out_dir, "coop_extra.txt")

@@ -2015,6 +2015,39 @@ cursor; execution, reset, recording control, state load, or direct machine
 mutation makes it stale. Searches use a 10 second timeout; other deferred
 commands use the standard 2 second timeout.
 
+### Frame Ring
+
+The flight recorder retains what the CPU did; the frame ring retains what the
+screen showed. It keeps the most recent completed frames in memory so a glitch
+that lasted a single frame can still be retrieved after you notice it and pause,
+which is typically a second and about fifty frames later.
+
+The default budget is 128 MiB, roughly 206 PAL frames or four seconds at 50 fps.
+Set it with `[debug] frame_ring_memory_mb`; `0` disables the ring and other valid
+values are 8 through 4096.
+
+| Command | Meaning |
+|---------|---------|
+| `frame-ring-info` | Report capacity, retained count, dropped frames, recording state, and the retained frame and cycle range |
+| `frame-ring-record <on\|off>` | Resume or stop recording without discarding retained frames |
+| `frame-ring-clear` | Discard retained frames |
+| `get-frame-at <frame=N\|cycle=N> [format=argb8888\|indexed8]` | Fetch one retained frame |
+
+The target must be named as either a frame number or a machine cycle, because a
+bare number could be either and the wrong reading returns a plausible but wrong
+frame. The lookup resolves to the nearest frame at or before the target. A target
+past the newest returns the newest; a target older than the retained window
+returns `not-found` rather than a substituted neighbour. Payloads are identical
+to `get-frame` in the same format.
+
+These commands answer immediately and work while the machine runs, although the
+retained window keeps moving until you pause. Warp does not record, because the
+live renderer is off and there are no real pixels to keep; recording resumes at
+normal or max speed. Loading a machine state clears the ring.
+
+Each retained frame carries its machine cycle, which is the key for searching the
+flight recorder for the same moment.
+
 ### State and Snapshots
 
 | Command | Response |

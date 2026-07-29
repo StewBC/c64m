@@ -1207,6 +1207,9 @@ static bool runtime_publish_debug_frame(runtime *rt) {
 
 static bool runtime_publish_completed_frame(runtime *rt) {
     if (runtime_turbo_display_mode(rt)) {
+        /* Warp: the live ARGB renderer is off, so there are no real pixels to
+           record. The ring deliberately stalls rather than storing geometric
+           debug snapshots that would look like frames but are not. */
         return runtime_publish_completed_frame_turbo(rt);
     }
 
@@ -1214,6 +1217,10 @@ static bool runtime_publish_completed_frame(runtime *rt) {
         runtime_publish_error(rt, "no completed live frame available");
         return false;
     }
+
+    /* Record before publishing: the ring must see every completed frame, even
+       the ones the UI drops because it is still holding the previous one. */
+    (void)runtime_frame_ring_push(&rt->frame_ring, &rt->publish_frame);
 
     return runtime_publish_frame_copy(rt, &rt->publish_frame);
 }
@@ -4873,6 +4880,10 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
 
     (void)runtime_history_clear_for_state_load(
         rt->history, rt->machine.clock.cycle);
+    /* Retained frames belong to the timeline that was just discarded, and the
+       loaded state restarts the cycle counter, so keeping them would let a
+       lookup match a frame from a different run. */
+    runtime_frame_ring_clear(&rt->frame_ring);
     rt->pending_history_trap = 0u;
     runtime_history_sync_observer(rt);
     runtime_clear_host_transients_after_state_load(rt);

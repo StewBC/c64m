@@ -1,7 +1,67 @@
 # Frame ring plan (Tier 1B)
 
-**Status:** proposed (2026-07-28). Not implemented. Test-first work breakdown;
-source and tests are authoritative once code lands.
+**Status:** Ring A implemented (2026-07-28); Ring B (per-line VIC derived state)
+still proposed. The source and tests are authoritative; the wire contract lives
+in `control-port.md` § Frame ring.
+
+Implementation record for Ring A (what shipped, and where it differs from the
+plan below):
+
+- **Frames are stored as ARGB, not reduced to `indexed8`.** The plan chose
+  indexed8 for a 4x memory saving, but the existing ARGB->index converter is a
+  per-pixel linear scan of the 16-entry palette (~2.5M comparisons per PAL
+  frame) and is lossy for any colour outside the palette, mapping it to index 0.
+  Running that on every completed frame was the wrong trade. Conversion now
+  happens on read, reusing the same code path as `get-frame`, so a ring frame
+  and a live frame convert identically. Cost is 649 KB per frame instead of
+  162 KB; the default 128 MiB budget still holds ~206 PAL frames (~4 s).
+- **No RPC plumbing.** The plan specified token-keyed RPC like bulk memory. The
+  ring instead carries its own mutex, the same shape as `runtime_frame_slot`'s
+  existing cross-thread frame handoff, so control commands answer immediately
+  from the main thread. Readers copy out rather than borrowing, so no pointer
+  outlives the lock.
+- **Lookups work while running**, not paused-only as planned: the lock makes it
+  race-free, and forbidding it would only add friction. The retained window
+  moves under a running machine, which is documented.
+- **`get-frame-at` names its target** (`frame=` or `cycle=`) rather than taking
+  a bare number. A bare number is ambiguous between a frame index and a machine
+  cycle, and guessing wrong returns a plausible but wrong frame.
+- A target past the newest clamps to the newest; one older than the window is
+  `not-found` rather than a substituted neighbour.
+
+Measured cost (Apple M2, headless, a ROM bumping the border once per frame):
+
+| Config | MHz |
+|---|---|
+| pre-1B baseline, turbo 2 | 15.510 |
+| turbo 2, ring recording off | 15.933 |
+| turbo 2, ring recording on | 15.898 |
+| turbo 1 (real-time), ring on | 1.027 |
+
+The push costs **+0.22%** of turbo-2 throughput and nothing measurable at
+turbo 1 (50 copies/sec). Post-change figures sit above the pre-change baseline,
+i.e. no regression outside noise. The real cost is resident memory: 128 MiB by
+default, tunable via `[debug] frame_ring_memory_mb` (`0` disables).
+
+Tests added:
+
+- `tests/runtime/test_runtime_frame_ring.c` - budget/capacity, push and info,
+  wrap with drop accounting, nearest-at-or-before lookup by frame and by cycle,
+  recording toggle, clear, and null/empty safety.
+- `tests/control/test_frame_ring_control.py` - end to end against a ROM that
+  bumps the border once per frame, so consecutive retained frames must differ by
+  exactly one border step; also cycle lookup, format equivalence, out-of-window
+  and bad-argument handling, record toggle, clear, and that warp records nothing
+  and recording resumes afterwards.
+
+`tools/coop_watch.py` gained `scrub [count]` and `frame <n>` inbox verbs, which
+write retained frames to `snap-NNN-frames/*.png` (stdlib-only paletted PNG
+writer) and record each frame's machine cycle for cross-referencing the
+recorder.
+
+---
+
+The original plan follows.
 
 ## Why this exists
 

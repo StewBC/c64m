@@ -95,9 +95,10 @@ Component handoffs:
   the "machine stops itself on nuance" primitive. Wire syntax and semantics
   live in `control-port.md`; the source is
   `src/runtime/runtime_breakpoint_condition.{c,h}`.
-- `frame-ring-plan.md` - proposed (Tier 1B): rolling in-RAM rings of completed
-  `indexed8` frames and per-line VIC derived state so a one-frame glitch
-  survives a human pause seconds late. Not current code.
+- `frame-ring-plan.md` - Tier 1B. **Ring A implemented**: a rolling in-RAM ring
+  of completed frames so a one-frame glitch survives a human pause seconds late
+  (`src/runtime/runtime_frame_ring.{c,h}`, wire contract in `control-port.md`).
+  Ring B (per-line VIC derived state) is still proposed.
 - `crt-type19-plan.md` - CRT mapper roadmap: type 19 Magic Desk first, type
   checklist with OneLoad64 unlock counts; implement later, not current code
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
@@ -107,10 +108,11 @@ Component handoffs:
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.
 
-Current baseline is 65/65 passing (includes `c64_snapshot_1541_midload`, the
-history integration test, the machine/runtime recorder tests, and the guarded-
-breakpoint condition/ini/control tests). That baseline includes the real 1541
-ROM/IEC, G64, Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
+Current baseline is 67/67 passing (includes `c64_snapshot_1541_midload`, the
+history integration test, the machine/runtime recorder tests, the guarded-
+breakpoint condition/ini/control tests, and the frame-ring unit/control tests).
+That baseline includes the real 1541 ROM/IEC, G64, Arkanoid, Robocop, and full
+1541 drive-object snapshot paths.
 
 The verification command is:
 

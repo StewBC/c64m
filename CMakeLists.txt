@@ -530,6 +530,19 @@ set_tests_properties(guarded_breakpoint_control_integration PROPERTIES
     TIMEOUT 60
 )
 
+add_test(
+    NAME frame_ring_control_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/control/test_frame_ring_control.py
+        $<TARGET_FILE:c64m>
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(frame_ring_control_integration PROPERTIES
+    TIMEOUT 60
+)
+
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c
 )
@@ -962,6 +975,18 @@ target_link_libraries(test_runtime_breakpoint_ini PRIVATE
 )
 
 add_test(NAME runtime_breakpoint_ini COMMAND test_runtime_breakpoint_ini)
+
+add_executable(test_runtime_frame_ring
+    tests/runtime/test_runtime_frame_ring.c
+)
+
+target_compile_features(test_runtime_frame_ring PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_frame_ring PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_frame_ring COMMAND test_runtime_frame_ring)
 
 add_executable(test_runtime_history
     tests/runtime/test_runtime_history.c

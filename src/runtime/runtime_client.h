@@ -2,6 +2,7 @@
 
 #include "runtime_event.h"
 #include "runtime.h"
+#include "runtime_frame_ring.h"
 
 #include "c64_frame.h"
 #include "c64.h"
@@ -250,3 +251,20 @@ bool runtime_client_save_bin(
 bool runtime_client_poll_event(
     runtime_client *client,
     runtime_event *out_event);
+
+/* Frame ring (rolling framebuffer black box). These read the runtime's ring
+   directly; it carries its own mutex, so they are safe to call from the main
+   thread while the runtime thread keeps pushing frames. */
+void runtime_client_get_frame_ring_info(
+    runtime_client *client,
+    runtime_frame_ring_info *out_info);
+
+bool runtime_client_copy_frame_at(
+    runtime_client *client,
+    uint64_t target,
+    bool by_cycle,
+    c64_frame *out_frame);
+
+void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording);
+
+void runtime_client_clear_frame_ring(runtime_client *client);

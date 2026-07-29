@@ -397,6 +397,18 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 9 && strncmp(name, "get-frame", length) == 0) {
         return CONTROL_COMMAND_GET_FRAME;
     }
+    if (length == 12 && strncmp(name, "get-frame-at", length) == 0) {
+        return CONTROL_COMMAND_GET_FRAME_AT;
+    }
+    if (length == 15 && strncmp(name, "frame-ring-info", length) == 0) {
+        return CONTROL_COMMAND_FRAME_RING_INFO;
+    }
+    if (length == 17 && strncmp(name, "frame-ring-record", length) == 0) {
+        return CONTROL_COMMAND_FRAME_RING_RECORD;
+    }
+    if (length == 16 && strncmp(name, "frame-ring-clear", length) == 0) {
+        return CONTROL_COMMAND_FRAME_RING_CLEAR;
+    }
     if (length == 7 && strncmp(name, "get-vic", length) == 0) {
         return CONTROL_COMMAND_GET_VIC;
     }
@@ -1294,6 +1306,61 @@ bool control_protocol_parse_request(
                 cursor++;
             }
         }
+    } else if (type == CONTROL_COMMAND_GET_FRAME_AT) {
+        bool have_target = false;
+        args.frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
+        skip_spaces(&cursor);
+        /* The target is named rather than positional: a bare number could be
+           either a frame index or a machine cycle, and guessing wrong returns
+           a plausible but wrong frame. */
+        if (strncmp(cursor, "frame=", 6) == 0) {
+            cursor += 6;
+            if (!parse_u64_token(cursor, &cursor, &args.frame_ring_target)) {
+                set_parse_error(out_error, id, "bad-args", "expected frame=<number>");
+                return false;
+            }
+            args.frame_ring_by_cycle = false;
+            have_target = true;
+        } else if (strncmp(cursor, "cycle=", 6) == 0) {
+            cursor += 6;
+            if (!parse_u64_token(cursor, &cursor, &args.frame_ring_target)) {
+                set_parse_error(out_error, id, "bad-args", "expected cycle=<number>");
+                return false;
+            }
+            args.frame_ring_by_cycle = true;
+            have_target = true;
+        }
+        if (!have_target) {
+            set_parse_error(out_error, id, "bad-args",
+                "expected frame=<number> or cycle=<number>");
+            return false;
+        }
+        skip_spaces(&cursor);
+        if (strncmp(cursor, "format=argb8888", 15) == 0) {
+            args.frame_format = CONTROL_FRAME_FORMAT_ARGB8888;
+            cursor += 15;
+            skip_spaces(&cursor);
+        } else if (strncmp(cursor, "format=indexed8", 15) == 0) {
+            args.frame_format = CONTROL_FRAME_FORMAT_INDEXED8;
+            cursor += 15;
+            skip_spaces(&cursor);
+        }
+    } else if (type == CONTROL_COMMAND_FRAME_RING_RECORD) {
+        /* Same on|off spelling as history-record, so the two black boxes are
+           driven the same way. */
+        if (strncmp(cursor, "on", 2) == 0 &&
+            (cursor[2] == '\0' || cursor[2] == ' ' || cursor[2] == '\t' ||
+             cursor[2] == '\r' || cursor[2] == '\n')) {
+            args.frame_ring_record_enabled = true;
+            cursor += 2;
+        } else if (strncmp(cursor, "off", 3) == 0) {
+            args.frame_ring_record_enabled = false;
+            cursor += 3;
+        } else {
+            set_parse_error(out_error, id, "bad-args", "expected on|off");
+            return false;
+        }
+        skip_spaces(&cursor);
     } else if (type == CONTROL_COMMAND_GET_CIA) {
         if (!parse_u8_token(cursor, &cursor, &args.cia_index) ||
             (args.cia_index != 1u && args.cia_index != 2u)) {

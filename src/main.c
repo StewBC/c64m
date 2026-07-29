@@ -1578,11 +1578,14 @@ static uint8_t control_argb_to_index(uint32_t argb)
     return 0u;
 }
 
-static void control_format_frame_response(
+/* Shared by get-frame and get-frame-at so a ring frame and a live frame go
+   through identical conversion; `extra_metadata` may be NULL. */
+static void control_format_frame_response_ex(
     control_response *response,
     uint32_t request_id,
     const c64_frame *frame,
-    uint8_t frame_format)
+    uint8_t frame_format,
+    const char *extra_metadata)
 {
     uint8_t *payload;
     size_t payload_size;
@@ -1630,13 +1633,15 @@ static void control_format_frame_response(
     snprintf(
         metadata,
         sizeof(metadata),
-        "width=%u height=%u stride=%u format=%s frame=%llu cycle=%llu",
+        "width=%u height=%u stride=%u format=%s frame=%llu cycle=%llu%s%s",
         frame->width,
         frame->height,
         stride,
         format_name,
         (unsigned long long)frame->frame_number,
-        (unsigned long long)frame->machine_cycle);
+        (unsigned long long)frame->machine_cycle,
+        extra_metadata != NULL ? " " : "",
+        extra_metadata != NULL ? extra_metadata : "");
     control_protocol_format_data(
         response,
         request_id,
@@ -1645,6 +1650,38 @@ static void control_format_frame_response(
         payload_size,
         metadata,
         false);
+}
+
+static void control_format_frame_response(
+    control_response *response,
+    uint32_t request_id,
+    const c64_frame *frame,
+    uint8_t frame_format)
+{
+    control_format_frame_response_ex(
+        response, request_id, frame, frame_format, NULL);
+}
+
+/* get-frame-at reports what was asked for alongside what was returned, because
+   the lookup resolves to the nearest frame at or before the target. */
+static void control_format_frame_at_response(
+    control_response *response,
+    uint32_t request_id,
+    const c64_frame *frame,
+    uint8_t frame_format,
+    uint64_t target,
+    bool by_cycle)
+{
+    char extra[96];
+
+    snprintf(
+        extra,
+        sizeof(extra),
+        "target=%llu target_kind=%s",
+        (unsigned long long)target,
+        by_cycle ? "cycle" : "frame");
+    control_format_frame_response_ex(
+        response, request_id, frame, frame_format, extra);
 }
 
 static void control_format_debug_memory_response(
@@ -4467,7 +4504,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/4",
+                "name=c64m protocol=C64M/5",
                 false);
             break;
 
@@ -4475,7 +4512,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/4 app=0.1.0",
+                "protocol=C64M/5 app=0.1.0",
                 false);
             break;
 
@@ -4483,7 +4520,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring",
                 false);
             break;
 
@@ -4826,6 +4863,87 @@ static void dispatch_control_request(
                     false);
             }
             break;
+
+        /* Frame-ring commands answer immediately: the ring carries its own
+           mutex, so no runtime round-trip is needed and a scrub does not
+           contend for the single-deferred slot. */
+        case CONTROL_COMMAND_FRAME_RING_INFO: {
+            runtime_frame_ring_info info;
+            char text[CONTROL_RESPONSE_TEXT_MAX];
+
+            runtime_client_get_frame_ring_info(client, &info);
+            snprintf(
+                text,
+                sizeof(text),
+                "capacity=%u count=%u dropped=%llu recording=%u bytes=%llu "
+                "oldest_frame=%llu newest_frame=%llu "
+                "oldest_cycle=%llu newest_cycle=%llu",
+                info.capacity,
+                info.count,
+                (unsigned long long)info.dropped,
+                info.recording ? 1u : 0u,
+                (unsigned long long)info.bytes,
+                (unsigned long long)info.oldest_frame,
+                (unsigned long long)info.newest_frame,
+                (unsigned long long)info.oldest_cycle,
+                (unsigned long long)info.newest_cycle);
+            control_protocol_format_ok(&response, request->id, text, false);
+            break;
+        }
+
+        case CONTROL_COMMAND_FRAME_RING_RECORD:
+            runtime_client_set_frame_ring_recording(
+                client, request->args.frame_ring_record_enabled);
+            control_protocol_format_ok(
+                &response,
+                request->id,
+                request->args.frame_ring_record_enabled ?
+                    "recording=1" : "recording=0",
+                false);
+            break;
+
+        case CONTROL_COMMAND_FRAME_RING_CLEAR:
+            runtime_client_clear_frame_ring(client);
+            control_protocol_format_ok(&response, request->id, "cleared=1", false);
+            break;
+
+        case CONTROL_COMMAND_GET_FRAME_AT: {
+            c64_frame *frame = (c64_frame *)malloc(sizeof(*frame));
+
+            if (frame == NULL) {
+                control_protocol_format_error(
+                    &response, request->id, "memory", "allocation failed", false);
+                break;
+            }
+            if (runtime_client_copy_frame_at(
+                    client,
+                    request->args.frame_ring_target,
+                    request->args.frame_ring_by_cycle,
+                    frame)) {
+                control_format_frame_at_response(
+                    &response,
+                    request->id,
+                    frame,
+                    request->args.frame_format,
+                    request->args.frame_ring_target,
+                    request->args.frame_ring_by_cycle);
+            } else {
+                /* Distinguish "never recorded" from "dropped off the back of
+                   the window" so a caller knows whether to widen the budget. */
+                runtime_frame_ring_info info;
+                runtime_client_get_frame_ring_info(client, &info);
+                control_protocol_format_error(
+                    &response,
+                    request->id,
+                    "not-found",
+                    info.capacity == 0u ? "frame ring is disabled" :
+                        (info.count == 0u ? "frame ring is empty" :
+                         "target precedes the retained window"),
+                    false);
+            }
+            free(frame);
+            break;
+        }
 
         case CONTROL_COMMAND_GET_VIC:
             if (control_cache_hot_fresh(control_cache)) {
@@ -6246,6 +6364,8 @@ int main(int argc, char **argv) {
     runtime_cfg.autorun           = options.autorun;
     runtime_cfg.history_memory_mb = (uint32_t)options.history_memory_mb;
     runtime_cfg.history_memory_mb_configured = true;
+    runtime_cfg.frame_ring_memory_mb = (uint32_t)options.frame_ring_memory_mb;
+    runtime_cfg.frame_ring_memory_mb_configured = true;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));

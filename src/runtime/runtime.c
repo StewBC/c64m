@@ -142,6 +142,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.breakpoint_slot = &rt->breakpoint_slot;
     rt->client.symbol_slot = &rt->symbol_slot;
     rt->client.rpc_payload_pool = &rt->rpc_payload_pool;
+    rt->client.frame_ring = &rt->frame_ring;
 
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
@@ -175,6 +176,9 @@ runtime *runtime_create(const runtime_config *config) {
         rt->history_memory_mb = config->history_memory_mb_configured ?
             config->history_memory_mb :
             RUNTIME_HISTORY_DEFAULT_MEMORY_MB;
+        rt->frame_ring_memory_mb = config->frame_ring_memory_mb_configured ?
+            config->frame_ring_memory_mb :
+            RUNTIME_FRAME_RING_DEFAULT_MEMORY_MB;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||
@@ -190,7 +194,18 @@ runtime *runtime_create(const runtime_config *config) {
 
     if (!config) {
         rt->history_memory_mb = RUNTIME_HISTORY_DEFAULT_MEMORY_MB;
+        rt->frame_ring_memory_mb = RUNTIME_FRAME_RING_DEFAULT_MEMORY_MB;
     }
+
+    /* A frame ring that fails to allocate is not fatal: the emulator runs
+       without a pixel black box, and frame-ring-info reports capacity 0. */
+    if (rt->frame_ring_memory_mb != 0u &&
+        rt->frame_ring_memory_mb <= RUNTIME_FRAME_RING_MAX_MEMORY_MB) {
+        (void)runtime_frame_ring_init(
+            &rt->frame_ring,
+            (uint64_t)rt->frame_ring_memory_mb * 1024u * 1024u);
+    }
+
     if (rt->history_memory_mb > 4096u ||
         (rt->history_memory_mb != 0u && rt->history_memory_mb < 16u) ||
         (uint64_t)rt->history_memory_mb * 1024u * 1024u > SIZE_MAX) {
@@ -224,6 +239,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->audio_record_path);
     runtime_history_destroy(rt->history);
     rt->history = NULL;
+    runtime_frame_ring_destroy(&rt->frame_ring);
     if (rt->rpc_payload_pool.mutex != NULL) {
         size_t i;
         mutex_lock(rt->rpc_payload_pool.mutex);

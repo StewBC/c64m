@@ -46,9 +46,10 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/4** (guarded breakpoints: `when=`
-conditions plus the `cond=`/`when=` fields on breakpoint records, on top of the
-C64M/3 HST1 flight-recorder queries and C64M/2 bulk-memory/token behavior).
+code and this document. **Current: C64M/5** (the frame ring: `frame-ring-info`,
+`frame-ring-record`, `frame-ring-clear`, and `get-frame-at`, on top of the
+C64M/4 guarded breakpoints, C64M/3 HST1 flight-recorder queries, and C64M/2
+bulk-memory/token behavior).
 
 ## Wire format
 
@@ -243,9 +244,9 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/4
-version      -> ok protocol=C64M/4 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive
+hello        -> ok name=c64m protocol=C64M/5
+version      -> ok protocol=C64M/5 app=0.1.0
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring
 ping         -> ok
 ```
 
@@ -348,6 +349,67 @@ N ok accepted=1 turbo=3 warning=warp-disables-live-ARGB-framebuffer;get-frame-is
 In warp, VIC-II timing still advances, but the live per-cycle ARGB renderer is
 disabled and `get-frame` returns a geometric debug snapshot. Lowering turbo to
 1 or 2 restores live rendering for subsequent frames.
+
+## Frame ring (rolling framebuffer black box)
+
+```text
+N frame-ring-info
+N frame-ring-record <on|off>
+N frame-ring-clear
+N get-frame-at <frame=<n>|cycle=<n>> [format=argb8888|indexed8]
+```
+
+The flight recorder answers "what executed before it went wrong"; it cannot
+answer "what did the screen actually **show** three frames ago". A human pausing
+a second after seeing a glitch is ~50 PAL frames too late, and those pixels are
+gone. The ring keeps the last N completed frames so the bad frame can still be
+retrieved afterwards.
+
+Entries carry both `frame` and `cycle`, so a frame found here yields the
+timestamp to query the flight recorder for the same moment.
+
+```text
+N ok capacity=206 count=206 dropped=710 recording=1 bytes=133692352
+    oldest_frame=711 newest_frame=916 oldest_cycle=12154625 newest_cycle=15659138
+```
+
+`dropped` counts frames pushed out of the window; a non-zero value means the
+glitch may already have rolled off, and the budget should be raised. Capacity
+comes from `[debug] frame_ring_memory_mb` (default 128 MiB, about 206 PAL frames
+/ 4 seconds at 50 fps; `0` disables the ring, and `capacity=0` is also what a
+failed allocation reports).
+
+`get-frame-at` names its target rather than taking a bare number, because a
+number alone could be either a frame index or a machine cycle and guessing wrong
+returns a plausible but wrong frame. The lookup resolves to the **nearest frame
+at or before** the target; a target past the newest clamps to the newest, and a
+target that predates the retained window is `error not-found`, never a
+substituted neighbour. Responses echo `target=` and `target_kind=` alongside the
+frame's own `frame=`/`cycle=`:
+
+```text
+N data frame 136760 width=520 height=263 stride=520 format=indexed8
+    frame=916 cycle=15659138 target=916 target_kind=frame
+```
+
+Payloads are byte-identical to `get-frame` in the same format (both go through
+one conversion path), so ring frames work as an oracle-compare source.
+
+These commands answer **immediately** and work while the machine is running:
+the ring carries its own mutex, so no runtime round-trip is needed and a scrub
+does not contend for the deferred slot. While running, the window keeps moving
+under you — pause first if you need a stable view.
+
+**Warp (turbo 3) does not record.** The live ARGB renderer is off, so there are
+no real pixels; the ring stalls rather than storing geometric debug snapshots
+that would look like frames but are not. Recording resumes at turbo 1 or 2.
+Loading a machine state clears the ring: those frames belong to a discarded
+timeline whose cycle counter has restarted.
+
+Cost is one frame copy per completed frame: measured at **+0.22%** of turbo-2
+free-run throughput, and nothing at turbo 1 (50 copies/sec). The default budget
+is resident memory, so lower `frame_ring_memory_mb` if that matters more than
+window length.
 
 ## State, memory, and frames
 
@@ -687,7 +749,9 @@ policy). Sticky latches remain one-consumer.
 - Prefer **`--headless`** for control-port latency; a windowed present is still
   ~16 ms class by design.
 - Free-run `wait-frame 1` then `get-frame` can **alias frames** if one main-loop
-  turn exceeds a frame period. Prefer **`step-frame`** for consecutive frames.
+  turn exceeds a frame period. Prefer **`step-frame`** for consecutive frames,
+  or read the frame ring (§ Frame ring), which sees every completed frame even
+  when the UI drops one.
 - `run` → `wait-frame` → `pause` can still **overshoot by a frame** (pause is
   accepted after the wait). Not fixed by bulk memory or pipelining.
 - Breakpoints accept a bounded guard (`when=`, see § Guarded breakpoints), not a
