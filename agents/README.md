@@ -101,6 +101,11 @@ Component handoffs:
   state, including the sprite X actually latched for painting each line
   (`src/runtime/runtime_vic_ring.{c,h}`, record shape in `vicii.h`). Wire
   contract for both in `control-port.md`.
+- `framebuffer-format-plan.md` - **proposed, do next.** The VIC is a 4-bit
+  device but `c64_frame` carries ARGB, so the API reverse-maps ARGB back to a
+  palette index per pixel - lossily and via a 16-entry linear scan. Analysis,
+  measured perf (the speed argument is weak; ring depth and fidelity are the
+  real ones), risks, and a staged plan. Stage 1 is a ~10-line standalone win.
 - `crt-type19-plan.md` - CRT mapper roadmap: type 19 Magic Desk first, type
   checklist with OneLoad64 unlock counts; implement later, not current code
 - `testing.md` - automated coverage, baseline command, known gaps, smoke checks
