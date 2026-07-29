@@ -255,8 +255,8 @@ SID timing, and drive sync stay in lock-step):
 | `2` | `Max` | Free-run as fast as the host allows, still full live paint and collisions. |
 | `3` | `Warp` | Free-run with live paint off; frames are geometric debug snapshots. |
 
-On an Apple M2 Mac Mini, max free-runs around **12–16 MHz** emulated Phi2
-(roughly **12–16×** real C64 speed) with full live paint and correctness; pure
+On an Apple M2 Mac Mini, max free-runs around **12-16 MHz** emulated Phi2
+(roughly **12-16x** real C64 speed) with full live paint and correctness; pure
 machine-core benches land near the high end of that band, a full app free-run
 somewhat lower depending on load. Warp is faster still (live paint off) and is
 for skip-ahead to a breakpoint or load marker, not for judging pixels or
