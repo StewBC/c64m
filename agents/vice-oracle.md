@@ -135,9 +135,9 @@ monitor between runs did not wedge VICE.
 ### DISPLAY_GET is directly comparable to c64m's `get-frame`
 
 `DISPLAY_GET` returns the uncropped debug buffer, which for PAL is **504x312
-indexed-8** — the same geometry as c64m's `get-frame` payload, and only 157KB
-against c64m's 649KB of ARGB. It also reports `x_off`/`y_off` for the display
-window: PAL gives `x_off=136`, `y_off=51`, `inner 320x200`.
+indexed-8** — the same geometry and representation as c64m's native
+`get-frame format=indexed8` payload (157 KB). It also reports `x_off`/`y_off`
+for the display window: PAL gives `x_off=136`, `y_off=51`, `inner 320x200`.
 
 Since buffer column 136 is VIC X 24 (PAL display window left edge), the mapping is:
 

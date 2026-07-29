@@ -9,19 +9,19 @@
 
 enum {
     TEST_RESET_VECTOR = 0xe000,
-    TEST_COLOR_GREEN = 0xff56ac4du,
-    TEST_COLOR_BLUE = 0xff2e2c9bu,
+    TEST_COLOR_GREEN = 5,
+    TEST_COLOR_BLUE = 6,
     /* PAL framebuffer x == VIC X (offset 0; see VICII_PAL_FRAME_X_OFFSET). */
     TEST_PAL_FX = 0,
 };
 
-#define TEST_PALETTE_0   0xff000000u  /* black      */
-#define TEST_PALETTE_2   0xff813338u  /* red        */
-#define TEST_PALETTE_5   0xff56ac4du  /* green      */
-#define TEST_PALETTE_6   0xff2e2c9bu  /* blue       */
-#define TEST_PALETTE_7   0xffedf171u  /* yellow     */
-#define TEST_PALETTE_10  0xffc46c71u  /* light red  */
-#define TEST_PALETTE_11  0xff4a4a4au  /* dark gray  */
+#define TEST_PALETTE_0   0u   /* black      */
+#define TEST_PALETTE_2   2u   /* red        */
+#define TEST_PALETTE_5   5u   /* green      */
+#define TEST_PALETTE_6   6u   /* blue       */
+#define TEST_PALETTE_7   7u   /* yellow     */
+#define TEST_PALETTE_10  10u  /* light red  */
+#define TEST_PALETTE_11  11u  /* dark gray  */
 
 static void fail(const char *message) {
     fprintf(stderr, "%s\n", message);
@@ -431,7 +431,7 @@ static void test_frame_snapshot_geometry_and_regions(void) {
     expect_u32("frame width", C64_FRAME_PAL_WIDTH, frame.width);
     expect_u32("frame height", C64_FRAME_HEIGHT, frame.height);
     expect_u32("frame stride", C64_FRAME_WIDTH * sizeof(frame.pixels[0]), frame.stride_bytes);
-    expect_u32("frame format", C64_FRAME_PIXEL_FORMAT_ARGB8888, frame.pixel_format);
+    expect_u32("frame format", C64_FRAME_PIXEL_FORMAT_INDEXED8, frame.pixel_format);
     expect_u64("frame number", 0, frame.frame_number);
     expect_u64("frame cycle", 0, frame.machine_cycle);
 
@@ -521,7 +521,7 @@ static void test_border_rsel_csel(void) {
     c64_frame frame;
     uint32_t red;
 
-    red = 0xff813338u; /* palette index 2 */
+    red = 2u;
 
     /* RSEL=0: top border extends to y=54 (compare moves from 51 to 55).
        $D011 = 0x13: DEN=1, RSEL=0, YSCROLL=3. */
@@ -558,7 +558,7 @@ static void test_xscroll_shifts_content(void) {
     c64_frame frame0, frame1;
     uint32_t green;
 
-    green = 0xff56ac4du; /* palette index 5 */
+    green = 5u;
 
     /* Character 1 glyph row 0 = 0x80: only bit 7 set → foreground only at sx=0.
        YSCROLL=3 so glyph row 0 is at sy=0 (y=51). */
@@ -586,7 +586,7 @@ static void test_yscroll_shifts_content(void) {
     c64_frame frame3, frame4;
     uint32_t green;
 
-    green = 0xff56ac4du; /* palette index 5 */
+    green = 5u;
 
     /* Character 1 glyph row 0 = 0x80: foreground at sx=0 (x=24).
        YSCROLL=3 is the normal alignment: glyph row 0 appears at y=51. */
@@ -639,7 +639,7 @@ static void test_ecm_text_mode(void) {
 
     green = TEST_PALETTE_5;
     blue  = TEST_PALETTE_6;
-    cyan  = 0xff75cec8u; /* palette index 3 */
+    cyan  = 3u;
 
     reset_machine(&machine);
     c64_bus_write(&machine.bus, 0xd018, 0x15); /* screen=$0400, char=$1000 (ROM) */
@@ -707,7 +707,7 @@ static void test_basic_hires_circle_setup_selects_bitmap_mode(void) {
     machine.bus.ram[0x2000] = 0x80;
 
     make_live_frame(&machine, &frame, "make live basic hires setup frame");
-    expect_u32("basic hires setup foreground", 0xffffffffu,
+    expect_u32("basic hires setup foreground", 1u,
                frame.pixels[51 * C64_FRAME_WIDTH + (24 + TEST_PAL_FX)]);
     expect_u32("basic hires setup background", TEST_PALETTE_0,
                frame.pixels[51 * C64_FRAME_WIDTH + (25 + TEST_PAL_FX)]);
@@ -856,7 +856,7 @@ static void test_sprite_hires_appears_at_position(void) {
     c64_frame frame;
     int       i;
     /* palette[7] = yellow */
-    uint32_t  sprite_color = 0xffedf171u;
+    uint32_t  sprite_color = 7u;
     uint32_t  px;
 
     reset_machine(&machine);
@@ -3279,7 +3279,7 @@ static void test_fort_dual_zone_yscroll(void) {
 static void test_fort_soft_scroll_unique_rows(void) {
     c64_t machine;
     c64_frame f3, f4;
-    uint32_t white = 0xffffffffu;
+    uint32_t white = 1u;
     uint32_t y, i;
     uint32_t lit3[40];
     uint32_t lit4[40];
@@ -3373,7 +3373,7 @@ static void test_fort_soft_scroll_unique_rows(void) {
 static void test_fort_soft_y7_to_y6_transition(void) {
     c64_t machine;
     c64_frame f7, f6;
-    uint32_t white = 0xffffffffu;
+    uint32_t white = 1u;
     uint32_t y, i, n7 = 0, n6 = 0;
     uint32_t lit7[40], lit6[40];
     const expose_injection inj7[] = {
@@ -3447,7 +3447,7 @@ static void test_fort_soft_y7_to_y6_transition(void) {
 static void test_fort_soft_y1_to_y2_smooth(void) {
     c64_t machine;
     c64_frame f1, f2;
-    uint32_t white = 0xffffffffu;
+    uint32_t white = 1u;
     uint32_t y, i, n1 = 0, n2 = 0;
     uint32_t lit1[40], lit2[40];
     const expose_injection inj1[] = {
@@ -3572,7 +3572,7 @@ static void setup_full_white_bitmap(c64_t *machine) {
 static void test_expose_harness_renders_bitmap_and_metric(void) {
     c64_t     machine;
     c64_frame frame;
-    uint32_t  white = 0xffffffffu; /* palette[1] */
+    uint32_t  white = 1u;
     uint32_t  black = TEST_PALETTE_0;
     uint32_t  in_window, above_window;
     uint32_t  lit;
@@ -3744,7 +3744,7 @@ static void test_color_latency_drains_during_hblank(void) {
 static void test_expose_forced_badline_resets_row_counter(void) {
     c64_t     machine;
     c64_frame frame;
-    uint32_t  white = 0xffffffffu; /* palette[1] */
+    uint32_t  white = 1u;
     uint32_t  black = TEST_PALETTE_0;
     /* Force a bad line at raster 53 (YSCROLL=5, since 53&7==5), then restore
        YSCROLL=3 at raster 54 so line 54 is identical to the un-forced run except
@@ -3839,7 +3839,7 @@ static void test_expose_video_matrix_latched_at_badline(void) {
 static void test_expose_idle_state_shows_idle_graphics_in_window(void) {
     c64_t     machine;
     c64_frame frame;
-    uint32_t  white = 0xffffffffu;  /* bitmap foreground (vm high nibble 1) */
+    uint32_t  white = 1u;
     uint32_t  red   = TEST_PALETTE_2; /* B0C, to prove idle != background blank */
     uint32_t  black = TEST_PALETTE_0; /* bitmap idle output */
     uint32_t  i;
@@ -3899,7 +3899,7 @@ static void setup_rc_probe_bitmap(c64_t *machine) {
 static void test_expose_midline_d011_forces_badline(void) {
     c64_t     machine;
     c64_frame frame;
-    uint32_t  white = 0xffffffffu;
+    uint32_t  white = 1u;
     uint32_t  black = TEST_PALETTE_0;
     /* Force a bad line at cycle 12 of raster 53 (YSCROLL=5, 53&7==5) so the
        condition is present at the cycle-14 RC clear; restore YSCROLL at 54. */

@@ -470,7 +470,8 @@ static void test_reject_and_leave_unchanged(void) {
     c64_unmount_all_drives(&target);
 }
 
-/* v11 no longer stores ARGB paint buffers. A full dual-buffer dump was ~1.24 MiB;
+/* v11 no longer stores paint buffers. A full legacy ARGB dual-buffer dump was
+   ~1.24 MiB;
    a machine with one D64 mounted and no 1541 core must land well under that. */
 static void test_no_paint_buffers_and_cold_drive_stub(void) {
     c64_t source;
@@ -489,8 +490,8 @@ static void test_no_paint_buffers_and_cold_drive_stub(void) {
     expect_false("drive 9 cold", source.drives[1].powered);
 
     /* Scribble paint buffers - must not appear in the file or survive load. */
-    source.vic.frames[0].pixels[17] = 0xff112233u;
-    source.vic.frames[1].pixels[19] = 0xff445566u;
+    source.vic.frames[0].pixels[17] = 3u;
+    source.vic.frames[1].pixels[19] = 6u;
     source.vic.frames[0].width = C64_FRAME_PAL_WIDTH;
     source.vic.frames[0].height = C64_FRAME_HEIGHT;
 
@@ -523,12 +524,14 @@ static void test_no_paint_buffers_and_cold_drive_stub(void) {
     }
 
     mutate_machine(&target);
-    target.vic.frames[0].pixels[0] = 0xffffffffu;
+    target.vic.frames[0].pixels[0] = 1u;
     expect_true("load lean snapshot", c64_snapshot_load(&target, snapshot, snapshot_size));
     assert_restored_state(&target);
     expect_false("drive 9 still cold after load", target.drives[1].powered);
-    expect_u64("paint buffer cleared on load", 0, target.vic.frames[0].pixels[0]);
-    expect_u64("paint buffer not restored", 0, target.vic.frames[0].pixels[17]);
+    expect_u64("paint buffer cleared on load", C64_FRAME_PIXEL_UNPAINTED,
+        target.vic.frames[0].pixels[0]);
+    expect_u64("paint buffer not restored", C64_FRAME_PIXEL_UNPAINTED,
+        target.vic.frames[0].pixels[17]);
 
     free(snapshot);
     c64_unmount_all_drives(&source);

@@ -414,6 +414,7 @@ struct frontend {
     struct nk_font *help_font;
     SDL_Texture *display_texture;
     SDL_Texture *crt_texture;
+    uint32_t *display_pixels;
     uint32_t *crt_pixels;
     bool crt_texture_valid;
     SDL_Texture *led_green_texture;
@@ -1028,7 +1029,7 @@ static bool frontend_update_crt_texture(frontend *ui)
 
     crop_y = frontend_display_crop_y_for_frame(&ui->current_frame);
     frontend_crt_process(
-        ui->current_frame.pixels,
+        ui->display_pixels,
         ui->crt_pixels,
         C64_FRAME_WIDTH,
         (int)ui->current_frame.height,
@@ -8114,6 +8115,7 @@ void frontend_destroy(frontend *ui)
     app_disk_slot_clear(&ui->disk_queue[0]);
     app_disk_slot_clear(&ui->disk_queue[1]);
     free(ui->crt_pixels);
+    free(ui->display_pixels);
     free(ui);
 }
 
@@ -8299,11 +8301,11 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
     }
 
     /* width is the standard's line length (PAL 504 / NTSC 520); the row pitch is
-       always C64_FRAME_WIDTH, which is why the stride check is not width-based. */
+       always C64_FRAME_WIDTH native index bytes. */
     if ((frame->width != C64_FRAME_PAL_WIDTH && frame->width != C64_FRAME_NTSC_WIDTH) ||
         (frame->height != C64_FRAME_PAL_HEIGHT && frame->height != C64_FRAME_NTSC_HEIGHT) ||
-        frame->stride_bytes != C64_FRAME_WIDTH * sizeof(frame->pixels[0]) ||
-        frame->pixel_format != C64_FRAME_PIXEL_FORMAT_ARGB8888) {
+        frame->stride_bytes != C64_FRAME_WIDTH ||
+        frame->pixel_format != C64_FRAME_PIXEL_FORMAT_INDEXED8) {
         SDL_Log("unexpected frame format: %ux%u stride=%u format=%u",
             frame->width,
             frame->height,
@@ -8334,28 +8336,27 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         frontend_apply_display_filter(ui);
     }
 
-    /* Rotate the line so display-window column 0 lands at buffer column 0. The
-       PAL viewport starts at VIC X 496 and wraps through 0, which is not a
-       rectangle; doing the wrap once here keeps every consumer downstream - the
-       CRT processor, the texture upload, and the Nuklear/SDL source rects - on a
-       plain CROP_X-based rectangle. Machine frames stay in VIC-X order: this
-       rotation is display-only and never reaches get-frame or a snapshot. */
+    if (ui->display_pixels == NULL) {
+        ui->display_pixels = malloc(
+            (size_t)C64_FRAME_WIDTH * (size_t)C64_FRAME_PAL_HEIGHT *
+            sizeof(*ui->display_pixels));
+        if (ui->display_pixels == NULL) {
+            return false;
+        }
+    }
+
+    /* Expand native indices to the single ARGB staging buffer while rotating
+       each line so display-window column 0 lands at buffer column 0. The PAL
+       viewport starts at VIC X 496 and wraps through 0. Machine frames remain
+       in VIC-X order; this presentation-only rotation never reaches get-frame
+       or a snapshot. */
     {
         uint32_t window_x = frontend_display_window_x_for_frame(frame);
-        uint32_t line = frame->width;
-        uint32_t y;
 
         ui->current_frame = *frame;
-        if (window_x != 0u && line != 0u) {
-            for (y = 0; y < frame->height; ++y) {
-                const uint32_t *src = frame->pixels + (size_t)y * C64_FRAME_WIDTH;
-                uint32_t *dst = ui->current_frame.pixels + (size_t)y * C64_FRAME_WIDTH;
-                uint32_t i;
-
-                for (i = 0; i < line; ++i) {
-                    dst[i] = src[(window_x + i) % line];
-                }
-            }
+        if (!c64_frame_expand_argb(
+                frame, ui->display_pixels, C64_FRAME_WIDTH, window_x)) {
+            return false;
         }
     }
 
@@ -8366,10 +8367,10 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
            PAL height as a ceiling so it survives a standard switch, but each
            standard's crop stays inside its own frame->height, so rows past an
            NTSC frame are never sampled and need no padding fill. Uploaded from
-           current_frame, which carries the rotation applied above. */
+           display_pixels, which carries the expansion/rotation applied above. */
         if (SDL_UpdateTexture(ui->display_texture, &frame_rect,
-                ui->current_frame.pixels,
-                (int)ui->current_frame.stride_bytes) != 0) {
+                ui->display_pixels,
+                C64_FRAME_WIDTH * (int)sizeof(*ui->display_pixels)) != 0) {
             SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
             return false;
         }

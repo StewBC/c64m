@@ -1559,25 +1559,6 @@ static void control_format_memory_rpc_response(
         false);
 }
 
-/* Pepto palette matching vicii.c; used only for ARGB→index reverse lookup. */
-static const uint32_t control_palette_argb[16] = {
-    0xff000000u, 0xffffffffu, 0xff813338u, 0xff75cec8u,
-    0xff8e3c97u, 0xff56ac4du, 0xff2e2c9bu, 0xffedf171u,
-    0xff8e5029u, 0xff553800u, 0xffc46c71u, 0xff4a4a4au,
-    0xff7b7b7bu, 0xffa9ff9fu, 0xff706debu, 0xffb2b2b2u,
-};
-
-static uint8_t control_argb_to_index(uint32_t argb)
-{
-    unsigned i;
-    for (i = 0; i < 16u; i++) {
-        if (control_palette_argb[i] == argb) {
-            return (uint8_t)i;
-        }
-    }
-    return 0u;
-}
-
 /* Shared by get-frame and get-frame-at so a ring frame and a live frame go
    through identical conversion; `extra_metadata` may be NULL. */
 static void control_format_frame_response_ex(
@@ -1596,12 +1577,17 @@ static void control_format_frame_response_ex(
     if (response == NULL || frame == NULL) {
         return;
     }
+    if (frame->pixel_format != C64_FRAME_PIXEL_FORMAT_INDEXED8 ||
+        frame->stride_bytes != C64_FRAME_WIDTH) {
+        control_protocol_format_error(
+            response, request_id, "frame", "unexpected native frame format", false);
+        return;
+    }
 
     if (frame_format == CONTROL_FRAME_FORMAT_INDEXED8) {
         uint32_t y;
         uint32_t width = frame->width;
         uint32_t height = frame->height;
-        uint32_t src_stride_px = frame->stride_bytes / 4u;
         format_name = "indexed8";
         stride = width; /* one byte per pixel; row pitch = width */
         payload_size = (size_t)height * (size_t)stride;
@@ -1612,22 +1598,29 @@ static void control_format_frame_response_ex(
         }
         for (y = 0; y < height; y++) {
             uint32_t x;
-            const uint32_t *src_row = frame->pixels + (size_t)y * (size_t)src_stride_px;
+            const uint8_t *src_row =
+                frame->pixels + (size_t)y * (size_t)frame->stride_bytes;
             uint8_t *dst_row = payload + (size_t)y * (size_t)stride;
             for (x = 0; x < width; x++) {
-                dst_row[x] = control_argb_to_index(src_row[x]);
+                dst_row[x] = c64_frame_pixel_to_index(src_row[x]);
             }
         }
     } else {
         format_name = "argb8888";
-        stride = frame->stride_bytes;
-        payload_size = (size_t)frame->height * (size_t)frame->stride_bytes;
+        stride = C64_FRAME_WIDTH * sizeof(uint32_t);
+        payload_size = (size_t)frame->height * (size_t)stride;
         payload = (uint8_t *)malloc(payload_size);
         if (payload == NULL) {
             control_protocol_format_error(response, request_id, "memory", "allocation failed", false);
             return;
         }
-        memcpy(payload, frame->pixels, payload_size);
+        if (!c64_frame_expand_argb(
+                frame, (uint32_t *)(void *)payload, C64_FRAME_WIDTH, 0u)) {
+            free(payload);
+            control_protocol_format_error(
+                response, request_id, "frame", "frame expansion failed", false);
+            return;
+        }
     }
 
     snprintf(
@@ -5992,7 +5985,7 @@ static void dispatch_control_request(
                     snprintf(
                         text,
                         sizeof(text),
-                        "accepted=1 turbo=%u warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2",
+                        "accepted=1 turbo=%u warning=warp-disables-live-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2",
                         (unsigned int)request->args.turbo_multiplier);
                 } else {
                     snprintf(

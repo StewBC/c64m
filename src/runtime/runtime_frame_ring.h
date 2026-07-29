@@ -12,11 +12,9 @@
  * here gives the timestamp needed to query the flight recorder for the same
  * moment.
  *
- * Frames are stored as-is (ARGB), not reduced to palette indices. Reduction is
- * a per-pixel reverse palette lookup - far too costly to run on every completed
- * frame, and lossy for any colour outside the palette. Conversion happens on
- * read instead, so a ring frame and a live frame convert through identical
- * code.
+ * Frames are stored as-is in the machine's native indexed8 representation.
+ * Control clients either receive those indices directly or expand them through
+ * the shared Pepto palette for legacy ARGB responses.
  */
 
 #include "c64_frame.h"
@@ -27,8 +25,8 @@
 #include <stdint.h>
 
 enum {
-    /* ~206 PAL frames, about 4 seconds at 50 fps: comfortably longer than the
-       second or so it takes a human to react to a glitch and hit pause. */
+    /* ~827 PAL frames, about 16.5 seconds at 50 fps: comfortably longer than
+       the second or so it takes a human to react to a glitch and hit pause. */
     RUNTIME_FRAME_RING_DEFAULT_MEMORY_MB = 128,
     RUNTIME_FRAME_RING_MAX_MEMORY_MB = 4096
 };

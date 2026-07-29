@@ -145,7 +145,7 @@ static void runtime_update_sid_sample_output(runtime *rt) {
     c64_set_audio_output_enabled(&rt->machine, enabled);
 }
 
-/* Warp / FAST: do not fill VIC ARGB every cycle. Display frames are rebuilt
+/* Warp / FAST: do not fill VIC pixels every cycle. Display frames are rebuilt
    only when the frontend has drained the frame slot (geometric debug snapshot).
    Max (mode 2) free-runs with full live paint. */
 static bool runtime_turbo_display_mode(const runtime *rt) {
@@ -1157,7 +1157,7 @@ static bool runtime_publish_frame_copy(runtime *rt, const c64_frame *frame) {
 
 /* Warp display path: if the UI still holds the previous frame, count a drop and
    do no pixel copies and no FRAME_READY event. When the slot is free, rebuild one
-   geometric snapshot for display (live ARGB path is off in warp). */
+   geometric snapshot for display (live pixel path is off in warp). */
 static bool runtime_publish_completed_frame_turbo(runtime *rt) {
     runtime_event event = {
         .type = RUNTIME_EVENT_FRAME_READY,
@@ -1207,7 +1207,7 @@ static bool runtime_publish_debug_frame(runtime *rt) {
 
 static bool runtime_publish_completed_frame(runtime *rt) {
     if (runtime_turbo_display_mode(rt)) {
-        /* Warp: the live ARGB renderer is off, so there are no real pixels to
+        /* Warp: the live renderer is off, so there are no real pixels to
            record. The ring deliberately stalls rather than storing geometric
            debug snapshots that would look like frames but are not. */
         return runtime_publish_completed_frame_turbo(rt);

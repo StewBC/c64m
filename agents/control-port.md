@@ -330,8 +330,8 @@ list. Modes are:
 
 | Mode | Name   | Meaning |
 |------|--------|---------|
-| 1    | normal | Real-time pace, live ARGB |
-| 2    | max    | Free-run, live ARGB (full correctness) |
+| 1    | normal | Real-time pace, live pixels |
+| 2    | max    | Free-run, live pixels (full correctness) |
 | 3    | warp   | Free-run, paint off (debug frames only) |
 
 At modes 1 and 2 the response is:
@@ -343,10 +343,10 @@ N ok accepted=1 turbo=2
 At mode 3 (warp) it includes a warning:
 
 ```text
-N ok accepted=1 turbo=3 warning=warp-disables-live-ARGB-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2
+N ok accepted=1 turbo=3 warning=warp-disables-live-framebuffer;get-frame-is-debug-only-until-turbo-is-1-or-2
 ```
 
-In warp, VIC-II timing still advances, but the live per-cycle ARGB renderer is
+In warp, VIC-II timing still advances, but the live per-cycle pixel renderer is
 disabled and `get-frame` returns a geometric debug snapshot. Lowering turbo to
 1 or 2 restores live rendering for subsequent frames.
 
@@ -369,14 +369,14 @@ Entries carry both `frame` and `cycle`, so a frame found here yields the
 timestamp to query the flight recorder for the same moment.
 
 ```text
-N ok capacity=206 count=206 dropped=710 recording=1 bytes=133692352
-    oldest_frame=711 newest_frame=916 oldest_cycle=12154625 newest_cycle=15659138
+N ok capacity=827 count=827 dropped=89 recording=1 bytes=134198944
+    oldest_frame=90 newest_frame=916 oldest_cycle=1538838 newest_cycle=15659138
 ```
 
 `dropped` counts frames pushed out of the window; a non-zero value means the
 glitch may already have rolled off, and the budget should be raised. Capacity
-comes from `[debug] frame_ring_memory_mb` (default 128 MiB, about 206 PAL frames
-/ 4 seconds at 50 fps; `0` disables the ring, and `capacity=0` is also what a
+comes from `[debug] frame_ring_memory_mb` (default 128 MiB, about 827 PAL frames
+/ 16.5 seconds at 50 fps; `0` disables the ring, and `capacity=0` is also what a
 failed allocation reports).
 
 `get-frame-at` names its target rather than taking a bare number, because a
@@ -400,15 +400,17 @@ the ring carries its own mutex, so no runtime round-trip is needed and a scrub
 does not contend for the deferred slot. While running, the window keeps moving
 under you — pause first if you need a stable view.
 
-**Warp (turbo 3) does not record.** The live ARGB renderer is off, so there are
+**Warp (turbo 3) does not record.** The live pixel renderer is off, so there are
 no real pixels; the ring stalls rather than storing geometric debug snapshots
 that would look like frames but are not. Recording resumes at turbo 1 or 2.
 Loading a machine state clears the ring: those frames belong to a discarded
 timeline whose cycle counter has restarted.
 
-Cost is one frame copy per completed frame: measured at **+0.22%** of turbo-2
-free-run throughput, and nothing at turbo 1 (50 copies/sec). The default budget
-is resident memory, so lower `frame_ring_memory_mb` if that matters more than
+Cost is one native indexed frame copy per completed frame. The original ARGB
+ring push measured **+0.22%** of turbo-2 free-run throughput and nothing at
+turbo 1; Stage 3's matched whole-core measurements remained neutral after
+reducing the copy to one quarter of its former size. The default budget is
+resident memory, so lower `frame_ring_memory_mb` if that matters more than
 window length.
 
 ## VIC ring (per-line derived state)
@@ -575,16 +577,18 @@ width=504 height=312 stride=2080 format=argb8888 frame=... cycle=...
 Default format is `argb8888`: row-major 32-bit ARGB8888, `height * stride` bytes.
 The buffer is a full VIC-II raster line in VIC-X order, so framebuffer x = VIC X:
 PAL is 504x312 and NTSC 520x263. **`stride` is always 2080 bytes (520 px), not
-`width * 4`** - PAL rows carry 16 bytes of slack so one buffer shape serves both
-standards. Index rows by `stride`, never by `width`. Every dot of the line is
-composed, HBLANK included. The frontend crop is not applied to this payload.
-At turbo 3 (warp) this is a geometric debug snapshot rather than the live ARGB
+`width * 4`** - PAL rows carry 64 bytes / 16 pixels of slack so one buffer
+shape serves both standards. Index rows by `stride`, never by `width`. Every
+dot of the line is composed, HBLANK included. The frontend crop is not applied
+to this payload.
+At turbo 3 (warp) this is a geometric debug snapshot rather than the live
 framebuffer; use `set-turbo 1` or `set-turbo 2` before inspecting live pixels.
 
 `format=indexed8` returns one byte per pixel (palette index 0..15), with
 `stride=width` and payload size `height * width` (PAL 504×312 = 157248 bytes).
-Unknown ARGB values map to index 0. Indexed frames are the preferred oracle
-compare format because c64m and VICE RGB values differ.
+This is the machine/runtime's native representation; internal unpainted padding
+is mapped to index 0 and never appears on the wire. Indexed frames are the
+preferred oracle compare format because c64m and VICE RGB values differ.
 
 **Mid-frame pause:** `get-frame` while paused mid-raster returns the **partial
 working buffer**, not a completed frame. For a full frame use `step-frame`, or

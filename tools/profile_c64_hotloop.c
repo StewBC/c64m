@@ -160,7 +160,7 @@ static bool load_default_roms(c64_rom_set *roms, char *error, size_t error_size)
 }
 
 /* Flags after the cycle count (any order):
- *   no-video     disable VIC live ARGB paint (warp-like)
+ *   no-video     disable VIC live pixel paint (warp-like)
  *   null-error   pass NULL error buffer to c64_step_cycle
  *   1541         load roms/1541.rom into drive8+drive9 (steps both every cycle)
  *   1541-one     load 1541 ROM into drive8 only

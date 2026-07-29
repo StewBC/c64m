@@ -1,27 +1,32 @@
 # Framebuffer pixel format plan
 
-**Status:** proposed (2026-07-28). Not implemented. **Priority: do this next**
-(raised by the repo owner; parked only for lack of session budget at the time).
+**Status:** Stages 1–3 implemented and measured (2026-07-28).
 
-This is an analysis and a staged plan, not a work log. Stage 1 is small and
-worth doing on its own; Stage 3 is a deliberate project, not a drive-by.
+Stage 1 shipped as a standalone control-path improvement. Stage 2 confirmed the
+improvement was meaningful for indexed-frame reads. Stage 3 then made
+`indexed8` the native machine/runtime representation, primarily for 4x frame
+ring depth and a stronger representation invariant; emulator throughput stayed
+neutral, as expected.
 
 ## The finding
 
-The VIC-II is a **4-bit device**: 16 colours, no blending. c64m has the colour
-index at every pixel decision and immediately widens it 8x to 32-bit ARGB at the
-point of generation. Every paint decision in `src/machine/vicii.c` looks like:
+The VIC-II is a **4-bit device**: 16 colours, no blending. Before Stage 3, c64m
+had the colour index at every pixel decision and immediately widened it to
+32-bit ARGB at the point of generation. Stage 3 retains the index through the
+machine and runtime and expands it only at presentation/control boundaries.
+The former paint decisions in `src/machine/vicii.c` looked like:
 
 ```c
 return vicii_bg_pixel_make(vicii_palette_argb[vbuf & 0x0f], false);
 return vicii_sprite_pixel_make(vicii_palette_argb[color], true);
 ```
 
-(`vicii_palette_argb[16]` is at `src/machine/vicii.c:133`.)
+(The former `vicii_palette_argb[16]` lived in `src/machine/vicii.c`; the central
+presentation palette now lives in `src/machine/c64_frame.c`.)
 
-The remote API then runs a **reverse** lookup to recover the index that was
-discarded microseconds earlier (`control_argb_to_index`, `src/main.c:1570`,
-called per pixel at `src/main.c:1618`):
+Before Stage 1, the remote API ran a **reverse** lookup to recover the index that
+was discarded microseconds earlier (`control_argb_to_index`, `src/main.c`,
+called per pixel by `control_format_frame_response_ex`):
 
 ```c
 for (i = 0; i < 16u; i++) if (control_palette_argb[i] == argb) return i;
@@ -34,17 +39,18 @@ Two problems with that:
    consumers that most need fidelity - the debugger, the remote API, and the
    VICE oracle compare, which uses `indexed8` precisely *because* c64m and VICE
    RGB values differ - are the ones fed a reconstruction rather than the truth.
-2. **It is a linear scan of 16 per pixel** - up to ~2.5M comparisons per PAL
-   frame. Scrubbing 60 frames out of the frame ring burns ~150M comparisons.
+2. **It was a linear scan of 16 per pixel** - up to ~2.5M comparisons per PAL
+   frame. Scrubbing 60 frames out of the frame ring could burn ~150M
+   comparisons. Stage 1 removed this scan.
 
-`c64_frame` already carries a `pixel_format` field with exactly one value
-defined (`C64_FRAME_PIXEL_FORMAT_ARGB8888 = 1`, `src/machine/c64_frame.h:28`),
-so the original design left room for this.
+`c64_frame.pixel_format` now reports
+`C64_FRAME_PIXEL_FORMAT_INDEXED8`; `C64_FRAME_PIXEL_FORMAT_ARGB8888` remains an
+explicit legacy format identity for validation and wire expansion.
 
 ## What ARGB costs downstream
 
-`c64_frame` is 520x312x4 = ~649 KB and crosses boundaries **by value**. Per
-completed frame:
+Before Stage 3, `c64_frame` was 520x312x4 = ~649 KB and crossed boundaries
+**by value**. Per completed frame:
 
 | # | Copy | Site |
 |---|------|------|
@@ -53,7 +59,8 @@ completed frame:
 | 3 | `rt->frame_slot.frame = *frame` | `runtime_thread.c:1146` / `:1187` |
 | 4 | `runtime_client_poll_frame` -> main loop local | `src/main.c:3438` |
 
-About 2.6 MB per frame. In `indexed8` (162 KB) the same chain is ~650 KB.
+That was about 2.6 MB per frame. Native `indexed8` makes the same chain about
+650 KB.
 
 ## Honest perf note: the speed argument is weak
 
@@ -65,12 +72,15 @@ win.
 
 The arguments that do hold up:
 
-- **Ring depth x4.** The same 128 MiB frame-ring budget would retain ~16 s of
-  play instead of ~4 s. For "I noticed the glitch and paused several seconds
+- **Ring depth x4.** The same 128 MiB frame-ring budget retains about 827 PAL
+  frames / 16.5 s instead of about 206 / 4.1 s. For "I noticed the glitch and
+  paused several seconds
   later", that is the difference between catching it and missing it.
-- **Lossless.** `indexed8` becomes the native format rather than a lossy
-  reconstruction, which is what the API and the VICE oracle compare want.
-- **Deletes the reverse scan entirely**, including the scrub cost above.
+- **Native invariant.** `indexed8` becomes the source representation rather
+  than a reconstruction. The completed writer audit found no current
+  off-palette output, so this removes latent risk rather than known bad pixels.
+- **The reverse-scan win is already shipped in Stage 1.** Do not count it again
+  when deciding whether Stage 3 is worth its broader risk.
 - Snapshot/state work and any future frame persistence get 4x smaller.
 
 ## What makes it less risky than it sounds
@@ -78,15 +88,12 @@ The arguments that do hold up:
 - **The save format is not affected.** `.c64state` does not serialize the render
   buffers - `grep 'frames\[' src/machine/c64_snapshot.c` is empty. The usual
   blocking compatibility risk is absent.
-- **The SIMD paint path gets simpler, not harder.** `vicii_store8_u32` /
-  `vicii_fill8_u32` (`src/machine/vicii.c:12` onward) currently write 8 dots as
-  two NEON quad stores (32 bytes). In `indexed8`, 8 dots = 8 bytes = one 64-bit
-  store.
-- **An expansion stage already exists at the display boundary.** The frontend
-  keeps a separate `ui->crt_pixels` ARGB buffer and `crt_renderer` takes
-  `const uint32_t *source` (`src/frontend/crt_renderer.h:18`). Index -> ARGB
-  there is a *forward* table lookup, essentially free, and happens once instead
-  of being carried through four copies.
+- **The paint stores got simpler.** The former `vicii_store8_u32` /
+  `vicii_fill8_u32` wrote 8 dots as 32 bytes. In `indexed8`, 8 dots = 8 bytes,
+  handled by `memcpy` / `memset`.
+- **The expansion is at the display boundary.** The frontend retains native
+  `ui->current_frame` data and expands once into `ui->display_pixels`; both the
+  plain SDL texture and CRT renderer consume that ARGB staging data.
 
 ## The real risks
 
@@ -95,65 +102,111 @@ The arguments that do hold up:
   pipe, one-pixel colour latency, XSCROLL, sprite priority. Regression risk is
   genuine.
 - The per-dot colour pipe (`color_pipe_d020` / `color_pipe_d021`), border logic,
-  and sprite/graphics priority currently traffic in ARGB *values*. They would
-  all become index values. Mechanical, but broad.
-- **Audit required before committing:** confirm nothing anywhere *synthesises*
-  an ARGB value rather than looking one up in `vicii_palette_argb`. Spot checks
-  during analysis found only palette lookups, but that is not a proof. If any
-  path can emit an off-palette colour, `indexed8` cannot represent it and the
-  whole premise needs revisiting.
-- Check the geometric debug snapshot path (`c64_make_current_frame_snapshot`)
-  and the frontend crop for the same assumption.
+  and sprite/graphics priority all changed from ARGB values to indices. This was
+  mechanical but broad, which is why frozen-binary and `c64_vicii` pixel gates
+  were required.
+- **Writer audits in Stages 2 and 3:** live paint, buffer initialization, and
+  geometric debug snapshot paths are palette-derived. Any future path that can
+  emit an off-palette colour must revisit the representation premise.
+- The frontend crop/rotation audit found one presentation path for both plain
+  SDL and CRT output, fed by the shared expansion helper.
 
 ## Staged plan
 
-### Stage 1 - fix the reverse lookup (do this regardless, ~10 lines)
+### Stage 1 - fix the reverse lookup (implemented)
 
-Replace the 16-entry linear scan in `control_argb_to_index` with a direct map:
-a 4096-entry table keyed on packed RGB, or a small perfect hash. Kills ~2.5M
-comparisons per converted frame and makes scrubbing cheap. Independent of
-everything below, near-zero risk.
+Stage 1 changed `control_argb_to_index` to a 4096-byte RGB444 candidate table.
+Entries stored palette index + 1 so zero remained the no-candidate sentinel. A
+candidate was accepted only after comparing the complete 32-bit ARGB value
+against the palette, preserving the documented unknown -> index 0 behavior even
+when an unknown colour shared an RGB444 bucket with a palette colour. Stage 3
+subsequently removed this reverse converter because the native source is now
+already indexed.
 
-Keep the lossy-fallback behaviour explicit and documented (unknown -> 0) so the
-change is purely a speed fix, not a semantic one.
+`tests/control/test_frame_ring_control.py` now retrieves 16 consecutive frames
+from a ROM that advances `$D020` once per frame and proves all palette indices
+0..15 appear in order. It also compares every visible `indexed8` pixel with the
+corresponding ARGB pixel and the Pepto palette.
 
-### Stage 2 - measure before committing to Stage 3
+### Stage 2 - measure before committing to Stage 3 (completed)
 
-Profile what fraction of turbo-2 time is frame copy plus conversion. The 0.22%
-datapoint says "small". If Stage 2 confirms that, Stage 3 must be justified on
-ring depth and fidelity alone - which is a legitimate case, but a different one,
-and it should be made explicitly rather than by implication.
+Three serial before/after runs used
+`tools/measure_control_latency.py --bin ./build/c64m` against a paused PAL
+machine. Each run measured 30 warmed `get-frame format=indexed8` round trips:
 
-### Stage 3 - make `indexed8` the native format
+| Metric | Before | After | Change |
+|---|---:|---:|---:|
+| mean of run means | 2.315 ms | 1.679 ms | **-27.5%** |
+| mean of run p50s | 2.282 ms | 1.675 ms | **-26.6%** |
 
-`c64_frame.pixels` becomes `uint8_t`; the VIC writes indices; one index -> ARGB
-expansion at the display boundary. Set `pixel_format` accordingly and keep the
-field meaningful.
+This is end-to-end latency including control framing, loopback transport, and
+the 157,248-byte response, so it does not pretend to isolate converter cycles.
+The same runs' `get-cpu` means stayed effectively flat (1.280 ms before,
+1.280 ms after), supporting that the improvement is local to frame conversion.
+The previously measured frame-ring push cost remains 0.22% of turbo-2
+throughput.
 
-Kill tests to write **before** implementing, per the diagnosis discipline in
-`README.md`:
+The source writer audit found current live and geometric framebuffer writes are
+palette-derived. Consequently, the old reverse lookup was lossy by contract but
+appears exact for frames c64m currently produces. Stage 3's demonstrated case is
+therefore 4x ring depth plus removal of a latent representation hazard, not
+evidence of currently wrong indexed pixels.
 
-- Pixel-exact equality against the current build for the known demos
-  (lft-nine, EoD checker, DEM pillar/spirals) - same frames, same dots.
-- `get-frame format=argb8888` output must be byte-identical to today's for the
-  same frame, since the expansion is a forward map of the same palette.
-- `get-frame format=indexed8` must change only where the old reverse map was
-  *wrong* (off-palette -> 0). Enumerate those pixels; if the set is non-empty,
-  that is the lossiness this change fixes and it should be reported, not hidden.
-- VICE oracle compare unchanged or improved.
-- Perf: re-measure against `perf-baseline-turbo2.md`; expect a small win, accept
-  neutral, investigate any loss.
+Verification: focused `frame_ring_control_integration` passed, followed by
+`ctest --test-dir build --output-on-failure` at **69/69 passing**.
+
+### Stage 3 - make `indexed8` the native format (implemented)
+
+`c64_frame.pixels` is now `uint8_t`; the VIC writes palette indices and the
+machine/runtime/frame ring retain them. A shared `c64_frame_expand_argb`
+performs the single forward palette expansion used by the frontend and legacy
+ARGB control responses. The frontend uses one ARGB staging buffer for both the
+SDL texture and CRT renderer. Native PAL row padding uses an internal `0xff`
+unpainted sentinel, which expands to transparent zero; `indexed8` wire payloads
+map it to index 0 and expose no sentinel.
+
+The Stage 1 reverse lookup and RGB444 table are gone: native indexed responses
+copy/map the source indices, while ARGB responses expand through the central
+Pepto palette. The frame ring still has the same 128 MiB budget but now holds
+about 827 PAL frames.
+
+Verification:
+
+- Frozen pre-Stage-3 versus post-Stage-3 PAL and NTSC complete and partial-frame
+  payloads were byte-identical in both `argb8888` and `indexed8`.
+- An Edge of Disgrace checker capture reached frame 7271 in both builds and
+  emitted byte-identical PPMs
+  (`254437cf73a5b1072a8cabfc1795e4df8b71daf511dd01b9548c658e06cd92ac`).
+- No `indexed8` differences were found in the captured live/geometric frames,
+  confirming the writer audit: current output was palette-derived.
+- VICE-facing `indexed8` payloads are unchanged byte-for-byte, so existing
+  oracle comparisons are unchanged; no VIC model/timing expectation moved.
+- `c64_vicii` pixel/timing regression coverage passed, followed by the complete
+  suite at **69/69**.
+- Matched 20M-cycle hot-loop measurements were neutral: host paint-on
+  **16.394 -> 16.258 MHz**, paint-off **22.175 -> 21.995 MHz**, and drive rows
+  varied between -0.3% and +0.8%. The paint-on/off relationship did not move,
+  so this is host-run noise rather than a Stage 3 loss.
+- Three matched PAL control runs against the frozen Stage 1 binary reduced
+  warmed `indexed8` mean latency from **1.972 ms to 1.528 ms (-22.5%)** while
+  `get-cpu` stayed flat at about 1.52 ms.
+
+Stage 3's faster response generation exposed a pre-existing nonblocking socket
+bug: a temporarily full send buffer was treated as disconnect. The write helper
+now retries `EINTR` and waits (bounded to five seconds) for `EAGAIN` /
+`EWOULDBLOCK`. The PAL frame-ring integration test covers the larger response.
 
 ## Files this touches
 
 - `src/machine/vicii.c`, `src/machine/vicii.h` - paint path, palette, colour
   pipe, priority, SIMD helpers
-- `src/machine/c64_frame.h` - pixel array type, `pixel_format`
-- `src/machine/c64.c` - frame snapshot helpers
+- `src/machine/c64_frame.{c,h}` - native pixel contract, central palette,
+  expansion and rotation
+- `src/machine/c64_snapshot.c` - framebuffer reset after state load
 - `src/runtime/runtime_thread.c`, `runtime_frame_ring.{c,h}` - copies, ring
   slot size
-- `src/main.c` - `control_format_frame_response_ex`, the reverse map
-- `src/frontend/frontend.c`, `crt_renderer.{c,h}` - the single expansion point
+- `src/main.c` - native indexed responses and legacy ARGB expansion
+- `src/frontend/frontend.c` - the single display expansion point
 - `agents/vicii.md`, `agents/control-port.md` - update in the same change
 
 ## Non-goals

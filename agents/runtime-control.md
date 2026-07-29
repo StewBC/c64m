@@ -162,7 +162,7 @@ completion events, assemble, find-symbol, and `set-turbo`. Binary responses carr
 typed header and raw byte count. Deferred responses use a multi-entry table and
 must follow the message contracts above (`request_token`, epoch, lossy vs reliable).
 `set-turbo` changes the active mode without altering the configured Opt+T list;
-mode 3 (warp) warns that the live ARGB framebuffer is disabled until turbo is
+mode 3 (warp) warns that the live framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
 load path used by `load-state`. Wire protocol is **C64M/3** - see `control-port.md`.
 
@@ -197,8 +197,8 @@ Turbo is three discrete modes (not a MHz ladder). Field names still say
 `active_turbo_multiplier` / `turbo_speeds` for historical compatibility; values
 are mode IDs:
 
-| Mode | Name  | Pacing   | Live ARGB | Notes |
-|------|-------|----------|-----------|-------|
+| Mode | Name  | Pacing   | Live pixels | Notes |
+|------|-------|----------|-------------|-------|
 | 1    | normal | 1× real-time | yes | PAL ~0.985 MHz / NTSC ~1.023 MHz Φ2 |
 | 2    | max   | free-run | yes | Full correctness (collisions, paint) |
 | 3    | warp  | free-run | no  | Debug geometry only; collision latches skip |

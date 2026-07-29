@@ -84,14 +84,14 @@ latched value.
 
 (What shipped, and where it differs from the plan below.)
 
-- **Frames are stored as ARGB, not reduced to `indexed8`.** The plan chose
-  indexed8 for a 4x memory saving, but the existing ARGB->index converter is a
-  per-pixel linear scan of the 16-entry palette (~2.5M comparisons per PAL
-  frame) and is lossy for any colour outside the palette, mapping it to index 0.
-  Running that on every completed frame was the wrong trade. Conversion now
-  happens on read, reusing the same code path as `get-frame`, so a ring frame
-  and a live frame convert identically. Cost is 649 KB per frame instead of
-  162 KB; the default 128 MiB budget still holds ~206 PAL frames (~4 s).
+- **Frames are stored in the machine's native `indexed8` format.** Ring A
+  originally shipped with ARGB slots because reducing every pushed frame
+  through the then-linear reverse palette scan was the wrong trade. Framebuffer
+  format Stage 3 removed that premise: the VIC, runtime handoff, and ring now
+  retain the native indices, and only legacy ARGB reads expand through the
+  shared forward palette. A slot is about 162 KB rather than 649 KB, so the
+  default 128 MiB budget holds about 827 PAL frames / 16.5 seconds instead of
+  about 206 / 4.1 seconds.
 - **No RPC plumbing.** The plan specified token-keyed RPC like bulk memory. The
   ring instead carries its own mutex, the same shape as `runtime_frame_slot`'s
   existing cross-thread frame handoff, so control commands answer immediately
@@ -179,7 +179,7 @@ per pixel — the oracle-compare format, and 4x smaller than ARGB).
   `indexed8` reduction (or stores ARGB and converts on read — decide by cost;
   indexed8 storage is preferred for size).
 - Each slot: `{ frame_number, machine_cycle, width, height, uint8 pixels[] }`.
-- **Only records at turbo 1/2.** Warp (turbo 3) disables the live ARGB renderer
+- **Only records at turbo 1/2.** Warp (turbo 3) disables live pixel rendering
   (`agents/control-port.md` § turbo), so there are no real pixels to store; the
   ring pauses and `frame-ring-info` reports `live=0`. Coop play is turbo 1, which
   is the target workflow, so this is not a practical limit.

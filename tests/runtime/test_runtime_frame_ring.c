@@ -32,12 +32,12 @@ static void make_frame(c64_frame *frame, uint64_t number, uint64_t cycle) {
 
     frame->width = C64_FRAME_PAL_WIDTH;
     frame->height = C64_FRAME_PAL_HEIGHT;
-    frame->stride_bytes = C64_FRAME_WIDTH * 4u;
-    frame->pixel_format = C64_FRAME_PIXEL_FORMAT_ARGB8888;
+    frame->stride_bytes = C64_FRAME_WIDTH;
+    frame->pixel_format = C64_FRAME_PIXEL_FORMAT_INDEXED8;
     frame->frame_number = number;
     frame->machine_cycle = cycle;
     for (i = 0; i < pixels; ++i) {
-        frame->pixels[i] = (uint32_t)(number * 0x01010101u + (uint32_t)i);
+        frame->pixels[i] = (uint8_t)(number + (uint64_t)i);
     }
 }
 
@@ -46,7 +46,7 @@ static bool frame_pixels_match(const c64_frame *frame, uint64_t number) {
     size_t pixels = (size_t)C64_FRAME_WIDTH * (size_t)C64_FRAME_HEIGHT;
 
     for (i = 0; i < pixels; ++i) {
-        if (frame->pixels[i] != (uint32_t)(number * 0x01010101u + (uint32_t)i)) {
+        if (frame->pixels[i] != (uint8_t)(number + (uint64_t)i)) {
             return false;
         }
     }

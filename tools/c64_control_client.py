@@ -19,7 +19,7 @@ Then:
     c.cmd("run"); c.cmd("wait-paused 5000")
 
 GOTCHAS (learned the hard way, see lft-nine.md):
-  * Rendering: turbo modes are 1=normal, 2=max (free-run, live ARGB), 3=warp
+  * Rendering: turbo modes are 1=normal, 2=max (free-run, live pixels), 3=warp
     (free-run, paint off). At turbo=3 get-frame returns the geometric DEBUG
     snapshot (closed border, border-region sprites MASKED). Use turbo 1 or 2 for
     real frames. Register/memory reads are unaffected by turbo.

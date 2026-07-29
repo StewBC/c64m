@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 enum {
@@ -26,9 +27,30 @@ enum {
     C64_FRAME_NTSC_HEIGHT = 263,
     C64_FRAME_HEIGHT = C64_FRAME_PAL_HEIGHT,
     C64_FRAME_PIXEL_FORMAT_ARGB8888 = 1,
+    C64_FRAME_PIXEL_FORMAT_INDEXED8 = 2,
+    C64_FRAME_PALETTE_SIZE = 16,
+    /* Internal-only marker for row padding and not-yet-painted pixels. Wire
+       indexed8 maps it to index 0; ARGB expansion maps it to transparent zero,
+       preserving the pre-indexed framebuffer behavior. Completed visible
+       pixels must always be palette indices 0..15. */
+    C64_FRAME_PIXEL_UNPAINTED = 0xff,
 };
 
-/* Frames cross the runtime/frontend boundary by value. Pixels are ARGB8888. */
+/* Pepto ARGB palette used at host presentation/control boundaries. */
+extern const uint32_t c64_palette_argb[C64_FRAME_PALETTE_SIZE];
+
+static inline uint32_t c64_frame_pixel_to_argb(uint8_t pixel)
+{
+    return pixel < C64_FRAME_PALETTE_SIZE ? c64_palette_argb[pixel] : 0u;
+}
+
+static inline uint8_t c64_frame_pixel_to_index(uint8_t pixel)
+{
+    return pixel < C64_FRAME_PALETTE_SIZE ? pixel : 0u;
+}
+
+/* Frames cross the runtime/frontend boundary by value. Visible completed-frame
+   pixels are native VIC-II palette indices 0..15. */
 typedef struct c64_frame {
     uint32_t width;
     uint32_t height;
@@ -36,5 +58,15 @@ typedef struct c64_frame {
     uint32_t pixel_format;
     uint64_t frame_number;
     uint64_t machine_cycle;
-    uint32_t pixels[C64_FRAME_WIDTH * C64_FRAME_HEIGHT];
+    uint8_t pixels[C64_FRAME_WIDTH * C64_FRAME_HEIGHT];
 } c64_frame;
+
+/* Expand a native indexed frame into a fixed-pitch ARGB buffer. rotate_x is a
+   presentation-only cyclic origin within frame->width; pass zero for VIC-X
+   order. Columns from frame->width to C64_FRAME_WIDTH become transparent zero,
+   preserving legacy PAL row padding. */
+bool c64_frame_expand_argb(
+    const c64_frame *frame,
+    uint32_t *destination,
+    uint32_t destination_stride_pixels,
+    uint32_t rotate_x);

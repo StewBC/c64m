@@ -8,12 +8,26 @@ When verification is explicitly authorized, run from the repository root:
 ctest --test-dir build --output-on-failure
 ```
 
-The current baseline is 60/60 passing after the CPU flight-recorder additions,
-including the longer real 1541 ROM/IEC, G64, Arkanoid, Robocop, mid-transfer
-1541 snapshot paths, and the localhost C64M/3 integration test. Do not rebuild or
-rerun the suite merely to validate these handoffs when another agent is actively
-working in the tree; use the owner-provided baseline unless explicitly asked to
-verify it.
+The current baseline is 69/69 passing, including the longer real 1541 ROM/IEC,
+G64, Arkanoid, Robocop, mid-transfer 1541 snapshot paths, CPU flight recorder,
+guarded breakpoints, frame/VIC rings, and localhost control integration tests.
+Do not rebuild or rerun the suite merely to validate these handoffs when another
+agent is actively working in the tree; use the owner-provided baseline unless
+explicitly asked to verify it.
+
+Native framebuffer coverage is split across layers:
+
+- `c64_frame` pins the central 16-colour Pepto palette, the internal `0xff`
+  unpainted sentinel, indexed-to-ARGB expansion, PAL transparent padding, and
+  frontend X rotation.
+- `c64_vicii`, `c64_boot_progression`, `runtime_frame`, and
+  `runtime_frame_ring` assert native `indexed8` metadata and pixel values.
+- `frame_ring_control_integration` checks all 16 indices, every visible
+  indexed/ARGB pixel pair, PAL's deeper ~827-slot ring, and large nonblocking
+  response delivery.
+- Framebuffer Stage 3 was additionally gated against a frozen binary: complete
+  and partial PAL/NTSC wire payloads were byte-identical in both formats, as was
+  Edge of Disgrace checker frame 7271.
 
 ### Tests that need gitignored media SKIP, not fail
 

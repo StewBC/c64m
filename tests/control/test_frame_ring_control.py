@@ -40,6 +40,14 @@ LOOP = bytes([
 BORDER_ROW = 10
 BORDER_COL = 260
 
+PALETTE_ARGB = [
+    0xFF000000, 0xFFFFFFFF, 0xFF813338, 0xFF75CEC8,
+    0xFF8E3C97, 0xFF56AC4D, 0xFF2E2C9B, 0xFFEDF171,
+    0xFF8E5029, 0xFF553800, 0xFFC46C71, 0xFF4A4A4A,
+    0xFF7B7B7B, 0xFFA9FF9F, 0xFF706DEB, 0xFFB2B2B2,
+]
+PALETTE_INDEX = {argb: index for index, argb in enumerate(PALETTE_ARGB)}
+
 
 def reserve_port():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -67,6 +75,7 @@ def start_emulator(executable, directory):
             f"--control-port={port}",
             "--noini",
             "--nosaveini",
+            "--pal",
         ],
         cwd=directory,
         stdout=subprocess.DEVNULL,
@@ -146,30 +155,32 @@ def test_ring_records_frames(client):
     assert info["recording"] == "1", info
     assert int(info["newest_frame"]) >= int(info["oldest_frame"]), info
     assert int(info["newest_cycle"]) >= int(info["oldest_cycle"]), info
-    # Free-running for this long must overflow the default budget, which is
-    # what exercises the drop accounting.
-    assert int(info["dropped"]) > 0, f"expected the window to have rolled: {info}"
-    assert int(info["count"]) == int(info["capacity"]), info
+    # Native indexed frames make the same 128 MiB budget roughly four times
+    # deeper than the former ~206-slot ARGB ring.
+    assert int(info["capacity"]) >= 800, info
 
 
 def test_frames_are_distinct_and_correctly_indexed(client):
-    """Consecutive retained frames must differ by exactly one border step."""
+    """Sixteen retained frames must cover the palette in border-step order."""
     info = ring_info(client)
     newest = int(info["newest_frame"])
 
     previous = None
-    for number in (newest - 2, newest - 1, newest):
+    seen = set()
+    for number in range(newest - 15, newest + 1):
         meta, pixels = get_frame_at(client, number)
         assert int(meta["frame"]) == number, (
             f"asked for frame {number}, got {meta}")
         assert meta["target_kind"] == "frame", meta
         assert int(meta["target"]) == number, meta
         colour = border_of(meta, pixels)
+        seen.add(colour)
         if previous is not None:
-            assert (previous + 1) % 16 == colour % 16, (
+            assert (previous + 1) % 16 == colour, (
                 f"frame {number} border {colour:X} does not follow "
                 f"{previous:X}; the ring returned the wrong frame's pixels")
         previous = colour
+    assert seen == set(range(16)), f"indexed conversion missed colours: {seen}"
 
 
 def test_lookup_by_cycle(client):
@@ -207,6 +218,18 @@ def test_formats_match_get_frame(client):
     assert len(idx) == width * height, (len(idx), width, height)
     assert int(argb_meta["stride"]) == 2080, argb_meta
     assert len(argb) == height * 2080, (len(argb), height)
+
+    argb_stride = int(argb_meta["stride"])
+    for y in range(height):
+        for x in range(width):
+            argb_offset = y * argb_stride + x * 4
+            argb_pixel = int.from_bytes(
+                argb[argb_offset:argb_offset + 4], sys.byteorder)
+            expected = PALETTE_INDEX.get(argb_pixel, 0)
+            actual = idx[y * width + x]
+            assert actual == expected, (
+                f"pixel ({x},{y}) ARGB={argb_pixel:08X}: "
+                f"indexed={actual:X}, expected={expected:X}")
 
 
 def test_out_of_window_and_bad_args(client):

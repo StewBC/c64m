@@ -137,9 +137,9 @@ typedef void (*vicii_line_observer_fn)(
 struct vicii {
     uint8_t registers[VICII_REGISTER_COUNT];
     vicii_timing timing;
-    /* Double-buffered live ARGB frames. paint_frame is the buffer being
+    /* Double-buffered live indexed frames. paint_frame is the buffer being
        painted; the other holds the last completed frame when ready. EOF
-       swaps the index instead of memcpy'ing ~650KB. */
+       swaps the index instead of copying the completed frame. */
     c64_frame frames[2];
     uint8_t paint_frame; /* 0 or 1 */
     bool completed_frame_ready;
@@ -223,7 +223,7 @@ struct vicii {
        open. Snapshot rendering keeps geometric side borders. */
     bool     main_border_ff;
 
-    /* When false, raster/BA/IRQ/sprite-DMA timing still advances, but ARGB pixel
+    /* When false, raster/BA/IRQ/sprite-DMA timing still advances, but pixel
        fill, working-frame clears, and completed-frame copies are skipped. Used by
        the runtime in warp turbo mode so free-run is not bound by display work.
        Sprite collision latches only update while pixel output is enabled. */
@@ -266,9 +266,9 @@ struct vicii {
         uint8_t  solid;
         uint8_t  dot[8];             /* dot position 0..7 within the cycle */
         uint32_t idx[8];
-        uint32_t content[8];
+        uint8_t  content[8];
         bool     content_d021[8];
-        uint32_t border[8];
+        uint8_t  border[8];
     } hborder_pipe[2];
     /* Transient bus pointer stashed each begin_cycle so finish_cycle can resolve
        a same-cycle Phi2 $D016 MCM write into the current span (see the mode

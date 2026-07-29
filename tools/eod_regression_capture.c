@@ -108,7 +108,8 @@ static void write_ppm(const char *path, const c64_frame *frame) {
     for (y = 0; y < frame->height; ++y) {
         uint32_t x;
         for (x = 0; x < frame->width; ++x) {
-            uint32_t argb = frame->pixels[y * C64_FRAME_WIDTH + x];
+            uint32_t argb = c64_frame_pixel_to_argb(
+                frame->pixels[y * C64_FRAME_WIDTH + x]);
             fputc((int)((argb >> 16) & 0xffu), file);
             fputc((int)((argb >> 8) & 0xffu), file);
             fputc((int)(argb & 0xffu), file);
@@ -264,7 +265,7 @@ live_capture:
     }
 
     /* Warp uses a geometric debug reconstruction and the frame slot retains its
-       oldest undrained frame. Drain that slot, switch to max (live ARGB), then
+       oldest undrained frame. Drain that slot, switch to max (live pixels), then
        discard one full PAL frame so the cycle renderer starts from a clean frame
        boundary. Keep draining FRAME_READY payloads while advancing so the final
        payload really is the requested live raster frame. */

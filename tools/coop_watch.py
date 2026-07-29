@@ -203,7 +203,7 @@ class CoopWatch:
 
     # -- setup --------------------------------------------------------------
     def setup(self):
-        self.c.cmd("set-turbo 1")           # real-time, live ARGB (never warp)
+        self.c.cmd("set-turbo 1")           # real-time, live pixels (never warp)
         self.c.cmd("history-record on")     # default-on; explicit for the log
         info = self._safe(lambda: self.c.history_info())
         self._log(f"connected port={self.cfg['port']} turbo=1 history=on "

@@ -10,10 +10,10 @@
 
 enum {
     TEST_RESET_VECTOR = 0xe000,
-    TEST_COLOR_GREEN = 0xff56ac4du,
-    TEST_COLOR_BLUE = 0xff2e2c9bu,
-    TEST_COLOR_LIGHT_BLUE = 0xff706debu,
-    TEST_COLOR_WHITE = 0xffffffffu,
+    TEST_COLOR_GREEN = 5,
+    TEST_COLOR_BLUE = 6,
+    TEST_COLOR_LIGHT_BLUE = 14,
+    TEST_COLOR_WHITE = 1,
     TEST_ACTIVE_PIXEL = 51 * C64_FRAME_WIDTH + 24,
 };
 
@@ -198,7 +198,7 @@ static void test_request_frame_while_paused(void) {
 
     expect_u32("frame width", C64_FRAME_NTSC_WIDTH, frame.width);
     expect_u32("frame height", C64_FRAME_NTSC_HEIGHT, frame.height);
-    expect_u32("frame pixel format", C64_FRAME_PIXEL_FORMAT_ARGB8888, frame.pixel_format);
+    expect_u32("frame pixel format", C64_FRAME_PIXEL_FORMAT_INDEXED8, frame.pixel_format);
     expect_u64("paused frame cycle", 0, frame.machine_cycle);
 
     expect_true("request machine state", runtime_client_request_machine_state(client));

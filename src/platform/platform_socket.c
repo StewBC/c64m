@@ -170,11 +170,53 @@ bool platform_socket_write_all(
 
     while (remaining > 0) {
         int sent = (int)send(connection->handle, cursor, (int)remaining, 0);
-        if (sent <= 0) {
+        if (sent > 0) {
+            cursor += sent;
+            remaining -= (size_t)sent;
+            continue;
+        }
+        if (sent == 0) {
             return false;
         }
-        cursor += sent;
-        remaining -= (size_t)sent;
+#if defined(_WIN32)
+        {
+            int err = WSAGetLastError();
+            if (err == WSAEINTR) {
+                continue;
+            }
+            if (err == WSAEWOULDBLOCK) {
+                fd_set write_set;
+                struct timeval timeout;
+                int ready;
+                FD_ZERO(&write_set);
+                FD_SET(connection->handle, &write_set);
+                timeout.tv_sec = 5;
+                timeout.tv_usec = 0;
+                ready = select(0, NULL, &write_set, NULL, &timeout);
+                if (ready > 0) {
+                    continue;
+                }
+            }
+        }
+#else
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            struct pollfd pfd;
+            int ready;
+            pfd.fd = connection->handle;
+            pfd.events = POLLOUT | POLLERR | POLLHUP;
+            pfd.revents = 0;
+            ready = poll(&pfd, 1, 5000);
+            if (ready > 0 &&
+                (pfd.revents & POLLOUT) != 0 &&
+                (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0) {
+                continue;
+            }
+        }
+#endif
+        return false;
     }
     return true;
 }

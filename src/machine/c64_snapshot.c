@@ -407,8 +407,8 @@ static void write_vic(snapshot_writer *w, const c64_t *m) {
     w_bool(w, v->vertical_border_active);
     w_bool(w, v->set_vborder);
     w_bool(w, v->allow_bad_lines);
-    /* ARGB paint buffers are display cache only - not stored. Load zeros them;
-       the next completed frame is the first correct picture. */
+    /* Paint buffers are display cache only - not stored. Load marks them
+       unpainted; the next completed frame is the first correct picture. */
     end_chunk(w, chunk);
 }
 
@@ -931,7 +931,7 @@ static void read_vic(snapshot_reader *r, c64_t *m) {
     /* Paint buffers are not in the file; clear so the first visible frame is
        whatever paint produces after load. */
     v->paint_frame = 0;
-    memset(v->frames, 0, sizeof(v->frames));
+    memset(v->frames, C64_FRAME_PIXEL_UNPAINTED, sizeof(v->frames));
 }
 
 static void read_cia_timer(snapshot_reader *r, cia_timer *timer) {

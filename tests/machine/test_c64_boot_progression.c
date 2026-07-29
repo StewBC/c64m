@@ -13,8 +13,8 @@ enum {
     TEST_RESET_VECTOR = 0xe000,
     TEST_NMI_VECTOR = 0xe080,
     TEST_IRQ_VECTOR = 0xe100,
-    TEST_COLOR_GREEN = 0xff56ac4du,
-    TEST_COLOR_BLUE = 0xff2e2c9bu,
+    TEST_COLOR_GREEN = 5,
+    TEST_COLOR_BLUE = 6,
 };
 
 static void fail(const char *message) {

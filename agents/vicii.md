@@ -135,7 +135,11 @@ Phi2 schedule; frontend frames are copies.
   with an IRQ path that only acks raster `$01`).
 - Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
   not a fixed 512-dot wrap.
-- Turbo modes 1 (normal) and 2 (max) publish the live per-cycle ARGB framebuffer.
+- Turbo modes 1 (normal) and 2 (max) publish the live per-cycle indexed
+  framebuffer. VIC paint, runtime handoff, and frame-ring storage retain palette
+  indices 0..15; the frontend and ARGB control response share one forward Pepto
+  palette expansion. The internal `0xff` unpainted sentinel expands to
+  transparent zero and is mapped to index 0 at the wire boundary.
   Mode 3 (warp) disables host pixel output while retaining raster, BA, IRQ,
   sprite-DMA, CIA, and SID timing; its published frame is geometric debug
   reconstruction, not visual evidence for timing-sensitive effects. Sprite

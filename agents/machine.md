@@ -122,7 +122,7 @@ reads use `c64_debug_read_cpu_map`, `c64_debug_read_ram`, `c64_debug_read_rom`, 
 
 `c64_snapshot.{c,h}` provides a versioned, chunked, all-or-nothing machine
 serializer (format version 13). It includes CPU, RAM/color RAM, banking, VIC-II
-chip state (not the ARGB paint buffers), CIA, SID, controls, cartridge, and
+chip state (not the framebuffer paint buffers), CIA, SID, controls, cartridge, and
 per-drive slot data. When real 1541 emulation is on with a drive ROM loaded,
 **powered** units also store full live 1541 drive-object state (CPU including mid-
 instruction micro fields, both VIAs, 2 KiB RAM, media scalars, and verbatim GCR

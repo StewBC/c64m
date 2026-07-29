@@ -15,7 +15,7 @@ ownership), `disk-iec1541.md` (soft power), `testing.md` (ctest).
 
 | Item | Rule |
 |------|------|
-| **Correctness bar** | Turbo **1 and 2**: free-run with **live ARGB**, collisions, full VIC/CIA/SID model as today. **No behavioral shortcuts.** Internal rewrites OK only if observables hold. |
+| **Correctness bar** | Turbo **1 and 2**: free-run with **live pixels**, collisions, full VIC/CIA/SID model as today. **No behavioral shortcuts.** Internal rewrites OK only if observables hold. |
 | **Warp (turbo 3)** | May drop paint / batch aggressively for speed. Returning to turbo 2 must leave a **valid turbo-2 world** (as if turbo never went above 2). UI/control still serviced. |
 | **Phase 1 measure** | Pure machine core, paint **on**, drives soft-powered **off** (`profile_c64_hotloop` / `bench_core_mhz`) |
 | **Phase 2 measure** | Product free-run **turbo=2** headless, drives off (control-port Φ2 window) |
@@ -136,6 +136,42 @@ media_1541=true
 ```
 
 **Do not** run multiple free-run instances in parallel when collecting baselines.
+
+### Recorder / ring / observer costs (runtime-path work)
+
+**`bench_core_mhz.sh` cannot measure these.** It drives `profile_c64_hotloop`,
+the pure machine core, which never enters the runtime thread, frame publish,
+control port, flight recorder, or either ring. A change to any of those measures
+as exactly zero there. Use the product free-run recipe above instead.
+
+For isolating one hook's marginal cost, a **synthetic stub KERNAL** is easier to
+reason about than a real title, because the VIC workload is fixed and known:
+
+```text
+# Enables sprite 0, then toggles the $D010 MSB once per frame, so the VIC does
+# real sprite work and each frame differs. Placed at $E000 in a stub system.bin
+# with the reset vector pointing at it; run with --headless --noini --nosaveini.
+LDA #$01 / STA $D015 ; LDA #$50 / STA $D000 ; LDA #$32 / STA $D001
+loop: LDA #$FF / CMP $D012 / BNE loop
+      LDA $D010 / EOR #$01 / STA $D010
+wait: LDA #$FF / CMP $D012 / BEQ wait
+      JMP loop
+```
+
+Then `set-turbo 2`, `run`, sleep a 3 s wall window, `pause`, and take the
+`get-cpu` `cycles=` delta over the window. Two passes, keep the best.
+
+Toggle the feature between otherwise identical runs. Prefer the **config**
+switch (`[debug] vic_ring_memory_mb=0`, `frame_ring_memory_mb=0`,
+`history_memory_mb=0`) over a runtime `*-record off` command: `off` may stop the
+*store* while still paying to build the record, so it understates the true cost.
+For the VIC ring specifically, `off` measures almost the same as `on`, while a
+`0` budget measures identical to a build without the feature.
+
+**Absolute MHz from a synthetic ROM is workload-specific.** A border-only ROM
+and this sprite ROM differ by ~1.5 MHz on the same build. Such numbers are
+comparable only to other runs of *the same* ROM and script — never to the pure
+core table above, and never across ROMs.
 
 ### Thread samples (optional)
 
@@ -317,6 +353,17 @@ also report paint-off (`no-video`) so the on/off gap is visible.
 7. **Tests that poke `sprite_active[]`** must rebuild sprite masks.  
 8. **`c6510_micro_cycles_remaining` is not a free multi-Phi2 oracle** in Release
    (`assert` off). Do not pre-paint or skip work past an unverified remaining count.
+9. **Pure-core benches are blind to runtime-path work.** `bench_core_mhz.sh` /
+   `profile_c64_hotloop` never enter the runtime thread, frame publish, control
+   port, recorder, or rings. Measuring a change to any of those with the pure
+   core reports a clean zero and proves nothing. Use the product free-run recipe.
+10. **A `*-record off` toggle is not a perf switch.** It can stop the store while
+   still building the record each time. To measure a feature's true cost, disable
+   it by budget (`*_memory_mb=0`) so the hook is never installed.
+11. **Marginal costs move when the surrounding path changes.** The VIC ring cost
+   2.64% against the ARGB framebuffer and 0.15% against the native `indexed8`
+   one, with recording coverage unchanged. Re-measure a hook's cost after any
+   change to the path it sits in; do not carry an old percentage forward.
 
 ---
 
@@ -350,3 +397,5 @@ also report paint-off (`no-video`) so the on/off gap is visible.
 | 2026-07-25 | Perf program paused. Folded durable measure/contract/pitfalls into this file; removed session hand-off and 100 MHz roadmap docs. |
 | 2026-07-25 | CPU flight recorder accepted baseline: matched runtime `config-off` **14.716/14.705 MHz** versus full recording **13.593/13.634 MHz**, about **7.4%** loss. This is above the 5% target but below the 10% ceiling and was explicitly accepted without further optimization. A final post-CTest single pass measured **14.180 / 13.484 MHz**. The 256 MiB idle-BASIC arena retained **9.51 million** records at about **28 bytes/record**. Full-store query results were exact-address miss **219.734-221.473 ms**, newest hit **0.020-0.024 ms**, PC **1.3-1.4 ms**, and three-opcode pattern **0.058-0.064 ms**; the linear miss is below the 500 ms indexing threshold. |
 | 2026-07-25 | Phase 3 follow-up optimization: fast common-case block admission, compiler-friendly little-endian arena loads/stores, direct observer access validation, and fewer completion writes. Alternating old/new full-recording binaries averaged **13.522 / 13.637 MHz** (**+0.85%** enabled throughput). Final matched rows averaged **14.705 MHz config-off / 13.664 MHz full**, about **7.1%** recorder cost versus the prior accepted ~7.4%. Capacity/encoding are unchanged; exact-address full miss remained **219.423 ms**. Full CTest **60/60**. |
+| 2026-07-28 | Native `indexed8` framebuffer Stage 3: matched 20M-cycle old/new hot-loop rows were neutral (host paint-on **16.394 / 16.258 MHz**, paint-off **22.175 / 21.995 MHz**; drive rows within -0.3%..+0.8%). Byte-exact PAL/NTSC wire captures and EoD checker frame 7271; full CTest **69/69**. |
+| 2026-07-28 | Ring costs re-measured on the sprite/`$D010` stub ROM (product free-run, turbo=2, 3 s windows × 2) after the `indexed8` framebuffer landed. VIC ring disabled (`vic_ring_memory_mb=0`) **14.139 → 14.413 MHz**; VIC ring on (default) **13.768 → 14.392 MHz**. Against the pre-Ring-B reference of **14.142 MHz**, the default config carrying *both* rings is now about **+1.8%**, i.e. faster than before Ring B existed. The VIC ring's marginal cost fell from **-2.64% to -0.15%** (0.374 → 0.021 MHz absolute) with per-line coverage unchanged (`vic_ring_control_integration` still asserts a full 263/312-line frame, in order). Turbo 1 unchanged at ~**1.017 MHz** (paced, no headroom). **Unproven hypothesis** for the collapse: the per-line record was never instruction-bound but competed for cache/memory bandwidth with the ARGB paint; cutting paint traffic 4× (8 dots = 8 bytes, not 32) leaves slack it now fits into. Confirming that needs a cache-miss profile, which was not run. Note the pure-core rows in the entry above measure a *different* thing and correctly show this work as neutral. |
