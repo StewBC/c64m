@@ -42,7 +42,7 @@ static void strip_comment(char *line, int *line_len) {
 
 static size_t active_target_index(const ASSEMBLER *as) {
     for(size_t i = 0; i < as->targets.items; i++) {
-        if(*ARRAY_GET((DYNARRAY *)&as->targets, TARGET*, i) == as->active_target) {
+        if(*ARRAY_GET(&as->targets, TARGET*, i) == as->active_target) {
             return i;
         }
     }
@@ -89,7 +89,7 @@ static int segment_adjustments_copy(DYNARRAY *dest, const DYNARRAY *source) {
     ARRAY_INIT(dest, SEGMENT_ADJUSTMENT);
     for(size_t i = 0; i < source->items; i++) {
         const SEGMENT_ADJUSTMENT *adjustment =
-            ARRAY_GET((DYNARRAY *)source, SEGMENT_ADJUSTMENT, i);
+            ARRAY_GET(source, SEGMENT_ADJUSTMENT, i);
         if(ASM_OK != segment_adjustment_add(
                 dest,
                 adjustment->target_index,

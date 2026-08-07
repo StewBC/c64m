@@ -42,7 +42,7 @@ void array_free(DYNARRAY *array) {
     array->items = 0;
 }
 
-void *array_get(DYNARRAY *array, size_t index) {
+void *array_get(const DYNARRAY *array, size_t index) {
     if(index < array->size) {
         return (char *)array->data + index * array->element_size;
     }

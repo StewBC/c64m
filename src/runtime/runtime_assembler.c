@@ -73,7 +73,7 @@ static void runtime_assembler_format_errors(const ERRORLOG *log, char *error, si
     }
 
     for (size_t i = 0; i < log->log_array.items; i++) {
-        const ERROR_ENTRY *entry = ARRAY_GET((DYNARRAY *)&log->log_array, ERROR_ENTRY, i);
+        const ERROR_ENTRY *entry = ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
         int n;
 
         if (entry == NULL || entry->err_str == NULL) {

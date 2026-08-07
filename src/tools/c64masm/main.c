@@ -300,7 +300,7 @@ static void print_errors(const ERRORLOG *log) {
     }
     fprintf(stderr, "\nAssembly errors:\n");
     for(size_t i = 0; i < log->log_array.items; i++) {
-        const ERROR_ENTRY *e = ARRAY_GET((DYNARRAY *)&log->log_array, ERROR_ENTRY, i);
+        const ERROR_ENTRY *e = ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
         if(e && e->err_str) {
             fprintf(stderr, "  %s\n", e->err_str);
         }
