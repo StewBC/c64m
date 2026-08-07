@@ -6,13 +6,14 @@ restore full machine snapshots (`.c64state`); and includes a debugger and assemb
 C64 development.
 
 c64m requires C64 ROM files. Place `basic`, `kernal` (or a single `system` file which
-combines both `basic` and `kernal`) and `character`, ROM files beside the executable
-or in a `rom` or `roms` subdirectory. A `1541` ROM (16 KB) is optional and enables the
-emulated 1541 drive. Files are matched by stem name and size; extensions are ignored.
-JiffyDOS replacement ROMs can be used in place of the stock `kernal` and `1541` images -
-they are the same sizes - but because their filenames do not match the stems above, point
-at them explicitly with `[roms] kernal=` and `[roms] 1541=` (or the Configure > Paths
-ROM fields).
+combines both `basic` and `kernal`) and `character` ROM files where discovery can find
+them: the current directory, `rom/` or `roms/` under it, beside the executable (or in
+`rom`/`roms` next to the binary or its parent folder), or under the INI file's
+directory. A `1541` ROM (16 KB) is optional and enables the emulated 1541 drive. Files
+are matched by stem name and size; extensions are ignored. JiffyDOS replacement ROMs can
+be used in place of the stock `kernal` and `1541` images - they are the same sizes - but
+because their filenames do not match the stems above, point at them explicitly with
+`[roms] kernal=` and `[roms] 1541=` (or the Configure > Paths ROM fields).
 
 ## Overview
 
@@ -1492,6 +1493,17 @@ settings to the named INI file.
 c64m reads `c64m.ini` from the current directory by default. Use `--inifile <path>` to
 load a different file, or `--noini` to skip loading entirely.
 
+Relative paths in the INI (ROMs, disks, browse folders, assembler source, symbols) are
+resolved against the directory that contains the INI file, not against the process
+working directory. That means
+`../c64m/build/c64m -i ../c64m/c64m.ini -p game.prg` from another project folder still
+finds `roms/character.rom` next to the INI. Absolute paths stay absolute. On save, paths
+near the INI (under it, or a close sibling via at most two `..` steps) are rewritten
+relative so a movable install stays portable; farther absolute paths are kept absolute.
+
+Command-line media paths (`--prg`, `--disk`, and similar) stay relative to the shell's
+current directory.
+
 The `[Video] standard` setting can be overridden for a single launch with `--video PAL`,
 `--video NTSC`, `-P`, or `-N`.
 
@@ -1578,8 +1590,15 @@ If `single_system` is absent it is derived: a combined `system` ROM without a
 `basic`+`kernal` pair defaults to true, otherwise false. These paths and the flag are
 editable on the Configure dialog's Paths tab.
 
-If no ROM paths are specified, c64m searches for files named `basic`, `kernal`,
-`character`, `system`, and `1541` (with any extension) in `.`, `rom/`, and `roms/`.
+Relative ROM paths are resolved against the INI directory. If a path is missing or the
+file does not open, c64m searches for files named `basic`, `kernal`, `character`,
+`system`, and `1541` (with any extension) in:
+
+1. `.`, `rom/`, `roms/` (current working directory)
+2. the executable's directory, plus `rom/` and `roms/` under it
+3. the executable's parent directory, plus `rom/` and `roms/` under it (so a binary in
+   `build/` still finds project-root `roms/`)
+4. the INI file's directory, plus `rom/` and `roms/` under it
 
 ### [disk]
 

@@ -231,6 +231,182 @@ bool app_options_path_absolute_from_ini(
     return path_absolute_from_ini(options, path, out, out_size);
 }
 
+/* Defined below; used by path_for_ini_storage. */
+static bool relative_path_from_dir(
+    const char *base_dir,
+    const char *abs_path,
+    char *out,
+    size_t out_size);
+
+/* True when path names an existing regular file. */
+static bool path_is_existing_file(const char *path)
+{
+    struct stat st;
+
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+    if (stat(path, &st) != 0 || !C64M_STAT_ISREG(st.st_mode)) {
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Count leading ".." components in a relative path (e.g. "../../foo" -> 2).
+ * Used to decide whether an absolute path is "near" the INI (portable) or far
+ * enough away that the absolute form should be preserved on save.
+ */
+static int count_leading_dotdot_components(const char *rel)
+{
+    int count = 0;
+    const char *cursor = rel;
+
+    if (cursor == NULL) {
+        return 0;
+    }
+    while (cursor[0] == '.' && cursor[1] == '.' &&
+           (cursor[2] == '/' || cursor[2] == '\0')) {
+        count++;
+        if (cursor[2] == '\0') {
+            break;
+        }
+        cursor += 3;
+    }
+    return count;
+}
+
+/*
+ * Form suitable for writing into the INI:
+ *  - relative strings stay relative
+ *  - absolute paths that live near the INI (under it, or a sibling via at most
+ *    two leading "..") are stored relative so a moved install still works
+ *  - absolute paths farther away stay absolute (Config pick of JiffyDOS on
+ *    another volume, etc.)
+ */
+static bool path_for_ini_storage(
+    const app_options *options,
+    const char *path,
+    char *out,
+    size_t out_size)
+{
+    char ini_dir[PATH_MAX];
+    char resolved[PATH_MAX];
+    char relative[PATH_MAX];
+    int leading_dotdots;
+
+    if (path == NULL || path[0] == '\0') {
+        return copy_path(out, out_size, "");
+    }
+    if (!path_is_absolute(path)) {
+        return copy_path(out, out_size, path);
+    }
+    if (!ini_directory_absolute(options, ini_dir, sizeof(ini_dir))) {
+        return copy_path(out, out_size, path);
+    }
+
+#if defined(_WIN32)
+    if (_fullpath(resolved, path, sizeof(resolved)) != NULL) {
+        normalize_path_separators(resolved);
+    } else if (!copy_path(resolved, sizeof(resolved), path)) {
+        return false;
+    }
+#else
+    if (realpath(path, resolved) == NULL) {
+        if (!copy_path(resolved, sizeof(resolved), path)) {
+            return false;
+        }
+    } else {
+        normalize_path_separators(resolved);
+    }
+#endif
+
+    if (!relative_path_from_dir(ini_dir, resolved, relative, sizeof(relative))) {
+        return copy_path(out, out_size, resolved);
+    }
+
+    leading_dotdots = count_leading_dotdot_components(relative);
+    /* 0 = under/at the INI dir; 1-2 = sibling project folders (../disks, etc.). */
+    if (leading_dotdots <= 2) {
+        return copy_path(out, out_size, relative);
+    }
+    return copy_path(out, out_size, resolved);
+}
+
+/* Resolve argv[0] to the directory containing the running executable. */
+static bool resolve_argv0_directory(const char *argv0, char *out, size_t out_size)
+{
+    char cwd[PATH_MAX];
+    char joined[PATH_MAX];
+    char resolved[PATH_MAX];
+    char copy[PATH_MAX];
+    char *slash;
+
+    if (out == NULL || out_size == 0 || argv0 == NULL || argv0[0] == '\0') {
+        return false;
+    }
+
+#if defined(_WIN32)
+    if (_fullpath(resolved, argv0, sizeof(resolved)) != NULL) {
+        normalize_path_separators(resolved);
+        if (!copy_path(copy, sizeof(copy), resolved)) {
+            return false;
+        }
+    } else
+#else
+    if (realpath(argv0, resolved) != NULL) {
+        if (!copy_path(copy, sizeof(copy), resolved)) {
+            return false;
+        }
+    } else
+#endif
+    {
+        if (path_is_absolute(argv0)) {
+            if (!copy_path(copy, sizeof(copy), argv0)) {
+                return false;
+            }
+        } else {
+            if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+                return false;
+            }
+            normalize_path_separators(cwd);
+            if (!join_path_buffer(joined, sizeof(joined), cwd, argv0)) {
+                return false;
+            }
+            if (!copy_path(copy, sizeof(copy), joined)) {
+                return false;
+            }
+        }
+    }
+
+    slash = strrchr(copy, '/');
+    if (slash == NULL) {
+        return copy_path(out, out_size, ".");
+    }
+    if (slash == copy) {
+        return copy_path(out, out_size, "/");
+    }
+    *slash = '\0';
+    return copy_resolved_or_original(out, out_size, copy);
+}
+
+/* Store value resolved against the INI directory (absolute when possible). */
+static bool replace_string_from_ini(
+    app_options *options,
+    char **target,
+    const char *value)
+{
+    char abs_path[PATH_MAX];
+
+    if (value == NULL) {
+        return replace_string(target, NULL);
+    }
+    if (path_absolute_from_ini(options, value, abs_path, sizeof(abs_path))) {
+        return replace_string(target, abs_path);
+    }
+    return replace_string(target, value);
+}
+
 static size_t path_component_length(const char *path)
 {
     const char *slash;
@@ -569,48 +745,196 @@ static bool discover_rom_path(
     return true;
 }
 
-static bool discover_default_rom_paths(app_options *options)
+/*
+ * Ensure *target names an existing ROM file when possible. If the current path
+ * already opens, leave it. If unset or missing, search roots; on a hit replace
+ * the path, otherwise restore the prior configured string so diagnostics still
+ * show what the INI asked for.
+ */
+static bool fill_rom_path_from_roots(
+    char **target,
+    const char *rom_name,
+    size_t expected_size,
+    char roots[][PATH_MAX],
+    size_t root_count)
 {
-    static const char *const dirs[] = { ".", "rom", "roms" };
+    char *prior;
     size_t i;
 
-    for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
-        if (!discover_rom_path(
-                dirs[i],
-                "system",
-                C64M_SYSTEM_ROM_SIZE,
-                &options->system_rom_path) ||
-            !discover_rom_path(
-                dirs[i],
-                "basic",
-                C64M_BASIC_ROM_SIZE,
-                &options->basic_rom_path) ||
-            !discover_rom_path(
-                dirs[i],
-                "character",
-                C64M_CHARACTER_ROM_SIZE,
-                &options->char_rom_path) ||
-            !discover_rom_path(
-                dirs[i],
-                "kernal",
-                C64M_KERNAL_ROM_SIZE,
-                &options->kernal_rom_path) ||
-            !discover_rom_path(
-                dirs[i],
-                "1541",
-                C64M_SYSTEM_ROM_SIZE,
-                &options->rom1541_path)) {
+    if (target == NULL) {
+        return false;
+    }
+    if (*target != NULL && path_is_existing_file(*target)) {
+        return true;
+    }
+
+    prior = *target;
+    *target = NULL;
+    for (i = 0; i < root_count; ++i) {
+        if (!discover_rom_path(roots[i], rom_name, expected_size, target)) {
+            *target = prior;
+            return false;
+        }
+        if (*target != NULL) {
+            free(prior);
+            return true;
+        }
+    }
+    *target = prior;
+    return true;
+}
+
+static bool append_discover_root(
+    char roots[][PATH_MAX],
+    size_t roots_cap,
+    size_t *root_count,
+    const char *root)
+{
+    size_t i;
+
+    if (root == NULL || root[0] == '\0' || *root_count >= roots_cap) {
+        return true;
+    }
+    for (i = 0; i < *root_count; ++i) {
+        if (strcmp(roots[i], root) == 0) {
+            return true;
+        }
+    }
+    if (!copy_path(roots[*root_count], PATH_MAX, root)) {
+        return false;
+    }
+    (*root_count)++;
+    return true;
+}
+
+static bool append_discover_root_and_rom_subdirs(
+    char roots[][PATH_MAX],
+    size_t roots_cap,
+    size_t *root_count,
+    const char *base)
+{
+    char child[PATH_MAX];
+
+    if (base == NULL || base[0] == '\0') {
+        return true;
+    }
+    if (!append_discover_root(roots, roots_cap, root_count, base)) {
+        return false;
+    }
+    if (!join_path_buffer(child, sizeof(child), base, "rom")) {
+        return false;
+    }
+    if (!append_discover_root(roots, roots_cap, root_count, child)) {
+        return false;
+    }
+    if (!join_path_buffer(child, sizeof(child), base, "roms")) {
+        return false;
+    }
+    return append_discover_root(roots, roots_cap, root_count, child);
+}
+
+/*
+ * Fill any still-unset ROM paths by scanning well-known locations, in order:
+ *   1. CWD, ./rom, ./roms
+ *   2. directory of the executable, and rom/roms under it
+ *   3. parent of the executable (build/c64m with ROMs in the project root)
+ *   4. directory of the INI (when known), and rom/roms under it
+ *
+ * Existing non-NULL targets are left alone (discover_rom_path no-ops on them).
+ */
+static bool discover_default_rom_paths(app_options *options, const char *exe_dir)
+{
+    char roots[16][PATH_MAX];
+    size_t root_count = 0;
+    char ini_dir[PATH_MAX];
+    char parent[PATH_MAX];
+    char *slash;
+
+    if (!append_discover_root_and_rom_subdirs(roots, 16, &root_count, ".")) {
+        return false;
+    }
+
+    if (exe_dir != NULL && exe_dir[0] != '\0') {
+        if (!append_discover_root_and_rom_subdirs(roots, 16, &root_count, exe_dir)) {
+            return false;
+        }
+        if (copy_path(parent, sizeof(parent), exe_dir)) {
+            slash = strrchr(parent, '/');
+            if (slash != NULL && slash != parent) {
+                *slash = '\0';
+                if (!append_discover_root_and_rom_subdirs(roots, 16, &root_count, parent)) {
+                    return false;
+                }
+            }
+        }
+    }
+    if (options != NULL && options->ini_path != NULL && options->ini_path[0] != '\0' &&
+        ini_directory_absolute(options, ini_dir, sizeof(ini_dir))) {
+        if (!append_discover_root_and_rom_subdirs(roots, 16, &root_count, ini_dir)) {
             return false;
         }
     }
 
     {
-        /* Match the ini-load default: a lone combined system ROM means single-ROM
-           mode; a basic+kernal pair means separate. */
-        bool have_system = options->system_rom_path != NULL && options->system_rom_path[0] != '\0';
-        bool have_basic = options->basic_rom_path != NULL && options->basic_rom_path[0] != '\0';
-        bool have_kernal = options->kernal_rom_path != NULL && options->kernal_rom_path[0] != '\0';
-        options->rom_single_system = have_system && !(have_basic && have_kernal);
+        /* Only derive single_system when discovery is the source of the CPU ROM
+           set. If the INI (or caller) already supplied any of system/basic/kernal
+           that open (or that we keep as configured), keep the existing flag. */
+        bool had_open_cpu_roms =
+            (options->system_rom_path != NULL &&
+             path_is_existing_file(options->system_rom_path)) ||
+            (options->basic_rom_path != NULL &&
+             path_is_existing_file(options->basic_rom_path)) ||
+            (options->kernal_rom_path != NULL &&
+             path_is_existing_file(options->kernal_rom_path));
+        bool had_any_cpu_config =
+            (options->system_rom_path != NULL && options->system_rom_path[0] != '\0') ||
+            (options->basic_rom_path != NULL && options->basic_rom_path[0] != '\0') ||
+            (options->kernal_rom_path != NULL && options->kernal_rom_path[0] != '\0');
+
+        if (!fill_rom_path_from_roots(
+                &options->system_rom_path,
+                "system",
+                C64M_SYSTEM_ROM_SIZE,
+                roots,
+                root_count) ||
+            !fill_rom_path_from_roots(
+                &options->basic_rom_path,
+                "basic",
+                C64M_BASIC_ROM_SIZE,
+                roots,
+                root_count) ||
+            !fill_rom_path_from_roots(
+                &options->char_rom_path,
+                "character",
+                C64M_CHARACTER_ROM_SIZE,
+                roots,
+                root_count) ||
+            !fill_rom_path_from_roots(
+                &options->kernal_rom_path,
+                "kernal",
+                C64M_KERNAL_ROM_SIZE,
+                roots,
+                root_count) ||
+            !fill_rom_path_from_roots(
+                &options->rom1541_path,
+                "1541",
+                C64M_SYSTEM_ROM_SIZE,
+                roots,
+                root_count)) {
+            return false;
+        }
+
+        /* Derive only when nothing was configured and discovery filled the set
+           (classic --noini / missing-ini case). Do not stomp an INI flag. */
+        if (!had_any_cpu_config && !had_open_cpu_roms) {
+            bool have_system =
+                options->system_rom_path != NULL && options->system_rom_path[0] != '\0';
+            bool have_basic =
+                options->basic_rom_path != NULL && options->basic_rom_path[0] != '\0';
+            bool have_kernal =
+                options->kernal_rom_path != NULL && options->kernal_rom_path[0] != '\0';
+            options->rom_single_system = have_system && !(have_basic && have_kernal);
+        }
     }
 
     return true;
@@ -848,16 +1172,16 @@ static bool disk_slot_format_list(
     out[0] = '\0';
 
     for (j = 0; j < slot->count; ++j) {
-        char rel[PATH_MAX];
+        char stored[PATH_MAX];
         int written;
 
-        if (!app_options_path_relative_to_ini(options, slot->paths[j], rel, sizeof(rel))) {
-            if (!copy_path(rel, sizeof(rel), slot->paths[j])) {
+        if (!path_for_ini_storage(options, slot->paths[j], stored, sizeof(stored))) {
+            if (!copy_path(stored, sizeof(stored), slot->paths[j])) {
                 return false;
             }
         }
 
-        written = snprintf(out + used, out_size - used, "%s%s", used > 0 ? "," : "", rel);
+        written = snprintf(out + used, out_size - used, "%s%s", used > 0 ? "," : "", stored);
         if (written < 0 || (size_t)written >= out_size - used) {
             return false;
         }
@@ -1038,7 +1362,8 @@ static const char *const browse_dir_keys[APP_BROWSE_DIR_COUNT] = {
 
 /* Write the ROM file paths and the single/separate-ROM flag into cfg. Empty or
    unset paths remove their key so a cleared field disappears from the INI. Shared
-   by the full-shutdown save and the "Save Paths Only" save. */
+   by the full-shutdown save and the "Save Paths Only" save. Paths near the INI
+   are stored relative; far absolute paths stay absolute. */
 static void config_write_rom_config(config *cfg, const app_options *options)
 {
     struct {
@@ -1055,7 +1380,12 @@ static void config_write_rom_config(config *cfg, const app_options *options)
 
     for (i = 0; i < sizeof(roms) / sizeof(roms[0]); ++i) {
         if (roms[i].value != NULL && roms[i].value[0] != '\0') {
-            config_set(cfg, "roms", roms[i].key, roms[i].value);
+            char storage[PATH_MAX];
+            if (path_for_ini_storage(options, roms[i].value, storage, sizeof(storage))) {
+                config_set(cfg, "roms", roms[i].key, storage);
+            } else {
+                config_set(cfg, "roms", roms[i].key, roms[i].value);
+            }
         } else {
             config_remove_prefix(cfg, "roms", roms[i].key);
         }
@@ -1143,7 +1473,7 @@ static void apply_config(app_options *options, config *cfg)
         value = config_get(cfg, "roms", "basic");
     }
     if (value != NULL) {
-        replace_string(&options->basic_rom_path, value);
+        replace_string_from_ini(options, &options->basic_rom_path, value);
     }
     value = config_get(cfg, "rom", "char");
     if (value == NULL) {
@@ -1156,28 +1486,28 @@ static void apply_config(app_options *options, config *cfg)
         value = config_get(cfg, "roms", "character");
     }
     if (value != NULL) {
-        replace_string(&options->char_rom_path, value);
+        replace_string_from_ini(options, &options->char_rom_path, value);
     }
     value = config_get(cfg, "rom", "kernal");
     if (value == NULL) {
         value = config_get(cfg, "roms", "kernal");
     }
     if (value != NULL) {
-        replace_string(&options->kernal_rom_path, value);
+        replace_string_from_ini(options, &options->kernal_rom_path, value);
     }
     value = config_get(cfg, "rom", "system");
     if (value == NULL) {
         value = config_get(cfg, "roms", "system");
     }
     if (value != NULL) {
-        replace_string(&options->system_rom_path, value);
+        replace_string_from_ini(options, &options->system_rom_path, value);
     }
     value = config_get(cfg, "rom", "1541");
     if (value == NULL) {
         value = config_get(cfg, "roms", "1541");
     }
     if (value != NULL) {
-        replace_string(&options->rom1541_path, value);
+        replace_string_from_ini(options, &options->rom1541_path, value);
     }
 
     {
@@ -1250,12 +1580,7 @@ static void apply_config(app_options *options, config *cfg)
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
-        char abs_path[PATH_MAX];
-        if (path_absolute_from_ini(options, value, abs_path, sizeof(abs_path))) {
-            replace_string(&options->assembler_file, abs_path);
-        } else {
-            replace_string(&options->assembler_file, value);
-        }
+        replace_string_from_ini(options, &options->assembler_file, value);
     }
     value = config_get(cfg, "assembler", "address");
     if (value != NULL) {
@@ -1295,7 +1620,7 @@ static void apply_config(app_options *options, config *cfg)
     for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
         value = config_get(cfg, "browse", browse_dir_keys[i]);
         if (value != NULL && value[0] != '\0') {
-            replace_string(&options->browse_dirs[i], value);
+            replace_string_from_ini(options, &options->browse_dirs[i], value);
         }
     }
     /* Migrate the pre-unification [state] quicksave_folder into the snapshot slot
@@ -1304,7 +1629,8 @@ static void apply_config(app_options *options, config *cfg)
             options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT][0] == '\0') {
         value = config_get(cfg, "state", "quicksave_folder");
         if (value != NULL && value[0] != '\0') {
-            replace_string(&options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT], value);
+            replace_string_from_ini(
+                options, &options->browse_dirs[APP_BROWSE_DIR_SNAPSHOT], value);
         }
     }
 }
@@ -1709,8 +2035,19 @@ bool app_options_copy(app_options *dest, const app_options *src)
 bool app_options_load_startup(app_options *options, int argc, char **argv)
 {
     config *cfg = NULL;
+    char exe_dir[PATH_MAX];
+    const char *exe_dir_arg = NULL;
 
     app_options_init(options);
+
+    /*
+     * Capture the executable directory before argparse rewrites argv[] (it
+     * compact-shifts remaining non-options over argv[0]).
+     */
+    if (argv != NULL && argc > 0 && argv[0] != NULL &&
+        resolve_argv0_directory(argv[0], exe_dir, sizeof(exe_dir))) {
+        exe_dir_arg = exe_dir;
+    }
 
     if (!preparse_ini_options(options, argc, argv)) {
         return false;
@@ -1728,11 +2065,18 @@ bool app_options_load_startup(app_options *options, int argc, char **argv)
         return false;
     }
 
-    if (!options->defaults &&
-        (!options->use_ini || cfg == NULL) &&
-        !discover_default_rom_paths(options)) {
-        config_destroy(cfg);
-        return false;
+    /*
+     * ROM friendliness: relative INI keys are already absolutized against the
+     * INI directory. Fill any unset or unopenable ROM path by scanning CWD,
+     * the executable tree, and the INI tree for standard ROM names. Always run
+     * (unless --defaults) so a broken key or a no-INI launch still finds ROMs
+     * next to the binary.
+     */
+    if (!options->defaults) {
+        if (!discover_default_rom_paths(options, exe_dir_arg)) {
+            config_destroy(cfg);
+            return false;
+        }
     }
 
     config_destroy(cfg);
@@ -1845,9 +2189,9 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_bool(cfg, "disk", "show_disk_leds", options->show_disk_leds);
 
     if (options->assembler_file != NULL && options->assembler_file[0] != '\0') {
-        char rel_path[PATH_MAX];
-        if (app_options_path_relative_to_ini(options, options->assembler_file, rel_path, sizeof(rel_path))) {
-            config_set(cfg, "assembler", "file", rel_path);
+        char storage[PATH_MAX];
+        if (path_for_ini_storage(options, options->assembler_file, storage, sizeof(storage))) {
+            config_set(cfg, "assembler", "file", storage);
         }
     }
     if (options->assembler_address != NULL && options->assembler_address[0] != '\0') {
@@ -1871,7 +2215,13 @@ bool app_options_save_shutdown(const app_options *options)
         int i;
         for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
             if (options->browse_dirs[i] != NULL && options->browse_dirs[i][0] != '\0') {
-                config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+                char storage[PATH_MAX];
+                if (path_for_ini_storage(
+                        options, options->browse_dirs[i], storage, sizeof(storage))) {
+                    config_set(cfg, "browse", browse_dir_keys[i], storage);
+                } else {
+                    config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+                }
             }
         }
     }
@@ -1904,7 +2254,13 @@ bool app_options_save_paths_only(const app_options *options)
 
     for (i = 0; i < APP_BROWSE_DIR_COUNT; ++i) {
         if (options->browse_dirs[i] != NULL && options->browse_dirs[i][0] != '\0') {
-            config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+            char storage[PATH_MAX];
+            if (path_for_ini_storage(
+                    options, options->browse_dirs[i], storage, sizeof(storage))) {
+                config_set(cfg, "browse", browse_dir_keys[i], storage);
+            } else {
+                config_set(cfg, "browse", browse_dir_keys[i], options->browse_dirs[i]);
+            }
         } else {
             config_remove_prefix(cfg, "browse", browse_dir_keys[i]);
         }

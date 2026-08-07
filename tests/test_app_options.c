@@ -197,12 +197,34 @@ static bool file_contains(const char *path, const char *needle) {
 
 static void test_rom_paths_from_ini(void) {
     app_options options;
+    char cwd[1024];
+    char expected_basic[1024];
+    char expected_char[1024];
+    char expected_kernal[1024];
+    char expected_system[1024];
     char *argv[] = {
         "test_app_options",
         "--inifile",
         "test_app_options.ini",
     };
 
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+    snprintf(expected_basic, sizeof(expected_basic), "%s/roms/basic.rom", cwd);
+    snprintf(expected_char, sizeof(expected_char), "%s/roms/characters.rom", cwd);
+    snprintf(expected_kernal, sizeof(expected_kernal), "%s/roms/kernal.rom", cwd);
+    snprintf(expected_system, sizeof(expected_system), "%s/roms/64c.rom", cwd);
+
+    /* Create the files so discovery does not replace configured paths with the
+       project-tree ROMs found relative to the test binary. */
+    c64m_mkdir("roms", 0777);
+    write_sized_file("roms/basic.rom", 8192);
+    write_sized_file("roms/characters.rom", 4096);
+    write_sized_file("roms/kernal.rom", 8192);
+    write_sized_file("roms/64c.rom", 16384);
     write_ini("test_app_options.ini");
 
     if (!app_options_load_startup(&options, 3, argv)) {
@@ -210,13 +232,286 @@ static void test_rom_paths_from_ini(void) {
         exit(1);
     }
 
-    expect_string("basic rom path", "roms/basic.rom", options.basic_rom_path);
-    expect_string("char rom path", "roms/characters.rom", options.char_rom_path);
-    expect_string("kernal rom path", "roms/kernal.rom", options.kernal_rom_path);
-    expect_string("system rom path", "roms/64c.rom", options.system_rom_path);
+    /* Relative [roms] keys resolve against the INI directory (here: CWD). */
+    normalize_path(options.basic_rom_path);
+    normalize_path(options.char_rom_path);
+    normalize_path(options.kernal_rom_path);
+    normalize_path(options.system_rom_path);
+    expect_string("basic rom path", expected_basic, options.basic_rom_path);
+    expect_string("char rom path", expected_char, options.char_rom_path);
+    expect_string("kernal rom path", expected_kernal, options.kernal_rom_path);
+    expect_string("system rom path", expected_system, options.system_rom_path);
 
     app_options_destroy(&options);
     remove("test_app_options.ini");
+    remove("roms/basic.rom");
+    remove("roms/characters.rom");
+    remove("roms/kernal.rom");
+    remove("roms/64c.rom");
+    c64m_rmdir("roms");
+}
+
+/* Launch from a foreign CWD with -i pointing at an install tree: relative
+   ROM keys must open against the INI directory, not CWD. */
+static void test_rom_paths_relative_to_ini_from_foreign_cwd(void) {
+    app_options options;
+    char cwd[1024];
+    char foreign[1024];
+    char ini_path[1024];
+    char expected_char[1024];
+    char expected_system[1024];
+    char *argv[3];
+    FILE *file;
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_rom_foreign", 0777);
+    c64m_mkdir("test_rom_foreign/install", 0777);
+    c64m_mkdir("test_rom_foreign/install/roms", 0777);
+    c64m_mkdir("test_rom_foreign/project", 0777);
+    write_sized_file("test_rom_foreign/install/roms/character.rom", 4096);
+    write_sized_file("test_rom_foreign/install/roms/system.rom", 16384);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_rom_foreign/install/c64m.ini", cwd);
+    file = fopen(ini_path, "w");
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", ini_path);
+        exit(1);
+    }
+    fputs("[roms]\nsingle_system=true\ncharacter=roms/character.rom\n"
+          "system=roms/system.rom\n", file);
+    fclose(file);
+
+    snprintf(foreign, sizeof(foreign), "%s/test_rom_foreign/project", cwd);
+    if (c64m_chdir(foreign) != 0) {
+        fprintf(stderr, "failed to enter foreign cwd\n");
+        exit(1);
+    }
+
+    argv[0] = "test_app_options";
+    argv[1] = "--inifile";
+    argv[2] = ini_path;
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "foreign-cwd load_startup failed\n");
+        c64m_chdir(cwd);
+        exit(1);
+    }
+
+    snprintf(expected_char, sizeof(expected_char),
+             "%s/test_rom_foreign/install/roms/character.rom", cwd);
+    snprintf(expected_system, sizeof(expected_system),
+             "%s/test_rom_foreign/install/roms/system.rom", cwd);
+    normalize_path(options.char_rom_path);
+    normalize_path(options.system_rom_path);
+    expect_string("foreign cwd char rom", expected_char, options.char_rom_path);
+    expect_string("foreign cwd system rom", expected_system, options.system_rom_path);
+    expect_bool("foreign cwd single_system", 1, options.rom_single_system);
+
+    app_options_destroy(&options);
+    if (c64m_chdir(cwd) != 0) {
+        fprintf(stderr, "failed to restore cwd\n");
+        exit(1);
+    }
+    remove(ini_path);
+    remove("test_rom_foreign/install/roms/character.rom");
+    remove("test_rom_foreign/install/roms/system.rom");
+    c64m_rmdir("test_rom_foreign/install/roms");
+    c64m_rmdir("test_rom_foreign/install");
+    c64m_rmdir("test_rom_foreign/project");
+    c64m_rmdir("test_rom_foreign");
+}
+
+/* No INI: ROMs live next to the executable (or in exe/roms), not under CWD. */
+static void test_rom_discovery_beside_exe(void) {
+    app_options options;
+    char cwd[1024];
+    char foreign[1024];
+    char exe_path[1024];
+    char expected_char[1024];
+    char expected_system[1024];
+    char *argv[2];
+    FILE *exe;
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_rom_exe", 0777);
+    c64m_mkdir("test_rom_exe/bin", 0777);
+    c64m_mkdir("test_rom_exe/roms", 0777);
+    c64m_mkdir("test_rom_exe/project", 0777);
+    write_sized_file("test_rom_exe/roms/character.rom", 4096);
+    write_sized_file("test_rom_exe/roms/system.rom", 16384);
+    /* realpath(argv0) needs a real file at the "executable" path. */
+    snprintf(exe_path, sizeof(exe_path), "%s/test_rom_exe/bin/c64m", cwd);
+    exe = fopen(exe_path, "wb");
+    if (!exe) {
+        fprintf(stderr, "failed to create fake exe\n");
+        exit(1);
+    }
+    fputc(0, exe);
+    fclose(exe);
+
+    snprintf(foreign, sizeof(foreign), "%s/test_rom_exe/project", cwd);
+    if (c64m_chdir(foreign) != 0) {
+        fprintf(stderr, "failed to enter foreign cwd\n");
+        exit(1);
+    }
+
+    argv[0] = exe_path;
+    argv[1] = "--noini";
+    if (!app_options_load_startup(&options, 2, argv)) {
+        fprintf(stderr, "exe-relative discovery load failed\n");
+        c64m_chdir(cwd);
+        exit(1);
+    }
+
+    /* Parent of bin/ is test_rom_exe; roms/ lives there. */
+    snprintf(expected_char, sizeof(expected_char),
+             "%s/test_rom_exe/roms/character.rom", cwd);
+    snprintf(expected_system, sizeof(expected_system),
+             "%s/test_rom_exe/roms/system.rom", cwd);
+    normalize_path(options.char_rom_path);
+    normalize_path(options.system_rom_path);
+    expect_string("exe-relative char rom", expected_char, options.char_rom_path);
+    expect_string("exe-relative system rom", expected_system, options.system_rom_path);
+    expect_bool("exe-relative single_system", 1, options.rom_single_system);
+
+    app_options_destroy(&options);
+    if (c64m_chdir(cwd) != 0) {
+        fprintf(stderr, "failed to restore cwd\n");
+        exit(1);
+    }
+    remove(exe_path);
+    remove("test_rom_exe/roms/character.rom");
+    remove("test_rom_exe/roms/system.rom");
+    c64m_rmdir("test_rom_exe/roms");
+    c64m_rmdir("test_rom_exe/bin");
+    c64m_rmdir("test_rom_exe/project");
+    c64m_rmdir("test_rom_exe");
+}
+
+/* Absolute ROM path far from the INI tree (more than two .. hops) stays absolute. */
+static void test_absolute_rom_outside_ini_stays_absolute_on_save(void) {
+    app_options options;
+    char cwd[1024];
+    char ini_path[1024];
+    char outside_rom[1024];
+    char *argv[3];
+    FILE *file;
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    /* Deep INI dir so reaching a sibling top-level folder needs >2 leading ... */
+    c64m_mkdir("test_rom_abs", 0777);
+    c64m_mkdir("test_rom_abs/configs", 0777);
+    c64m_mkdir("test_rom_abs/configs/deep", 0777);
+    c64m_mkdir("test_rom_far", 0777);
+    write_sized_file("test_rom_far/character.rom", 4096);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_rom_abs/configs/deep/c64m.ini", cwd);
+    snprintf(outside_rom, sizeof(outside_rom), "%s/test_rom_far/character.rom", cwd);
+    file = fopen(ini_path, "w");
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", ini_path);
+        exit(1);
+    }
+    fputs("[roms]\n", file);
+    fclose(file);
+
+    argv[0] = "test_app_options";
+    argv[1] = "--inifile";
+    argv[2] = ini_path;
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "abs-rom load failed\n");
+        exit(1);
+    }
+    app_options_set_string(&options.char_rom_path, outside_rom);
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "abs-rom save failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (!file_contains(ini_path, outside_rom)) {
+        fprintf(stderr, "absolute ROM path outside INI tree was relativized\n");
+        exit(1);
+    }
+
+    remove(ini_path);
+    remove(outside_rom);
+    c64m_rmdir("test_rom_abs/configs/deep");
+    c64m_rmdir("test_rom_abs/configs");
+    c64m_rmdir("test_rom_abs");
+    c64m_rmdir("test_rom_far");
+}
+
+/* Absolute ROM under the INI directory is saved as a short relative path. */
+static void test_absolute_rom_under_ini_saved_relative(void) {
+    app_options options;
+    char cwd[1024];
+    char ini_path[1024];
+    char abs_rom[1024];
+    char *argv[3];
+    FILE *file;
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+
+    c64m_mkdir("test_rom_under", 0777);
+    c64m_mkdir("test_rom_under/roms", 0777);
+    write_sized_file("test_rom_under/roms/character.rom", 4096);
+
+    snprintf(ini_path, sizeof(ini_path), "%s/test_rom_under/c64m.ini", cwd);
+    snprintf(abs_rom, sizeof(abs_rom), "%s/test_rom_under/roms/character.rom", cwd);
+    file = fopen(ini_path, "w");
+    if (!file) {
+        fprintf(stderr, "failed to create %s\n", ini_path);
+        exit(1);
+    }
+    fputs("[roms]\n", file);
+    fclose(file);
+
+    argv[0] = "test_app_options";
+    argv[1] = "--inifile";
+    argv[2] = ini_path;
+    if (!app_options_load_startup(&options, 3, argv)) {
+        fprintf(stderr, "under-ini rom load failed\n");
+        exit(1);
+    }
+    app_options_set_string(&options.char_rom_path, abs_rom);
+    if (!app_options_save_shutdown(&options)) {
+        fprintf(stderr, "under-ini rom save failed\n");
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    if (!file_contains(ini_path, "character=roms/character.rom")) {
+        fprintf(stderr, "ROM under INI dir was not saved relative\n");
+        exit(1);
+    }
+    if (file_contains(ini_path, abs_rom)) {
+        fprintf(stderr, "absolute path leaked into INI for under-dir ROM\n");
+        exit(1);
+    }
+
+    remove(ini_path);
+    remove("test_rom_under/roms/character.rom");
+    c64m_rmdir("test_rom_under/roms");
+    c64m_rmdir("test_rom_under");
 }
 
 static void test_rom_paths_empty_without_ini(void) {
@@ -525,6 +820,8 @@ static void test_config_turbo_speeds_ignores_runtime_turbo(void) {
 
 static void test_phase14_config_saved_to_ini(void) {
     app_options options;
+    char cwd[1024];
+    char expected_states[1024];
     char *argv[] = {
         "test_app_options",
         "--noini",
@@ -537,6 +834,13 @@ static void test_phase14_config_saved_to_ini(void) {
         "--inifile",
         "test_phase14_save.ini",
     };
+
+    if (c64m_getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "failed to read cwd\n");
+        exit(1);
+    }
+    normalize_path(cwd);
+    snprintf(expected_states, sizeof(expected_states), "%s/states", cwd);
 
     write_legacy_runtime_turbo_ini("test_phase14_save.ini");
     if (!app_options_load_startup(&options, 5, argv)) {
@@ -569,6 +873,10 @@ static void test_phase14_config_saved_to_ini(void) {
         fprintf(stderr, "legacy runtime turbo was not removed on save\n");
         exit(1);
     }
+    if (!file_contains("test_phase14_save.ini", "snapshot=states")) {
+        fprintf(stderr, "snapshot browse dir was not saved relative\n");
+        exit(1);
+    }
 
     if (!app_options_load_startup(&options, 3, load_argv)) {
         fprintf(stderr, "app_options_load_startup after save failed\n");
@@ -585,7 +893,8 @@ static void test_phase14_config_saved_to_ini(void) {
     expect_bool("saved remember", 1, options.remember);
     expect_int("saved scroll wheel lines", 9, options.scroll_wheel_lines);
     expect_string("saved turbo speeds", "5,10", options.turbo_multipliers);
-    expect_string("saved snapshot browse dir", "states", options.browse_dirs[5]);
+    normalize_path(options.browse_dirs[5]);
+    expect_string("saved snapshot browse dir", expected_states, options.browse_dirs[5]);
     expect_string("saved symbol files", "symbols/main.sym", options.symbol_files);
 
     app_options_destroy(&options);
@@ -1298,6 +1607,10 @@ static void test_assembler_auto_adjust_segments_ini(void) {
 
 int main(void) {
     test_rom_paths_from_ini();
+    test_rom_paths_relative_to_ini_from_foreign_cwd();
+    test_rom_discovery_beside_exe();
+    test_absolute_rom_outside_ini_stays_absolute_on_save();
+    test_absolute_rom_under_ini_saved_relative();
     test_rom_paths_empty_without_ini();
     test_rom_paths_discovered_without_ini();
     test_rom_paths_discovered_when_default_ini_missing();
