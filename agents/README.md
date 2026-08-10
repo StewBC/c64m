@@ -77,6 +77,10 @@ Manual updates:
   
 Component handoffs:
 
+- `using-c64m.md` - **Consumer guide** for agents/scripts driving c64m over the
+  control port (recipes, gotchas, co-op). Portable brief for other projects;
+  maintain here when wire behavior scripts depend on changes. Deep contract:
+  `control-port.md`.
 - `machine.md` - C64 machine, CPU, bus, memory, interrupts, cartridges, snapshots
 - `vicii.md` - VIC-II timing, rendering, sprites, PAL/NTSC, BA/AEC/RDY
 - `cia.md` - CIA timers, interrupts, keyboard, joystick, IEC pins, TOD, serial
@@ -84,6 +88,7 @@ Component handoffs:
 - `disk-iec1541.md` - D64/T64/CRT host I/O and optional 1541 ROM/media path
 - `runtime-control.md` - runtime thread, commands, snapshots, control port
 - `control-port.md` - wire protocol, Python client, command reference, payloads
+  (implementer handoff; not the primary teaching doc — see `using-c64m.md`)
 - `frontend-debugger.md` - SDL/Nuklear UI, debugger, input, configuration, help
 - `tools.md` - assembler, disassembler, symbols, D64/T64/CRT/G64 parsers, util
 - `cpu-flight-recorder.md` - implemented always-on, bounded in-memory 6510
@@ -115,6 +120,13 @@ Component handoffs:
 - `vice-oracle.md` - VICE as display/timing oracle: `assets/prg/` load flags
   (`-autostartprgmode 1`, `-autoload`), **always `-VICIImodel 6569`**, binary
   monitor recipes, DISPLAY_GET alignment. Required before c64m-vs-VICE compares.
+- `debug-ergonomics-looklater.md` - **Not active work.** Ranked look-later ideas
+  (mem workshop fill/move/diff, live media session reconfig, state
+  checkpoint/rewind, frame gate / HW snaps) harvested from an a2m-v2 vs
+  AltirraBridge comparison. **BUT CHECK against this tree’s source before any
+  implementation** — c64m may already cover large parts (e.g. `step-frame`,
+  mount wire, VIC/CIA/frame rings). Sibling list:
+  `../a2m-v2/agents/backlog.md` E1–E4.
 
 Current baseline is 69/69 passing (includes `c64_snapshot_1541_midload`, the
 history integration test, the machine/runtime recorder tests, the guarded-

@@ -1,5 +1,8 @@
 # Control port: operational handoff
 
+**Using c64m from outside this tree?** Start with **`using-c64m.md`** (recipes,
+gotchas, co-op). This file is the implementer / full wire contract.
+
 This is the working guide for an agent or external script controlling c64m. The
 implementation is split between:
 
