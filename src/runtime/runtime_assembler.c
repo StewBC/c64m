@@ -209,8 +209,6 @@ static bool c64_assemble_file_ex(
 
     // The C64 host deliberately starts at the smallest portable profile.
     assembler_predefine(&assembler, "AM65", "0");
-    // Retain the old emulator-side define while sources migrate to AM65.
-    assembler_predefine(&assembler, "C64MASM", "0");
     assembler_set_cpu_profile(&assembler, ASM_CPU_6502);
     assembler_set_auto_adjust_segments(
         &assembler,
