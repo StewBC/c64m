@@ -286,6 +286,13 @@ to normal as soon as the term is changed. Both directions wrap around the full d
 Navigating to a new section via **Prev**, **Next**, or the index resets the search
 starting point to the top of that section.
 
+Matches are highlighted. The match you jumped to is drawn in black on a yellow band, and
+every other match in the section on screen is underlined in yellow. The highlight follows
+whatever is in the **Search:** field, so matches light up as you type and disappear when
+the field is cleared. The view scrolls so the current match sits about a third of the way
+down the content area. A match that falls across a line break is still found, but is not
+highlighted.
+
 Keyboard shortcuts active while the help overlay is open:
 
 | Key | Action |
