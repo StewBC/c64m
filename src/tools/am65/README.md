@@ -20,6 +20,38 @@ each assembly; an in-source directive affects subsequent lines. This lets c64m
 and Apple ][+ select 6502, Apple //e Enhanced select 65C02, and standalone users
 opt into Rockwell or WDC instructions explicitly.
 
+## Named scopes and output targets
+
+Named scopes provide namespaces, and symbols may be referenced with `::`:
+
+```asm
+.scope game
+main:
+    rts
+.endscope
+
+.word game::main
+```
+
+A named scope becomes a separate output target when it has `file=` or `dest=`:
+
+```asm
+.scope game file="game.bin" dest="map"
+    .org $6000
+    ; ...
+.endscope
+```
+
+The assembler core passes both attributes to its host. Standalone `am65` uses
+`file=` to create a binary and accepts but ignores `dest=`. Emulator hosts
+ignore `file=`, advertise and validate their own destination names, and place
+each emitted byte through an opaque host target. This keeps machine banking out
+of the shared assembler.
+
+Standalone `am65` predefines `AM65=1` and no machine symbol. Emulator hosts
+predefine `AM65=0` plus their machine symbol, currently `APPLE2=1` in a2m and
+`C64=1` in c64m.
+
 Regenerate `gperf.c` after changing `gperf.gperf`:
 
 ```sh

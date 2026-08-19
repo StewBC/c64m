@@ -981,6 +981,63 @@ static void dot_scope_parse_redirect(ASSEMBLER *as,
     }
 }
 
+static int dot_scope_destination_supported(
+    ASSEMBLER *as,
+    const char *dest,
+    int dest_len) {
+    int offset = 0;
+
+    if(!dest || as->cb.destination_name_count == 0 || !as->cb.destination_names) {
+        return 1;
+    }
+    while(offset < dest_len) {
+        int start;
+        int end;
+        size_t i;
+        int found = 0;
+
+        while(offset < dest_len && (dest[offset] == ' ' || dest[offset] == '\t')) {
+            offset++;
+        }
+        start = offset;
+        while(offset < dest_len && dest[offset] != ',') {
+            offset++;
+        }
+        end = offset;
+        while(end > start && (dest[end - 1] == ' ' || dest[end - 1] == '\t')) {
+            end--;
+        }
+        for(i = 0; i < as->cb.destination_name_count; i++) {
+            const char *candidate = as->cb.destination_names[i];
+            size_t candidate_len = candidate ? strlen(candidate) : 0;
+            if(candidate_len == (size_t)(end - start) &&
+               candidate_len > 0 &&
+               0 == asm_strnicmp(dest + start, candidate, candidate_len)) {
+                found = 1;
+                break;
+            }
+        }
+        if(!found) {
+            asm_err(as, ASM_ERR_RESOLVE,
+                    ".scope destination '%.*s' is not supported by this assembler host",
+                    end - start, dest + start);
+            return 0;
+        }
+        if(offset < dest_len && dest[offset] == ',') {
+            offset++;
+            if(offset == dest_len) {
+                asm_err(as, ASM_ERR_RESOLVE, ".scope dest= may not end with a comma");
+                return 0;
+            }
+        }
+    }
+    if(dest_len == 0) {
+        asm_err(as, ASM_ERR_RESOLVE, ".scope dest= may not be empty");
+        return 0;
+    }
+    return 1;
+}
+
 static void dot_scope(ASSEMBLER *as) {
     const char *name;
     int name_len;
@@ -1011,6 +1068,9 @@ static void dot_scope(ASSEMBLER *as) {
         }
         next_token(as);
         dot_scope_parse_redirect(as, &file_name, &file_len, &dest_name, &dest_len);
+        if(dest_name && !dot_scope_destination_supported(as, dest_name, dest_len)) {
+            return;
+        }
     } else {
         asm_err(as, ASM_ERR_RESOLVE, ".scope name must be an identifier");
         return;

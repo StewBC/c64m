@@ -48,6 +48,12 @@ typedef struct {
     asm_output_byte_fn output_byte;        // required
     asm_target_open_fn target_open;        // optional (NULL => .scope file=/dest= unsupported)
     asm_target_release_fn target_release;  // optional
+    // Optional, case-insensitive destination vocabulary. When non-empty, every
+    // comma-separated name in dest="..." must occur here before target_open is
+    // called. A host that does not interpret destinations (the am65 CLI) leaves
+    // this empty and may accept/ignore dest= for shared emulator source.
+    const char *const *destination_names;
+    size_t destination_name_count;
 } CB_ASM_CTX;
 
 typedef void (*assembler_symbol_cb)(
