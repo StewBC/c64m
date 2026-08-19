@@ -4,14 +4,19 @@
 #include "errorlog.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-typedef struct assembler_output_ctx {
-    c64_t *machine;
+typedef struct assembler_output_stats {
     uint16_t first_address;
     uint16_t last_address;
     uint32_t byte_count;
     bool has_output;
+} assembler_output_stats;
+
+typedef struct assembler_output_ctx {
+    c64_t *machine;
+    assembler_output_stats *stats;
 } assembler_output_ctx;
 
 typedef struct assembler_symbol_import {
@@ -29,20 +34,51 @@ typedef struct assembler_adjustment_format {
 
 static void runtime_assembler_output_byte(void *user, uint16_t addr, uint8_t val) {
     assembler_output_ctx *ctx = (assembler_output_ctx *)user;
+    assembler_output_stats *stats = ctx->stats;
     c64_debug_write_ram(ctx->machine, addr, val);
-    if (!ctx->has_output) {
-        ctx->first_address = addr;
-        ctx->last_address = addr;
-        ctx->has_output = true;
+    if (!stats->has_output) {
+        stats->first_address = addr;
+        stats->last_address = addr;
+        stats->has_output = true;
     } else {
-        if (addr < ctx->first_address) {
-            ctx->first_address = addr;
+        if (addr < stats->first_address) {
+            stats->first_address = addr;
         }
-        if (addr > ctx->last_address) {
-            ctx->last_address = addr;
+        if (addr > stats->last_address) {
+            stats->last_address = addr;
         }
     }
-    ctx->byte_count++;
+    stats->byte_count++;
+}
+
+static void *runtime_assembler_target_open(
+    void *user,
+    const char *name,
+    int name_len,
+    const char *file,
+    int file_len,
+    const char *dest,
+    int dest_len) {
+    assembler_output_ctx *host = (assembler_output_ctx *)user;
+    assembler_output_ctx *target =
+        (assembler_output_ctx *)calloc(1, sizeof(*target));
+
+    (void)name;
+    (void)name_len;
+    (void)file;
+    (void)file_len;
+    (void)dest;
+    (void)dest_len;
+    if (target != NULL) {
+        target->machine = host->machine;
+        target->stats = host->stats;
+    }
+    return target;
+}
+
+static void runtime_assembler_target_release(void *user, void *target) {
+    (void)user;
+    free(target);
 }
 
 static void runtime_assembler_import_symbol(const char *name, uint16_t address, void *user) {
@@ -172,9 +208,11 @@ static bool c64_assemble_file_ex(
     size_t error_size) {
     ERRORLOG log;
     ASSEMBLER assembler;
+    assembler_output_stats output_stats;
     assembler_output_ctx output_ctx;
     CB_ASM_CTX cb;
     bool ok = false;
+    static const char *const destination_names[] = {"map"};
 
     if (error != NULL && error_size > 0) {
         error[0] = '\0';
@@ -190,14 +228,19 @@ static bool c64_assemble_file_ex(
     }
 
     errlog_init(&log);
+    memset(&output_stats, 0, sizeof(output_stats));
     memset(&output_ctx, 0, sizeof(output_ctx));
     output_ctx.machine = machine;
+    output_ctx.stats = &output_stats;
     memset(&cb, 0, sizeof(cb));
     cb.user = &output_ctx;
     cb.default_target = &output_ctx;
     cb.output_byte = runtime_assembler_output_byte;
-    // No target_open: assembling live into machine RAM has no per-file targets,
-    // so a named `.scope file="..."` is rejected rather than silently ignored.
+    cb.target_open = runtime_assembler_target_open;
+    cb.target_release = runtime_assembler_target_release;
+    cb.destination_names = destination_names;
+    cb.destination_name_count =
+        sizeof(destination_names) / sizeof(destination_names[0]);
 
     if (assembler_init(&assembler, &log, &cb) != ASM_OK) {
         if (error != NULL && error_size > 0) {
@@ -209,6 +252,7 @@ static bool c64_assemble_file_ex(
 
     // The C64 host deliberately starts at the smallest portable profile.
     assembler_predefine(&assembler, "AM65", "0");
+    assembler_predefine(&assembler, "C64", "1");
     assembler_set_cpu_profile(&assembler, ASM_CPU_6502);
     assembler_set_auto_adjust_segments(
         &assembler,
@@ -249,15 +293,15 @@ static bool c64_assemble_file_ex(
     if (ok) {
         if (out_start_address != NULL) {
             *out_start_address =
-                output_ctx.has_output ? output_ctx.first_address : address;
+                output_stats.has_output ? output_stats.first_address : address;
         }
         if (out_end_address != NULL) {
-            *out_end_address = output_ctx.has_output
-                ? (uint16_t)(output_ctx.last_address + 1u)
+            *out_end_address = output_stats.has_output
+                ? (uint16_t)(output_stats.last_address + 1u)
                 : address;
         }
         if (out_byte_count != NULL) {
-            *out_byte_count = output_ctx.byte_count;
+            *out_byte_count = output_stats.byte_count;
         }
     }
     return ok;

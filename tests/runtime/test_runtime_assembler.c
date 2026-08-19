@@ -122,6 +122,69 @@ static int test_assemble_reports_errors(void) {
     return failures;
 }
 
+static int test_assemble_named_map_targets(void) {
+    char path[128];
+    char error[1024];
+    c64_t machine;
+    int failures = 0;
+    const char *source =
+        ".if AM65 .eq 0\n"
+        "    .if C64 .eq 1\n"
+        "        .scope mapped file=\"ignored.bin\" dest=\"MAP\"\n"
+        "            .org $4000\n"
+        "            .byte $c6\n"
+        "        .endscope\n"
+        "        .scope file_only file=\"also-ignored.bin\"\n"
+        "            .org $4001\n"
+        "            .byte $f1\n"
+        "        .endscope\n"
+        "    .endif\n"
+        ".endif\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+    c64_init(&machine);
+    if (!c64_assemble_file(
+            &machine, NULL, path, 0x0801, "current", error, sizeof(error))) {
+        fprintf(stderr, "named map target assembly failed: %s\n", error);
+        failures++;
+    } else {
+        failures += expect_u8(
+            "map target byte", 0xc6, c64_debug_read_ram(&machine, 0x4000));
+        failures += expect_u8(
+            "file-only map byte", 0xf1, c64_debug_read_ram(&machine, 0x4001));
+    }
+    c64m_test_remove_file(path);
+    return failures;
+}
+
+static int test_assemble_rejects_non_map_target(void) {
+    char path[128];
+    char error[1024];
+    c64_t machine;
+    int failures = 0;
+    const char *source =
+        ".scope invalid dest=\"main\"\n"
+        "    .byte $ff\n"
+        ".endscope\n";
+
+    if (write_source(path, sizeof(path), source) != 0) {
+        return 1;
+    }
+    c64_init(&machine);
+    if (c64_assemble_file(
+            &machine, NULL, path, 0x0801, "current", error, sizeof(error))) {
+        fprintf(stderr, "unsupported C64 destination unexpectedly succeeded\n");
+        failures++;
+    } else if (strstr(error, "not supported") == NULL) {
+        fprintf(stderr, "unsupported destination error mismatch: %s\n", error);
+        failures++;
+    }
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 static int test_assemble_cpu_profile_defaults(void) {
     char path[128];
     char error[1024];
@@ -294,6 +357,8 @@ int main(void) {
 
     failures += test_assemble_imports_symbols();
     failures += test_assemble_reports_errors();
+    failures += test_assemble_named_map_targets();
+    failures += test_assemble_rejects_non_map_target();
     failures += test_assemble_cpu_profile_defaults();
     failures += test_assemble_reports_emitted_extent();
     failures += test_assemble_auto_adjusts_segments();

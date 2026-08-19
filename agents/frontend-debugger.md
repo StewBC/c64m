@@ -64,7 +64,10 @@ updates BASIC pointers, and preserves non-printable PETSCII in named/hex escapes
 `manual/manual.md` is compiled into help content by `tools/gen_help.py`; keep that
 file ASCII/PETSCII-safe. The shared assembler supports the in-emulator path and the
 `am65` CLI, scopes/segments, macros, conditionals, expression `*` as the current
-instruction address, named output targets, and `AM65` predefined detection.
+instruction address, named output targets, and host predefines. In-emulator
+assembly exposes only `dest="map"`, ignores `file=`, and predefines `AM65=0` and
+`C64=1`; standalone `am65` uses `file=`, ignores `dest=`, and defines `AM65=1`
+without a machine symbol.
 `[assembler] auto_adjust_segments=yes` enables bounded overlap-layout retries for
 emulator assembly and reports the temporary addresses in an Assembly Adjustments
 dialog after success.

@@ -4,7 +4,9 @@
 
 - `src/tools/am65`: Git-subtree copy of the neutral two-pass assembler library
   used by the frontend, runtime, and standalone `am65`; output-target callbacks
-  are optional and absent in the in-emulator host. Its opt-in segment
+  are optional. The C64 in-emulator host advertises only `map`, ignores `file=`,
+  and writes named targets to live RAM; any other `dest=` name is an assembly
+  error. Its opt-in segment
   auto-adjust mode performs up to three
   fresh pass-1 layout retries using structured overlap suggestions; pass 2 only
   runs after layout stabilizes, and hosts can walk the applied address map.
@@ -30,8 +32,9 @@ The parser boundaries are deliberately simple: D64/T64/CRT/G64 return parsed or
 decoded data; runtime decides whether to inject, mount, attach, or persist it. A
 format parser must not call runtime, SDL, or frontend code. The assembler library
 is likewise independent of the live machine; the runtime supplies its target
-callbacks, explicitly selects the 6502 profile, and the CLI supplies file-output
-targets. The subtree also supports opt-in `.65c02`, `.rockwell`, and `.wdc`
+callbacks, explicitly selects the 6502 profile, and predefines `AM65=0` plus
+`C64=1`; the CLI supplies file-output targets, predefines `AM65=1`, and does not
+define a machine. The subtree also supports opt-in `.65c02`, `.rockwell`, and `.wdc`
 profiles without changing the C64 default.
 
 ## Utilities

@@ -1159,7 +1159,7 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.macro name [args]`    | Define a macro with optional parameter list                  |
 | `.endmacro`             | End of macro definition                                      |
 | `.local name`           | Macro-local label; expanded to a unique name at call time    |
-| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `name` may be a bare identifier or a quoted identifier (`"name"`). `file=`/`dest=` redirect the scope's output to a separate file (command-line `am65` only) |
+| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `name` may be a bare identifier or a quoted identifier (`"name"`). `file=`/`dest=` create a host-resolved output target |
 | `.endscope`             | Close the innermost scope (and end any output redirect)     |
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
@@ -1318,7 +1318,7 @@ default behavior with `.strcode _`. Quoted escape sequences (`\n`, `\r`, `\t`, `
 `\\`, `\xNN`, `\0NN` octal) are processed in strings but are not passed through
 `.strcode`.
 
-### Output Redirection (Multiple Files)
+### Named Output Targets
 
 A named `.scope` can send its output to a separate file, so a single source can build
 several binaries in one pass -- a loader plus a game, a main program plus overlays, and
@@ -1342,15 +1342,20 @@ across files through the normal scope rules (`game::main`), so the loader can re
 addresses in the game and vice versa. An optional `dest="..."` names the target for
 tooling without binding it to a file name.
 
-Output redirection is honoured by the command-line assembler (`am65`, below). The
-in-emulator Assembler tab assembles into live RAM and has no per-file targets, so a
-`.scope` with `file=`/`dest=` reports an error there.
+The assembler core passes `file=` and `dest=` to its host. Command-line `am65` uses
+`file=` to create a separate binary and accepts but ignores `dest=`. A `dest=`-only
+scope therefore continues writing into its parent file image.
+
+The in-emulator C64 host ignores `file=` and accepts only `dest="map"`, which writes
+to live C64 RAM. A file-only target also defaults to `map`. Destination matching is
+case-insensitive; every other destination name is an assembly error.
 
 ### Build-Time Detection
 
 The define `AM65` distinguishes how the source is being assembled: it is `1` under the
-command-line `am65` tool and `0` when assembled by the in-emulator Assembler tab. Use
-it to switch behaviour between a live-poke session and a file build:
+command-line `am65` tool and `0` when assembled by the in-emulator Assembler tab. The
+emulator also predefines `C64=1`; standalone `am65` defines no machine symbol. Use
+these to switch behaviour between a live-poke session and a file build:
 
 ```
 .if AM65
@@ -1388,7 +1393,8 @@ am65 -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
 
 Each output file contains exactly the range of addresses the source emitted into.
 Named `.scope file="..."` targets are written to their own files (resolved relative to
-the current directory). `AM65` is predefined to `1`.
+the current directory). `dest=` is accepted but ignored. `AM65` is predefined to `1`;
+no emulator machine symbol is predefined.
 
 ```
 am65 -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
