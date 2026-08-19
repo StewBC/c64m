@@ -75,7 +75,9 @@ the hit - rows scrolled out of view are still laid out, so this works even when
 the estimate left the hit off-screen - and corrects the group scroll on the next
 frame, landing every hit a third of the way down the content area.
 `help_view_search()` runs the same search as the nav bar's arrows and is what
-`test_help_view` drives. The shared assembler supports the in-emulator path and the
+`test_help_view` drives. This overlay is shared with the a2m-v2 project
+(`../a2m-v2/src/frontend/help_view.*`); keep the two copies in step - they
+differ only in the palette macro names (`C64_HELP_*` vs `HELP_PALETTE_*`). The shared assembler supports the in-emulator path and the
 `am65` CLI, scopes/segments, macros, conditionals, expression `*` as the current
 instruction address, named output targets, and host predefines. In-emulator
 assembly exposes only `dest="map"`, ignores `file=`, and predefines `AM65=0` and
