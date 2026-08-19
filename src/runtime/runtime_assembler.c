@@ -73,7 +73,8 @@ static void runtime_assembler_format_errors(const ERRORLOG *log, char *error, si
     }
 
     for (size_t i = 0; i < log->log_array.items; i++) {
-        const ERROR_ENTRY *entry = ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
+        const ERROR_ENTRY *entry = AM65_ARRAY_GET(
+            (AM65_DYNARRAY *)&log->log_array, ERROR_ENTRY, i);
         int n;
 
         if (entry == NULL || entry->err_str == NULL) {
@@ -206,8 +207,11 @@ static bool c64_assemble_file_ex(
         return false;
     }
 
-    // Let source detect it is being assembled live in the emulator (vs the c64masm CLI).
+    // The C64 host deliberately starts at the smallest portable profile.
+    assembler_predefine(&assembler, "AM65", "0");
+    // Retain the old emulator-side define while sources migrate to AM65.
     assembler_predefine(&assembler, "C64MASM", "0");
+    assembler_set_cpu_profile(&assembler, ASM_CPU_6502);
     assembler_set_auto_adjust_segments(
         &assembler,
         options != NULL && options->auto_adjust_segments);

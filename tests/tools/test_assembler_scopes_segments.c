@@ -319,7 +319,7 @@ static int test_segment_auto_adjust_converges(void)
 static int errorlog_contains(const ERRORLOG *log, const char *needle)
 {
     for (size_t i = 0; i < log->log_array.items; i++) {
-        const ERROR_ENTRY *e = ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
+        const ERROR_ENTRY *e = AM65_ARRAY_GET(&log->log_array, ERROR_ENTRY, i);
         if (e->err_str && strstr(e->err_str, needle) != NULL) {
             return 1;
         }

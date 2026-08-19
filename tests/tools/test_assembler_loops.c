@@ -182,7 +182,7 @@ static int test_anon_label_bare_colon_error_message(void)
         fprintf(stderr, "bare anon ':': expected an assembly error\n");
         failures++;
     } else {
-        ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
+        ERROR_ENTRY *e = AM65_ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
         if (e->err_str == NULL ||
             (strstr(e->err_str, "'+' or '-'") == NULL &&
              strstr(e->err_str, ":+") == NULL)) {
@@ -294,7 +294,7 @@ static int test_org_below_start(void)
     if (assemble_file_at(path, &mem, &log, 0x8000) != ASM_OK) {
         fprintf(stderr, "org-below-start failed with %zu errors\n", log.log_array.items);
         for (size_t i = 0; i < log.log_array.items; i++) {
-            ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
+            ERROR_ENTRY *e = AM65_ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
             fprintf(stderr, "  [%zu] %s\n", i, e->err_str ? e->err_str : "?");
         }
         failures++;
@@ -330,7 +330,7 @@ static int test_star_below_start(void)
     if (assemble_file_at(path, &mem, &log, 0x8000) != ASM_OK) {
         fprintf(stderr, "star-below-start failed with %zu errors\n", log.log_array.items);
         for (size_t i = 0; i < log.log_array.items; i++) {
-            ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
+            ERROR_ENTRY *e = AM65_ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
             fprintf(stderr, "  [%zu] %s\n", i, e->err_str ? e->err_str : "?");
         }
         failures++;
@@ -388,7 +388,7 @@ static int test_relative_error_path(void)
         return 1;
     }
 
-    ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
+    ERROR_ENTRY *e = AM65_ARRAY_GET(&log.log_array, ERROR_ENTRY, 0);
     if (e == NULL || e->err_str == NULL) {
         fprintf(stderr, "relative-path: null error entry\n");
         failures++;

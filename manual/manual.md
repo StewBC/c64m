@@ -1159,7 +1159,7 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.macro name [args]`    | Define a macro with optional parameter list                  |
 | `.endmacro`             | End of macro definition                                      |
 | `.local name`           | Macro-local label; expanded to a unique name at call time    |
-| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `name` may be a bare identifier or a quoted identifier (`"name"`). `file=`/`dest=` redirect the scope's output to a separate file (command-line `c64masm` only) |
+| `.scope [name] [file="f"] [dest="d"]` | Open a scope namespace; anonymous if no name given. `name` may be a bare identifier or a quoted identifier (`"name"`). `file=`/`dest=` redirect the scope's output to a separate file (command-line `am65` only) |
 | `.endscope`             | Close the innermost scope (and end any output redirect)     |
 | `.proc name`            | Open a named procedure (a named scope)                       |
 | `.endproc`              | Close the innermost proc                                     |
@@ -1168,6 +1168,8 @@ The ternary form is `condition ? true-expr : false-expr`.
 | `.segment "n"`          | Activate the named segment; `.segment ""` returns to native mode |
 | `.6502`                 | Restrict to 6502 opcodes (default)                           |
 | `.65c02`                | Allow 65C02 opcodes                                          |
+| `.rockwell`             | Allow 65C02 plus Rockwell RMB/SMB and BBR/BBS operations     |
+| `.wdc`                  | Allow the Rockwell profile plus WDC WAI and STP              |
 
 **Paths:** `.include` and `.incbin` resolve relative to the directory of the including
 file.
@@ -1340,18 +1342,18 @@ across files through the normal scope rules (`game::main`), so the loader can re
 addresses in the game and vice versa. An optional `dest="..."` names the target for
 tooling without binding it to a file name.
 
-Output redirection is honoured by the command-line assembler (`c64masm`, below). The
+Output redirection is honoured by the command-line assembler (`am65`, below). The
 in-emulator Assembler tab assembles into live RAM and has no per-file targets, so a
 `.scope` with `file=`/`dest=` reports an error there.
 
 ### Build-Time Detection
 
-The define `C64MASM` distinguishes how the source is being assembled: it is `1` under the
-command-line `c64masm` tool and `0` when assembled by the in-emulator Assembler tab. Use
+The define `AM65` distinguishes how the source is being assembled: it is `1` under the
+command-line `am65` tool and `0` when assembled by the in-emulator Assembler tab. Use
 it to switch behaviour between a live-poke session and a file build:
 
 ```
-.if C64MASM
+.if AM65
     * = $0801           ; standalone build: normal load address
 .else
     * = $C000           ; live in the emulator: assemble into spare RAM
@@ -1361,14 +1363,15 @@ it to switch behaviour between a live-poke session and a file build:
 Additional build flags can be injected from the command line with `-D name[=value]`
 (see below) and tested the same way.
 
-### Command-Line Assembler (c64masm)
+### Command-Line Assembler (am65)
 
-`c64masm` is a standalone build of the same assembler, for use in scripts and makefiles.
+`am65` is a standalone build of the same assembler, for use in scripts and makefiles.
 It writes raw binary files rather than poking live memory.
 
 ```
-c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
-        [-D name[=value]]... [--auto-adjust-segments] [-v] [-h]
+am65 -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
+     [-C <6502|65c02|rockwell|wdc>] [-D name[=value]]...
+     [--auto-adjust-segments] [-v] [-h]
 ```
 
 | Switch            | Effect                                                             |
@@ -1377,6 +1380,7 @@ c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
 | `-o <outfile>`    | Binary output for the default (unnamed) target                    |
 | `-a <addr>`       | Origin/load address of the default target (default `$0000`; accepts `$hex`, `0xhex`, or decimal). Not needed if the source sets its own origin with `* =` / `.org` |
 | `-s <symfile\|->` | Write a symbol + segment listing; `-` sends it to stdout          |
+| `-C`, `--cpu <name>` | Select the initial CPU profile (default `6502`)               |
 | `-D name[=value]` | Predefine a text define (value defaults to `1`); repeatable       |
 | `-A`, `--auto-adjust-segments` | Retry overlapping pass-1 layouts up to three times using suggested starts |
 | `-v`              | Verbose: hex-dump each target's emitted bytes                     |
@@ -1384,10 +1388,10 @@ c64masm -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]
 
 Each output file contains exactly the range of addresses the source emitted into.
 Named `.scope file="..."` targets are written to their own files (resolved relative to
-the current directory). `C64MASM` is predefined to `1`.
+the current directory). `AM65` is predefined to `1`.
 
 ```
-c64masm -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
+am65 -i demo.asm -o loader.prg -a $0801 -D VERSION=3 -s symbols.txt
 ```
 
 ## Configure

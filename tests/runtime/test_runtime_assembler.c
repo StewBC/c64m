@@ -122,6 +122,47 @@ static int test_assemble_reports_errors(void) {
     return failures;
 }
 
+static int test_assemble_cpu_profile_defaults(void) {
+    char path[128];
+    char error[1024];
+    c64_t machine;
+    int failures = 0;
+    const char *portable_reject =
+        "* = $2000\n"
+        "    stz $10\n";
+    const char *explicit_65c02 =
+        ".65c02\n"
+        "* = $2000\n"
+        "    stz $10\n";
+
+    c64_init(&machine);
+    if (write_source(path, sizeof(path), portable_reject) != 0) {
+        return 1;
+    }
+    if (c64_assemble_file(
+            &machine, NULL, path, 0x2000, "current", error, sizeof(error))) {
+        fprintf(stderr, "C64 runtime unexpectedly accepted STZ by default\n");
+        failures++;
+    }
+    c64m_test_remove_file(path);
+
+    if (write_source(path, sizeof(path), explicit_65c02) != 0) {
+        return failures + 1;
+    }
+    if (!c64_assemble_file(
+            &machine, NULL, path, 0x2000, "current", error, sizeof(error))) {
+        fprintf(stderr, "explicit .65c02 assembly failed: %s\n", error);
+        failures++;
+    } else {
+        failures += expect_u8(
+            ".65c02 STZ opcode", 0x64, c64_debug_read_ram(&machine, 0x2000));
+        failures += expect_u8(
+            ".65c02 STZ operand", 0x10, c64_debug_read_ram(&machine, 0x2001));
+    }
+    c64m_test_remove_file(path);
+    return failures;
+}
+
 /* Regression: the _ex reporting must describe where code actually landed
    (lowest emitted origin and one-past-the-end), not the requested host default
    that the source overrides. This is what assemble-complete reports and what
@@ -253,6 +294,7 @@ int main(void) {
 
     failures += test_assemble_imports_symbols();
     failures += test_assemble_reports_errors();
+    failures += test_assemble_cpu_profile_defaults();
     failures += test_assemble_reports_emitted_extent();
     failures += test_assemble_auto_adjusts_segments();
 

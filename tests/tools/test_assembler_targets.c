@@ -147,7 +147,7 @@ static int test_named_scope_to_file(void) {
     if(assemble(source, &host, &log, 1, NULL, NULL) != ASM_OK) {
         fprintf(stderr, "named-scope assembly failed with %zu errors\n", log.log_array.items);
         for(size_t i = 0; i < log.log_array.items; i++) {
-            ERROR_ENTRY *e = ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
+            ERROR_ENTRY *e = AM65_ARRAY_GET(&log.log_array, ERROR_ENTRY, i);
             fprintf(stderr, "  %s\n", e->err_str ? e->err_str : "");
         }
         failures++;
@@ -229,15 +229,15 @@ static int test_predefine_detection(void) {
 
     const char *source =
         "* = $1000\n"
-        ".if C64MASM\n"
+        ".if AM65\n"
         "    .byte $aa\n"
         ".else\n"
         "    .byte $bb\n"
         ".endif\n";
 
-    // With C64MASM=1 the .if branch is taken -> $AA.
+    // With AM65=1 the .if branch is taken -> $AA.
     errlog_init(&log);
-    if(assemble(source, &host, &log, 1, "C64MASM", "1") != ASM_OK) {
+    if(assemble(source, &host, &log, 1, "AM65", "1") != ASM_OK) {
         fprintf(stderr, "predefine (true) assembly failed\n");
         failures++;
     }
@@ -247,10 +247,10 @@ static int test_predefine_detection(void) {
     }
     errlog_shutdown(&log);
 
-    // With C64MASM=0 the .else branch is taken -> $BB.
+    // With AM65=0 the .else branch is taken -> $BB.
     memset(&def, 0, sizeof(def));
     errlog_init(&log);
-    if(assemble(source, &host, &log, 1, "C64MASM", "0") != ASM_OK) {
+    if(assemble(source, &host, &log, 1, "AM65", "0") != ASM_OK) {
         fprintf(stderr, "predefine (false) assembly failed\n");
         failures++;
     }
