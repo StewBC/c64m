@@ -128,10 +128,11 @@ Component handoffs:
   mount wire, VIC/CIA/frame rings). Sibling list:
   `../a2m-v2/agents/backlog.md` E1–E4.
 
-Current baseline is 69/69 passing (includes `c64_snapshot_1541_midload`, the
+Current baseline is 70/70 passing (includes `c64_snapshot_1541_midload`, the
 history integration test, the machine/runtime recorder tests, the guarded-
-breakpoint condition/ini/control tests, and the frame-ring and VIC-ring
-unit/control tests). That baseline includes the real 1541 ROM/IEC, G64,
+breakpoint condition/ini/control tests, the frame-ring and VIC-ring
+unit/control tests, and `help_view`, which renders the help window headlessly
+and inspects the emitted nuklear draw commands). That baseline includes the real 1541 ROM/IEC, G64,
 Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
 
 The verification command is:

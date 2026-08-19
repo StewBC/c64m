@@ -53,7 +53,7 @@ environment, not a regression.
   `g64`, `c64_real_1541_load`, `c64_robocop_g64`, `c64_arkanoid_g64`,
   `runtime_disk`, `runtime_real_1541_autorun`.
 - Runtime/UI/platform: `runtime_*`, `frontend_input`, `frontend_joystick`,
-  `platform_fs`, `app_options`, `control_protocol`.
+  `help_view`, `platform_fs`, `app_options`, `control_protocol`.
 - Tools/util: assembler tests, `disasm_6502`, `symbol_table`, `t64`, `crt`,
   `basic_v2`, and `paste_parser`.
 

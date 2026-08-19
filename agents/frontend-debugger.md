@@ -62,7 +62,20 @@ updates BASIC pointers, and preserves non-printable PETSCII in named/hex escapes
 ## Help and assembler
 
 `manual/manual.md` is compiled into help content by `tools/gen_help.py`; keep that
-file ASCII/PETSCII-safe. The shared assembler supports the in-emulator path and the
+file ASCII/PETSCII-safe. Help search highlights its hits: the span the search
+jumped to is drawn inverse (black on C64 yellow) and every other occurrence in
+the visible section gets a yellow underline. Matching happens per *drawn line*
+inside `help_draw_inline_at`, on the marker-stripped, lowercased text and with
+the same `re_t` the search uses, which is what makes it work through word wrap;
+a hit split across a wrap boundary is not highlighted. The band must be a real
+`nk_fill_rect` because `nk_convert` drops `nk_draw_text`'s background colour.
+`help_estimate_span_y` only estimates the scroll target (one row per span, so it
+drifts on wrapped text); the render pass measures the row that actually holds
+the hit - rows scrolled out of view are still laid out, so this works even when
+the estimate left the hit off-screen - and corrects the group scroll on the next
+frame, landing every hit a third of the way down the content area.
+`help_view_search()` runs the same search as the nav bar's arrows and is what
+`test_help_view` drives. The shared assembler supports the in-emulator path and the
 `am65` CLI, scopes/segments, macros, conditionals, expression `*` as the current
 instruction address, named output targets, and host predefines. In-emulator
 assembly exposes only `dest="map"`, ignores `file=`, and predefines `AM65=0` and

@@ -42,6 +42,31 @@
 #define HELP_COLOR_SECTION_ACTIVE C64_HELP_PURPLE
 #define HELP_COLOR_SECTION_HOVER C64_HELP_LIGHT_BLUE
 #define HELP_COLOR_SECTION_DISABLED C64_HELP_DARK_GRAY
+#define HELP_COLOR_MATCH C64_HELP_YELLOW
+#define HELP_COLOR_MATCH_TEXT C64_HELP_BLACK
+
+#define HELP_HL_MAX_MATCHES 32
+#define HELP_HL_UNDERLINE_H 2.0f
+
+/* One search hit inside a single drawn line, in marker-stripped coordinates. */
+typedef struct help_hl_match {
+    int start;
+    int end;
+} help_hl_match;
+
+/* Search highlighting for one render pass. `re` is recompiled every frame by
+   help_view_render: re_compile() returns a pointer into one static internal
+   buffer, so a compiled pattern must never be cached across calls. */
+typedef struct help_highlight {
+    re_t re;         /* NULL when no search is active: highlighting is off */
+    bool anchored;   /* pattern starts with '^': only the first hit is real */
+    bool current;    /* span the search jumped to: inverse band, not underline */
+    bool hit_seen;   /* a hit in that span has been drawn or measured */
+    float hit_y;     /* screen y of the row holding it, for the scroll fix */
+} help_highlight;
+
+static void help_strip_markers(char *dst, const char *src, int max);
+static void help_tolower_buf(char *buf);
 
 void help_view_init(frontend_help_state *state)
 {
@@ -61,6 +86,7 @@ void help_view_init(frontend_help_state *state)
     state->search_no_match = false;
     state->search_section = 0;
     state->search_span = -1;
+    state->search_scroll_pending = false;
     memset(state->section_scroll_y, 0, sizeof(state->section_scroll_y));
 }
 
@@ -80,6 +106,7 @@ void help_view_open(frontend_help_state *state, bool paused_by_help)
     }
     state->search_section = state->section_index;
     state->search_span = -1;
+    state->search_scroll_pending = false;
 }
 
 void help_view_close(frontend_help_state *state)
@@ -129,6 +156,13 @@ static void help_view_store_current_scroll(struct nk_context *ctx, frontend_help
         return;
     }
 
+    /* Reachable from the SDL event loop (arrow keys, help search) with no
+       window open, where nk_group_get_scroll would assert. The render pass
+       stores this section's scroll every frame, so there is nothing to save. */
+    if (ctx->current == NULL) {
+        return;
+    }
+
     nk_group_get_scroll(ctx, "HelpContent", &x, &y);
     state->section_scroll_y[state->section_index] = y;
 }
@@ -163,6 +197,7 @@ bool help_view_select_section(struct nk_context *ctx, frontend_help_state *state
     help_view_request_restore(state);
     state->search_section = next;
     state->search_span = -1;
+    state->search_scroll_pending = false;
     return true;
 }
 
@@ -309,20 +344,102 @@ static bool help_update_inline_code_state(bool code, const char *text)
     return code;
 }
 
+/* Collect every hit in one drawn line. Matching runs on the marker-stripped,
+   lowercased copy so it agrees exactly with help_search_execute; the line is
+   whatever ended up on screen, which is what makes wrapped text work. */
+static int help_hl_collect(
+    const help_highlight *hl,
+    const char *text,
+    help_hl_match *out,
+    int max)
+{
+    char lowered[2048];
+    int len;
+    int pos = 0;
+    int count = 0;
+
+    if (hl == NULL || hl->re == NULL || text == NULL || out == NULL) {
+        return 0;
+    }
+
+    help_strip_markers(lowered, text, (int)sizeof(lowered));
+    help_tolower_buf(lowered);
+    len = (int)strlen(lowered);
+
+    while (pos < len && count < max) {
+        int match_len = 0;
+        int idx = re_matchp(hl->re, lowered + pos, &match_len);
+
+        if (idx < 0) {
+            break;
+        }
+        if (match_len <= 0) {
+            /* A pattern that can match nothing (`a*`) would spin here. */
+            pos += idx + 1;
+            continue;
+        }
+        out[count].start = pos + idx;
+        out[count].end = pos + idx + match_len;
+        pos = out[count].end;
+        ++count;
+        if (hl->anchored) {
+            /* Rescanning from `pos` would let '^' match mid-line. */
+            break;
+        }
+    }
+    return count;
+}
+
+static bool help_hl_covers(const help_hl_match *matches, int count, int index)
+{
+    int i;
+
+    for (i = 0; i < count; ++i) {
+        if (index >= matches[i].start && index < matches[i].end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* True while the row holding the current hit still has to be located. Rows
+   scrolled out of view are laid out but not drawn, so they are measured (not
+   painted) to keep the scroll correction exact. */
+static bool help_hl_measuring(const help_highlight *hl)
+{
+    return hl != NULL && hl->re != NULL && hl->current && !hl->hit_seen;
+}
+
 static void help_draw_inline_at(
     struct nk_context *ctx,
     struct nk_command_buffer *canvas,
     struct nk_rect bounds,
     const char *text,
-    struct nk_color base_color)
+    struct nk_color base_color,
+    help_highlight *hl,
+    bool visible)
 {
     const struct nk_user_font *font;
+    help_hl_match matches[HELP_HL_MAX_MATCHES];
+    int match_count;
+    int stripped_pos = 0;
+    bool current;
     const char *run;
     const char *p;
     float x;
     bool code = false;
 
     if (ctx == NULL || canvas == NULL || text == NULL || ctx->style.font == NULL) {
+        return;
+    }
+
+    current = hl != NULL && hl->current;
+    match_count = help_hl_collect(hl, text, matches, HELP_HL_MAX_MATCHES);
+    if (match_count > 0 && current && !hl->hit_seen) {
+        hl->hit_seen = true;
+        hl->hit_y = bounds.y;
+    }
+    if (!visible) {
         return;
     }
 
@@ -334,17 +451,54 @@ static void help_draw_inline_at(
         if (*p == HELP_INLINE_CODE_ON || *p == HELP_INLINE_CODE_OFF || *p == '\0') {
             int len = (int)(p - run);
             if (len > 0) {
-                float w = help_text_width(ctx, run, len);
-                struct nk_rect segment = nk_rect(x, bounds.y, w + 1.0f, bounds.h);
-                nk_draw_text(
-                    canvas,
-                    segment,
-                    run,
-                    len,
-                    font,
-                    HELP_TEXT_BG,
-                    code ? HELP_COLOR_CODE : base_color);
-                x += w;
+                struct nk_color run_color = code ? HELP_COLOR_CODE : base_color;
+                int i = 0;
+
+                /* Split the run again wherever a hit starts or ends. */
+                while (i < len) {
+                    bool hit = help_hl_covers(matches, match_count, stripped_pos + i);
+                    int j = i + 1;
+                    float w;
+
+                    while (j < len &&
+                           help_hl_covers(matches, match_count, stripped_pos + j) == hit) {
+                        ++j;
+                    }
+                    w = help_text_width(ctx, run + i, j - i);
+                    if (hit) {
+                        /* nk_convert forwards only the foreground colour, so
+                           nk_draw_text's background argument is dropped by this
+                           backend: the band has to be a real filled rect. */
+                        if (current) {
+                            nk_fill_rect(
+                                canvas,
+                                nk_rect(x, bounds.y, w, bounds.h),
+                                0.0f,
+                                HELP_COLOR_MATCH);
+                        } else {
+                            nk_fill_rect(
+                                canvas,
+                                nk_rect(
+                                    x,
+                                    bounds.y + bounds.h - HELP_HL_UNDERLINE_H,
+                                    w,
+                                    HELP_HL_UNDERLINE_H),
+                                0.0f,
+                                HELP_COLOR_MATCH);
+                        }
+                    }
+                    nk_draw_text(
+                        canvas,
+                        nk_rect(x, bounds.y, w + 1.0f, bounds.h),
+                        run + i,
+                        j - i,
+                        font,
+                        HELP_TEXT_BG,
+                        (hit && current) ? HELP_COLOR_MATCH_TEXT : run_color);
+                    x += w;
+                    i = j;
+                }
+                stripped_pos += len;
             }
             if (*p == '\0') {
                 break;
@@ -358,42 +512,53 @@ static void help_draw_inline_at(
     }
 }
 
-static void help_inline_row(struct nk_context *ctx, const char *text, struct nk_color color)
+static void help_inline_row(
+    struct nk_context *ctx,
+    const char *text,
+    struct nk_color color,
+    help_highlight *hl)
 {
     struct nk_rect bounds;
+    bool visible;
 
     if (ctx == NULL) {
         return;
     }
 
     nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
-    if (!nk_widget(&bounds, ctx)) {
+    visible = nk_widget(&bounds, ctx) != 0;
+    if (!visible && !help_hl_measuring(hl)) {
         return;
     }
 
-    help_draw_inline_at(ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color);
+    help_draw_inline_at(
+        ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color, hl, visible);
 }
 
 static void help_inline_row_indented(
     struct nk_context *ctx,
     const char *text,
     struct nk_color color,
-    float indent)
+    float indent,
+    help_highlight *hl)
 {
     struct nk_rect bounds;
+    bool visible;
 
     if (ctx == NULL) {
         return;
     }
 
     nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
-    if (!nk_widget(&bounds, ctx)) {
+    visible = nk_widget(&bounds, ctx) != 0;
+    if (!visible && !help_hl_measuring(hl)) {
         return;
     }
 
     bounds.x += indent;
     bounds.w -= indent;
-    help_draw_inline_at(ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color);
+    help_draw_inline_at(
+        ctx, nk_window_get_canvas(ctx), bounds, text != NULL ? text : "", color, hl, visible);
 }
 
 static void help_marker_text_row(
@@ -402,22 +567,25 @@ static void help_marker_text_row(
     const char *text,
     struct nk_color marker_color,
     struct nk_color text_color,
-    float text_indent)
+    float text_indent,
+    help_highlight *hl)
 {
     struct nk_rect bounds;
     struct nk_command_buffer *canvas;
+    bool visible;
 
     if (ctx == NULL) {
         return;
     }
 
     nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
-    if (!nk_widget(&bounds, ctx)) {
+    visible = nk_widget(&bounds, ctx) != 0;
+    if (!visible && !help_hl_measuring(hl)) {
         return;
     }
 
     canvas = nk_window_get_canvas(ctx);
-    if (marker != NULL && marker[0] != '\0') {
+    if (visible && marker != NULL && marker[0] != '\0') {
         nk_draw_text(
             canvas,
             nk_rect(bounds.x, bounds.y, text_indent + 1.0f, bounds.h),
@@ -429,7 +597,7 @@ static void help_marker_text_row(
     }
     bounds.x += text_indent;
     bounds.w -= text_indent;
-    help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", text_color);
+    help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", text_color, hl, visible);
 }
 
 static void help_wrap_text(
@@ -439,7 +607,8 @@ static void help_wrap_text(
     float first_indent,
     float rest_indent,
     const char *marker,
-    struct nk_color marker_color)
+    struct nk_color marker_color,
+    help_highlight *hl)
 {
     char line[2048];
     char candidate[2048];
@@ -485,9 +654,9 @@ static void help_wrap_text(
         available = nk_window_get_content_region(ctx).w - indent - 8.0f;
         if (line_len > 0 && help_encoded_text_width(ctx, candidate) > available) {
             if (row == 0 && marker != NULL) {
-                help_marker_text_row(ctx, marker, line, marker_color, color, first_indent);
+                help_marker_text_row(ctx, marker, line, marker_color, color, first_indent, hl);
             } else {
-                help_inline_row_indented(ctx, line, color, indent);
+                help_inline_row_indented(ctx, line, color, indent, hl);
             }
             ++row;
             line_len = 0;
@@ -528,9 +697,9 @@ static void help_wrap_text(
                 piece[piece_len] = '\0';
                 if (piece_len > 0) {
                     if (row == 0 && marker != NULL) {
-                        help_marker_text_row(ctx, marker, piece, marker_color, color, first_indent);
+                        help_marker_text_row(ctx, marker, piece, marker_color, color, first_indent, hl);
                     } else {
-                        help_inline_row_indented(ctx, piece, color, p_indent);
+                        help_inline_row_indented(ctx, piece, color, p_indent, hl);
                     }
                     ++row;
                     piece_len = 0;
@@ -549,13 +718,17 @@ static void help_wrap_text(
     }
 
     if (row == 0 && marker != NULL) {
-        help_marker_text_row(ctx, marker, line, marker_color, color, first_indent);
+        help_marker_text_row(ctx, marker, line, marker_color, color, first_indent, hl);
     } else {
-        help_inline_row_indented(ctx, line, color, row == 0 ? first_indent : rest_indent);
+        help_inline_row_indented(ctx, line, color, row == 0 ? first_indent : rest_indent, hl);
     }
 }
 
-static void help_inline_wrap_if_needed(struct nk_context *ctx, const char *text, struct nk_color color)
+static void help_inline_wrap_if_needed(
+    struct nk_context *ctx,
+    const char *text,
+    struct nk_color color,
+    help_highlight *hl)
 {
     float available;
 
@@ -565,43 +738,47 @@ static void help_inline_wrap_if_needed(struct nk_context *ctx, const char *text,
 
     available = nk_window_get_content_region(ctx).w - 8.0f;
     if (help_encoded_text_width(ctx, text) <= available) {
-        help_inline_row(ctx, text, color);
+        help_inline_row(ctx, text, color, hl);
         return;
     }
-    help_wrap_text(ctx, text, color, 0.0f, 0.0f, NULL, color);
+    help_wrap_text(ctx, text, color, 0.0f, 0.0f, NULL, color, hl);
 }
 
-static void help_bullet_row(struct nk_context *ctx, const char *text)
+static void help_bullet_row(struct nk_context *ctx, const char *text, help_highlight *hl)
 {
     struct nk_rect bounds;
     struct nk_command_buffer *canvas;
     float marker_w;
+    bool visible;
 
     if (ctx == NULL) {
         return;
     }
 
     nk_layout_row_dynamic(ctx, help_row_height(ctx), 1);
-    if (!nk_widget(&bounds, ctx)) {
+    visible = nk_widget(&bounds, ctx) != 0;
+    if (!visible && !help_hl_measuring(hl)) {
         return;
     }
 
     canvas = nk_window_get_canvas(ctx);
     marker_w = help_text_width(ctx, "- ", 2);
-    nk_draw_text(
-        canvas,
-        nk_rect(bounds.x, bounds.y, marker_w + 1.0f, bounds.h),
-        "- ",
-        2,
-        ctx->style.font,
-        HELP_TEXT_BG,
-        HELP_COLOR_BULLET);
+    if (visible) {
+        nk_draw_text(
+            canvas,
+            nk_rect(bounds.x, bounds.y, marker_w + 1.0f, bounds.h),
+            "- ",
+            2,
+            ctx->style.font,
+            HELP_TEXT_BG,
+            HELP_COLOR_BULLET);
+    }
     bounds.x += marker_w;
     bounds.w -= marker_w;
-    help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", HELP_COLOR_BODY);
+    help_draw_inline_at(ctx, canvas, bounds, text != NULL ? text : "", HELP_COLOR_BODY, hl, visible);
 }
 
-static void help_bullet_wrap_if_needed(struct nk_context *ctx, const char *text)
+static void help_bullet_wrap_if_needed(struct nk_context *ctx, const char *text, help_highlight *hl)
 {
     float marker_w;
     float available;
@@ -613,13 +790,13 @@ static void help_bullet_wrap_if_needed(struct nk_context *ctx, const char *text)
     marker_w = help_text_width(ctx, "- ", 2);
     available = nk_window_get_content_region(ctx).w - marker_w - 8.0f;
     if (help_encoded_text_width(ctx, text) <= available) {
-        help_bullet_row(ctx, text);
+        help_bullet_row(ctx, text, hl);
         return;
     }
-    help_wrap_text(ctx, text, HELP_COLOR_BODY, marker_w, marker_w, "- ", HELP_COLOR_BULLET);
+    help_wrap_text(ctx, text, HELP_COLOR_BODY, marker_w, marker_w, "- ", HELP_COLOR_BULLET, hl);
 }
 
-static void help_render_span(struct nk_context *ctx, const help_span *span)
+static void help_render_span(struct nk_context *ctx, const help_span *span, help_highlight *hl)
 {
     if (ctx == NULL || span == NULL) {
         return;
@@ -632,37 +809,41 @@ static void help_render_span(struct nk_context *ctx, const help_span *span)
             break;
 
         case HELP_SPAN_H3:
-            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_H3);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_H3, hl);
             break;
 
         case HELP_SPAN_BULLET:
-            help_bullet_wrap_if_needed(ctx, span->text);
+            help_bullet_wrap_if_needed(ctx, span->text, hl);
             break;
 
         case HELP_SPAN_NUMBER:
-            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_NUMBER);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_NUMBER, hl);
             break;
 
         case HELP_SPAN_CODE_BLOCK:
-            help_inline_row(ctx, span->text, HELP_COLOR_CODE);
+            help_inline_row(ctx, span->text, HELP_COLOR_CODE, hl);
             break;
 
         case HELP_SPAN_TABLE:
-            help_inline_row(ctx, span->text, HELP_COLOR_TABLE);
+            help_inline_row(ctx, span->text, HELP_COLOR_TABLE, hl);
             break;
 
         case HELP_SPAN_TABLE_HEADER:
-            help_inline_row(ctx, span->text, HELP_COLOR_TABLE_HEADER);
+            help_inline_row(ctx, span->text, HELP_COLOR_TABLE_HEADER, hl);
             break;
 
         case HELP_SPAN_TEXT:
         default:
-            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_BODY);
+            help_inline_wrap_if_needed(ctx, span->text, HELP_COLOR_BODY, hl);
             break;
     }
 }
 
-static void help_render_section(struct nk_context *ctx, const help_section *section)
+static void help_render_section(
+    struct nk_context *ctx,
+    const help_section *section,
+    help_highlight *hl,
+    int current_span)
 {
     int i;
 
@@ -671,7 +852,13 @@ static void help_render_section(struct nk_context *ctx, const help_section *sect
     }
 
     for (i = 0; i < section->span_count; ++i) {
-        help_render_span(ctx, &section->spans[i]);
+        if (hl != NULL) {
+            hl->current = i == current_span;
+        }
+        help_render_span(ctx, &section->spans[i], hl);
+    }
+    if (hl != NULL) {
+        hl->current = false;
     }
 }
 
@@ -773,6 +960,9 @@ static void help_search_execute(struct nk_context *ctx, frontend_help_state *sta
                 state->search_section = cur_sec;
                 state->search_span = cur_span;
                 state->search_no_match = false;
+                /* span_y is a per-span estimate that ignores wrapped rows; the
+                   render pass measures the real row and corrects the scroll. */
+                state->search_scroll_pending = true;
                 return;
             }
         }
@@ -793,6 +983,25 @@ static void help_search_execute(struct nk_context *ctx, frontend_help_state *sta
     }
 
     state->search_no_match = true;
+}
+
+bool help_view_search(
+    struct nk_context *ctx,
+    frontend_help_state *state,
+    const char *needle,
+    bool forward)
+{
+    if (ctx == NULL || state == NULL) {
+        return false;
+    }
+
+    if (needle != NULL) {
+        strncpy(state->search_buf, needle, sizeof(state->search_buf) - 1);
+        state->search_buf[sizeof(state->search_buf) - 1] = '\0';
+        state->search_no_match = false;
+    }
+    help_search_execute(ctx, state, forward);
+    return !state->search_no_match;
 }
 
 static float help_nav_combo_width(struct nk_context *ctx)
@@ -956,6 +1165,8 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
 {
     struct nk_rect bounds;
     struct nk_style_window saved_window;
+    help_highlight hl;
+    char hl_pattern[sizeof(state->search_buf)];
     nk_uint content_scroll_x = 0;
     nk_uint content_scroll_y = 0;
     float margin;
@@ -975,6 +1186,22 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
 
     if (state->section_index < 0 || state->section_index >= help_section_count) {
         state->section_index = 0;
+    }
+
+    /* Compile the highlight pattern fresh each frame: re_compile() hands back a
+       pointer into one static buffer, and the search buttons in the nav bar
+       (drawn after the content below) compile over it. */
+    hl.re = NULL;
+    hl.anchored = false;
+    hl.current = false;
+    hl.hit_seen = false;
+    hl.hit_y = 0.0f;
+    if (state->search_buf[0] != '\0' && !state->search_no_match) {
+        strncpy(hl_pattern, state->search_buf, sizeof(hl_pattern) - 1);
+        hl_pattern[sizeof(hl_pattern) - 1] = '\0';
+        help_tolower_buf(hl_pattern);
+        hl.anchored = hl_pattern[0] == '^';
+        hl.re = re_compile(hl_pattern);
     }
 
     margin = width < 760 ? 12.0f : 36.0f;
@@ -1016,11 +1243,20 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
         nk_layout_row_dynamic(ctx, content_h, 1);
         if (nk_group_begin(ctx, "HelpContent", NK_WINDOW_BORDER)) {
             struct nk_panel *content_layout = ctx->current != NULL ? ctx->current->layout : NULL;
+            nk_uint layout_scroll_y = 0;
             if (state->pending_scroll_restore) {
                 nk_group_set_scroll(ctx, "HelpContent", 0, state->pending_scroll_y);
                 state->pending_scroll_restore = false;
             }
-            help_render_section(ctx, &help_sections[state->section_index]);
+            /* The offset is dereferenced per widget, so a set_scroll above lands
+               this frame: this is the scroll the rows below are laid out with,
+               unclamped, which is what the hit measurement has to be read against. */
+            nk_group_get_scroll(ctx, "HelpContent", &content_scroll_x, &layout_scroll_y);
+            help_render_section(
+                ctx,
+                &help_sections[state->section_index],
+                &hl,
+                state->search_section == state->section_index ? state->search_span : -1);
             if (content_layout != NULL) {
                 float max_y = content_layout->at_y - content_layout->bounds.y - content_layout->bounds.h;
                 state->content_max_y = max_y > 0.0f ? (nk_uint)max_y : 0;
@@ -1033,6 +1269,33 @@ void help_view_render(struct nk_context *ctx, frontend_help_state *state, struct
             }
             if (state->section_index >= 0 && state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
                 state->section_scroll_y[state->section_index] = content_scroll_y;
+            }
+            if (state->search_scroll_pending) {
+                if (hl.hit_seen) {
+                    /* The row was laid out this frame whether or not it was
+                       visible, so this is exact even for wrapped spans. */
+                    struct nk_rect region = nk_window_get_content_region(ctx);
+                    float row_y = hl.hit_y - region.y + (float)layout_scroll_y;
+                    float target = row_y - region.h * 0.33f;
+                    nk_uint want;
+
+                    if (target < 0.0f) {
+                        target = 0.0f;
+                    }
+                    want = (nk_uint)target;
+                    if (want > state->content_max_y) {
+                        want = state->content_max_y;
+                    }
+                    if (want != layout_scroll_y) {
+                        nk_group_set_scroll(ctx, "HelpContent", 0, want);
+                        if (state->section_index >= 0 &&
+                            state->section_index < FRONTEND_HELP_MAX_SECTIONS) {
+                            state->section_scroll_y[state->section_index] = want;
+                        }
+                        state->pending_scroll_y = want;
+                    }
+                }
+                state->search_scroll_pending = false;
             }
             nk_group_end(ctx);
         }

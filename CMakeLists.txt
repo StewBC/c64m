@@ -375,6 +375,25 @@ target_link_libraries(test_frontend_input PRIVATE
 
 add_test(NAME frontend_input COMMAND test_frontend_input)
 
+add_executable(test_help_view
+    tests/frontend/test_help_view.c
+)
+
+target_compile_features(test_help_view PRIVATE c_std_99)
+
+target_compile_definitions(test_help_view PRIVATE SDL_MAIN_HANDLED)
+
+target_include_directories(test_help_view PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/machine
+)
+
+target_link_libraries(test_help_view PRIVATE
+    frontend
+)
+
+add_test(NAME help_view COMMAND test_help_view)
+
 add_executable(test_frontend_joystick
     tests/frontend/test_frontend_joystick.c
 )
