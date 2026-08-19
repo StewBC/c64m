@@ -18,9 +18,9 @@
 
 // ---------------------------------------------------------------------------
 // Per-target output: a flat 64K image plus the file it is written to.
-typedef struct {
+typedef struct FILE_TARGET {
     char *file_name;   // output path (NULL => not written, e.g. dest-only scope)
-    char *dest_name;   // optional label from dest="..." (reserved, unused for now)
+    struct FILE_TARGET *sink; // destination-only scopes emit into their parent target
     int wrote_any;     // set once a byte lands in this target
     uint32_t lo;       // lowest address written (valid when wrote_any)
     uint32_t hi;       // one past highest address written (valid when wrote_any)
@@ -39,7 +39,7 @@ static char *dup_str(const char *s, int len) {
     return out;
 }
 
-static FILE_TARGET *file_target_new(const char *file, int file_len, const char *dest, int dest_len) {
+static FILE_TARGET *file_target_new(const char *file, int file_len, FILE_TARGET *sink) {
     FILE_TARGET *ft = calloc(1, sizeof(*ft));
     if(!ft) {
         return NULL;
@@ -51,9 +51,7 @@ static FILE_TARGET *file_target_new(const char *file, int file_len, const char *
             return NULL;
         }
     }
-    if(dest && dest_len > 0) {
-        ft->dest_name = dup_str(dest, dest_len);
-    }
+    ft->sink = sink ? sink : ft;
     return ft;
 }
 
@@ -62,7 +60,6 @@ static void file_target_free(FILE_TARGET *ft) {
         return;
     }
     free(ft->file_name);
-    free(ft->dest_name);
     free(ft);
 }
 
@@ -73,6 +70,7 @@ static void cli_output_byte(void *target, uint16_t addr, uint8_t val) {
     if(!ft) {
         return;
     }
+    ft = ft->sink ? ft->sink : ft;
     ft->ram[addr] = val;
     if(!ft->wrote_any) {
         ft->wrote_any = 1;
@@ -91,13 +89,17 @@ static void cli_output_byte(void *target, uint16_t addr, uint8_t val) {
 static void *cli_target_open(void *user, const char *name, int name_len,
                              const char *file, int file_len,
                              const char *dest, int dest_len) {
-    (void)user;
+    ASSEMBLER *as = (ASSEMBLER *)user;
+    FILE_TARGET *parent = as && as->active_target ?
+        (FILE_TARGET *)as->active_target->ctx : NULL;
     (void)name;
     (void)name_len;
-    if((!file || file_len == 0) && (!dest || dest_len == 0)) {
-        return NULL;
-    }
-    return file_target_new(file, file_len, dest, dest_len);
+    (void)dest;
+    (void)dest_len;
+    // The standalone assembler interprets file= and deliberately ignores
+    // dest=. A destination-only scope therefore inherits its parent's output
+    // image rather than silently discarding its bytes.
+    return file_target_new(file, file_len, file_len > 0 ? NULL : parent);
 }
 
 static void cli_target_release(void *user, void *target) {
@@ -142,7 +144,7 @@ static int write_target_file(TARGET *target, int verbose) {
 
 static void dump_target_hex(TARGET *target) {
     FILE_TARGET *ft = (FILE_TARGET *)target->ctx;
-    if(!ft || !ft->wrote_any) {
+    if(!ft || ft->sink != ft || !ft->wrote_any) {
         return;
     }
     if(ft->file_name) {
@@ -310,8 +312,10 @@ static void usage(const char *program) {
         "\n"
         "A named `.scope name file=\"path\"` inside the source assembles into its own\n"
         "output file, so one source can produce several binaries (loader, overlays...).\n"
+        "The standalone tool accepts but ignores dest=; a dest=-only scope continues\n"
+        "emitting into its parent output target.\n"
         "The define AM65 is predefined to 1 so source can detect the CLI build with\n"
-        "`.if AM65`.\n",
+        "`.if AM65`. No emulator machine symbol is predefined.\n",
         base);
 }
 
@@ -408,6 +412,7 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+    default_target->sink = default_target;
 
     ERRORLOG log;
     ASSEMBLER as;
