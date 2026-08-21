@@ -1837,7 +1837,13 @@ combine headless mode with `--sna`:
 The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
 thread performs network I/O only; runtime commands and snapshot requests are dispatched
 by the main loop, so remote control follows the same thread-ownership rules as the GUI
-debugger. The current protocol name is `C64M/3`.
+debugger. The current protocol name is `C64M/7`.
+
+Unsolicited events may arrive with request id `0`, for example
+`0 event state-changed reason=step session=2 cycles=… frame=… epoch=…`. Scripts that
+match replies by id must skip or queue these lines (the bundled Python `Ctl` client
+does). History FIND/NEXT cursors are per asker session; a mutation from any asker
+invalidates active cursors (`CURSOR_STALE` → re-FIND).
 
 ### Quick Start
 
@@ -1953,8 +1959,8 @@ is still paced by present/vsync (~16 ms class).
 
 | Command | Response |
 |---------|----------|
-| `hello` | `ok name=c64m protocol=C64M/3` |
-| `version` | `ok protocol=C64M/3 app=0.1.0` |
+| `hello` | `ok name=c64m protocol=C64M/7` |
+| `version` | `ok protocol=C64M/7 app=0.1.0` |
 | `capabilities` | Space-separated capability names |
 | `ping` | `ok` |
 | `quit-client` | `ok`, then the server closes the client connection |
@@ -1962,9 +1968,11 @@ is still paced by present/vsync (~16 ms class).
 `capabilities` currently includes (among others) `connection`, `introspection`,
 `execution`, `state`, `step`, `turbo`, `frame`, `memory`, `debug-memory`, `call-stack`,
 `input`, `disk`, `file`, `snapshot`, `breakpoints`, `wait`, `assemble`, `symbols`,
-`drive-cpu`, `vic`, `cia`, `run-to-raster`, and `history`. The `snapshot` token
-means machine save/load (`.c64state`) via `load-state` / `save-state`. The `state`
-token means runtime inspection (`get-state`), not file snapshots.
+`drive-cpu`, `vic`, `cia`, `run-to-raster`, `history`, `frame-ring`, `vic-ring`,
+`sessions`, and `state-changed`. The `snapshot` token means machine save/load
+(`.c64state`) via `load-state` / `save-state`. The `state` token means runtime
+inspection (`get-state`), not file snapshots. `sessions` / `state-changed` mean
+per-asker history cursors and unsolicited mutation informs (open mutation; no lock).
 
 ### Execution Control
 

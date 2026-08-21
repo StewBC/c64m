@@ -66,25 +66,31 @@ Rules:
 - Control-originated deferred work always uses non-zero tokens.
 - UI free-run / poll telemetry may use token 0. A token-0 (or wrong-token) event
   **must never** complete a control deferred entry.
-- Wire request ids are a **client/session** concern and are not the same as
+- Wire request ids are a **client/connection** concern and are not the same as
   `request_token`. Correlation across threads:
 
   - Client-facing: `(connection_epoch, wire_request_id)`
   - Runtime-facing: `request_token`
+  - Asker-facing: runtime **session id** (history cursor owner; see
+    `sessions.md`) — distinct from connection epoch
 
 ### Connection epoch
 
-On each accepted control connection, main bumps a `connection_epoch` (session
-generation). Deferred table entries and in-flight responses are tagged with that
-epoch.
+On each accepted control connection, main bumps a `connection_epoch`
+(TCP connection generation — not the same as a runtime session id). Deferred
+table entries and in-flight responses are tagged with that epoch. The TCP
+client is also bound to one `kind=control` runtime session for that epoch
+(C64M/7; released on disconnect).
 
 On disconnect / `quit-client` teardown:
 
 - Cancel all outstanding deferred entries for that epoch.
+- Close the bound control runtime session (history cursor slot reusable).
 - Free any owned RPC payloads for those entries.
 - Drain or tag-drop in-flight responses so they cannot be delivered to the next
   client.
-- Queues that outlive connections must not leak pointer payloads across sessions.
+- Queues that outlive connections must not leak pointer payloads across
+  connections.
 
 Duplicate outstanding wire request ids within one epoch: reject with `bad-id`.
 
@@ -164,7 +170,8 @@ must follow the message contracts above (`request_token`, epoch, lossy vs reliab
 `set-turbo` changes the active mode without altering the configured Opt+T list;
 mode 3 (warp) warns that the live framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
-load path used by `load-state`. Wire protocol is **C64M/3** - see `control-port.md`.
+load path used by `load-state`. Wire protocol is **C64M/7** - see `control-port.md`
+(sessions + `state-changed`; `sessions.md`).
 
 ## CPU flight recorder
 

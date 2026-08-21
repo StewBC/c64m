@@ -1,6 +1,6 @@
 # Sessions: multi-asker query foundation (Inspector prep)
 
-**Status:** In progress (S0–S3 landed). **No Inspector UI in this epic.**  
+**Status:** Closed (foundation). **No Inspector UI in this epic.**  
 **Sibling:** Closed foundation in `../a2m` as **A2M/11** — see
 `../a2m/agents/sessions.md` and commits `5e203fc`…`173873c`.  
 **Product name (later UI):** Inspector (F9-like second view; not this campaign).  
@@ -335,20 +335,22 @@ C64M/7 + capabilities `sessions` / `state-changed`; `Ctl` skips events;
 - Checklist below all checked
 - This file: Status → Closed (foundation); UI remains follow-up
 
-**Landed:** _(pending)_
+**Landed:** Docs + manual + README; checklist complete; epic foundation closed.
+Inspector UI remains follow-up. Sessions hold cursor metadata + ids only (no
+live `c64_t *`).
 
 ---
 
 ## Acceptance checklist (foundation done)
 
-- [ ] Fixed session table (N=4) in runtime; no global history cursor
-- [ ] Two in-process sessions can page history independently
-- [ ] TCP client maps to one control session; disconnect cleans up
-- [ ] Open mutation; no permission protocol
-- [ ] `state-changed` inform reaches the socket client; `Ctl` safe with events
-- [ ] C64M version bumped + capabilities + docs
-- [ ] Full ctest green
-- [ ] **No** Inspector UI / host chord / frontend layout work required to claim done
+- [x] Fixed session table (N=4) in runtime; no global history cursor
+- [x] Two in-process sessions can page history independently
+- [x] TCP client maps to one control session; disconnect cleans up
+- [x] Open mutation; no permission protocol
+- [x] `state-changed` inform reaches the socket client; `Ctl` safe with events
+- [x] C64M version bumped + capabilities + docs
+- [x] Full ctest green
+- [x] **No** Inspector UI / host chord / frontend layout work required to claim done
 
 ---
 

@@ -371,6 +371,12 @@ Joystick mask: bit0 up, bit1 down, bit2 left, bit3 right, bit4 fire.
 control clients in parallel. Co-op means **one** automated client owns the port
 while a human uses the **windowed** emulator (keyboard/pause UI).
 
+**C64M/7 sessions:** the TCP client auto-binds one runtime session (history
+FIND/NEXT cursor). A future Inspector UI will use a separate session id so the
+two askers do not stomp each other’s history pages. Mutations are **open** (no
+ask-to-step); peers get `0 event state-changed …` as awareness only. Prefer
+`Ctl` so events do not break request matching (`drain_events` / `events`).
+
 ### 6.1 Pattern A — agent-only automation
 
 Headless + your script or `tools/c64_control_client.py`. Best for batch tests,
