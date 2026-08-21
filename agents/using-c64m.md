@@ -10,7 +10,9 @@ scripts rely on changes.
 contract live in `control-port.md`. VICE comparison load flags live in
 `vice-oracle.md`.
 
-Current protocol identity: **C64M/6** (ask `hello` / `version` to confirm).
+Current protocol identity: **C64M/7** (ask `hello` / `version` to confirm).
+Unsolicited `0 event state-changed …` lines may arrive at any time; `Ctl` in
+`tools/c64_control_client.py` skips them during `cmd()` matching.
 
 ---
 
@@ -196,7 +198,7 @@ Below, `N` is any client-chosen decimal id. In practice your client auto-numbers
 4 get-state
 ```
 
-Expect `protocol=C64M/6` (or whatever the build advertises).
+Expect `protocol=C64M/7` (or whatever the build advertises).
 
 ### 4.2 Load a PRG and RUN it
 

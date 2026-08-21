@@ -9,6 +9,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+static bool runtime_client_push(runtime_client *client, runtime_command *command)
+{
+    if (client == NULL || command == NULL) {
+        return false;
+    }
+    command->session_id = client->command_session_id;
+    return message_queue_push(client->command_queue, command);
+}
+
 static bool runtime_client_send_command_token(
     runtime_client *client,
     runtime_command_type type,
@@ -22,7 +32,7 @@ static bool runtime_client_send_command_token(
         .request_token = request_token,
     };
 
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 static bool runtime_client_send_command(
@@ -45,6 +55,23 @@ uint64_t runtime_client_alloc_request_token(runtime_client *client) {
     return token;
 }
 
+
+void runtime_client_set_command_session(runtime_client *client, uint32_t session_id)
+{
+    if (client == NULL) {
+        return;
+    }
+    client->command_session_id = session_id;
+}
+
+uint32_t runtime_client_get_command_session(const runtime_client *client)
+{
+    if (client == NULL) {
+        return 0u;
+    }
+    return client->command_session_id;
+}
+
 bool runtime_client_ping(runtime_client *client) {
     return runtime_client_send_command(client, RUNTIME_COMMAND_PING);
 }
@@ -64,7 +91,7 @@ bool runtime_client_reset_ex(runtime_client *client, bool detach_cartridge) {
 
     command.data.reset.detach_cartridge = detach_cartridge ? 1u : 0u;
     command.data.reset.resume_running = RUNTIME_RESET_PRESERVE_STATE;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_reset_ex_with_resume(
@@ -82,7 +109,7 @@ bool runtime_client_reset_ex_with_resume(
     command.data.reset.detach_cartridge = detach_cartridge ? 1u : 0u;
     command.data.reset.resume_running = resume_running ?
         RUNTIME_RESET_RUNNING : RUNTIME_RESET_PAUSED;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_reset(runtime_client *client) {
@@ -115,7 +142,7 @@ bool runtime_client_run_cycles(runtime_client *client, size_t count) {
     }
 
     command.data.run_cycles.count = count;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_run_instructions(runtime_client *client, size_t count) {
@@ -128,7 +155,7 @@ bool runtime_client_run_instructions(runtime_client *client, size_t count) {
     }
 
     command.data.run_instructions.count = count;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_step_frame(runtime_client *client) {
@@ -182,7 +209,7 @@ bool runtime_client_request_memory_token(
     command.data.request_memory.address = address;
     command.data.request_memory.length = length;
     command.data.request_memory.mode = (uint8_t)mode;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_claim_memory_rpc(
@@ -316,7 +343,7 @@ bool runtime_client_request_memory_view(
     command.data.request_memory.address = address;
     command.data.request_memory.length = length;
     command.data.request_memory.mode = (uint8_t)mode;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_request_debug_memory(runtime_client *client, bool include_write_history) {
@@ -329,7 +356,7 @@ bool runtime_client_request_debug_memory(runtime_client *client, bool include_wr
     }
 
     command.data.request_debug_memory.include_write_history = include_write_history ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_request_frame(runtime_client *client) {
@@ -347,7 +374,7 @@ bool runtime_client_keyboard_key(runtime_client *client, c64_key key, bool press
 
     command.data.keyboard_key.key = key;
     command.data.keyboard_key.pressed = pressed ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_restore(runtime_client *client) {
@@ -365,7 +392,7 @@ bool runtime_client_set_joystick(runtime_client *client, unsigned port, uint8_t 
 
     command.data.set_joystick.port = (uint8_t)port;
     command.data.set_joystick.inputs = (uint8_t)(inputs & 0x1fu);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 static bool runtime_client_set_cpu_register(
@@ -382,7 +409,7 @@ static bool runtime_client_set_cpu_register(
 
     command.data.set_cpu_register.reg = reg;
     command.data.set_cpu_register.value = value;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_set_pc(runtime_client *client, uint16_t value) {
@@ -425,7 +452,7 @@ bool runtime_client_write_memory_byte(
     command.data.write_memory_byte.address = address;
     command.data.write_memory_byte.value = value;
     command.data.write_memory_byte.mode = (uint8_t)mode;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_write_memory(
@@ -447,7 +474,7 @@ bool runtime_client_write_memory(
     command.data.write_memory.length = length;
     command.data.write_memory.mode = (uint8_t)mode;
     memcpy(command.data.write_memory.bytes, bytes, length);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t address) {
@@ -461,7 +488,7 @@ bool runtime_client_set_execute_breakpoint(runtime_client *client, uint16_t addr
 
     command.data.set_execute_breakpoint.address = address;
     command.data.set_execute_breakpoint.enabled = 1u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_create_breakpoint(
@@ -476,7 +503,7 @@ bool runtime_client_create_breakpoint(
     }
 
     command.data.create_breakpoint.definition = *definition;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_update_breakpoint(
@@ -493,7 +520,7 @@ bool runtime_client_update_breakpoint(
 
     command.data.update_breakpoint.id = id;
     command.data.update_breakpoint.definition = *definition;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_duplicate_breakpoint(runtime_client *client, uint32_t id) {
@@ -506,7 +533,7 @@ bool runtime_client_duplicate_breakpoint(runtime_client *client, uint32_t id) {
     }
 
     command.data.duplicate_breakpoint.id = id;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id) {
@@ -519,7 +546,7 @@ bool runtime_client_clear_breakpoint(runtime_client *client, uint32_t id) {
     }
 
     command.data.clear_breakpoint.id = id;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_clear_all_breakpoints(runtime_client *client) {
@@ -537,7 +564,7 @@ bool runtime_client_set_breakpoint_enabled(runtime_client *client, uint32_t id, 
 
     command.data.set_breakpoint_enabled.id = id;
     command.data.set_breakpoint_enabled.enabled = enabled ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_rearm_oneshot_breakpoints(runtime_client *client) {
@@ -558,7 +585,7 @@ bool runtime_client_load_prg(runtime_client *client, const char *path) {
     }
 
     snprintf(command.data.load_prg.path, sizeof(command.data.load_prg.path), "%s", path);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_load_crt(runtime_client *client, const char *path) {
@@ -571,7 +598,7 @@ bool runtime_client_load_crt(runtime_client *client, const char *path) {
     }
 
     snprintf(command.data.load_crt.path, sizeof(command.data.load_crt.path), "%s", path);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_save_state(runtime_client *client, const char *path) {
@@ -584,7 +611,7 @@ bool runtime_client_save_state(runtime_client *client, const char *path) {
     }
 
     snprintf(command.data.state_file.path, sizeof(command.data.state_file.path), "%s", path);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_load_state(runtime_client *client, const char *path) {
@@ -597,7 +624,7 @@ bool runtime_client_load_state(runtime_client *client, const char *path) {
     }
 
     snprintf(command.data.state_file.path, sizeof(command.data.state_file.path), "%s", path);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_mount_d64(runtime_client *client, uint8_t device, const char *path) {
@@ -620,7 +647,7 @@ bool runtime_client_mount_d64_ex(
     command.data.mount_d64.device = device;
     command.data.mount_d64.writable = writable ? 1u : 0u;
     snprintf(command.data.mount_d64.path, sizeof(command.data.mount_d64.path), "%s", path);
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_set_disk_writable(runtime_client *client, uint8_t device, bool writable) {
@@ -634,7 +661,7 @@ bool runtime_client_set_disk_writable(runtime_client *client, uint8_t device, bo
 
     command.data.disk_device.device = device;
     command.data.disk_device.writable = writable ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_unmount_disk(runtime_client *client, uint8_t device) {
@@ -647,7 +674,7 @@ bool runtime_client_unmount_disk(runtime_client *client, uint8_t device) {
     }
 
     command.data.disk_device.device = device;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_power_on_drive(runtime_client *client, uint8_t device) {
@@ -660,7 +687,7 @@ bool runtime_client_power_on_drive(runtime_client *client, uint8_t device) {
     }
 
     command.data.disk_device.device = device;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_power_off_drive(runtime_client *client, uint8_t device) {
@@ -673,7 +700,7 @@ bool runtime_client_power_off_drive(runtime_client *client, uint8_t device) {
     }
 
     command.data.disk_device.device = device;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_request_disk_status(runtime_client *client, uint8_t device) {
@@ -686,7 +713,7 @@ bool runtime_client_request_disk_status(runtime_client *client, uint8_t device) 
     }
 
     command.data.disk_device.device = device;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_assemble_file(runtime_client *client, const char *path, uint16_t address) {
@@ -700,7 +727,7 @@ bool runtime_client_assemble_file(runtime_client *client, const char *path, uint
 
     snprintf(command.data.assemble_file.path, sizeof(command.data.assemble_file.path), "%s", path);
     command.data.assemble_file.address = address;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_assemble_file_full(
@@ -728,7 +755,7 @@ bool runtime_client_assemble_file_full(
     command.data.assemble_file.reset_first = reset_first ? 1u : 0u;
     command.data.assemble_file.auto_adjust_segments =
         auto_adjust_segments ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_poll_symbols(runtime_client *client, runtime_symbol_snapshot *out) {
@@ -767,7 +794,7 @@ bool runtime_client_set_turbo_multiplier(runtime_client *client, uint32_t multip
     }
 
     command.data.set_turbo_multiplier.multiplier = multiplier;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_apply_machine_config(
@@ -830,7 +857,7 @@ bool runtime_client_apply_machine_config(
                  sizeof(command.data.apply_machine_config.rom1541_path),
                  "%s", rom_paths->rom1541_path != NULL ? rom_paths->rom1541_path : "");
     }
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_poll_frame(runtime_client *client, c64_frame *out_frame) {
@@ -925,7 +952,7 @@ bool runtime_client_run_to_cursor(runtime_client *client, uint16_t address) {
     }
 
     command.data.run_to_cursor.address = address;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_run_to_raster(
@@ -944,7 +971,7 @@ bool runtime_client_run_to_raster(
     command.data.run_to_raster.raster_line = raster_line;
     command.data.run_to_raster.has_cycle = has_cycle ? 1u : 0u;
     command.data.run_to_raster.cycle_in_line = cycle_in_line;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_history_info(
@@ -966,7 +993,7 @@ bool runtime_client_history_record(
         return false;
     }
     command.data.history_record.enabled = enabled ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_history_clear(
@@ -999,7 +1026,7 @@ bool runtime_client_history_find(
     command.data.history_find.session_id = session_id;
     command.data.history_find.from_kind = (uint8_t)from_kind;
     command.data.history_find.limit = limit;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_history_next(
@@ -1020,7 +1047,7 @@ bool runtime_client_history_next(
     command.data.history_next.cursor = cursor;
     command.data.history_next.session_id = session_id;
     command.data.history_next.limit = limit;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_history_read(
@@ -1046,7 +1073,7 @@ bool runtime_client_history_read(
     command.data.history_read.session_id = session_id;
     command.data.history_read.before = before;
     command.data.history_read.after = after;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_history_close(
@@ -1064,7 +1091,7 @@ bool runtime_client_history_close(
     }
     command.data.history_close.cursor = cursor;
     command.data.history_close.session_id = session_id;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_session_open(
@@ -1084,7 +1111,7 @@ bool runtime_client_session_open(
     }
     command.data.session_open.kind = (uint8_t)kind;
     command.data.session_open.endpoint_epoch = endpoint_epoch;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_session_close(
@@ -1100,7 +1127,7 @@ bool runtime_client_session_close(
         return false;
     }
     command.data.session_close.session_id = session_id;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_paste_text(runtime_client *client, const char *text, size_t length) {
@@ -1119,7 +1146,7 @@ bool runtime_client_paste_text(runtime_client *client, const char *text, size_t 
     memcpy(command.data.paste_text.text, text, length);
     command.data.paste_text.length = length;
     command.data.paste_text.use_buffer = 0;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_load_bin(
@@ -1144,7 +1171,7 @@ bool runtime_client_load_bin(
     command.data.load_bin.reset_first = reset_first ? 1u : 0u;
     command.data.load_bin.is_basic = is_basic ? 1u : 0u;
     command.data.load_bin.is_basic_text = is_basic_text ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_save_bin(
@@ -1169,7 +1196,7 @@ bool runtime_client_save_bin(
     command.data.save_bin.write_file_address = write_file_address ? 1u : 0u;
     command.data.save_bin.is_basic = is_basic ? 1u : 0u;
     command.data.save_bin.is_basic_text = is_basic_text ? 1u : 0u;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, size_t length) {
@@ -1188,7 +1215,7 @@ bool runtime_client_paste_text_buffer(runtime_client *client, const char *text, 
     memcpy(command.data.paste_text.text, text, length);
     command.data.paste_text.length = length;
     command.data.paste_text.use_buffer = 1;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_paste_events(runtime_client *client, const paste_event_t *events, size_t count) {
@@ -1206,7 +1233,7 @@ bool runtime_client_paste_events(runtime_client *client, const paste_event_t *ev
 
     memcpy(command.data.paste_events.events, events, count * sizeof(paste_event_t));
     command.data.paste_events.count = count;
-    return message_queue_push(client->command_queue, &command);
+    return runtime_client_push(client, &command);
 }
 
 bool runtime_client_request_call_stack(runtime_client *client) {

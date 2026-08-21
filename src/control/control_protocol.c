@@ -1808,6 +1808,22 @@ void control_protocol_format_ok(
     }
 }
 
+void control_protocol_format_event(
+    control_response *response,
+    uint32_t id,
+    const char *text)
+{
+    if (response == NULL) {
+        return;
+    }
+    memset(response, 0, sizeof(*response));
+    response->id = id;
+    response->type = CONTROL_RESPONSE_EVENT;
+    if (text != NULL) {
+        strncpy(response->text, text, CONTROL_RESPONSE_TEXT_MAX - 1);
+    }
+}
+
 void control_protocol_format_error(
     control_response *response,
     uint32_t id,
@@ -1885,6 +1901,13 @@ bool control_protocol_write_response_line(
             "%u error %s\n",
             response->id,
             response->text);
+    } else if (response->type == CONTROL_RESPONSE_EVENT) {
+        if (response->text[0] != '\0') {
+            written = snprintf(
+                out, out_size, "%u event %s\n", response->id, response->text);
+        } else {
+            written = snprintf(out, out_size, "%u event\n", response->id);
+        }
     } else {
         if (response->metadata[0] != '\0') {
             written = snprintf(

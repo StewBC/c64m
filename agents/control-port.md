@@ -49,10 +49,10 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/6** (the per-line VIC ring:
-`vic-ring-info`, `vic-ring-record`, `vic-ring-clear`, and `vic-ring-find`, on
-top of the C64M/5 frame ring, C64M/4 guarded breakpoints, C64M/3 HST1
-flight-recorder queries, and C64M/2 bulk-memory/token behavior).
+code and this document. **Current: C64M/7** (multi-asker sessions + unsolicited
+`state-changed` informs; see `sessions.md`. Prior: C64M/6 per-line VIC ring,
+C64M/5 frame ring, C64M/4 guarded breakpoints, C64M/3 HST1 flight-recorder
+queries, C64M/2 bulk-memory/token behavior).
 
 ## Wire format
 
@@ -72,7 +72,22 @@ Normal text responses are one line:
 ```text
 <id> ok [text]\n
 <id> error <code> <message>\n
+0 event <name> [fields...]\n
 ```
+
+Unsolicited **events** use request id `0` (reserved event channel). Clients that
+match replies by id must skip or queue these lines. `tools/c64_control_client.py`
+`Ctl.cmd()` / `pipeline()` do that automatically (`Ctl.events` / `drain_events`).
+
+`state-changed` framing (C64M/7):
+
+```text
+0 event state-changed reason=<token> session=<u> cycles=<u64> frame=<u64> epoch=<u64>
+```
+
+Reason tokens: `step`, `run`, `pause`, `poke`, `reset`, `load-state`,
+`history-clear`, `media`, `other`. `session` is the source asker id (0 if
+unknown). Awareness only — not a lock. See `sessions.md`.
 
 Data responses have a header, exactly `byte_count` raw bytes, and one final `\n`:
 
@@ -247,9 +262,9 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/6
-version      -> ok protocol=C64M/6 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring
+hello        -> ok name=c64m protocol=C64M/7
+version      -> ok protocol=C64M/7 app=0.1.0
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed
 ping         -> ok
 ```
 

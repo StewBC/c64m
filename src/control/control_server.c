@@ -329,15 +329,34 @@ static bool control_server_handle_connection(
                 }
                 continue;
             }
-            if (!message_queue_wait_pop(server->responses, &response)) {
-                break;
-            }
-            if (!control_server_send_response(connection, &response)) {
+            /* Unsolicited EVENT lines (id 0) may arrive first; flush them and
+               keep waiting for the matching request reply. */
+            for (;;) {
+                if (!message_queue_wait_pop(server->responses, &response)) {
+                    keep_open = false;
+                    break;
+                }
+                if (response.type == CONTROL_RESPONSE_EVENT || response.id == 0u) {
+                    if (!control_server_send_response(connection, &response)) {
+                        control_response_release(&response);
+                        keep_open = false;
+                        break;
+                    }
+                    control_response_release(&response);
+                    continue;
+                }
+                if (!control_server_send_response(connection, &response)) {
+                    control_response_release(&response);
+                    keep_open = false;
+                    break;
+                }
+                keep_open = !response.close_client;
                 control_response_release(&response);
                 break;
             }
-            control_response_release(&response);
-            keep_open = !response.close_client;
+            if (!keep_open) {
+                break;
+            }
         }
         return true;
     }
@@ -346,10 +365,14 @@ static bool control_server_handle_connection(
         control_response response;
         bool did_work = false;
 
-        /* Flush any completed responses first. */
+        /* Flush any completed responses first. Unsolicited EVENT lines (id 0)
+           do not retire outstanding request ids. */
         while (message_queue_try_pop(server->responses, &response)) {
             did_work = true;
-            control_server_ids_remove(outstanding_ids, &outstanding, response.id);
+            if (response.type != CONTROL_RESPONSE_EVENT && response.id != 0u) {
+                control_server_ids_remove(
+                    outstanding_ids, &outstanding, response.id);
+            }
             if (!control_server_send_response(connection, &response)) {
                 control_response_release(&response);
                 keep_open = false;
@@ -431,7 +454,11 @@ static bool control_server_handle_connection(
             /* Wait for socket readability and/or a response. */
             if (outstanding > 0) {
                 if (message_queue_wait_pop_timeout(server->responses, &response, 5u)) {
-                    control_server_ids_remove(outstanding_ids, &outstanding, response.id);
+                    if (response.type != CONTROL_RESPONSE_EVENT &&
+                        response.id != 0u) {
+                        control_server_ids_remove(
+                            outstanding_ids, &outstanding, response.id);
+                    }
                     if (!control_server_send_response(connection, &response)) {
                         control_response_release(&response);
                         break;

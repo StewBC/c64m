@@ -1470,6 +1470,14 @@ static const char *control_runtime_event_name(runtime_event_type type)
             return "save-state-complete";
         case RUNTIME_EVENT_LOAD_STATE_COMPLETE:
             return "load-state-complete";
+        case RUNTIME_EVENT_HISTORY_STATUS_RESPONSE:
+            return "history-status";
+        case RUNTIME_EVENT_HISTORY_RESULT_RESPONSE:
+            return "history-result";
+        case RUNTIME_EVENT_SESSION_RESPONSE:
+            return "session";
+        case RUNTIME_EVENT_STATE_CHANGED:
+            return "state-changed";
         case RUNTIME_EVENT_NONE:
         default:
             return "none";
@@ -3180,6 +3188,55 @@ static void cancel_deferred_control_response(
     }
 }
 
+static const char *state_changed_reason_name(runtime_state_changed_reason reason)
+{
+    switch (reason) {
+    case RUNTIME_STATE_CHANGED_STEP:
+        return "step";
+    case RUNTIME_STATE_CHANGED_RUN:
+        return "run";
+    case RUNTIME_STATE_CHANGED_PAUSE:
+        return "pause";
+    case RUNTIME_STATE_CHANGED_POKE:
+        return "poke";
+    case RUNTIME_STATE_CHANGED_RESET:
+        return "reset";
+    case RUNTIME_STATE_CHANGED_LOAD_STATE:
+        return "load-state";
+    case RUNTIME_STATE_CHANGED_HISTORY_CLEAR:
+        return "history-clear";
+    case RUNTIME_STATE_CHANGED_MEDIA:
+        return "media";
+    case RUNTIME_STATE_CHANGED_OTHER:
+    default:
+        return "other";
+    }
+}
+
+static void control_post_state_changed(
+    control_server *control,
+    const runtime_event *event)
+{
+    control_response response;
+    char text[CONTROL_RESPONSE_TEXT_MAX];
+
+    if (control == NULL || event == NULL) {
+        return;
+    }
+    /* Always push: awareness only. Clients ignore or log; Ctl skips in cmd(). */
+    snprintf(
+        text,
+        sizeof(text),
+        "state-changed reason=%s session=%u cycles=%llu frame=%llu epoch=%llu",
+        state_changed_reason_name(event->data.state_changed.reason),
+        (unsigned)event->data.state_changed.source_session_id,
+        (unsigned long long)event->data.state_changed.cycles,
+        (unsigned long long)event->data.state_changed.frame,
+        (unsigned long long)event->data.state_changed.history_epoch);
+    control_protocol_format_event(&response, 0u, text);
+    (void)control_server_post_response(control, &response);
+}
+
 /* Close the bound control session without waiting (fire-and-forget). */
 static void control_session_release(
     runtime_client *client,
@@ -3194,6 +3251,7 @@ static void control_session_release(
     (void)runtime_client_session_close(client, bind->session_id, token);
     bind->session_id = 0u;
     bind->session_epoch = 0u;
+    runtime_client_set_command_session(client, 0u);
 }
 
 /*
@@ -3245,11 +3303,16 @@ static bool control_session_ensure(
                     event.data.session.session_id != 0u) {
                     bind->session_id = event.data.session.session_id;
                     bind->session_epoch = epoch;
+                    runtime_client_set_command_session(
+                        client, bind->session_id);
                     return true;
                 }
                 return false;
             }
-            /* Keep deferred completions / latches coherent while waiting. */
+            /* Keep deferred completions / latches / informs coherent. */
+            if (event.type == RUNTIME_EVENT_STATE_CHANGED) {
+                control_post_state_changed(control, &event);
+            }
             control_event_latch_note(event_latch, event.type);
             if (deferred_table != NULL) {
                 size_t di;
@@ -3459,6 +3522,9 @@ static void poll_runtime_events(
             } else if (event.type == RUNTIME_EVENT_CPU_STATE_RESPONSE) {
                 control_cache_note_cpu(control_cache, &event.data.cpu_state);
             }
+        }
+        if (event.type == RUNTIME_EVENT_STATE_CHANGED) {
+            control_post_state_changed(control, &event);
         }
         update_debug_state_from_event(debug_state, &event);
         control_event_latch_note(event_latch, event.type);
@@ -4752,7 +4818,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/6",
+                "name=c64m protocol=C64M/7",
                 false);
             break;
 
@@ -4760,7 +4826,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/6 app=0.1.0",
+                "protocol=C64M/7 app=0.1.0",
                 false);
             break;
 
@@ -4768,7 +4834,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed",
                 false);
             break;
 
@@ -6145,6 +6211,18 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_UNMOUNT_DISK:
         case CONTROL_COMMAND_POWER_DRIVE:
             if (accepted) {
+                /* Optimistic RUNNING so a following wait-paused in the same
+                   round-trip cannot false-complete on the previous pause before
+                   RUNTIME_EVENT_RUNNING is polled (widened by state-changed). */
+                if (debug_state != NULL &&
+                    (request->type == CONTROL_COMMAND_RUN ||
+                     request->type == CONTROL_COMMAND_RUN_CYCLES ||
+                     request->type == CONTROL_COMMAND_RUN_INSTRUCTIONS ||
+                     request->type == CONTROL_COMMAND_RUN_TO ||
+                     request->type == CONTROL_COMMAND_RUN_TO_RASTER)) {
+                    debug_state->runtime_state = FRONTEND_RUNTIME_STATE_RUNNING;
+                    debug_state->stop_reason = RUNTIME_STOP_REASON_NONE;
+                }
                 control_protocol_format_ok(&response, request->id, "accepted=1", false);
                 request_debug_state(client);
             } else if (response.text[0] == '\0') {

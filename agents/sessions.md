@@ -1,15 +1,14 @@
 # Sessions: multi-asker query foundation (Inspector prep)
 
-**Status:** In progress (S0/S1 landed). **No Inspector UI in this epic.**  
+**Status:** In progress (S0–S3 landed). **No Inspector UI in this epic.**  
 **Sibling:** Closed foundation in `../a2m` as **A2M/11** — see
 `../a2m/agents/sessions.md` and commits `5e203fc`…`173873c`.  
 **Product name (later UI):** Inspector (F9-like second view; not this campaign).  
-**Depends on:** flight recorder + history wire (C64M/3+), frame ring (C64M/5+),
-current control path at **C64M/6**.  
+**Depends on:** flight recorder + history wire (C64M/3+), frame ring (C64M/5+).  
 **Unblocks:** Inspector UI / shared flight-recorder browsing between human UI and
 socket agent without cursor stomp.  
-**Wire:** bump to **C64M/7** when unsolicited `state-changed` (and/or visible
-session fields) land.
+**Wire:** **C64M/7** (unsolicited `state-changed` + `sessions` / `state-changed`
+capabilities).
 
 Related: [`control-port.md`](control-port.md) · [`using-c64m.md`](using-c64m.md) ·
 [`cpu-flight-recorder.md`](cpu-flight-recorder.md) ·
@@ -312,7 +311,10 @@ the slot; single-client scripts omit session syntax as before.
 - Dual history test: after step, NEXT on old cursor → cursor stale; re-FIND works
 - Existing coop smoke still works; watcher may log events
 
-**Landed:** _(pending)_
+**Landed:** `RUNTIME_EVENT_STATE_CHANGED` on history-invalidating commands and
+pause; wire `0 event state-changed reason=… session=… cycles=… frame=… epoch=…`;
+C64M/7 + capabilities `sessions` / `state-changed`; `Ctl` skips events;
+`runtime_state_changed` ctest (step → stale → re-FIND).
 
 ---
 

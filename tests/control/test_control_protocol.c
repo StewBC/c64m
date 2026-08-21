@@ -584,6 +584,18 @@ static void test_response_formatting(void)
     expect_true("write data", control_protocol_write_response_line(&response, line, sizeof(line)));
     expect_string("data line", "12 data memory 4 addr=0400 length=4 mode=0\n", line);
     control_response_release(&response);
+
+    control_protocol_format_event(
+        &response,
+        0u,
+        "state-changed reason=step session=2 cycles=12345 frame=1 epoch=1");
+    expect_true(
+        "write event",
+        control_protocol_write_response_line(&response, line, sizeof(line)));
+    expect_string(
+        "event line",
+        "0 event state-changed reason=step session=2 cycles=12345 frame=1 epoch=1\n",
+        line);
 }
 
 static void test_parse_run_to_raster(void)

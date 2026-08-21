@@ -168,7 +168,10 @@ typedef struct control_args {
 typedef enum control_response_type {
     CONTROL_RESPONSE_OK = 0,
     CONTROL_RESPONSE_ERROR,
-    CONTROL_RESPONSE_DATA
+    CONTROL_RESPONSE_DATA,
+    /* Unsolicited out-of-band line: "<id> event <name> [fields...]".
+       Request id 0 is the reserved event channel. */
+    CONTROL_RESPONSE_EVENT
 } control_response_type;
 
 typedef struct control_request {
@@ -207,6 +210,11 @@ void control_protocol_format_error(
     const char *code,
     const char *message,
     bool close_client);
+
+void control_protocol_format_event(
+    control_response *response,
+    uint32_t id,
+    const char *text);
 
 void control_protocol_format_data(
     control_response *response,

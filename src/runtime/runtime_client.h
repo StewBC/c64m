@@ -50,6 +50,10 @@ bool runtime_client_step_frame(runtime_client *client);
 /* Allocate a non-zero request_token for solicited control/UI RPC. */
 uint64_t runtime_client_alloc_request_token(runtime_client *client);
 
+/* Stamp source session id onto subsequent commands (0 = unknown / internal). */
+void runtime_client_set_command_session(runtime_client *client, uint32_t session_id);
+uint32_t runtime_client_get_command_session(const runtime_client *client);
+
 /* Token 0: unsolicited / UI telemetry (must not complete control deferred). */
 bool runtime_client_request_cpu_state(runtime_client *client);
 /* Solicited CPU read; runtime echoes request_token on CPU_STATE_RESPONSE. */

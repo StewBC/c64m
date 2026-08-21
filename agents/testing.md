@@ -69,7 +69,9 @@ CPU flight-recorder coverage is split deliberately across layers:
   failure.
 - `runtime_history_sessions`: two in-process sessions page FIND/NEXT without
   cursor cross-stomp (sessions foundation; see `sessions.md`).
-- `history_control_integration`: real localhost C64M/3 framing and cursor
+- `runtime_state_changed`: mutation emits `RUNTIME_EVENT_STATE_CHANGED`; peer
+  history cursor goes stale and re-FIND works (C64M/7 inform).
+- `history_control_integration`: real localhost C64M framing and cursor
   invalidation against a headless emulator. Environments that sandbox localhost
   must grant loopback access for this test.
 

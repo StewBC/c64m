@@ -46,6 +46,8 @@ struct runtime_client {
     struct runtime_vic_ring *vic_ring;
     /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
     uint64_t next_request_token;
+    /* Stamped onto outgoing commands as source session (0 = unknown). */
+    uint32_t command_session_id;
 };
 
 typedef struct paste_state {

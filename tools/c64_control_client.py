@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal c64m control-port client (C64M/6 line protocol).
+"""Minimal c64m control-port client (C64M/7 line protocol).
 
 Debug/introspection helper for driving a headless c64m over its localhost
 control port. Written for the lft-nine VIC-II investigation
@@ -35,8 +35,13 @@ Wire format:
   ok      : "<id> ok [text]\n"
   error   : "<id> error <code> <message>\n"
   data    : "<id> data <type> <byte_count> [metadata]\n" + <bytes> + "\n"
+  event   : "0 event <name> [fields...]\n"  (unsolicited; cmd() skips)
+
+Unsolicited `0 event state-changed …` lines are collected on Ctl.events;
+cmd()/pipeline() skip them so request matching stays correct.
 """
 import socket, struct, time
+from typing import List
 
 class Ctl:
     def __init__(self, host="127.0.0.1", port=17652, timeout=30.0):
@@ -44,6 +49,8 @@ class Ctl:
         self.s.settimeout(timeout)
         self.buf = b""
         self.id = 0
+        # Unsolicited `0 event …` lines collected here (newest last).
+        self.events: List[str] = []
 
     def _readline(self):
         while b"\n" not in self.buf:
@@ -69,9 +76,12 @@ class Ctl:
     def _parse_response_header(self, line, expect_id=None):
         parts = line.split(" ")
         rid = int(parts[0])
+        kind = parts[1]
+        if kind == "event":
+            # Unsolicited / out-of-band (normally id 0).
+            return rid, ("event", " ".join(parts[2:]))
         if expect_id is not None:
             assert rid == expect_id, f"id mismatch: {line!r}"
-        kind = parts[1]
         if kind == "ok":
             return rid, ("ok", " ".join(parts[2:]))
         if kind == "error":
@@ -83,19 +93,52 @@ class Ctl:
             return rid, ("data", meta, payload)
         raise ValueError(f"unknown response: {line!r}")
 
+    def _note_event(self, text):
+        self.events.append(text)
+
+    def drain_events(self, wait=0.0):
+        """Return and clear queued events; optionally wait briefly for more."""
+        if wait > 0:
+            old = self.s.gettimeout()
+            try:
+                self.s.settimeout(wait)
+                while True:
+                    try:
+                        line = self._readline()
+                    except (socket.timeout, TimeoutError):
+                        break
+                    rid, result = self._parse_response_header(line)
+                    if result[0] == "event":
+                        self._note_event(result[1])
+                        continue
+                    raise RuntimeError(
+                        f"unexpected non-event while draining: id={rid} {result!r}"
+                    )
+            finally:
+                self.s.settimeout(old)
+        out = list(self.events)
+        self.events.clear()
+        return out
+
     def cmd(self, text):
+        """Send one command; skip intervening event lines into self.events."""
         self.id += 1
         rid = self.id
         self.s.sendall(f"{rid} {text}\n".encode("latin1"))
-        line = self._readline()
-        _, result = self._parse_response_header(line, expect_id=rid)
-        return result
+        while True:
+            line = self._readline()
+            got_id, result = self._parse_response_header(line)
+            if result[0] == "event":
+                self._note_event(result[1])
+                continue
+            assert got_id == rid, f"id mismatch: {line!r}"
+            return result
 
     def pipeline(self, commands):
         """Send many requests without waiting, then collect responses by id.
 
         Phase 2b: server may complete out of order; returns list of results in
-        the same order as `commands`.
+        the same order as `commands`. Unsolicited events go to self.events.
         """
         ids = []
         for text in commands:
@@ -108,6 +151,9 @@ class Ctl:
         while pending:
             line = self._readline()
             rid, result = self._parse_response_header(line)
+            if result[0] == "event":
+                self._note_event(result[1])
+                continue
             if rid not in pending:
                 raise RuntimeError(f"unexpected response id {rid}: {line!r}")
             by_id[rid] = result
