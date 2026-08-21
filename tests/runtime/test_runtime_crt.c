@@ -349,6 +349,7 @@ static void expect_crt_history_order(runtime_client *client) {
         "request CRT history",
         runtime_client_history_find(
             client,
+            0u,
             &query,
             RUNTIME_HISTORY_FROM_OLDEST,
             0u,

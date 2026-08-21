@@ -1055,3 +1055,15 @@ target_link_libraries(test_runtime_history_wire PRIVATE
 )
 
 add_test(NAME runtime_history_wire COMMAND test_runtime_history_wire)
+
+add_executable(test_runtime_history_sessions
+    tests/runtime/test_runtime_history_sessions.c
+)
+
+target_compile_features(test_runtime_history_sessions PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_history_sessions PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_history_sessions COMMAND test_runtime_history_sessions)

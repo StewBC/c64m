@@ -67,6 +67,8 @@ CPU flight-recorder coverage is split deliberately across layers:
 - `runtime_flight_recorder`: runtime ownership, reset/mutation ordering,
   recording controls, epochs, timelines, partial records, and allocation
   failure.
+- `runtime_history_sessions`: two in-process sessions page FIND/NEXT without
+  cursor cross-stomp (sessions foundation; see `sessions.md`).
 - `history_control_integration`: real localhost C64M/3 framing and cursor
   invalidation against a headless emulator. Environments that sandbox localhost
   must grant loopback access for this test.

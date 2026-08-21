@@ -4785,6 +4785,7 @@ static void dispatch_control_request(
                                 RUNTIME_HISTORY_QUERY_BACKWARD;
                         sent = runtime_client_history_find(
                             client,
+                            0u, /* default session until S2 binds control */
                             &query,
                             (runtime_history_from_kind)
                                 request->args.history_from_kind,
@@ -4795,6 +4796,7 @@ static void dispatch_control_request(
                                CONTROL_COMMAND_HISTORY_NEXT) {
                         sent = runtime_client_history_next(
                             client,
+                            0u,
                             request->args.history_cursor,
                             request->args.history_limit,
                             token);
@@ -4802,6 +4804,7 @@ static void dispatch_control_request(
                                CONTROL_COMMAND_HISTORY_READ) {
                         sent = runtime_client_history_read(
                             client,
+                            0u,
                             request->args.history_epoch,
                             request->args.history_id,
                             request->args.history_before,
@@ -4810,6 +4813,7 @@ static void dispatch_control_request(
                     } else {
                         sent = runtime_client_history_close(
                             client,
+                            0u,
                             request->args.history_cursor,
                             token);
                     }

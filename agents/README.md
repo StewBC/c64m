@@ -95,6 +95,10 @@ Component handoffs:
   forensic recorder and C64M/3 query/API contract
 - `cpu-flight-recorder-plan.md` - completed test-first implementation record,
   performance gates, measurements, and acceptance checklist
+- `sessions.md` - **Planned port** of a2m’s multi-asker session foundation
+  (per-asker history cursors + `state-changed` inform; Inspector prep; no UI).
+  Sibling closed as A2M/11 in `../a2m/agents/sessions.md`. Target wire bump
+  C64M/7; control bind lives in `main.c` (c64m has no `control_dispatch.c`).
 - `guarded-breakpoints-plan.md` - **implemented** (Tier 1A): condition-guarded
   breakpoints (`when=`, bounded AND-list of CPU/flag/value/mem/raster terms);
   the "machine stops itself on nuance" primitive. Wire syntax and semantics

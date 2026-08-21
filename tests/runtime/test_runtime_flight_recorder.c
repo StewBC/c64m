@@ -168,7 +168,7 @@ int main(void) {
 
         memset(&query, 0, sizeof(query));
         if (!runtime_client_history_find(
-                client, &query, RUNTIME_HISTORY_FROM_DEFAULT,
+                client, 0u, &query, RUNTIME_HISTORY_FROM_DEFAULT,
                 0u, 2u, token) ||
             !poll_event(
                 client, RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
@@ -187,7 +187,7 @@ int main(void) {
         }
         busy_token = runtime_client_alloc_request_token(client);
         if (!runtime_client_history_read(
-                client, 0u, status.newest_id, 0u, 0u, busy_token) ||
+                client, 0u, 0u, status.newest_id, 0u, 0u, busy_token) ||
             !poll_event(
                 client, RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
                 busy_token, &event) ||
@@ -215,7 +215,7 @@ int main(void) {
         }
         stale_token = runtime_client_alloc_request_token(client);
         if (!runtime_client_history_next(
-                client, cursor, 2u, stale_token) ||
+                client, 0u, cursor, 2u, stale_token) ||
             !poll_event(
                 client, RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
                 stale_token, &event) ||
@@ -227,7 +227,7 @@ int main(void) {
         status = request_status(client);
         token = runtime_client_alloc_request_token(client);
         if (!runtime_client_history_read(
-                client, status.epoch, status.newest_id,
+                client, 0u, status.epoch, status.newest_id,
                 1u, 0u, token) ||
             !poll_event(
                 client, RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,

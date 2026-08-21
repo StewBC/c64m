@@ -643,9 +643,11 @@ applies to the executed opcode. If neither `address` nor `access` is supplied,
 
 ### Cursor
 
-There is one active history search cursor per runtime. A new `history-find`
-replaces the previous cursor. The cursor owns only query criteria and a scan
-position, never arena data.
+History search cursors are **per session** (fixed table of 4 asker slots on the
+runtime; see `agents/sessions.md`). A new `history-find` on a given session
+replaces that session’s cursor only. Omitting session id uses the default
+compat session. The cursor owns only query criteria and a scan position, never
+arena data.
 
 The cursor binds:
 
@@ -655,9 +657,10 @@ The cursor binds:
 - direction;
 - next scan position.
 
-`history-next` returns `stale history-cursor-stale` after cursor invalidation.
-`history-close` is idempotent. Disconnect does not leak payload or pin the ring;
-a later `history-find` simply replaces any abandoned cursor.
+`history-next` returns `stale history-cursor-stale` after cursor invalidation
+(mutation invalidates **all** active session cursors). `history-close` is
+idempotent. Disconnect releases the control session slot; a later
+`history-find` on a new session starts a fresh cursor.
 
 Cursor IDs are nonzero unsigned 64-bit values and are not reusable within one
 runtime lifetime. A successful find page reports a cursor only when more search

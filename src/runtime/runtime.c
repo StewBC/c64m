@@ -145,6 +145,15 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.frame_ring = &rt->frame_ring;
     rt->client.vic_ring = &rt->vic_ring;
 
+    /* Default session for omit-session_id commands (compat / single asker). */
+    rt->next_session_id = 1u;
+    rt->sessions[0].id = 1u;
+    rt->sessions[0].kind = RUNTIME_SESSION_KIND_UI;
+    rt->sessions[0].active = 1u;
+    rt->sessions[0].endpoint_epoch = 0u;
+    rt->default_session_id = 1u;
+    rt->next_session_id = 2u;
+
     if (config) {
         rt->basic_rom_path = runtime_copy_string(config->basic_rom_path);
         rt->char_rom_path = runtime_copy_string(config->char_rom_path);
