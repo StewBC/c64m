@@ -274,7 +274,9 @@ analogous sites are the control request switch and deferred completion paths in
 - Disconnect mid-FIND leaves no orphan cursor (slot reusable)
 - `tools/c64_control_client.py` history smoke unchanged for happy path
 
-**Landed:** _(pending)_
+**Landed:** Control TCP client binds `kind=control` session in `main.c`; history
+FIND/NEXT/READ/CLOSE use that session id; disconnect/epoch/shutdown releases
+the slot; single-client scripts omit session syntax as before.
 
 ---
 

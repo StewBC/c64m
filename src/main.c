@@ -68,6 +68,12 @@ typedef struct sdl_c64_controller_state {
 
 /* deferred_control_response / table: control_deferred.h */
 
+/* Runtime session bound to the current TCP control client (0 = unbound). */
+typedef struct control_session_bind {
+    uint32_t session_id;
+    uint64_t session_epoch;
+} control_session_bind;
+
 static bool deferred_table_any_active(const deferred_control_table *table)
 {
     size_t i;
@@ -3174,6 +3180,126 @@ static void cancel_deferred_control_response(
     }
 }
 
+/* Close the bound control session without waiting (fire-and-forget). */
+static void control_session_release(
+    runtime_client *client,
+    control_session_bind *bind)
+{
+    uint64_t token;
+
+    if (client == NULL || bind == NULL || bind->session_id == 0u) {
+        return;
+    }
+    token = runtime_client_alloc_request_token(client);
+    (void)runtime_client_session_close(client, bind->session_id, token);
+    bind->session_id = 0u;
+    bind->session_epoch = 0u;
+}
+
+/*
+ * Ensure TCP client is bound to a kind=control runtime session for the current
+ * connection epoch. Opens synchronously by pumping runtime events briefly.
+ * Completes deferred work for any events drained while waiting.
+ */
+static bool control_session_ensure(
+    control_server *control,
+    runtime_client *client,
+    deferred_control_table *deferred_table,
+    frontend_debug_state *debug_state,
+    control_event_latch *event_latch,
+    control_session_bind *bind)
+{
+    uint64_t epoch;
+    uint64_t token;
+    uint32_t start_ms;
+    runtime_event event;
+
+    if (control == NULL || client == NULL || bind == NULL) {
+        return false;
+    }
+    if (!control_server_has_client(control)) {
+        return false;
+    }
+
+    epoch = control_server_connection_epoch(control);
+    if (bind->session_id != 0u && bind->session_epoch == epoch) {
+        return true;
+    }
+
+    if (bind->session_id != 0u) {
+        control_session_release(client, bind);
+    }
+
+    token = runtime_client_alloc_request_token(client);
+    if (!runtime_client_session_open(
+            client, RUNTIME_SESSION_KIND_CONTROL, epoch, token)) {
+        return false;
+    }
+
+    start_ms = SDL_GetTicks();
+    while ((SDL_GetTicks() - start_ms) < 2000u) {
+        while (runtime_client_poll_event(client, &event)) {
+            if (event.type == RUNTIME_EVENT_SESSION_RESPONSE &&
+                event.request_token == token) {
+                if (event.data.session.status == RUNTIME_SESSION_OK &&
+                    event.data.session.session_id != 0u) {
+                    bind->session_id = event.data.session.session_id;
+                    bind->session_epoch = epoch;
+                    return true;
+                }
+                return false;
+            }
+            /* Keep deferred completions / latches coherent while waiting. */
+            control_event_latch_note(event_latch, event.type);
+            if (deferred_table != NULL) {
+                size_t di;
+                for (di = 0; di < CONTROL_DEFERRED_CAPACITY; ++di) {
+                    deferred_control_response *deferred =
+                        &deferred_table->entries[di];
+                    if (!deferred->active) {
+                        continue;
+                    }
+                    complete_deferred_control_response(
+                        control, client, debug_state, deferred, &event);
+                    check_deferred_event_wait(
+                        control, deferred, &event, event_latch);
+                    check_deferred_state_wait(
+                        control, deferred, debug_state, &event);
+                    if (debug_state != NULL && debug_state->has_frame) {
+                        check_deferred_frame_wait(
+                            control, deferred, debug_state->frame_number);
+                    }
+                }
+            }
+        }
+        SDL_Delay(1);
+    }
+    return false;
+}
+
+static uint32_t control_session_history_id(
+    control_server *control,
+    runtime_client *client,
+    deferred_control_table *deferred_table,
+    frontend_debug_state *debug_state,
+    control_event_latch *event_latch,
+    control_session_bind *bind)
+{
+    if (bind == NULL) {
+        return 0u;
+    }
+    if (!control_session_ensure(
+            control,
+            client,
+            deferred_table,
+            debug_state,
+            event_latch,
+            bind)) {
+        return 0u; /* fall back to default session */
+    }
+    return bind->session_id;
+}
+
 static void check_deferred_control_session_one(
     control_server *control,
     runtime_client *client,
@@ -3199,12 +3325,35 @@ static void check_deferred_control_session_one(
 static void check_deferred_control_session(
     control_server *control,
     runtime_client *client,
-    deferred_control_table *table)
+    deferred_control_table *table,
+    frontend_debug_state *debug_state,
+    control_event_latch *event_latch,
+    control_session_bind *bind)
 {
     size_t i;
+    uint64_t epoch;
+    bool has_client;
+
     if (control == NULL || table == NULL) {
         return;
     }
+
+    has_client = control_server_has_client(control);
+    epoch = control_server_connection_epoch(control);
+
+    /* Disconnect / epoch bump: free the control session slot. */
+    if (bind != NULL && bind->session_id != 0u &&
+        (!has_client || bind->session_epoch != epoch)) {
+        control_session_release(client, bind);
+    }
+
+    /* New TCP client: bind a control session early (before history cmds). */
+    if (bind != NULL && has_client &&
+        (bind->session_id == 0u || bind->session_epoch != epoch)) {
+        (void)control_session_ensure(
+            control, client, table, debug_state, event_latch, bind);
+    }
+
     for (i = 0; i < CONTROL_DEFERRED_CAPACITY; ++i) {
         check_deferred_control_session_one(
             control, client, &table->entries[i]);
@@ -4563,10 +4712,11 @@ static bool control_command_is_execution_control(control_command_type type)
 static void dispatch_control_request(
     control_server *control,
     runtime_client *client,
-    const frontend_debug_state *debug_state,
+    frontend_debug_state *debug_state,
     control_cached_state *control_cache,
     deferred_control_table *deferred_table,
     control_event_latch *event_latch,
+    control_session_bind *session_bind,
     bool auto_adjust_segments,
     const control_request *request)
 {
@@ -4785,7 +4935,13 @@ static void dispatch_control_request(
                                 RUNTIME_HISTORY_QUERY_BACKWARD;
                         sent = runtime_client_history_find(
                             client,
-                            0u, /* default session until S2 binds control */
+                            control_session_history_id(
+                                control,
+                                client,
+                                deferred_table,
+                                debug_state,
+                                event_latch,
+                                session_bind),
                             &query,
                             (runtime_history_from_kind)
                                 request->args.history_from_kind,
@@ -4796,7 +4952,13 @@ static void dispatch_control_request(
                                CONTROL_COMMAND_HISTORY_NEXT) {
                         sent = runtime_client_history_next(
                             client,
-                            0u,
+                            control_session_history_id(
+                                control,
+                                client,
+                                deferred_table,
+                                debug_state,
+                                event_latch,
+                                session_bind),
                             request->args.history_cursor,
                             request->args.history_limit,
                             token);
@@ -4804,7 +4966,13 @@ static void dispatch_control_request(
                                CONTROL_COMMAND_HISTORY_READ) {
                         sent = runtime_client_history_read(
                             client,
-                            0u,
+                            control_session_history_id(
+                                control,
+                                client,
+                                deferred_table,
+                                debug_state,
+                                event_latch,
+                                session_bind),
                             request->args.history_epoch,
                             request->args.history_id,
                             request->args.history_before,
@@ -4813,7 +4981,13 @@ static void dispatch_control_request(
                     } else {
                         sent = runtime_client_history_close(
                             client,
-                            0u,
+                            control_session_history_id(
+                                control,
+                                client,
+                                deferred_table,
+                                debug_state,
+                                event_latch,
+                                session_bind),
                             request->args.history_cursor,
                             token);
                     }
@@ -6022,10 +6196,11 @@ static void dispatch_control_request(
 static void dispatch_control_requests(
     control_server *control,
     runtime_client *client,
-    const frontend_debug_state *debug_state,
+    frontend_debug_state *debug_state,
     control_cached_state *control_cache,
     deferred_control_table *deferred_table,
     control_event_latch *event_latch,
+    control_session_bind *session_bind,
     bool auto_adjust_segments)
 {
     control_request request;
@@ -6042,6 +6217,7 @@ static void dispatch_control_requests(
             control_cache,
             deferred_table,
             event_latch,
+            session_bind,
             auto_adjust_segments,
             &request);
         control_request_release(&request);
@@ -6085,6 +6261,7 @@ static bool run_main_loop(
     deferred_control_table deferred_control = {0};
     control_cached_state control_cache = {0};
     control_event_latch event_latch = {0};
+    control_session_bind session_bind = {0};
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
@@ -6300,7 +6477,12 @@ static bool run_main_loop(
             &control_cache,
             &event_latch);
         check_deferred_control_session(
-            control, client, &deferred_control);
+            control,
+            client,
+            &deferred_control,
+            &debug_state,
+            &event_latch,
+            &session_bind);
         check_deferred_control_timeout(
             control, client, &deferred_control);
         dispatch_control_requests(
@@ -6310,6 +6492,7 @@ static bool run_main_loop(
             &control_cache,
             &deferred_control,
             &event_latch,
+            &session_bind,
             options->assembler_auto_adjust_segments);
 
         if (!title_set ||
@@ -6359,6 +6542,7 @@ static bool run_main_loop(
             &kbd_joystick);
         platform_window_present(window);
     }
+    control_session_release(client, &session_bind);
     sdl_c64_controllers_close(&controller_state, client);
 
     return true;
@@ -6388,6 +6572,7 @@ static bool run_headless_loop(
     deferred_control_table deferred_control = {0};
     control_cached_state control_cache = {0};
     control_event_latch event_latch = {0};
+    control_session_bind session_bind = {0};
     frontend_debug_state debug_state = {
         .runtime_state = FRONTEND_RUNTIME_STATE_UNKNOWN,
     };
@@ -6426,7 +6611,12 @@ static bool run_headless_loop(
             &control_cache,
             &event_latch);
         check_deferred_control_session(
-            control, client, &deferred_control);
+            control,
+            client,
+            &deferred_control,
+            &debug_state,
+            &event_latch,
+            &session_bind);
         check_deferred_control_timeout(
             control, client, &deferred_control);
         dispatch_control_requests(
@@ -6436,9 +6626,11 @@ static bool run_headless_loop(
             &control_cache,
             &deferred_control,
             &event_latch,
+            &session_bind,
             options->assembler_auto_adjust_segments);
     }
 
+    control_session_release(client, &session_bind);
     if (control != NULL) {
         control_server_set_wake_hook(control, NULL);
     }
