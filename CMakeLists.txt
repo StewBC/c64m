@@ -575,6 +575,23 @@ set_tests_properties(vic_ring_control_integration PROPERTIES
     TIMEOUT 60
 )
 
+add_executable(test_disasm_pc_lock
+    tests/frontend/test_disasm_pc_lock.c
+    src/frontend/disasm_pc_lock.c
+)
+
+target_compile_features(test_disasm_pc_lock PRIVATE c_std_99)
+
+target_include_directories(test_disasm_pc_lock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+)
+
+target_link_libraries(test_disasm_pc_lock PRIVATE
+    disasm_6502
+)
+
+add_test(NAME disasm_pc_lock COMMAND test_disasm_pc_lock)
+
 add_executable(test_disasm_6502
     tests/tools/test_disasm_6502.c
 )

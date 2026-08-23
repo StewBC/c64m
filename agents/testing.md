@@ -8,7 +8,7 @@ When verification is explicitly authorized, run from the repository root:
 ctest --test-dir build --output-on-failure
 ```
 
-The current baseline is 69/69 passing, including the longer real 1541 ROM/IEC,
+The current baseline is 73 tests (including `disasm_pc_lock`), covering the longer real 1541 ROM/IEC,
 G64, Arkanoid, Robocop, mid-transfer 1541 snapshot paths, CPU flight recorder,
 guarded breakpoints, frame/VIC rings, and localhost control integration tests.
 Do not rebuild or rerun the suite merely to validate these handoffs when another
@@ -54,7 +54,7 @@ environment, not a regression.
   `runtime_disk`, `runtime_real_1541_autorun`.
 - Runtime/UI/platform: `runtime_*`, `frontend_input`, `frontend_joystick`,
   `help_view`, `platform_fs`, `app_options`, `control_protocol`.
-- Tools/util: assembler tests, `disasm_6502`, `symbol_table`, `t64`, `crt`,
+- Tools/util: assembler tests, `disasm_6502`, `disasm_pc_lock`, `symbol_table`, `t64`, `crt`,
   `basic_v2`, and `paste_parser`.
 
 CPU flight-recorder coverage is split deliberately across layers:

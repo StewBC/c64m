@@ -25,6 +25,8 @@ add_library(frontend STATIC
     crt_renderer.h
     disk_led_data.c
     disk_led_data.h
+    disasm_pc_lock.c
+    disasm_pc_lock.h
     frontend.c
     frontend.h
     frontend_input.c
