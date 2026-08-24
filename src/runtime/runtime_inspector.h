@@ -56,7 +56,9 @@ typedef enum runtime_inspector_enter_status {
 
 /* I0 master switch. Off->on arms film (if budget > 0) and starts the
  * checkpoint recorder. Never arms HST1. On->off stops Inspector recording
- * only; standalone HST1 / film are left alone. */
+ * only; standalone HST1 / film are left alone.
+ * While turbo is max/warp and inspector_off_on_max is on, enable does not
+ * arm: it is remembered for leave-max. Disable clears that memory. */
 void runtime_inspector_set_enabled(runtime *rt, bool enabled);
 bool runtime_inspector_enabled(const runtime *rt);
 uint32_t runtime_inspector_memory_mb(const runtime *rt);

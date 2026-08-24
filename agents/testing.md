@@ -9,7 +9,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 The current baseline is 77 tests (including `disasm_pc_lock`, `runtime_inspector`,
-`runtime_inspector_replay`, and `runtime_inspector_mode`), covering the longer real 1541 ROM/IEC,
+`runtime_inspector_replay` (I4 wipe-in-max / restore-on-leave / warp), and `runtime_inspector_mode`), covering the longer real 1541 ROM/IEC,
 G64, Arkanoid, Robocop, mid-transfer 1541 snapshot paths, CPU flight recorder,
 guarded breakpoints, frame/VIC rings, and localhost control integration tests.
 Do not rebuild or rerun the suite merely to validate these handoffs when another

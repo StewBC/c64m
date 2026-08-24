@@ -124,6 +124,7 @@ static void fill_base_config(runtime_config *config) {
     config->inspector = true;
     config->inspector_memory_mb = 16u;
     config->inspector_memory_mb_configured = true;
+    config->inspector_off_on_max = true;
 }
 
 static void scratch_cleanup(c64_t *m) {
@@ -334,6 +335,251 @@ int main(void) {
         }
     }
 
+    /* I4: max/warp wipe Record; leave restores into an empty window. */
+    {
+        uint64_t oldest = 0u;
+        uint64_t live = 0u;
+        uint64_t n = 0u;
+        runtime_history_status hist_before;
+        runtime_history_status hist_after;
+        runtime_frame_ring_info film;
+
+        if (!runtime_inspector_enabled(rt) ||
+            runtime_inspector_checkpoint_count(rt) < 1u) {
+            fail("I4 setup: Record not on");
+        }
+        runtime_history_get_status(rt->history, &hist_before);
+        if (!hist_before.recording) {
+            fail("I4 setup: HST1 not recording");
+        }
+
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("set turbo 1");
+        }
+        drain_commands(client);
+        if (!runtime_inspector_enabled(rt) ||
+            runtime_inspector_checkpoint_count(rt) < 1u) {
+            fail("turbo 1 wiped Inspector");
+        }
+
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX)) {
+            fail("set max");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt)) {
+            fail("Record still on in max");
+        }
+        if (runtime_inspector_recorder_is_recording(rt)) {
+            fail("recorder still armed in max");
+        }
+        if (runtime_inspector_checkpoint_count(rt) != 0u) {
+            fail("tape not wiped in max");
+        }
+        runtime_inspector_timeline_bounds(rt, &oldest, &live, &n);
+        if (n != 0u) {
+            fail("timeline not empty in max");
+        }
+        runtime_history_get_status(rt->history, &hist_after);
+        if (!hist_after.recording) {
+            fail("HST1 paused on enter max");
+        }
+        runtime_client_get_frame_ring_info(client, &film);
+        if (film.count != 0u) {
+            fail("film not wiped with Record");
+        }
+
+        step_instructions(client, 20u);
+        runtime_history_get_status(rt->history, &hist_after);
+        if (hist_after.record_count <= hist_before.record_count) {
+            fail("HST1 did not keep recording in max");
+        }
+        if (runtime_inspector_checkpoint_count(rt) != 0u) {
+            fail("Inspector recorded in max");
+        }
+
+        /* Record click in max does not arm; remembered for leave. */
+        token = runtime_client_alloc_request_token(client);
+        if (!runtime_client_inspector_set_enabled(client, true, token)) {
+            fail("Record click in max");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt) ||
+            runtime_inspector_recorder_is_recording(rt) ||
+            runtime_inspector_checkpoint_count(rt) != 0u) {
+            fail("Record click in max armed a tape");
+        }
+
+        if (!runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("leave max");
+        }
+        drain_commands(client);
+        if (!runtime_inspector_enabled(rt)) {
+            fail("Record not restored on leave max");
+        }
+        if (runtime_inspector_checkpoint_count(rt) < 1u) {
+            fail("fresh tape missing after leave max");
+        }
+        runtime_inspector_timeline_bounds(rt, &oldest, &live, &n);
+        if (n < 1u || oldest != live) {
+            fail("leave max window not empty at live");
+        }
+
+        /* Record-off stays off across a max round-trip. */
+        token = runtime_client_alloc_request_token(client);
+        if (!runtime_client_inspector_set_enabled(client, false, token)) {
+            fail("Record off before max");
+        }
+        drain_commands(client);
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX)) {
+            fail("set max again");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt)) {
+            fail("Record on in max after off");
+        }
+        if (!runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("leave max again");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt)) {
+            fail("Record-off did not stay off");
+        }
+
+        /* Warp (turbo 3) is the same as max. */
+        token = runtime_client_alloc_request_token(client);
+        if (!runtime_client_inspector_set_enabled(client, true, token)) {
+            fail("Record on for warp");
+        }
+        drain_commands(client);
+        (void)runtime_inspector_checkpoint_take(rt);
+        if (runtime_inspector_checkpoint_count(rt) < 1u) {
+            fail("no CP before warp");
+        }
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_WARP)) {
+            fail("set warp");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt) ||
+            runtime_inspector_checkpoint_count(rt) != 0u) {
+            fail("warp did not wipe Record");
+        }
+        /* max <-> warp must not forget the saved Record. */
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX)) {
+            fail("warp to max");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt) ||
+            runtime_inspector_checkpoint_count(rt) != 0u) {
+            fail("max after warp re-armed Record");
+        }
+        if (!runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("leave warp/max");
+        }
+        drain_commands(client);
+        if (!runtime_inspector_enabled(rt) ||
+            runtime_inspector_checkpoint_count(rt) < 1u) {
+            fail("Record not restored after warp");
+        }
+
+        /* Disable while in max clears the restore memory. */
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX)) {
+            fail("set max for disable");
+        }
+        drain_commands(client);
+        token = runtime_client_alloc_request_token(client);
+        if (!runtime_client_inspector_set_enabled(client, false, token)) {
+            fail("Record disable in max");
+        }
+        drain_commands(client);
+        if (!runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("leave max after disable");
+        }
+        drain_commands(client);
+        if (runtime_inspector_enabled(rt)) {
+            fail("disable in max was still restored");
+        }
+
+        /* Inspecting + enter max: leave Inspect (restore NOW) first, then wipe. */
+        token = runtime_client_alloc_request_token(client);
+        if (!runtime_client_inspector_set_enabled(client, true, token)) {
+            fail("Record on for inspect+max");
+        }
+        drain_commands(client);
+        (void)runtime_inspector_checkpoint_take(rt);
+        step_instructions(client, 40u);
+        (void)runtime_inspector_checkpoint_take(rt);
+        {
+            uint64_t now_cycle;
+            uint16_t now_pc;
+            uint64_t old = 0u;
+            uint64_t live_end = 0u;
+            uint64_t count = 0u;
+            runtime_event ev;
+
+            now_cycle = rt->machine.clock.cycle;
+            now_pc = rt->machine.cpu.cpu.pc;
+            runtime_inspector_timeline_bounds(rt, &old, &live_end, &count);
+            if (count < 1u) {
+                fail("inspect+max: no timeline");
+            }
+            token = runtime_client_alloc_request_token(client);
+            if (!runtime_client_inspector_enter(client, token)) {
+                fail("enter inspect");
+            }
+            if (!poll_event(client, RUNTIME_EVENT_INSPECTOR_MODE, token, &ev)) {
+                fail("enter inspect timeout");
+            }
+            if (!runtime_inspector_in_inspect(rt)) {
+                fail("not inspecting");
+            }
+            if (old != now_cycle) {
+                token = runtime_client_alloc_request_token(client);
+                if (!runtime_client_inspector_land(client, old, token)) {
+                    fail("land oldest");
+                }
+                {
+                    clock_t t0 = clock();
+                    while (rt->machine.clock.cycle != old &&
+                           (double)(clock() - t0) / CLOCKS_PER_SEC < 2.0) {
+                    }
+                }
+                if (rt->machine.clock.cycle != old) {
+                    fail("land oldest did not move C64");
+                }
+            }
+            if (!runtime_client_set_turbo_multiplier(
+                    client, RUNTIME_TURBO_MODE_MAX)) {
+                fail("max while inspecting");
+            }
+            drain_commands(client);
+            if (runtime_inspector_in_inspect(rt)) {
+                fail("still inspecting after max");
+            }
+            if (rt->machine.clock.cycle != now_cycle) {
+                fail("NOW not restored before wipe");
+            }
+            if (rt->machine.cpu.cpu.pc != now_pc) {
+                fail("NOW PC not restored before wipe");
+            }
+            if (runtime_inspector_enabled(rt) ||
+                runtime_inspector_checkpoint_count(rt) != 0u) {
+                fail("inspect+max did not wipe Record");
+            }
+            if (!runtime_client_set_turbo_multiplier(
+                    client, RUNTIME_TURBO_MODE_NORMAL)) {
+                fail("leave max after inspect");
+            }
+            drain_commands(client);
+            if (!runtime_inspector_enabled(rt)) {
+                fail("Record not restored after inspect+max");
+            }
+        }
+    }
+
     {
         uint64_t cps;
 
@@ -386,6 +632,42 @@ int main(void) {
     step_instructions(client, 20u);
     if (runtime_inspector_checkpoint_count(rt) != 0u) {
         fail("inspector off at boot allocated checkpoints");
+    }
+    stop_runtime(rt, client);
+
+    fill_base_config(&config);
+    config.inspector_off_on_max = false;
+    rt = start_runtime(&config, &client);
+    if (!runtime_inspector_enabled(rt) ||
+        runtime_inspector_checkpoint_count(rt) < 1u) {
+        fail("opt-out startup Record");
+    }
+    {
+        uint64_t cps = runtime_inspector_checkpoint_count(rt);
+        if (!runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX)) {
+            fail("opt-out set max");
+        }
+        drain_commands(client);
+        if (!runtime_inspector_enabled(rt)) {
+            fail("opt-out wiped Record in max");
+        }
+        if (runtime_inspector_checkpoint_count(rt) < cps) {
+            fail("opt-out dropped checkpoints");
+        }
+        step_instructions(client, 8u);
+        (void)runtime_inspector_checkpoint_take(rt);
+        if (runtime_inspector_checkpoint_count(rt) < 1u ||
+            !runtime_inspector_recorder_is_recording(rt)) {
+            fail("opt-out did not keep recording in max");
+        }
+        if (!runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL)) {
+            fail("opt-out leave max");
+        }
+        drain_commands(client);
+        if (!runtime_inspector_enabled(rt)) {
+            fail("opt-out Record off after leave");
+        }
     }
     stop_runtime(rt, client);
 

@@ -7528,13 +7528,20 @@ static void frontend_draw_misc_inspector(
     if (!inspecting) {
         rec = (debug != NULL && debug->inspector_enabled != 0u) ? nk_true : nk_false;
         nk_layout_row_dynamic(ctx, 22.0f, 1);
+        if (debug != NULL && debug->inspector_stopped_for_max) {
+            nk_widget_disable_begin(ctx);
+        }
         if (nk_checkbox_label(ctx, "Record", &rec)) {
             bool want = rec != nk_false;
             bool have = debug != NULL && debug->inspector_enabled != 0u;
-            if (want != have) {
+            if (want != have &&
+                (debug == NULL || !debug->inspector_stopped_for_max)) {
                 frontend_push_inspector_intent(
                     ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_SET_ENABLED, want, 0u);
             }
+        }
+        if (debug != NULL && debug->inspector_stopped_for_max) {
+            nk_widget_disable_end(ctx);
         }
     }
 

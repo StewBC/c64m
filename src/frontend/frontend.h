@@ -75,6 +75,7 @@ typedef struct frontend_debug_state {
     uint64_t inspector_oldest_cycle;
     uint64_t inspector_newest_cycle;
     uint32_t inspector_clock_hz;
+    bool inspector_stopped_for_max;
 } frontend_debug_state;
 
 const char *frontend_runtime_state_name(frontend_runtime_state state);

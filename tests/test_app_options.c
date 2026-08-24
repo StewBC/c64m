@@ -1558,6 +1558,93 @@ static void test_inspector_options(void) {
     remove("test_inspector_garbage.ini");
 }
 
+static void test_inspector_off_on_max_options(void) {
+    app_options options;
+    FILE *file;
+    char *default_argv[] = {
+        "test_app_options",
+        "--noini",
+    };
+    char *on_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--inspector-off-on-max",
+    };
+    char *off_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--no-inspector-off-on-max",
+    };
+    char *ini_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector_off_on_max.ini",
+    };
+    char *override_on_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector_off_on_max.ini",
+        "--inspector-off-on-max",
+    };
+    char *override_off_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector_off_on_max.ini",
+        "--no-inspector-off-on-max",
+    };
+
+    if (!app_options_load_startup(&options, 2, default_argv)) {
+        fprintf(stderr, "inspector_off_on_max default load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max default", 1, options.inspector_off_on_max);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, on_argv)) {
+        fprintf(stderr, "inspector_off_on_max --inspector-off-on-max load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max cli on", 1, options.inspector_off_on_max);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, off_argv)) {
+        fprintf(stderr, "inspector_off_on_max --no-inspector-off-on-max load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max cli off", 0, options.inspector_off_on_max);
+    app_options_destroy(&options);
+
+    file = fopen("test_inspector_off_on_max.ini", "w");
+    if (file == NULL) {
+        fprintf(stderr, "failed to create inspector_off_on_max ini\n");
+        exit(1);
+    }
+    fputs("[debug]\ninspector_off_on_max=0\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, ini_argv)) {
+        fprintf(stderr, "inspector_off_on_max ini load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max ini off", 0, options.inspector_off_on_max);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 4, override_on_argv)) {
+        fprintf(stderr, "inspector_off_on_max cli override on failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max ini overridden on", 1, options.inspector_off_on_max);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 4, override_off_argv)) {
+        fprintf(stderr, "inspector_off_on_max cli override off failed\n");
+        exit(1);
+    }
+    expect_bool("inspector_off_on_max still off", 0, options.inspector_off_on_max);
+    app_options_destroy(&options);
+    remove("test_inspector_off_on_max.ini");
+}
+
 static void test_headless_requires_control_port(void) {
     app_options options;
     char *argv[] = {
@@ -1749,6 +1836,7 @@ int main(void) {
     test_control_port_option();
     test_history_memory_options();
     test_inspector_options();
+    test_inspector_off_on_max_options();
     test_headless_requires_control_port();
     test_headless_with_control_port();
     test_crt_path_with_spaces();

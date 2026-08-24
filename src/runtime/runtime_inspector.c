@@ -273,35 +273,66 @@ void runtime_inspector_recorder_set_enabled(runtime *rt, bool enabled)
     (void)runtime_inspector_checkpoint_take(rt);
 }
 
+static bool runtime_inspector_off_on_max_active(const runtime *rt)
+{
+    uint32_t mode;
+
+    if (rt == NULL || !rt->inspector_off_on_max) {
+        return false;
+    }
+    mode = rt->active_turbo_multiplier > 0u ? rt->active_turbo_multiplier : 1u;
+    if (mode > (uint32_t)RUNTIME_TURBO_MODE_LAST) {
+        mode = (uint32_t)RUNTIME_TURBO_MODE_LAST;
+    }
+    return mode >= (uint32_t)RUNTIME_TURBO_MODE_MAX;
+}
+
 void runtime_inspector_set_enabled(runtime *rt, bool enabled)
 {
     bool was_enabled;
+    bool on_max;
 
     if (rt == NULL) {
         return;
     }
 
-    was_enabled = rt->inspector_enabled;
-    rt->inspector_enabled = enabled;
+    on_max = runtime_inspector_off_on_max_active(rt);
 
-    if (!was_enabled && enabled) {
-        if (rt->frame_ring_memory_mb > 0u) {
-            runtime_frame_ring_set_recording(&rt->frame_ring, true);
+    if (!enabled) {
+        if (on_max) {
+            rt->inspector_enabled_saved_for_max = false;
         }
-        if (rt->inspector_memory_mb == 0u && !rt->inspector_empty_tape_warned) {
-            fprintf(
-                stderr,
-                "Inspector recording enabled with inspector_memory_mb=0; "
-                "checkpoint tape is empty\n");
-            rt->inspector_empty_tape_warned = true;
+        was_enabled = rt->inspector_enabled;
+        rt->inspector_enabled = false;
+        if (was_enabled) {
+            runtime_inspector_recorder_set_enabled(rt, false);
         }
-        runtime_inspector_recorder_set_enabled(rt, true);
         return;
     }
 
-    if (was_enabled && !enabled) {
-        runtime_inspector_recorder_set_enabled(rt, false);
+    if (on_max) {
+        /* Remember Record-on for leave-max; do not arm in max/warp. */
+        rt->inspector_enabled_saved_for_max = true;
+        return;
     }
+
+    was_enabled = rt->inspector_enabled;
+    rt->inspector_enabled = true;
+    if (was_enabled) {
+        return;
+    }
+
+    if (rt->frame_ring_memory_mb > 0u) {
+        runtime_frame_ring_set_recording(&rt->frame_ring, true);
+    }
+    if (rt->inspector_memory_mb == 0u && !rt->inspector_empty_tape_warned) {
+        fprintf(
+            stderr,
+            "Inspector recording enabled with inspector_memory_mb=0; "
+            "checkpoint tape is empty\n");
+        rt->inspector_empty_tape_warned = true;
+    }
+    runtime_inspector_recorder_set_enabled(rt, true);
 }
 
 bool runtime_inspector_enabled(const runtime *rt)

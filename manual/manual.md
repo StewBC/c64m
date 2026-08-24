@@ -43,6 +43,7 @@ Useful flags:
 | `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 | `--inspector`          | Enable Inspector recording (checkpoints; default off). `--inspector-memory=<MiB>` sets the budget (0 or 16..4096) |
+| `--inspector-off-on-max` / `--no-inspector-off-on-max` | Wipe Inspector Record on max/warp (default on). Does not pause the CPU flight recorder |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file stores
 configuration, window size, debugger layout, and breakpoints.
@@ -271,6 +272,13 @@ list.
 A successful guest disk write **drops earlier Inspector history**. The tab shows
 `disk write, device N @ cycle X` at the left edge of the remaining window.
 
+**Opt+T** into max (turbo 2) or warp (turbo 3) discards Inspector Record: the
+tape is wiped and Record turns off. Leaving max/warp (back to turbo 1) restores
+Record into a new empty window if it was on. Record that was already off stays
+off. While in max/warp the Record checkbox is locked off. Turbo 1 still records.
+Opt out with `--no-inspector-off-on-max` or `[debug] inspector_off_on_max=false`.
+This does not pause the CPU flight recorder.
+
 ### Turbo Mode
 
 **Opt+T** cycles through the configured turbo mode list (default when unset is
@@ -284,6 +292,9 @@ SID timing, and drive sync stay in lock-step):
 | `1` | `Normal` | Real-time pace, live ARGB framebuffer (PAL about 0.985 MHz Phi2, NTSC about 1.023 MHz). |
 | `2` | `Max` | Free-run as fast as the host allows, still full live paint and collisions. |
 | `3` | `Warp` | Free-run with live paint off; frames are geometric debug snapshots. |
+
+Entering max or warp with Inspector Record on discards that tape (see Inspector
+above). Turbo 1 is unchanged.
 
 On an Apple M2 Mac Mini, max free-runs around **12-16 MHz** emulated Phi2
 (roughly **12-16x** real C64 speed) with full live paint and correctness; pure
@@ -2031,7 +2042,10 @@ Accepted execution commands respond:
 ```
 
 `set-turbo` changes only the active mode; it does not modify the configured Opt+T
-turbo list. Its accepted response includes the requested mode:
+turbo list. `set-turbo 2` or `set-turbo 3` wipes Inspector Record when the
+`inspector_off_on_max` policy is on (default); returning to turbo 1 restores
+Record into an empty window. The CPU flight recorder is unchanged. The accepted
+response includes the requested mode:
 
 ```text
 <id> ok accepted=1 turbo=2

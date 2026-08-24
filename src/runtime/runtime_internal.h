@@ -201,6 +201,8 @@ struct runtime {
     bool inspector;
     bool inspector_enabled;
     uint32_t inspector_memory_mb;
+    bool inspector_off_on_max;
+    bool inspector_enabled_saved_for_max;
     bool inspector_empty_tape_warned;
     struct runtime_inspector_recorder *inspector_recorder;
     bool inspecting;

@@ -1,6 +1,6 @@
 # Inspector: time-travel debugger (roadmap)
 
-**Status:** I0–I3 landed. I4 not started.  
+**Status:** I0–I4 landed.  
 **Product name:** Inspector — runtime-owned time travel (checkpoints + land + sealed re-execute).  
 **Not:** the CPU flight recorder (HST1). That is a separate forensic product.  
 **Depends on:** sessions S0–S4 (C64M/7, closed); machine snapshots (`c64_snapshot_save` / `load`); frame ring (film preview); guarded breakpoints (the one BP list).  
@@ -180,7 +180,7 @@ Implement in order. Each phase ends with: **build + ctest green**, **Landed** in
 | **I1** | [`I1.md`](I1.md) | Checkpoint ring + input log + sealed replay to a **scratch** `c64_t`. **Landed.** |
 | **I2** | [`I2.md`](I2.md) | Land / enter / leave into the one true `c64_t`; control honesty (C64M/8). **Landed.** |
 | **I3** | [`I3.md`](I3.md) | Misc Inspector tab; film / land / keys / chrome (A1–A18). **Landed.** |
-| **I4** | [`I4.md`](I4.md) | Max and warp wipe Record; restore Record on leave into an empty window. |
+| **I4** | [`I4.md`](I4.md) | Max and warp wipe Record; restore Record on leave into an empty window. **Landed.** |
 
 ```text
 I0 --> I1 --> I2 --> I3 --> I4
@@ -228,7 +228,7 @@ Keep [`testing.md`](testing.md) gate green every phase.
 - [ ] Read-only pokes; leave restores live NOW paused
 - [ ] Guest media write cuts the window, with marker + honest UI text; housekeeping writes do not
 - [ ] Cooperative one-state + `state-changed` + control-visible mode/leave (C64M/8)
-- [ ] Max and warp wipe Record; leave restores Record into an empty window (I4)
+- [x] Max and warp wipe Record; leave restores Record into an empty window (I4)
 
 ---
 
@@ -243,7 +243,7 @@ Keep [`testing.md`](testing.md) gate green every phase.
 | Input log | `c64_set_key`, `c64_set_joystick`. Paste already goes through keys. No paddles / HostFS. |
 | D10 | Successful **guest** 1541 GCR/job write or successful KERNAL SAVE trap. Write-protect refusal does not cut. `sync_dirty` / save-state / eject do not cut. |
 | Audio | SID in the snapshot; mute host output under the seal (`c64_set_audio_output_enabled` / do not emit into `audio_out`). |
-| Max / warp | Turbo 1 records. Turbo 2 (max) and turbo 3 (warp) wipe Record (I4). c64m has no `history_off_on_max` today. |
+| Max / warp | Turbo 1 records. Turbo 2 (max) and turbo 3 (warp) wipe Record (`inspector_off_on_max`, default true). c64m has no `history_off_on_max`; HST1 is not paused. |
 | Control bind | `src/main.c` (no `control_dispatch.c`). |
 | Wire | **C64M/8**: capability `inspector`; `mode=live\|inspector`; `leave-inspector`; `focus_cycle`; `state-changed` reasons `inspector-enter` / `inspector-land` / `inspector-leave`. Error `read-only-inspector`. |
 | Enter on wire | **Not required.** UI uses `runtime_client`. Leave is required on the wire so a socket peer can recover. |

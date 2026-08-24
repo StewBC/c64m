@@ -376,6 +376,8 @@ list. Modes are:
 | 2    | max    | Free-run, live pixels (full correctness) |
 | 3    | warp   | Free-run, paint off (debug frames only) |
 
+`set-turbo 2` or `set-turbo 3` wipes Inspector Record when `[debug] inspector_off_on_max` is on (default); turbo 1 restores Record into an empty window. HST1 is unchanged.
+
 At modes 1 and 2 the response is:
 
 ```text

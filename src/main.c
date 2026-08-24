@@ -1323,6 +1323,8 @@ static void update_debug_state_from_event(
                 event->data.machine_state.inspector_newest_cycle;
             debug_state->inspector_clock_hz =
                 event->data.machine_state.inspector_clock_hz;
+            debug_state->inspector_stopped_for_max =
+                event->data.machine_state.inspector_stopped_for_max != 0u;
             debug_state->has_cpu = true;
             debug_state->has_memory_banking = true;
             debug_state->has_hardware = true;
@@ -7037,6 +7039,7 @@ int main(int argc, char **argv) {
     runtime_cfg.inspector = options.inspector;
     runtime_cfg.inspector_memory_mb = (uint32_t)options.inspector_memory_mb;
     runtime_cfg.inspector_memory_mb_configured = true;
+    runtime_cfg.inspector_off_on_max = options.inspector_off_on_max;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));

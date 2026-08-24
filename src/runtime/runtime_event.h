@@ -257,6 +257,7 @@ typedef struct runtime_machine_snapshot {
     uint64_t inspector_oldest_cycle;
     uint64_t inspector_newest_cycle; /* live end of oldest-snapshot -> live */
     uint32_t inspector_clock_hz;
+    uint8_t inspector_stopped_for_max; /* Record locked: max/warp + policy on */
 } runtime_machine_snapshot;
 
 typedef struct runtime_memory_snapshot {

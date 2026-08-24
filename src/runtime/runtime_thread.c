@@ -57,6 +57,9 @@ static bool runtime_history_append_commit_marker(
     uint16_t marker_kind,
     uint32_t arg0,
     uint32_t arg1);
+static void runtime_inspector_reattach_live_hooks(runtime *rt);
+static void runtime_inspector_publish_head(runtime *rt);
+static void runtime_commit_turbo_mode(runtime *rt, uint32_t multiplier);
 
 /* Turbo mode helpers. Field name remains active_turbo_multiplier; values are
    RUNTIME_TURBO_MODE_* (1=normal, 2=max free-run full paint, 3=warp free-run). */
@@ -568,6 +571,8 @@ static void runtime_publish_machine_state(runtime *rt) {
         event.data.machine_state.inspector_newest_cycle = live;
         event.data.machine_state.inspector_clock_hz =
             c64_config_clock_hz(&rt->machine.config);
+        event.data.machine_state.inspector_stopped_for_max =
+            (rt->inspector_off_on_max && runtime_turbo_is_free_run(rt)) ? 1u : 0u;
     }
 
     runtime_publish_event(rt, &event);
@@ -2337,15 +2342,17 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     rt->save_ini = command->data.apply_machine_config.save_ini != 0;
     memcpy(rt->turbo_speeds, command->data.apply_machine_config.turbo_speeds, sizeof(rt->turbo_speeds));
     rt->turbo_speed_count = command->data.apply_machine_config.turbo_speed_count;
-    rt->active_turbo_multiplier = command->data.apply_machine_config.active_turbo_multiplier;
-    if (rt->turbo_speed_count == 0 || rt->active_turbo_multiplier == 0) {
-        runtime_config defaults = {0};
-        runtime_config_set_turbo_defaults(&defaults);
-        memcpy(rt->turbo_speeds, defaults.turbo_speeds, sizeof(rt->turbo_speeds));
-        rt->turbo_speed_count = defaults.turbo_speed_count;
-        rt->active_turbo_multiplier = defaults.active_turbo_multiplier;
+    {
+        uint32_t new_turbo = command->data.apply_machine_config.active_turbo_multiplier;
+        if (rt->turbo_speed_count == 0 || new_turbo == 0) {
+            runtime_config defaults = {0};
+            runtime_config_set_turbo_defaults(&defaults);
+            memcpy(rt->turbo_speeds, defaults.turbo_speeds, sizeof(rt->turbo_speeds));
+            rt->turbo_speed_count = defaults.turbo_speed_count;
+            new_turbo = defaults.active_turbo_multiplier;
+        }
+        runtime_commit_turbo_mode(rt, new_turbo);
     }
-    rt->pace_initialized = false;
     if (!runtime_replace_string(&rt->ini_path, command->data.apply_machine_config.ini_path)) {
         runtime_publish_error(rt, "failed to update runtime INI path");
         return;
@@ -2401,6 +2408,62 @@ static void runtime_apply_machine_config(runtime *rt, const runtime_command *com
     }
 }
 
+/* I4: wipe Inspector Record on enter max/warp; restore on leave to turbo 1.
+   Does not pause or wipe HST1. Max <-> warp stays in the wipe regime. */
+static void runtime_inspector_apply_max_policy(runtime *rt, bool entering, bool leaving)
+{
+    if (rt == NULL || !rt->inspector_off_on_max) {
+        return;
+    }
+
+    if (entering) {
+        if (rt->inspecting) {
+            runtime_inspector_leave(rt);
+            runtime_inspector_reattach_live_hooks(rt);
+            runtime_inspector_publish_head(rt);
+            runtime_publish_state_changed(
+                rt,
+                RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE,
+                rt->default_session_id);
+        }
+        rt->inspector_enabled_saved_for_max = rt->inspector_enabled;
+        runtime_inspector_recorder_set_enabled(rt, false);
+        runtime_inspector_on_history_invalidate(rt);
+        if (rt->inspector_enabled_saved_for_max) {
+            runtime_frame_ring_set_recording(&rt->frame_ring, false);
+            runtime_frame_ring_clear(&rt->frame_ring);
+        }
+        rt->inspector_enabled = false;
+    } else if (leaving) {
+        if (rt->inspector_enabled_saved_for_max) {
+            rt->inspector_enabled_saved_for_max = false;
+            runtime_inspector_set_enabled(rt, true);
+        }
+    }
+}
+
+static void runtime_commit_turbo_mode(runtime *rt, uint32_t multiplier)
+{
+    bool was_free_run;
+    bool now_free_run;
+
+    if (rt == NULL) {
+        return;
+    }
+
+    was_free_run = runtime_turbo_is_free_run(rt);
+    rt->active_turbo_multiplier = multiplier;
+    rt->pace_initialized = false;
+    runtime_update_sid_sample_output(rt);
+    runtime_update_video_output(rt);
+    now_free_run = runtime_turbo_is_free_run(rt);
+    if (now_free_run && !was_free_run) {
+        runtime_inspector_apply_max_policy(rt, true, false);
+    } else if (!now_free_run && was_free_run) {
+        runtime_inspector_apply_max_policy(rt, false, true);
+    }
+}
+
 static void runtime_cycle_turbo_speed(runtime *rt) {
     uint8_t i;
     uint8_t next_index = 0;
@@ -2416,10 +2479,7 @@ static void runtime_cycle_turbo_speed(runtime *rt) {
         }
     }
 
-    rt->active_turbo_multiplier = rt->turbo_speeds[next_index];
-    rt->pace_initialized = false;
-    runtime_update_sid_sample_output(rt);
-    runtime_update_video_output(rt);
+    runtime_commit_turbo_mode(rt, rt->turbo_speeds[next_index]);
     runtime_publish_machine_state(rt);
 }
 
@@ -2430,10 +2490,7 @@ static void runtime_set_turbo_multiplier(runtime *rt, uint32_t multiplier) {
         return;
     }
 
-    rt->active_turbo_multiplier = multiplier;
-    rt->pace_initialized = false;
-    runtime_update_sid_sample_output(rt);
-    runtime_update_video_output(rt);
+    runtime_commit_turbo_mode(rt, multiplier);
     runtime_publish_machine_state(rt);
 }
 

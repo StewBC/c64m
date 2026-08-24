@@ -103,6 +103,9 @@ typedef struct app_options {
        in MiB: 0 or 16..4096. 0 is an empty tape, not a refuse. */
     bool inspector;
     int inspector_memory_mb;
+    /* Wipe Inspector Record on turbo max/warp. Default true. Does not
+       pause the CPU flight recorder. */
+    bool inspector_off_on_max;
     /* Host-keyboard joystick: layout name ("numpad" or "wasd") and the C64 port
        it drives (0 = disabled, 1 or 2 = active). */
     char *keyboard_joystick_layout;

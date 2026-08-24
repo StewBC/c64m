@@ -65,6 +65,9 @@ typedef struct runtime_config {
     bool inspector;
     uint32_t inspector_memory_mb;
     bool inspector_memory_mb_configured;
+    /* Wipe Inspector Record on turbo max/warp (2/3). Default true in
+       app_options; does not pause HST1. */
+    bool inspector_off_on_max;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

@@ -197,6 +197,8 @@ runtime *runtime_create(const runtime_config *config) {
         rt->inspector_memory_mb = config->inspector_memory_mb_configured ?
             config->inspector_memory_mb :
             RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB;
+        rt->inspector_off_on_max = config->inspector_off_on_max;
+        rt->inspector_enabled_saved_for_max = false;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||
@@ -216,6 +218,8 @@ runtime *runtime_create(const runtime_config *config) {
         rt->vic_ring_memory_mb = RUNTIME_VIC_RING_DEFAULT_MEMORY_MB;
         rt->inspector = false;
         rt->inspector_memory_mb = RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB;
+        rt->inspector_off_on_max = true;
+        rt->inspector_enabled_saved_for_max = false;
     }
 
     /* A frame ring that fails to allocate is not fatal: the emulator runs
