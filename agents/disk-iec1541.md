@@ -1,155 +1,98 @@
-# Disk, file formats, and IEC/1541 handoff
+# Disk, IEC, and 1541
 
-## Host formats and compatibility path
+## Formats
 
-Tools live in `src/tools/d64`, `t64`, `crt`, and `g64`; machine/runtime integration
-is in `src/machine/c64.c`, `c1541.c`, `c1541_media.c`, and runtime disk code.
+Parsers in `src/tools/d64`, `t64`, `g64`, `crt`. Machine/runtime integration
+in `c64.c`, `c1541.c`, `c1541_media.c`, runtime disk code.
 
-- D64 supports standard 35-track images, common error-info tails, BAM/directory
-  parsing, PRG extraction, wildcard matching, directory synthesis, PRG writes,
-  BAM allocation, and `@:` replacement.
-- Devices 8 and 9 have independent ordered disk queues. Images are read-only by
-  default. Writable KERNAL SAVE updates the in-memory image and runtime flushes it
-  to the host path; failed flushes leave the image dirty and report an error.
-- The compatibility KERNAL LOAD/SAVE traps support D64 PRG operations. This is the
-  fallback when 1541 emulation is disabled or no usable 1541 ROM is loaded.
-- T64 is host convenience loading only: the first loadable entry is extracted.
-  There is no mounted tape/Datasette state or T64 KERNAL trap.
-- CRT supports hardware types 0 (generic 8K/16K), 5 (Ocean type 1 multi-bank), and
-  19 (Magic Desk multi-bank 8K) through the machine cart path; it is not a
-  disk/file injection.
+- D64: 35-track, error tails, BAM/directory, PRG extract/write, wildcards,
+  `@:` replacement.
+- Devices 8 and 9 have independent ordered disk queues. Images are
+  read-only by default. Writable KERNAL SAVE updates the in-memory image;
+  runtime flushes to the host path. Failed flushes leave the image dirty.
+- T64 is host convenience: first loadable entry. No Datasette, no T64
+  KERNAL trap.
+- CRT is not disk I/O. Mapper list and attach rules: `machine.md`.
 
-Useful runtime entry points are `c64_mount_d64_ex()`, `c64_mount_g64()`,
-`c64_set_drive_writable()`, `c64_unmount_drive()`, `c64_copy_drive_status()`, and
-the corresponding `runtime_client_*` functions. Runtime owns host flushing;
-machine code only mutates an in-memory image and marks its slot dirty. Devices
-other than 8 and 9 must be rejected rather than silently treated as 8.
+Runtime owns host flushing. Machine mutates the in-memory image and marks
+the slot dirty. Devices other than 8 and 9 must be rejected.
 
-## Real 1541 ROM/IEC path
+Entry points: `c64_mount_d64_ex()`, `c64_mount_g64()`,
+`c64_set_drive_writable()`, `c64_unmount_drive()`, `c64_copy_drive_status()`,
+matching `runtime_client_*`.
 
-Enable `[disk] emulate_1541=1` and provide a supported 16 KiB combined DOS 2.6
-ROM (`[roms] 1541`, or auto-discovered `1541.rom` in `.`, `rom`, or `roms`). The
-drive has a 6502-compatible CPU, RAM, two VIAs, IEC wiring, and a fractional true
-1.000 MHz drive clock. With a ROM present, device 8/9 KERNAL LOAD uses real C64
-KERNAL IEC handlers and the drive ROM. D64 sector READ/SEARCH and WRITE jobs are
-intercepted at the DOS job layer; writes honor read-only mounts and mark slots dirty.
-The DOS command/error channel supports scratch, rename, validate, initialize,
-format, and status through the ROM plus the FORMT intercept.
+## Three load paths
 
-### Soft power (which drives sit on the IEC bus / get stepped)
+1. **KERNAL trap** at `$FFD5`/`$FFD8` when `emulate_1541` is off or no 1541
+   ROM is loaded. D64 PRG (and `$` directory) only. G64 has no trap path.
+2. **Real 1541 ROM + IEC** when `[disk] emulate_1541=1` and a 16 KiB DOS 2.6
+   ROM is present (`[roms] 1541` or `1541.rom` next to the binary / in
+   `rom` / `roms`). Drive 6502, RAM, two VIAs, IEC, fractional 1.000 MHz
+   drive clock. D64 sector READ/SEARCH/WRITE jobs are intercepted at the
+   DOS job layer unless media mode is on.
+3. **Media GCR** when `media_1541=1` (requires `emulate_1541=1`): D64-to-GCR
+   synthesis or G64 attach, rotation/SYNC/BYTE READY, motor/stepper/WPS.
+   Physical READ/SEARCH/VERIFY run the ROM path. D64 WRITE is hybrid
+   (sector + GCR poke). G64 WRITE is Port-A flux only.
 
-Each unit (8 and 9) has a sticky **soft power** latch (`c64_drive_slot.powered`):
+DOS command/error channel (scratch, rename, validate, initialize, format,
+status) goes through the ROM plus the FORMT intercept.
+
+Validated fast-loader samples: Arkanoid V-MAX PAL and Robocop NTSC
+load-to-game. That is not broad commercial coverage.
+
+## Soft power
+
+Each unit has a sticky `c64_drive_slot.powered` latch.
 
 | Event | Effect |
 |-------|--------|
-| Cold start | Unit **off**: not stepped, does not pull IEC |
-| First successful disk mount (D64/G64) | Powers on (DOS reset if ROM loaded) |
-| Explicit power-on (UI device button / red LED, `power-drive`, CLI `-d N=`) | Powers on without media |
-| Eject / unmount only | Media cleared; **stays powered** |
-| Power-off (green LED, `power-drive N off`) | **Ejects media if present**, then powers off |
+| Cold start | Off: not stepped, does not pull IEC |
+| First successful D64/G64 mount | Powers on (DOS reset if ROM loaded) |
+| Explicit power-on (UI / `power-drive` / CLI `-d N=`) | On, even without media |
+| Eject / unmount | Media cleared; **stays powered** |
+| Power-off | Ejects media, then powers off |
 
-`c64_power_on_drive()` / `c64_power_off_drive()` implement the transitions. Mount
-paths call power-on automatically. Power-off always ejects first so the unit is
-empty when cold. While unpowered, `c64_drive_sync_to` skips
-`c1541_advance_one_cycle` for that unit and bus aggregation ignores its IEC pull.
+Loading a 1541 ROM is not power-on. An idle powered 1541 still answers ATN
+by pulling DATA (`DATA = PB1 | (ATN XOR ATNA)`). A drive the user never
+asked for therefore clamps DATA on every ATN, which destroyed Edge of
+Disgrace's post-swap streaming depacker. Keep unused units (especially
+device 9) cold.
 
-This is not cosmetic. An idle powered 1541 still answers ATN by pulling DATA
-through the ATN acknowledge gate (`DATA = PB1 | (ATN XOR ATNA)`, see
-`c1541_iec_pull_from_orb`). A drive the user never asked for therefore clamps
-DATA low on every ATN assert, which destroys loaders that use ATN as a transfer
-clock — it corrupted Edge of Disgrace's post-swap streaming depacker. Soft power
-keeps never-used units (especially device 9) completely cold, matching leaving
-the real power switch off. It also avoids free-run 1541 cost for PRG/CRT/idle
-BASIC when no drive was engaged.
+## G64 write-back
 
-A 1541 ROM may still be loaded into both drive objects at startup; loading ROM is
-not power-on.
+G64 mounts are read-only by default. Writable requires `media_1541`. Live
+bit ring is `halves[].data`; host blob is `slot->image_bytes`. Export is
+copy-only (no phase-rotate of the live ring). Triggers: leave write gate,
+seek-off-dirty, unmount, media disable. Length-preserving in-place patch;
+no empty-slot grow / format rebuild.
 
-## Optional media path
+## Lessons that stay load-bearing
 
-`[disk] media_1541=1` requires `emulate_1541=1`. It provides D64-to-GCR track
-synthesis, rotation/SYNC/BYTE READY, disk VIA motor/stepper/WPS behavior, physical
-read, hybrid write/format on D64, and G64 mounting with optional flux write-back.
-The validated fast-loader matrix includes Arkanoid V-MAX PAL dumps and Robocop
-NTSC load-to-game byte checks; this is not broad commercial compatibility.
+- Job `$E0` (EXECUTE) jumps into the job buffer. With `media_1541=1` it
+  must **not** complete as synthetic `format_track()`: that froze
+  multi-stage loaders after a disk swap. Sector-intercept mode (media off)
+  still maps EXECUTE to hybrid D64 track erase for FORMT tests.
+- Disk swap starts a VICE-style attach blanking window
+  (`C1541_MEDIA_ATTACH_DELAY`).
+- Runtime `-a` autorun injects `LOAD"*",8` / `RUN` only when mounting into
+  an **empty** device 8. Replacing an already-mounted image is a swap and
+  must not re-arm autorun: injecting into the KERNAL keyboard buffer can
+  overwrite live loader code at `$0277-$0280`.
+- G64 uses the flux-transition decoder; synthetic D64 uses NRZ GCR +
+  immediate BYTE READY. BYTE READY is a sticky SO edge after drive Phi2;
+  **CLV discards any pending edge**. Dual-BVC loaders require that.
+- While PC is in drive RAM and no job is queued, VIA2 T1 is acked so
+  custom code is not stolen by `$F2B0` (Robocop). Intentional, not
+  hardware-accurate.
+- Full drive-object save-state is snapshot v13 `DR8C`/`DR9C` for **powered**
+  units only.
 
-### G64 write-back (Phase 1)
-
-G64 mounts are read-only by default; `c64_set_drive_writable` (or the mount
-writable flag via runtime) enables writing. Requires `media_1541` for a useful
-path (no sector map / no KERNAL-trap SAVE into G64).
-
-- **Physical path only:** with media active, job WRITE is not intercepted for
-  G64 (ROM Port-A write). RO or media-off reports write-protect.
-- **Live vs host:** `halves[].data` is the live bit ring; `slot->image_bytes` is
-  the host G64 blob. Stage A export is **copy-only** — the live ring is never
-  phase-rotated.
-- **Stage A triggers:** leave write gate, seek-off-dirty (stepper leaves a
-  dirty half-track), unmount, and media path disable. Coheres
-  `built_from_seq = image_content_seq` so `ensure_tracks` does not rebuild live
-  halves from a rotated host snapshot.
-- **Export phase:** if a stable SYNC (≥10 ones) is found, host payload is
-  rotated so byte 0 is that SYNC start; otherwise unrotated pack of the live
-  ring. Length-preserving in-place patch only (no empty-slot grow / format
-  rebuild yet).
-- **Stage B:** existing runtime dirty flush writes `image_bytes` to the host
-  path (same as D64).
-- **Half-tracks:** G64/`halves[84]` map tracks 1.0…42.5 (indices 0…83). Media
-  head steps 2…84 → indices 0…82 (through 42.0); slot 83 is file storage for
-  42.5. Stage A walks all 84 dirty slots.
-
-## Explicit limits
-
-G64 empty-track grow / format rebuild, pure Port-A GCR write fidelity polish,
-cross-drive copy, block/memory commands, devices beyond 8/9, 1571/other ROM
-variants, and exhaustive fast-loader support are deferred. Full 1541 drive-object
-save-state is supported in snapshot format v13 (`DR8C`/`DR9C` for **powered**
-units only: CPU/VIA/RAM/media + verbatim GCR tracks; unpowered units are a
-`powered=false` stub) so a mid-transfer custom-loader snapshot can resume.
-Without the included-core flag, load hard-resets the drives. Do not add
-machine-to-host file I/O; runtime owns flushing.
-
-## Practical workflows
+When a real-1541 load fails, inspect `get-drive-cpu`, ROM-loaded and media
+state, and whether the KERNAL trap ran. Do not infer success from a host
+RUN log.
 
 ```sh
 ./build/c64m --disk 8=path/to/game.d64 --autorun
-./build/c64m --disk 8=path/to/game.d64 --control-port 6510
 ./build/c64m --crt path/to/cart.crt
 ```
-
-For the control-port workflow, mount with `mount-d64 8 path`, query
-`get-disk-status 8`, and use `load-prg` or BASIC keyboard input. Enable the disk
-write flag through the frontend/runtime API before SAVE; a normal mount is
-read-only. Real 1541 testing additionally requires a ROM and `emulate_1541=1`;
-media/GCR testing also requires `media_1541=1`.
-
-When debugging a failed real-1541 load, inspect `get-drive-cpu 8`, ROM-loaded and
-media-track state, and whether the KERNAL trap was bypassed. Do not infer success
-from a host-side RUN log; inspect C64 memory or a frame.
-
-## Multi-disk / custom EXECUTE notes
-
-Job `$E0` (EXECUTE) means the DOS ROM jumps into the job buffer (`$0300+n*$100`).
-DOS `NEW`/FORMT and custom fastloaders (e.g. Edge of Disgrace after disk 1A) both
-use this. With `media_1541=1`, EXECUTE must **not** be completed as a synthetic
-`format_track()`: that short-circuits buffer entry (often as write-protect on a
-read-only mount) and freezes multi-stage loaders after a disk swap. Sector-intercept
-mode (media off) still maps EXECUTE to the hybrid D64 track erase for FORMT tests.
-
-Disk swap (invalidate then rebuild) starts a VICE-style attach blanking window
-(`C1541_MEDIA_ATTACH_DELAY`): Port A reads as 0 and WPS is closed until the delay
-elapses. Inter-sector gaps on synthetic D64 tracks match VICE zone sizes
-(8/17/12/9 by density).
-
-Runtime autorun (`-a`) bootstraps media mounted into an empty device 8 with
-`LOAD"*",8` / `RUN`. Replacing an image already mounted on device 8 is a disk
-swap and must not re-arm autorun: injecting the command through the KERNAL
-keyboard buffer can overwrite live multi-disk loader code at `$0277-$0280`.
-
-Read path matches VICE’s split: G64 uses the flux-transition + UE7/UF4 decoder
-(`rotation_1541_gcr`); synthetic D64 uses NRZ GCR bitstream + immediate BYTE
-READY (`rotation_1541_simple`). BYTE READY is a sticky SO edge applied after
-drive Phi2; **CLV discards any pending edge** (VICE `LOCAL_SET_OVERFLOW(0)`),
-which dual-BVC loaders (`BVC *` / `CLV` / `LDA $1C01`) require so a byte that
-lands during CLV cannot re-assert V and cause repeated GCR samples. No
-title-specific assists.

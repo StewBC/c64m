@@ -1,97 +1,84 @@
-# Frontend, debugger, input, and configuration handoff
+# Frontend, debugger, input, and help
 
 ## Source of truth
 
-UI code is in `src/frontend`, with integration in `src/main.c`; runtime-facing
-interfaces are in `src/runtime/runtime_client.h`; platform services are in
-`src/platform`. Tests cover input, joystick, options, filesystem helpers, and
-protocol; much of the Nuklear UI remains manual smoke coverage.
+`src/frontend/`, integration in `src/main.c`, runtime-facing APIs in
+`src/runtime/runtime_client.h`, platform in `src/platform/`. Automated
+coverage: `frontend_input`, `frontend_joystick`, `help_view`, `window_title`,
+`crt_renderer`, `disasm_pc_lock`. Most Nuklear UI is manual smoke.
 
-The main integration loop is in `src/main.c`: SDL events become frontend intents,
-intents become `runtime_client` commands, and `poll_runtime_events()` updates the
-copied debugger state. A new UI action normally needs an intent type/field, a
-runtime-client call, main-loop dispatch, and an event/snapshot update if the UI
-must show completion.
+SDL events become frontend intents, intents become `runtime_client` commands,
+and `poll_runtime_events()` updates copied debugger state. A new UI action
+needs an intent, a runtime-client call, main-loop dispatch, and an event
+update if the UI must show completion. The frontend never reads live `c64_t`.
 
-## Current UI
+## Layout
 
-The Nuklear frontend consumes copied runtime snapshots and provides Machine,
-disassembly, memory, CPU/register, hardware, assembler, Inspector, help, configuration,
-disk/program/state, breakpoint, symbol lookup, and file-browser views. It never
-reads live machine state directly. Memory views distinguish CPU map, raw RAM, ROM,
-and 1541 map sources; debugger edits go through runtime commands.
-Misc tabs are Machine / Debugger / Breakpoints / Hardware / Assembler / Inspector
-(two rows of three). Inspector is the only Inspect entry (see `inspector.md` I3).
-The window title is `c64m - VIDEO - TURBO - STATE`; it refreshes when PAL/NTSC,
-the active turbo mode, state, stop reason, or Inspect mode changes. Modes render as `Normal`,
-`Max`, and `Warp`. Inspecting replaces the state with `Inspect`.
+Display | registers/disasm | memory | Misc. Memory sources: CPU map, raw RAM,
+ROM, drive 8, drive 9. Debugger edits go through runtime commands.
 
-Host file selection uses the in-app cross-platform browser backed by
-`platform_fs`; it does not shell out to macOS scripts. Remembered browse directories
-are stored in `[browse]`; the old `[state] quicksave_folder` is migrated and stripped
-on save. State hotkeys are Opt+Shift+`>`/`<`.
+Misc tabs (two rows of three): Machine, Debugger, Breakpoints / Hardware,
+Assembler, Inspector. Inspector is the only Inspect entry.
+
+Window title: `c64m - VIDEO - TURBO - STATE`. Modes render as `Normal`,
+`Max`, `Warp`. Inspecting replaces the state with `Inspect`.
+
+Host file selection uses `platform_fs`. Remembered browse directories live
+in `[browse]`. State hotkeys: Opt+Shift+`>` / `<`.
+
+## Inspector tab
+
+Record off: Record checkbox only. Record on: Inspect plus window summary
+(oldest / live / duration). In Inspect: Leave Inspector, `[-]` slider `[+]`,
+cycle lines. Thumb-down is film preview or pink; release lands. Window
+headers use dark cobalt while Inspecting; do not tint the window background.
+
+Product rules and control honesty: `runtime-control.md`. Do not walk HST1
+to place the slider.
 
 ## Input
 
-SDL keyboard/controller input is translated to C64 keys/joystick through the existing
-runtime choke points. Optional keyboard joystick layouts are `numpad` and `wasd`;
-WASD keys are consumed only while assigned and C64 keyboard focus is active. Runtime
-assignment shortcuts are Alt+Shift+1/2, with Alt+Shift+0 disabling; real controllers
-remain Alt+1/2. SDL text input is enabled only while an edit field has focus.
+`SDL event -> frontend_input` / `frontend_joystick_input ->`
+`runtime_client_keyboard_key` or `runtime_client_set_joystick`. Do not write
+CIA or keyboard state from frontend code. Dialogs are modal: outside clicks
+must not focus or activate base views.
 
-The input path is `SDL event -> frontend_input/frontend_joystick_input ->
-runtime_client_keyboard_key` or `runtime_client_set_joystick -> c64_set_key`/
-`c64_set_joystick`. Do not write directly to CIA or keyboard state from frontend
-code. Dialogs are modal: outside clicks must not focus or activate base views.
+Keyboard joystick layouts: `numpad` and `wasd`. WASD is consumed only while
+assigned and C64 keyboard focus is active. Assignment: Alt+Shift+1/2, Alt+Shift+0
+disables; real controllers remain Alt+1/2. SDL text input is enabled only
+while an edit field has focus.
 
 ## Loading and configuration
 
-Machine dialogs support D64 queue management, writable toggle, PRG/BASIC/BASIC Text
-load/save, T64 host extraction, CRT attach, state save/load, ROM endpoint selection,
-single combined-vs-split C64 ROM selection, video standard, audio, 1541 emulation,
-and media mode. The Emulator configuration tab also owns frontend-only CRT
-presentation: optional 4:3 pixel-aspect correction, scanlines with adjustable
-strength, and screen curvature with adjustable amount. Scanline/curvature output
-uses a second processed texture so the original SDL texture remains the fallback;
-the same fitted texture selection is used by debugger and display-only views.
-CRT controls preview their editable copy live; cancelling or closing Configure
-restores the original presentation values. ROM changes apply by reboot/reload;
+Machine dialogs: D64 queues, writable toggle, PRG/BASIC/BASIC Text, T64
+extract, CRT attach, state save/load, ROM endpoints, video standard, audio,
+1541 emulation, media mode. Emulator tab also owns CRT presentation (4:3
+pixel-aspect option, scanlines, curvature) on a second processed texture.
+Controls preview live; Cancel restores. ROM changes apply by reboot/reload;
 1541 emulation applies live.
 
-Basic Text is stock BASIC V2 only. `util/basic_v2` tokenizes/detokenizes ASCII,
-updates BASIC pointers, and preserves non-printable PETSCII in named/hex escapes.
+Basic Text is stock BASIC V2 only (`util/basic_v2`).
 
-## Help and assembler
+## Help
 
-`manual/manual.md` is compiled into help content by `tools/gen_help.py`; keep that
-file ASCII/PETSCII-safe. Help search highlights its hits: the span the search
-jumped to is drawn inverse (black on C64 yellow) and every other occurrence in
-the visible section gets a yellow underline. Matching happens per *drawn line*
-inside `help_draw_inline_at`, on the marker-stripped, lowercased text and with
-the same `re_t` the search uses, which is what makes it work through word wrap;
-a hit split across a wrap boundary is not highlighted. The band must be a real
-`nk_fill_rect` because `nk_convert` drops `nk_draw_text`'s background colour.
-`help_estimate_span_y` only estimates the scroll target (one row per span, so it
-drifts on wrapped text); the render pass measures the row that actually holds
-the hit - rows scrolled out of view are still laid out, so this works even when
-the estimate left the hit off-screen - and corrects the group scroll on the next
-frame, landing every hit a third of the way down the content area.
-`help_view_search()` runs the same search as the nav bar's arrows and is what
-`test_help_view` drives. This overlay is shared with the a2m-v2 project
-(`../a2m-v2/src/frontend/help_view.*`); keep the two copies in step - they
-differ only in the palette macro names (`C64_HELP_*` vs `HELP_PALETTE_*`). The shared assembler supports the in-emulator path and the
-`am65` CLI, scopes/segments, macros, conditionals, expression `*` as the current
-instruction address, named output targets, and host predefines. In-emulator
-assembly exposes only `dest="map"`, ignores `file=`, and predefines `AM65=0` and
-`C64=1`; standalone `am65` uses `file=`, ignores `dest=`, and defines `AM65=1`
-without a machine symbol.
-`[assembler] auto_adjust_segments=yes` enables bounded overlap-layout retries for
-emulator assembly and reports the temporary addresses in an Assembly Adjustments
-dialog after success.
+`manual/manual.md` is compiled by `tools/gen_help.py`. Before editing it,
+read `manual/HELP_MARKDOWN.md` (ASCII, no links, help-renderer subset).
+
+Help search highlights hits: inverse band on the jumped-to span, underline
+on other visible occurrences. Matching is per drawn line inside
+`help_draw_inline_at`. The band must be a real `nk_fill_rect` (`nk_convert`
+drops `nk_draw_text` background colour). `help_estimate_span_y` only
+estimates scroll; the render pass measures the row that holds the hit and
+corrects. `help_view_search()` is what `test_help_view` drives.
+
+## Assembler surface
+
+In-emulator assembly exposes `dest="map"`, ignores `file=`, predefines
+`AM65=0` and `C64=1`. `[assembler] auto_adjust_segments=yes` enables bounded
+overlap-layout retries. Library details: `tools.md`.
 
 ## Limits
 
-The file browser has no Windows drive-letter enumeration UI. Undocumented opcodes
-display as `.BYTE` in disassembly. Breakpoint Type timing during cycle stepping,
-per-device Swap, and richer Tron trace management remain limited. Treat UI behavior
-not covered by automated tests as manual-smoke territory.
+File browser has no Windows drive-letter enumeration UI. Undocumented
+opcodes display as `.BYTE`. Breakpoint Type during cycle stepping,
+per-device Swap, and richer Tron management remain limited.

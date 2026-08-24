@@ -354,6 +354,7 @@ Not exhaustive — full syntax in `control-port.md` / `manual/manual.md`.
 | Files | `load-prg`, `load-bin`, `save-bin`, `load-state`, `save-state`, `mount-d64`, `unmount-disk`, `power-drive`, `get-disk-status` |
 | Breakpoints | `break-exec`, `break-create`, `break-update`, `break-list`, `break-clear`, `break-clear-all`, `break-enable`, `rearm-oneshots` |
 | History | `history-info`, `history-record`, `history-clear`, `history-find`, `history-next`, `history-read`, `history-close` |
+| Inspector | `enter-inspector`, `leave-inspector` (`get-state` reports `mode=` / `focus_cycle=`) |
 | Build | `assemble`, `find-symbol` |
 | Session | `quit-client` |
 
@@ -371,14 +372,14 @@ Joystick mask: bit0 up, bit1 down, bit2 left, bit3 right, bit4 fire.
 control clients in parallel. Co-op means **one** automated client owns the port
 while a human uses the **windowed** emulator (keyboard/pause UI).
 
-**C64M/7 sessions:** the TCP client auto-binds one runtime session (history
-FIND/NEXT cursor). Inspector (C64M/8) is a **global** mode of the one true
-`c64_t`: `get-state` reports `mode=live|inspector`, and while Inspecting every
-peer sees past bytes. `leave-inspector` restores live NOW (no auto-resume).
-Mutating pokes fail with `error read-only-inspector`. Socket `run` / `step-*`
-while Inspecting are sealed execute clamped to live. Mutations are **open** (no
-ask-to-step); peers get `0 event state-changed ...` as awareness only. Prefer
-`Ctl` so events do not break request matching (`drain_events` / `events`).
+The TCP client auto-binds one runtime session (history FIND/NEXT cursor).
+Inspector is a **global** mode of the one true `c64_t`: `get-state` reports
+`mode=live|inspector`, and while Inspecting every peer sees past bytes.
+`leave-inspector` restores live NOW (no auto-resume). Mutating pokes fail
+with `error read-only-inspector`. Socket `run` / `step-*` while Inspecting
+are sealed execute clamped to live. Mutations are **open** (no ask-to-step);
+peers get `0 event state-changed ...` as awareness only. Prefer `Ctl` so
+events do not break request matching (`drain_events` / `events`).
 
 ### 6.1 Pattern A — agent-only automation
 

@@ -1321,7 +1321,7 @@ static vicii_bg_pixel vicii_background_pixel_ex(
            B0C over-border path: on Deus Ex Machina's water scene, whose per-frame
            ±1-dot shimmer toggles XSCROLL 0↔1 under an opened side border, that
            painted a solid B0C vertical line at x=344 every second frame
-           (dem-handoff.md). No g-access loads the sequencer past 344+xscroll, so
+           (see agents/vicii.md). No g-access loads the sequencer past 344+xscroll, so
            there the graphics data is zero (VICE gbuf_pipe0_reg) and every pair is
            00. While the main border flip-flop is closed vicii_compose_pixel
            overrides this, so ordinary screens are unaffected. The left edge

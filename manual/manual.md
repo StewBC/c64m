@@ -1880,10 +1880,10 @@ by the main loop, so remote control follows the same thread-ownership rules as t
 debugger. The current protocol name is `C64M/8`.
 
 Unsolicited events may arrive with request id `0`, for example
-`0 event state-changed reason=step session=2 cycles=… frame=… epoch=…`. Scripts that
+`0 event state-changed reason=step session=2 cycles=... frame=... epoch=...`. Scripts that
 match replies by id must skip or queue these lines (the bundled Python `Ctl` client
 does). History FIND/NEXT cursors are per asker session; a mutation from any asker
-invalidates active cursors (`CURSOR_STALE` → re-FIND).
+invalidates active cursors (`CURSOR_STALE` -> re-FIND).
 
 ### Quick Start
 
@@ -2763,7 +2763,7 @@ write-back (live track ring exported to the host image on leave-write, seek-off-
 unmount, and media disable); G64 mounts stay read-only unless marked writable. Stock
 BASIC SAVE/LOAD on a writable blank G64 is supported; empty-track grow/format rebuild
 and broad pure-write fidelity are not claimed. Multi-stage commercial loaders are not
-broadly claimed; see `agents/disk-iec1541.md` for the media notes.
+broadly claimed.
 
 When the 1541 ROM is absent, D64 SAVE falls back to the compatibility KERNAL trap
 (G64 has no trap path). Cross-drive copy, block/memory-execute edge cases, and devices
@@ -2833,25 +2833,25 @@ geometry is one click away in either mode.
 
 ### Vendored third-party code and assets
 - `C64_TrueType_v1.2.1-STYLE`
-  - Upstream: <http://style64.org/c64-truetype>
+  - Upstream: http://style64.org/c64-truetype
   - License: http://style64.org/c64-truetype/license
 - `stb/stb_ds.h`
-  - Upstream: <https://github.com/nothings/stb>
+  - Upstream: https://github.com/nothings/stb
   - License: public domain or MIT
 - `inih/ini.c`, `inih/ini.h`
-  - Upstream: <https://github.com/benhoyt/inih>
+  - Upstream: https://github.com/benhoyt/inih
   - License: BSD-3-Clause
 - `logc/log.c`, `logc/log.h`
-  - Upstream: <https://github.com/rxi/log.c>
+  - Upstream: https://github.com/rxi/log.c
   - License: MIT
 - `argparse/argparse.c`, `argparse/argparse.h`
-  - Upstream: <https://github.com/cofyc/argparse>
+  - Upstream: https://github.com/cofyc/argparse
   - License: MIT
 - `whereami/whereami.c`, `whereami/whereami.h`
-  - Upstream: <https://github.com/gpakosz/whereami>
+  - Upstream: https://github.com/gpakosz/whereami
   - License: MIT or WTFPL v2
 - `tiny-regex-c/re.c`, `tiny-regex-c/re.h`
-  - Upstream: <https://github.com/kokke/tiny-regex-c>
+  - Upstream: https://github.com/kokke/tiny-regex-c
   - License: The Unlicense (public domain)
 
 ## Versions

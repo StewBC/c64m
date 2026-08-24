@@ -45,15 +45,13 @@ Run from the repository root so default ROM lookup finds `roms/`.
 ## Protocol version
 
 Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
+There is no dual-path compatibility layer. When wire behavior or control
+concurrency semantics change in a way that scripts must learn, bump `N` in
+the same change as the code and this document.
 
-**Versioning policy (this work series):** there is no dual-path compatibility
-layer for older clients. When wire behavior or control concurrency semantics
-change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/8** (Inspect honesty: `mode=live|inspector`,
-`leave-inspector`, capability `inspector`, `state-changed` reasons `inspector-*`.
-Prior: C64M/7 sessions + unsolicited `state-changed`; C64M/6 per-line VIC ring,
-C64M/5 frame ring, C64M/4 guarded breakpoints, C64M/3 HST1 flight-recorder
-queries, C64M/2 bulk-memory/token behavior).
+**Current: C64M/8** — Inspect honesty (`mode=live|inspector`, `leave-inspector`,
+capability `inspector`, `state-changed` reasons `inspector-*`), sessions,
+unsolicited `state-changed`, VIC ring, frame ring, guarded breakpoints, HST1.
 
 ## Wire format
 
@@ -80,7 +78,7 @@ Unsolicited **events** use request id `0` (reserved event channel). Clients that
 match replies by id must skip or queue these lines. `tools/c64_control_client.py`
 `Ctl.cmd()` / `pipeline()` do that automatically (`Ctl.events` / `drain_events`).
 
-`state-changed` framing (C64M/7):
+`state-changed` framing:
 
 ```text
 0 event state-changed reason=<token> session=<u> cycles=<u64> frame=<u64> epoch=<u64>
@@ -88,8 +86,9 @@ match replies by id must skip or queue these lines. `tools/c64_control_client.py
 
 Reason tokens: `step`, `run`, `pause`, `poke`, `reset`, `load-state`,
 `history-clear`, `media`, `inspector-enter`, `inspector-land`, `inspector-leave`,
-`other`. `session` is the source asker id (0 if unknown). Awareness only — not a
-lock. See `sessions.md`. Inspect mode is global: `get-memory` returns past bytes
+`other`. `session` is the source asker id (0 if unknown). Awareness only, not a
+lock. History FIND/NEXT cursors are per session; a mutation from any asker
+stamps them stale. Inspect mode is global: `get-memory` returns past bytes
 while Inspecting and mutating verbs fail with `error read-only-inspector`.
 
 Data responses have a header, exactly `byte_count` raw bytes, and one final `\n`:
@@ -313,8 +312,8 @@ Valid line ranges depend on video standard (PAL 0..311, NTSC 0..262); out-of-ran
 targets time out with a runtime error. Use `get-vic` after completion to confirm
 `raster=` / `cycle=`.
 
-The former `set-cpu-history` and `get-cpu-history` commands do not exist in
-C64M/3 or later. Use the flight-recorder commands below.
+There are no `set-cpu-history` / `get-cpu-history` commands. Use the
+flight-recorder commands below.
 
 ## CPU flight recorder
 
@@ -349,16 +348,15 @@ Find/next/read return counted `data history` responses with metadata:
 epoch=N count=N cursor=N more=0|1 oldest=N newest=N
 ```
 
-The payload is little-endian HST1: a 24-byte header, followed by records with a
-48-byte header and 8-byte materialized bus-access entries. Exact field offsets,
-stable marker/reset reason IDs, error strings, and lifecycle semantics are in
-`cpu-flight-recorder.md`. Marker 13 (`media-changed`) is additive: `arg0` is
-`0` unknown or `1` guest-write; `arg1` is the drive device when known (I1 did
-not bump the protocol for it). `tools/c64_control_client.py` validates and decodes
-HST1 through `history_info()`, `history_find()`, `history_next()`, and
-`history_read()`.
+The payload is little-endian HST1 (`runtime_history_wire.h`): 24-byte file
+header, then records with a 48-byte header and 8-byte materialized bus-access
+entries. Marker 13 (`media-changed`): `arg0` is `0` unknown or `1` guest-write;
+`arg1` is the drive device when known. Decode with
+`tools/c64_control_client.py` (`history_info` / `history_find` / `history_next`
+/ `history_read`). Drive CPUs are not recorded. HST1 does not restore the
+machine; Inspector does.
 
-There is one runtime cursor. Any execution, reset, recording control, state
+One cursor per runtime session. Any execution, reset, recording control, state
 load, or direct mutation makes it stale. `history-close` is idempotent. Result
 payload ownership is token-keyed and released on claim, timeout, disconnect,
 cancellation, queue failure, or shutdown.
@@ -450,12 +448,9 @@ that would look like frames but are not. Recording resumes at turbo 1 or 2.
 Loading a machine state clears the ring: those frames belong to a discarded
 timeline whose cycle counter has restarted.
 
-Cost is one native indexed frame copy per completed frame. The original ARGB
-ring push measured **+0.22%** of turbo-2 free-run throughput and nothing at
-turbo 1; Stage 3's matched whole-core measurements remained neutral after
-reducing the copy to one quarter of its former size. The default budget is
-resident memory, so lower `frame_ring_memory_mb` if that matters more than
-window length.
+Cost is one native indexed frame copy per completed frame. The default budget
+is resident memory; lower `frame_ring_memory_mb` if that matters more than
+window length. Re-measure after ring changes (`testing.md`).
 
 ## VIC ring (per-line derived state)
 
@@ -515,14 +510,11 @@ Like the frame ring these answer immediately and work while running (the ring
 owns a mutex); the window moves under a running machine, so pause for a stable
 view. Loading a machine state clears the ring.
 
-**Cost.** This is a much hotter path than the frame ring: one record per raster
-line, ~15.6k/s at turbo 1 and ~280k/s at turbo 2. Measured **2.64%** of turbo-2
-free-run throughput, and nothing measurable at turbo 1. Note that
+This is a hotter path than the frame ring: one record per raster line.
 `vic-ring-record off` stops *storing* but does **not** remove that cost — the
-record is still built each line. To get the throughput back, disable the ring
-with `[debug] vic_ring_memory_mb=0`, which leaves one NULL test per line and
-measures identical to a build without the feature. Default budget is 16 MiB
-(~161k lines, about 500 PAL frames / 10 s at 50 fps).
+record is still built each line. To drop the cost, set
+`[debug] vic_ring_memory_mb=0`. Default budget is 16 MiB (~161k lines, about
+500 PAL frames).
 
 ## State, memory, and frames
 
@@ -742,8 +734,7 @@ N break-list
 `when=` adds a **bounded AND-list of up to 4 comparison terms**, evaluated only
 *after* the address/access/mapping test already matched. That keeps the CPU hot
 path untouched: a guard on `$D021` does work on the handful of accesses that hit
-`$D021`, never on the general bus stream. Measured cost versus the same
-watchpoint unguarded is under 1% for one term (see § Guarded-breakpoint cost).
+`$D021`, never on the general bus stream.
 
 This is not an expression language — no OR, no grouping, no precedence. If a
 case needs OR, arm two breakpoints.

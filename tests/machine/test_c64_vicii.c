@@ -1626,7 +1626,7 @@ static void test_live_side_border_shows_zero_graphics(void) {
    therefore XSCROLL-delayed, not the fixed x=344. Getting this wrong painted a
    solid B0C vertical line at x=344 on every second frame of Deus Ex Machina's
    water scene, whose ±1-dot shimmer toggles XSCROLL 0<->1 under an opened side
-   border (agents/demo/deusexmachina/dem-handoff.md).
+   border (see agents/vicii.md).
 
    Multicolor bitmap mode (as in the DEM water scene) gives a directly-controlled
    g-byte whose over-border pair-0 colour is B0C. Column 39's last pixel pair

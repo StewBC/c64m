@@ -1,325 +1,132 @@
-# VIC-II handoff
+# VIC-II
 
 ## Source of truth
 
-Implementation: `src/machine/vicii.{c,h}` and its integration in `c64.c`/`c64_bus.c`.
-Tests: `tests/machine/test_c64_vicii.c`, `tests/machine/test_c64_cpu_validation.c`,
-runtime frame tests, and the selected `assets/prg/lft-nine.prg` diagnostics.
+`src/machine/vicii.{c,h}`, integration in `c64.c` / `c64_bus.c`, geometry in
+`c64_frame.{c,h}`. Tests: `tests/machine/test_c64_vicii.c`, `test_c64_frame.c`,
+`test_c64_cpu_validation.c`.
 
-The main entry points are `vicii_step_cycle()`, `vicii_ba_active()`,
-`vicii_aec_active()`, `vicii_rdy_active()`, `vicii_bus_access()`, register read/write
-functions, and the three frame functions (`copy_completed`, `make_frame_snapshot`,
-`make_current_frame_snapshot`). `c64_step_cycle()` calls VIC-II inside the machine
-Phi2 schedule; frontend frames are copies.
+Entry points: `vicii_begin_cycle()`, `vicii_finish_cycle()`, `vicii_ba_active()`,
+`vicii_aec_active()`, `vicii_rdy_active()`, register read/write, and
+`vicii_copy_completed_frame()` / snapshot reconstruct. Frontend frames are
+copies. Snapshot reconstruct is a debugger fallback, not a timing oracle.
 
-## Current implementation
+Read `README.md` diagnosis rules before naming a pixel mechanism. Highest split:
+border vs field (VIC X outside `[24, 344+XSCROLL)` is a different paint path).
+Next: sprite vs graphics.
 
-- PAL 6569 and NTSC 6567R8 timing are selected per machine configuration.
-- Full PAL/NTSC frame heights are published: PAL 312 lines, NTSC 263. The
-  frontend crop is per-standard and always stays inside the published frame:
-  PAL uses the normal-border 384x272 viewport from X=0, Y=16 (rows 16..287),
-  matching VICE's canonical PAL geometry
-  (`VICII_PAL_NORMAL_FIRST/LAST_DISPLAYED_LINE` = 16/287) so every PAL title is
-  cropped exactly as the oracle shows it. This still retains upper/lower border
-  effects such as EoD's `FLIP`/`DISK` labels (they sit inside 16..287); a wider
-  crop (the former rows 20..291) exposed lower-border content VICE hides - e.g.
-  Deus Ex Machina's parked-pillar sprite-7 retract at raster 288 read as a
-  grey->black "dropout". Horizontally **framebuffer x = VIC X** everywhere: the
-  pixel buffer is the full raster line (`C64_FRAME_PAL_WIDTH` 504 /
-  `C64_FRAME_NTSC_WIDTH` 520, array stride `C64_FRAME_WIDTH`), so no origin
-  offset or machine-side crop exists to get wrong. `frame->width` is the
-  standard's line length and is **not** the row pitch - index rows by
-  `C64_FRAME_WIDTH` or `stride_bytes`.
+## Geometry and framebuffer
 
-  The whole line is composed, HBLANK included - there is no paint window any
-  more. The PAL viewport is VICE's 32/320/32: it starts at **VIC X 496**, runs
-  through the wrap to X 375, and its left 8 columns are the real painted
-  X 496..503 rather than any invented pad. `frontend_submit_frame` rotates each
-  frame by that origin so every downstream consumer still sees a plain rectangle
-  at `CROP_X` 0 - the rotation is display-only and never reaches `get-frame` or a
-  snapshot. NTSC is unchanged at 16/320/16 from X 8.
+PAL 6569: 63 cycles x 312 lines, 504 dots/line. NTSC 6567R8: 65 x 263, 520
+dots/line. Sprite wrap is `cycles_per_line * 8` (504/520), not 512.
+`c64_init` / `vicii_init` default to NTSC.
 
-  Verified dot-for-dot against VICE 6569 on the EoD checker snapshot: raster 245
-  (the bottom black frame line) is `X408..491=2 X492..503=0` in both. Getting
-  there required the same-cycle `$D011` fix below. **Match VIC-II models before
-  comparing** - VICE's default is an 8565 and its output differs from a 6569 by
-  ~8 dots here, which silently invalidated two earlier rounds of this analysis.
-  A `.vsf` only loads when the model matches, so a snapshot that refuses to load
-  is a model mismatch, not a corrupt file.
+Native pixels are **indexed8** (0..15). `c64_frame.pixels` stride is always
+`C64_FRAME_WIDTH` (520). `frame->width` is 504 PAL / 520 NTSC and is **not**
+the row pitch. Unpainted sentinel `0xff` expands to ARGB 0 / wire index 0.
+Framebuffer x **is** VIC X, full line including HBLANK. ARGB exists only at
+presentation (`c64_frame_expand_argb`, Pepto).
 
-  One known deviation remains, outside every viewport: c64m assigns X 392..407
-  to the *end* of a frame row while VICE assigns it to the *start* of the next
-  (a 16-dot, 2-cycle row-boundary offset). The 32/32 window is X 496..503 +
-  X 0..375, so this band is never displayed; it only shows up in whole-line
-  compares. 9f1ea9e tried to reach 32/32 by shifting the *origin* (modular +8),
-  which both invented a left band and dropped X 376..383 - not the route to
-  retry (resolved: use the real viewport crop, not a modular origin shift).
-  NTSC crop is 352x224 from X=8, Y=39 (rows 39..262). The display window is
-  51..250 on both standards, so NTSC has only 12 border lines below it; the
-  224-row crop takes 12 above and 12 below. Do not give NTSC a PAL-sized crop -
-  it runs past raster 262 and exposes the frame's fill colour as a band under
-  the picture.
-- Display aspect follows the frame, since the crops differ in height. The
-  `True Aspect Ratio` option applies the pixel aspect ratio (PAL 0.9365, NTSC
-  0.7500 - see codebase64.c64.org/doku.php?id=vic:pixel_aspect_ratio), giving the
-  real-world geometry: ~1.32 PAL, ~1.18 NTSC. Do not restore a hardcoded 4:3:
-  it is only an approximation for PAL and stretches NTSC ~13% too wide. With
-  the option off the picture is not
-  corrected at all: it stretches to fill the view. Do not substitute a
-  square-pixel aspect there - the display free-scales to its pane (there is no
-  1:1 or integer-zoom mode), so square pixels would buy no pixel-exactness, just
-  a second wrong shape.
-- Unpainted pixels are filled with $D020. Everything outside the display window
-  is border, and that includes the DEN=0 case: the vertical border flip-flop
-  never opens, so the border covers the whole screen rather than showing B0C.
-- Text, bitmap, multicolor, ECM, invalid modes, border state, DEN/bad-line state,
-  sprites, priority, expansion, multicolor, pointers/data fetches, collisions,
-  raster IRQ, and timed register writes are implemented.
-- Sprite-sprite priority is resolved before sprite-background priority: the
-  lowest-numbered opaque sprite wins the sprite mux, then that winning sprite's
-  `$D01B` bit decides whether foreground graphics mask it. A higher-numbered
-  front sprite cannot leapfrog a lower-numbered behind sprite. The DEM spirals
-  effect depends on this ordering to let foreground graphics mask yellow
-  sprites 0-3 without revealing green sprites 4-7 underneath them.
-- The bus scheduler distinguishes Phi1 idle/graphics/sprite-pointer work from
-  Phi2 bad-line character and sprite-data work. Bad-line BA is low on cycles
-  11..53; sprite BA uses VICE's explicit live PAL/NTSC per-cycle DMA masks, not
-  a synthetic persistent six-cycle window. AEC and RDY are exposed at cycle
-  granularity.
-- Live rendering tracks main and vertical border flip-flops. The current source
-  follows the Bauer 3.9 rule used by the `lft-nine` work: main border covers
-  sprites with `$D020`; vertical border blanks graphics to B0C and does not blank
-  sprites. DEN gates bad-line arming and the top vertical-border compare; it is
-  not a live graphics blanking signal. Clearing DEN after the border/display
-  sequencer has opened leaves the running VC/RC graphics pipeline visible. With
-  DEN clear from the start, the vertical border never opens and `$D020` covers
-  the frame; if software has already opened the border, idle/display output and
-  sprites can remain visible underneath it.
-- Horizontal-border checks use the VICE `check_hborder` model under a 2-cycle
-  paint delay: left compare at cycle 17; right at 57 (CSEL=1) or 55 (CSEL=0).
-  CSEL=1 applies one border state to the whole 8-dot span. CSEL=0 follows VICE
-  `draw_border8`: first 7 dots keep the previous output state, last dot takes the
-  new flip-flop (38-col edges at VIC X 31/335 — framebuffer 39/343 on PAL). A
-  prior whole-span CSEL=0 close left a 1px open B0C column at the right edge
-  (DEM top-bar hang). Two CSEL samples are retained because c64m can project
-  VICE's cycle-56 store at cycle 56 (EoD) or 55 (lft-nine); in-flight 1→0 dodges
-  the stable 38-col close.
-- Bad Line Condition is evaluated every cycle like VICE `check_badline`, from
-  the frame-level DEN latch armed at raster `$30`, the `$30..$F7` range, and live
-  YSCROLL. RC is cleared at UpdateVc when badline holds. **Machine order:**
-  `vicii_begin_cycle` performs the VIC's
-  Phi1/internal work and establishes current-cycle BA/AEC, the CPU may then use
-  Phi2, and `vicii_finish_cycle` advances the raster. A same-cycle STA `$D011`
-  is therefore too late for that cycle's UpdateVc/badline; the delay latch sees
-  it on the next VIC cycle, in time for the subsequent g-access. UpdateVc is
-  VICE `PAL_CYCLE(14)` (0-based **13**). UpdateRc is VICE Phi2(58), 0-based
-  **57**, not a line-wrap shortcut.
-- Raster compare IRQ is edge-triggered on non-match → match. Writing `$D011`
-  only re-checks the compare when the 9-bit line actually changes (RST8). A
-  mid-line `$D011` YSCROLL write on an already-matching raster must not re-assert
-  IRQ (Arkanoid dual-zone soft-scroll chain). Writing `$D012` to the *current*
-  line still triggers immediately (Galencia bottom-border chain).
-- Register read-back masks follow VICE: `$D016` returns `(reg & 0x3F) | 0xC0` —
-  only bits 7:6 are unused. **Bit 5 is RES, a real readable/writable bit**, and
-  must read back what was written; an earlier model forced it high
-  (`(reg & 0x1F) | 0xE0`), so c64m read `$F8` where VICE reads `$D8` on Deus Ex
-  Machina's spiral part. `$D01A` returns `| 0xF0`, `$D020–$D02E` return
-  `(reg & 0x0F) | 0xF0`, and `$D02F–$D03F` read `$FF`. `vicii_read_register` and
-  `vicii_debug_read_register` must agree — both are covered by
-  `test_d016_unused_high_bits_read_as_1` and
-  `test_vicii_debug_read_forced_high_bits`.
-- Sprite collision IRQs (IMMC/IMBC) edge-trigger only when `$D01E`/`$D01F` go from
-  zero to non-zero (Bauer / VICE). Acking `$D019` while the collision latch is
-  still set must not re-fire; a CPU read of `$D01E`/`$D01F` clears the latch so
-  a later overlap can IRQ again. Sticky re-assert broke Potty Pigeon (`$D01A=$05`
-  with an IRQ path that only acks raster `$01`).
-- Sprite X wrapping uses `cycles_per_line * 8`: 504 PAL dots and 520 NTSC dots,
-  not a fixed 512-dot wrap.
-- Turbo modes 1 (normal) and 2 (max) publish the live per-cycle indexed
-  framebuffer. VIC paint, runtime handoff, and frame-ring storage retain palette
-  indices 0..15; the frontend and ARGB control response share one forward Pepto
-  palette expansion. The internal `0xff` unpainted sentinel expands to
-  transparent zero and is mapped to index 0 at the wire boundary.
-  Mode 3 (warp) disables host pixel output while retaining raster, BA, IRQ,
-  sprite-DMA, CIA, and SID timing; its published frame is geometric debug
-  reconstruction, not visual evidence for timing-sensitive effects. Sprite
-  collision latches only update while pixel output is enabled.
-- Live paint is the dominant host cost when pixel output is on. The 8-dot span
-  in `vicii_render_live_cycle` precomputes cycle-constant mode, XSCROLL, B1–B3
-  palette, idle ghost byte, and sprite-visibility once per cycle; background
-  decode uses the latched `video_matrix` / `color_line` / `g_line` without
-  re-deriving bank bases every pixel. Vertical-border spans with no visible
-  sprites skip background decode (content is forced to B0C). Hot bus peeks
-  (`c64_bus_vic_*`) are header `static inline`. Do not “optimize” by turning
-  warp paint-off into a general free-run path or by skipping BA/IRQ/sequencer
-  work.
+Frontend PAL crop is VICE's 32/320/32: 384x272 from Y=16 (rasters 16..287),
+rotated from VIC X **496**. That rotation is display-only; `get-frame` and
+snapshots stay in VIC-X order. NTSC crop is 352x224 from X=8, Y=39. Do not
+give NTSC a PAL-sized crop. Do not retry a modular +8 origin shift to fake
+32/32: that invented a left pad and dropped X 376..383.
 
-## Timing/debugging rules
+True Aspect Ratio uses the VIC-II pixel aspect (PAL 0.9365, NTSC 0.7500), not
+a hardcoded 4:3.
 
-Use the live path for timing-sensitive behavior. Snapshot rendering is a debugger
-and presentation fallback and is not a substitute for live bus timing. Drain any
-old frame payloads, use turbo 1 or 2, and discard one completed frame after
-leaving warp before judging a capture. Trace builds can emit `C64M_VICLOG`,
-`C64M_BALOG`, and `C64M_SPRDMA`; the `lft-nine` workflow uses these to compare
-against VICE. `C64M_LINELOG` dumps the per-line sequencer state at UpdateVc, and
-`C64M_LINELOG_FULL=1` adds all forty `color_line`/`video_matrix`/`g_line`
-entries - that is what disproved the "colour latch `$8`" story behind the EoD
-plasma black blocks (every column was `$B`).
+Turbo 1 and 2 publish the live per-cycle indexed framebuffer. Turbo 3 (warp)
+keeps raster, BA, IRQ, sprite-DMA, CIA, and SID; published frames are
+geometric debug, not visual evidence. Sprite collision latches update only
+while pixel output is on. After leaving warp, discard one completed frame
+before judging pixels.
 
-**Read `README.md`'s "Diagnosis discipline" before theorising about a pixel
-defect.** The VIC-specific form of step 1 is: histogram *where* the wrong pixels
-are before naming a mechanism. Border-vs-field is the highest-value split, since
-VIC X outside `[24,344)` is a different paint path entirely - a black-pixel
-histogram that landed every hit on the side borders is what turned a supposed
-freecolor bug into a side-border one. Sprite-vs-graphics is the next split
-(`$D015` and `EOD_DUMP` answer it).
+## Sequencer
 
-For a timing investigation, classify the defect as (1) bus schedule/access kind,
-(2) BA/RDY/AEC arbitration, (3) raster/register timing, or (4) pixel composition.
-The tests separate these concerns. Do not fix a pixel symptom by changing CPU
-stalls without a trace showing a bus defect. The current working-tree `lft-nine`
-effort is sensitive to border flip-flops, `$D011/$D012/$D016/$D017` projection,
-sprite MCBASE/data slots, and sprite X wrapping; preserve those edits.
+Machine order: `vicii_begin_cycle` does Phi1/internal work and establishes
+BA/AEC; CPU may then use Phi2; `vicii_finish_cycle` advances the raster. A
+same-cycle STA `$D011` is too late for that cycle's UpdateVc/badline.
 
-## Known limits
-
-- Light pen `$D013/$D014` is stubbed.
-- Analog/half-cycle AEC/RDY are not modeled. General last-byte-on-bus is still
-  incomplete, but **BA-lead cbuf** follows VICE: while `prefetch_cycles != 0`,
-  a forced c-access stores `vbuf=$ff` and `cbuf = ram[cpu_open_bus_pc] & 0x0f`
-  (VICE `vicii_fetch_matrix` / `ram_base_phi2[reg_pc]`). The machine snapshots
-  the 6510 PC into `bus.cpu_open_bus_pc` before each VIC cycle. A hardcoded
-  `$0f` here painted light-gray FLI-bug stripes on EoD's helmet portrait
-  (`agents/demo/eod/eod-stripes-*.png`) where open-bus was colour `$6`.
-- Idle g-access reads the ghost byte ($3FFF / $39FF in ECM) with c-data forced to
-  0. MCM text idle is **hires** (colour-RAM bit 3 is 0); only MCM bitmap idle
-  stays multicolor (matches VICE `draw_graphics` when `cbuf==0 && !BMM`).
-  Invalid modes (ECM with BMM and/or MCM) force the pixel **colour** black in
-  idle as well as display — otherwise the ghost-byte MCM-bitmap path stipples EoD
-  plasma's post-FLI bottom frame (`$D011=$71`). Only the colour is forced: the
-  graphics-derived **foreground/priority** bit is still computed from the ghost
-  byte (pair≥2 for MCM bitmap, else the hires bit), because the VIC keeps
-  clocking the MC flip-flop in invalid modes. Returning `foreground=false` there
-  let dkarcade2016's venetian-reveal sprites leak through the still-black
-  top/bottom border before their scanline was uncovered. The ghost byte is only
-  visible **inside** the 40-column window; see the over-border rule below.
-- The horizontal over-border region (x below `24` on the left, or `>= 344 +
-  XSCROLL` on the right) has **no graphics data at all**: no g-access loads the
-  sequencer there, so the shift register reads as zero and every pixel pair is
-  00. VICE models this as `gbuf_pipe0_reg = 0` when the cycle is not visible
-  (`vicii-draw-cycle.c`); `vicii_fetch_idle()` reads $3FFF for the bus but,
-  unlike `vicii_fetch_idle_gfx()`, never assigns `gbuf`. With pair 0 the mode's
-  colour reduces to B0C for hires/MCM text and MCM bitmap, to the vbuf low
-  nibble for standard bitmap, to `$D021 + (vbuf >> 6)` for ECM text, and to
-  black for invalid modes (`vicii_border_gfx_pixel`). vbuf/cbuf are *not*
-  zeroed — VICE retains the last display column, which is why the two
-  vbuf-sourced modes still need it. Emitting the $3FFF ghost byte here instead
-  painted its set bits in colour 0: that was the pure-black blocks under Edge of
-  Disgrace's plasma sprites in the opened side border. There is no "ghost byte
-  shine-through" in the border; when the border is closed `vicii_compose_pixel`
-  overrides this value anyway, so ordinary screens never see it. The right edge
-  is **XSCROLL-delayed**, not the fixed 344: VICE loads the shift register at
-  `i == xscroll_pipe`, so the last g-access column (39) is emitted at
-  x = 336+XSCROLL..343+XSCROLL and gbuf only falls to 0 at x = 344+XSCROLL.
-  A fixed 344 cutoff dropped column 39's final XSCROLL dots into the B0C
-  over-border path and painted a solid B0C vertical line at x=344 on every
-  second frame of Deus Ex Machina's water scene, whose ±1-dot shimmer toggles
-  XSCROLL 0↔1 under an opened side border (see
-  `demo/deusexmachina/dem-handoff.md`, `test_live_open_border_right_edge_xscroll_delayed`).
-  EoD's checker is unaffected: its `$D016=$62` (XSCROLL=2) dodge is written at
-  cycle 56 and excluded from `xscroll_pipe` (sampled only on g-access cycles
-  15..54), so the paint's effective XSCROLL there stays 0.
-- Vertical border uses VICE's two-stage unit: `set_vborder` latch (bottom only
-  sets) and `vertical_border_active` (applied at cycle 0 and left compare).
-  Top+DEN clears both. This is required for the classic RSEL lower-border open.
-- Bad lines: DEN is sampled on raster `$30` into `allow_bad_lines` for the rest
-  of `$30–$F7` (Bauer/VICE). Live DEN gates top open but does not blank an
-  already-running graphics pipeline.
-- g-access stores the fetched glyph/bitmap byte into `g_line[col]` using
-  `reg11_delay` (prior-cycle `$D011`) for BMM/ECM address bits — VICE's one-cycle
-  mode delay for fetches. The live paint path uses `g_line` rather than re-reading
-  RAM, so mid-line `$D018`/mode changes do not re-decode already-fetched columns.
-  Snapshot rendering still re-reads RAM (no sequencer history).
-- Live paint uses `xscroll_pipe`: after each cycle's CPU Phi2 store, on g-access
-  cycles **15..54** only, latch `$D016` XSCROLL for the next cycle's paint.
-  Cycles **0..14** are excluded (would re-latch a still-live previous-line
-  `$62` before the first matrix cell). Cycles **55+** are excluded (EoD's
-  open-border dodge `$D016=$62` / XSCROLL=2 at the right compare). Either
-  mistake pads x=24 with B0C — the solid vertical fine-checker line. Snapshot
-  path uses live `$D016`.
-- The `$D016` **MCM bit** for paint is resolved in `vicii_finish_cycle`, not just
-  read at `begin_cycle`. Live spans are painted in `begin_cycle` before the CPU's
-  Phi2 store, so a mid-line `$D016` MCM flip would otherwise miss the display
-  column drawn on that same cycle — the first affected column (x=24, cycle 15) is
-  left one paint behind. VICE resamples the MCM bit mid-cycle (`viciisc`
-  `draw_graphics` `vmode16_pipe`), so the write reaches that column. After the
-  Phi2 store, if the mode's **MCM bit** changed on a g-access cycle (**15..54**,
-  vertical border inactive — same window as `xscroll_pipe`), the just-painted span
-  (`hborder_pipe[1]`) is re-decoded with the post-store mode via `vicii_live_pixel`
-  (`note_collisions=false`; the paint pass already latched them). The trigger is
-  the MCM bit only — `$D011` ECM/BMM changes keep the existing `reg11_delay`/fetch
-  model. Deus Ex Machina toggles MCM on at cycle 15 every line of its band
-  transition; without this, column 0 painted hires text (colour 8, an orange bar)
-  over a VICE-black centre. EoD's `$D016=$62` dodge is at cycle 56 (excluded) and
-  never flips MCM inside 15..54, so it never triggers a re-decode; lft-nine's
-  closed side border is overridden by the main flip-flop at flush. See
-  `test_live_mcm_toggle_reaches_column0_same_cycle` and `dem-handoff.md`.
-- Live paint advances `color_pipe_d020` / `color_pipe_d021` once per VIC **dot**
-  of every cycle (VICE `draw_colors` runs for every cycle). Sampling only on painted
-  pixels left a 1px `$D020` delay stuck at x=0 across line edges (EoD
-  top/bottom black bar purple stub). Mid-line `$D020`/`$D021` splits still use
-  the one-pixel delay on visible columns. Because live spans are constructed in
-  `vicii_begin_cycle`, `vicii_finish_cycle` resolves same-cycle CPU Phi2
-  `$D020` and `$D021` writes into the two pending horizontal-border spans: dot
-  zero of the oldest span retains the prior colour, its remaining dots and the
-  newer span take the new colour. `$D021` identity is retained only when B0C is
-  the winning composed layer, so a sprite pixel that happens to share its
-  palette value is not recoloured. This mirrors VICE `draw_colors8()` resolving
-  its buffered colour tokens after CPU Phi2 and avoids the erroneous full
-  8-dot delay that exposed old-background ghost fragments between lft-nine's
-  upper-border digits.
-- `reg11_delay` samples `$D011` at the end of `vicii_begin_cycle`, after this
-  cycle's VIC fetches but before the CPU's same-cycle Phi2 write. A same-cycle
-  CPU store therefore cannot affect the following cycle's g-fetch; it reaches
-  the delay latch on the next cycle instead.
-- UpdateVc sets `VC=VCBASE` and `VMLI=0` at cycle 13. Bad-line c-accesses run on
-  Phi2 cycles 14..53. Display-state g-accesses run on Phi1 cycles 15..54, use
-  the current VC/VMLI, then increment both; the same cycle's following c-access
-  fills the newly selected matrix/colour slot. This per-cycle ordering is what
-  makes late `$D011`/`$D018` changes, FLI, and line crunch agree without bulk
-  matrix reloads or scene-specific `$D018` repair.
-- At cycle 57, UpdateRc enters idle and copies `VCBASE=VC` when RC was 7, then
-  increments RC and re-enters display state when the VICE condition holds.
-- The end-of-frame wrap resets **only `VC` and `VCBASE`** (VICE
-  `vicii_cycle_start_of_frame`); `RC`, `VMLI` and `display_state` (VICE
-  `idle_state`) **carry across the frame boundary**. This is load-bearing for
-  idle-region VSP/AGSP: a partial bad line induced above the first natural bad
-  line advances VC by fewer than 40, and UpdateRc captures the shifted `VCBASE`
-  only while `RC==7` — the value the bottom border leaves. Forcing `RC=0` here
-  discarded that offset and pinned EoD's rotating geometric object to the left
-  instead of letting it scroll horizontally across the screen. Normal frames are
-  unaffected: the first real bad line clears `RC` at UpdateVc before any display
-  g-access, so the carried value is never observed. See
+- Bad lines: DEN sampled at raster `$30` into `allow_bad_lines` for `$30-$F7`.
+  Condition every cycle from that latch, range, and live YSCROLL.
+- UpdateVc at cycle **13**. Phi2 c-access 14..53. Phi1 g-access 15..54, then
+  VC/VMLI++. UpdateRc at cycle **57** (not line wrap).
+- End of frame resets **only VC and VCBASE**. RC, VMLI, and display state
+  carry. Forcing RC=0 here pinned EoD's rotating object. See
   `test_frame_boundary_carries_rc_vmli_display`.
-- Badline BA/RDY is low on cycles 11..53 for c-accesses 14..53. It has no
-  artificial post-fetch hold: AEC blocks the final Phi2 on cycle 53 and the CPU
-  resumes at 54. Sprite BA is re-evaluated from the VICE masks every cycle,
-  including cross-line starts and releases. `c64_robocop_g64` still passes with
-  this schedule.
-- The combined EoD model is now verified in one tree: the earlier face/3D band
-  stays coherent, eod-3 remains contained in its black frame like VICE, and the
-  following sister imagery plus the earlier open-border/checker/plasma scenes
-  advance normally. See `eod-handoff.md` for captures and the resolved trace.
-- General cycle-perfect demo-scene compatibility is not claimed. `lft-nine` is a
-  selected milestone target. Edge of Disgrace's checker requires both the
-  full-bleed side-border windows and live VC/RC graphics to continue while DEN
-  is low; the left-edge solid column was an XSCROLL=2 B0C pad from sampling the
-  open-border `$D016=$62` dodge into `xscroll_pipe` (fixed: sample only on
-  g-access cycles 15..54 after the CPU store).
+- `reg11_delay` samples `$D011` at the end of `begin_cycle`. G-access address
+  bits use the prior-cycle mode.
+- Live paint uses `g_line`, not a re-read of RAM, so mid-line `$D018` changes
+  do not re-decode already-fetched columns.
 
-## Verification
+DEN gates bad-line arming and the top vertical-border compare. It is not a
+live graphics blank. Clearing DEN after the sequencer has opened leaves the
+running VC/RC pipeline visible.
 
-Preserve PAL sprite BA coverage, NTSC late sprite windows and fetch slots
-(`58,60,62,64,1,3,5,7`), cross-line sprite windows, frame timing constants, and
-the current border/`lft-nine` regressions. Run `ctest --test-dir build
---output-on-failure` after VIC changes.
+## Borders, XSCROLL, colour
+
+Main border (Bauer 3.9) covers sprites with `$D020`. Vertical border blanks
+graphics to B0C and does **not** blank sprites. Vertical unit is VICE
+two-stage: `set_vborder` (bottom only sets) and `vertical_border_active`.
+
+Horizontal checks sit under a 2-cycle paint delay: left cycle 17; right 57
+(CSEL=1) or 55 (CSEL=0). CSEL=0 follows VICE `draw_border8` (7 dots keep
+previous, last takes the new flip-flop). 38-col edges are VIC X 31/335.
+
+`xscroll_pipe` latches `$D016` XSCROLL **after** CPU Phi2, **only on g-access
+cycles 15..54**. Cycles 0..14 re-latch a previous-line `$62` before column 0.
+Cycles 55+ take EoD's open-border dodge `$D016=$62`. Either mistake paints a
+solid B0C column at x=24. The right over-border starts at **344+XSCROLL**,
+not a fixed 344.
+
+Over-border (x < 24 or x >= 344+XSCROLL) has **no graphics data**: gbuf is
+zero, not the `$3FFF` ghost byte. Ghost shine-through painted EoD plasma
+black blocks in the opened side border. Idle **inside** the 40-column window
+still uses the ghost byte. MCM text idle is hires (`cbuf==0`); only MCM
+bitmap idle stays multicolor. Invalid modes force pixel **colour** black but
+keep the graphics-derived **foreground/priority** bit (dkarcade venetian
+sprites).
+
+Colour pipes advance one VIC **dot** per cycle, including HBLANK. Sampling
+only painted pixels left a 1px old-`$D020` stub at x=0. `$D016` MCM bit for
+paint is resolved in `finish_cycle`; a mid-line MCM flip on cycles 15..54
+re-decodes the just-painted span (Deus Ex Machina band transition).
+
+## Sprites, IRQ, registers
+
+Sprite-sprite priority is resolved before sprite-background: lowest opaque
+sprite wins the mux, then that sprite's `$D01B` decides. Deus Ex Machina
+spirals depend on this.
+
+BA: bad-line low on cycles 11..53; sprite BA uses VICE per-cycle PAL/NTSC
+masks, re-evaluated every cycle. AEC/RDY are cycle granularity.
+
+Raster IRQ is edge-triggered non-match to match. `$D011` re-checks only when
+RST8 changes the 9-bit line (Arkanoid). Writing `$D012` to the current line
+still fires (Galencia). Collision IRQs edge 0 to nonzero; acking `$D019`
+while the latch is still set must not re-fire (Potty Pigeon).
+
+`$D016` reads `(reg & 0x3F) | 0xC0`. Bit 5 (RES) is real; forcing it high
+made Deus Ex Machina `$F8` where VICE reads `$D8`. `vicii_read_register` and
+`vicii_debug_read_register` must agree.
+
+## Rings
+
+Runtime frame ring stores completed **indexed8** frames, keyed by frame
+number and `machine_cycle`. VIC ring stores per-line latched state
+(`vicii_line_record`), including the sprite X used for that line. Warp
+frames are not stored in the frame ring.
+
+## Limits
+
+Light pen stubbed. No analog AEC/RDY. Open bus only for BA-lead cbuf.
+Snapshot files do not serialize paint pipes or paint buffers. Cycle-perfect
+demo compatibility is not claimed; lft-nine, Edge of Disgrace, and Deus Ex
+Machina are the load-bearing targets.
+
+A remaining whole-line vs VICE disagreement on X 392..407 (row-boundary
+offset) sits outside the 32/32 viewport.
+
+After VIC changes: `ctest --test-dir build --output-on-failure`. For oracle
+compares, match `-VICIImodel 6569` (`vice-oracle.md`).

@@ -1,77 +1,59 @@
-# Tools, parsers, and shared utilities
+# Tools, parsers, and utilities
 
 ## Tools
 
-- `src/tools/am65`: Git-subtree copy of the neutral two-pass assembler library
-  used by the frontend, runtime, and standalone `am65`; output-target callbacks
-  are optional. The C64 in-emulator host advertises only `map`, ignores `file=`,
-  and writes named targets to live RAM; any other `dest=` name is an assembly
-  error. Its opt-in segment
-  auto-adjust mode performs up to three
-  fresh pass-1 layout retries using structured overlap suggestions; pass 2 only
-  runs after layout stabilizes, and hosts can walk the applied address map.
-  Segments tagged `locked` in `.segdef` are anchors auto-adjust never moves; if
-  lower segments overrun a locked segment the retry is abandoned and assembly
-  fails naming the anchor rather than reshuffling around it. A plain `noemit`
-  segment may not overlap any segment (checked, hard error). The sanctioned
-  overlay is a reclaim segment, `.segdef "n", reclaim="host"`: implicitly noemit,
-  it inherits the emitted host's start (re-read on each auto-adjust re-parse, so
-  it follows the host with no extra machinery) and is validated to be no larger
-  than the host. The noemit/reclaim rules are enforced by `check_noemit_reclaim`
-  separately from the emit-only overlap/auto-adjust machinery, which continues to
-  ignore all `do_not_emit` segments.
-- `src/tools/disasm_6502`: 6502 disassembly and opcode addressing-mode metadata.
-  The frontend adds effective-address/value annotations from copied CPU/memory
-  snapshots.
-- `src/tools/symbols`: symbol-file parsing/table support for debugger and control
-  port.
-- `src/tools/d64`, `t64`, `crt`, `g64`: reusable format parsing. They do not own the
-  live machine or host UI policy.
+- `src/tools/am65`: two-pass assembler library used by the frontend, runtime,
+  and standalone `am65`. The C64 in-emulator host advertises only `map`,
+  ignores `file=`, and writes named targets to live RAM; any other `dest=`
+  name is an assembly error. Opt-in segment auto-adjust retries pass-1 layout
+  up to three times from structured overlap suggestions; pass 2 runs only
+  after layout stabilizes. Segments tagged `locked` in `.segdef` are anchors
+  auto-adjust never moves. A plain `noemit` segment may not overlap any
+  segment. The sanctioned overlay is `.segdef "n", reclaim="host"`: implicit
+  noemit, inherits the host start, and must not be larger than the host.
+- `src/tools/disasm_6502`: 6502 disassembly and addressing-mode metadata.
+  The frontend adds effective-address annotations from copied snapshots.
+- `src/tools/symbols`: symbol-file parsing for debugger and control port.
+- `src/tools/d64`, `t64`, `crt`, `g64`: format parse/decode only. Runtime
+  decides inject, mount, attach, or persist.
 
-The parser boundaries are deliberately simple: D64/T64/CRT/G64 return parsed or
-decoded data; runtime decides whether to inject, mount, attach, or persist it. A
-format parser must not call runtime, SDL, or frontend code. The assembler library
-is likewise independent of the live machine; the runtime supplies its target
-callbacks, explicitly selects the 6502 profile, and predefines `AM65=0` plus
-`C64=1`; the CLI supplies file-output targets, predefines `AM65=1`, and does not
-define a machine. The subtree also supports opt-in `.65c02`, `.rockwell`, and `.wdc`
-profiles without changing the C64 default.
+A parser must not call runtime, SDL, or frontend. The assembler library is
+independent of the live machine; runtime supplies target callbacks, selects
+the 6502 profile, and predefines `AM65=0` plus `C64=1`. The CLI supplies
+file-output targets, predefines `AM65=1`, and does not define a machine.
+The subtree also supports opt-in `.65c02`, `.rockwell`, and `.wdc` without
+changing the C64 default.
+
+`src/tools/assembler/` is an empty leftover; the real tree is `am65/`.
 
 ## Utilities
 
-`src/util` contains config, logging/helpers, mutex/condition/thread wrappers,
-message queues, SPSC audio buffer, paste-event parser, and stock BASIC V2
-tokenizer/detokenizer. Keep util dependency-safe; it must not acquire SDL or machine
-ownership.
+`src/util`: config, logging/helpers, mutex/condition/thread wrappers,
+message queues, SPSC audio buffer, paste-event parser, BASIC V2
+tokenizer/detokenizer. Util must not acquire SDL or machine ownership.
 
-Paste parser output is the runtime event format used by Type/paste actions. BASIC V2
-does not implement extension dialects.
+Paste parser output is the runtime event format used by Type/paste.
+BASIC V2 does not implement extension dialects.
 
-For a new parser or utility, first identify ownership of allocated buffers and the
-error contract in the existing header. Tests should exercise malformed input and
-boundary sizes, not only a successful fixture. Keep public headers C99-compatible;
-the audio buffer is the documented exception where its implementation uses C11
-atomics privately.
+Public headers stay C99-compatible. `audio_buffer` is the documented
+exception: its implementation uses C11 atomics privately.
 
-## Build/test ownership
+For a new parser, identify buffer ownership and the error contract in the
+existing header. Tests should exercise malformed input and boundary sizes.
 
-CMake builds component static libraries and 69 registered tests. Add a focused test
-with a new behavior; do not use documentation or a phase name as evidence that an
-old implementation still exists. Current parser/assembler tests are under
-`tests/tools`; audio/BASIC/paste tests are under `tests/util`.
+## Tests
 
-When touching the assembler's opcode/addressing tables (`gperf`, `opcode.c`,
-`parse.c`), run the standing coverage matrix
-`tests/tools/test_assembler_opcode_matrix.c`. It is built with the tree but is
-**not** an `add_test` gate - run it by hand:
+Add a focused test with a new behavior. Current parser/assembler tests are
+under `tests/tools`; audio/BASIC/paste under `tests/util`. Suite size and
+SKIP rules: `testing.md`.
+
+When touching assembler opcode/addressing tables (`gperf`, `opcode.c`,
+`parse.c`), run the standing coverage matrix (built, not `add_test`):
 
 ```text
 cmake --build build --target test_assembler_opcode_matrix
-./build/test_assembler_opcode_matrix        # PASS 151/151 when clean
+./build/test_assembler_opcode_matrix
 ```
 
-It round-trips every documented NMOS opcode through the *disassembler's*
-independent 256-entry table (assemble the disassembly, check opcode byte and
-length), so it catches silent encoding drift a table-vs-itself check cannot -
-e.g. `lsr <zp>` dropping its operand byte, or `ldx/stx <zp>,y` mis-promoting to
-absolute,Y. 65c02-only variants have no disasm oracle and are not covered.
+It round-trips every documented NMOS opcode through the disassembler's
+independent 256-entry table. 65c02-only variants have no disasm oracle.

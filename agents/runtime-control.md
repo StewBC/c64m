@@ -1,238 +1,163 @@
-# Runtime and control-port handoff
+# Runtime, Inspector, recorder, and rings
 
-## Runtime ownership
+## Ownership
 
-`src/runtime/runtime_thread.c` owns the runtime thread and live machine. Commands
-arrive through `runtime_client`/message queues; runtime publishes copied events,
-CPU/machine/debug-memory/frame/symbol snapshots. Runtime supports run, pause, reset,
-cycle/instruction stepping, step-over/out, run-to-cursor, finite run counts,
-breakpoints, input, paste, disk/file operations, assembler, save/load state, and
-direct selection of the active turbo mode (1=normal, 2=max, 3=warp).
+`src/runtime/runtime_thread.c` owns the runtime worker and the live `c64_t`.
+Commands arrive through `runtime_client` and message queues. Runtime publishes
+copied events and snapshots. The frontend must use `runtime_client`. The
+control socket thread must not poll those surfaces or touch the machine.
 
-The frontend must use `runtime_client`. The control socket thread must not poll
-runtime-client single-consumer surfaces or touch the machine directly.
+Runtime supports run, pause, reset, cycle/instruction stepping, step-over/out,
+run-to-cursor, `step-frame`, `run-to-raster`, breakpoints, input, paste,
+disk/file ops, assembler, save/load state, and turbo 1/2/3.
 
-## Frame and audio flow
+Turbo field names still say `active_turbo_multiplier` / `turbo_speeds`; values
+are mode IDs: 1 normal (real-time, live pixels), 2 max (free-run, live pixels),
+3 warp (free-run, paint off). Max is the correctness and throughput bar
+(`testing.md`).
 
-The runtime polls/publishes completed frame copies. A step can publish a current
-frame snapshot so debugger views reflect writes made by that step. Runtime audio
-production is cycle-driven and uses the shared audio buffer described in
-`sid-audio.md`.
+While free-running, the main loop must not poll fat snapshots every frame.
+Machine telemetry is once per UI present. Breakpoint and disk tables refresh
+on mutation or a full debug refresh (startup, step, pause).
+`request_debug_state()` is the full refresh; free-run uses
+`request_debug_telemetry()`.
 
-## UI telemetry cadence (Phase 4)
+## Message contracts
 
-While free-running, the main loop must **not** poll five fat snapshots every
-frame. Cadence:
+Every solicited runtime command carries a `request_token` (`uint64_t`). Token
+**0** is unsolicited telemetry and must never complete a control deferred
+entry. Non-zero tokens complete exactly one waiter. Wire request ids are a
+client/connection concern and are not the same as `request_token`.
 
-| Stream | When | Mechanism |
-|--------|------|-----------|
-| **Machine telemetry** | Once per UI present while running | `request_machine_state` / `RUNTIME_EVENT_MACHINE_STATE_RESPONSE` — includes CPU regs, VIC/CIA/SID, drive hardware, frame/cycle stamps |
-| **Breakpoint definitions** | On mutation (create/update/clear/enable/load/rearm) and on full debug refresh (startup, step, pause) | `runtime_publish_breakpoints` / `request_breakpoints` |
-| **Disk metadata** | On mount/unmount/writable/status request and full debug refresh | `runtime_publish_drive_status` / `request_disk_status` |
+Three identities, never mixed:
 
-Each machine telemetry event carries:
+| Axis | What |
+|------|------|
+| Client | `(connection_epoch, wire_request_id)` |
+| Runtime | `request_token` |
+| Asker | runtime session id (HST1 cursor owner) |
 
-- `runtime_seq` — monotonic publish sequence on the runtime thread
-- `cycle` / `cpu_cycles` / `frame_number` / `frame_cycle` — machine time stamps
+On each accepted TCP connection, main bumps `connection_epoch` and binds one
+`kind=control` runtime session. Disconnect cancels that epoch's deferred
+work, closes the session, and must not leak payloads to the next client.
+Duplicate outstanding wire ids in one epoch: `bad-id`.
 
-Use these for Phase 6 cache coherence barriers. Do not treat “looks paused” alone
-as freshness.
+Default UI session is slot 0, id 1, never released. Capacity is 4
+(`RUNTIME_SESSION_CAPACITY`). Open mutation: UI and socket may both step;
+there is no lock. `state-changed` is awareness only.
 
-`request_debug_state()` in `main.c` still does a **full** refresh (telemetry +
-tables) for startup and after stop/step. Free-run frame path calls
-`request_debug_telemetry()` only.
+Telemetry slots (frame, free-run machine/CPU) are latest-wins and may drop.
+RPC results (get-memory, HST1 pages, assemble, save/load) are exactly-once to
+the token owner, or explicit cancel/error. Bulk data uses
+`runtime_rpc_payload_pool`, keyed by token and kind. Do not enlarge
+`runtime_event` unions to carry 64K memory or history pages.
 
-## Message contracts (identity, delivery, ownership)
+`message_queue_push` may return false when full. Lossy notifications (frame
+ready, free-run telemetry) may drop. Reliable completions must not vanish:
+backpressure, `busy`, or a path that cannot drop without cancel.
 
-These rules are the IPC contract for UI↔runtime and control-port deferred work.
-They are enforced in code. Source remains authoritative if prose drifts.
+At most one outstanding control wait (`wait-paused` / `wait-running` /
+`wait-frame` / `wait-event`). A second wait gets `busy`. No live `c64_t`
+pointers in queue items.
 
-### Request tokens
-
-Every **solicited** runtime command carries an opaque internal `request_token`
-(`uint64_t`, monotonic allocator on the producer side: main / control dispatch /
-UI when needed).
-
-| Token | Meaning |
-|-------|---------|
-| **0** | Unsolicited notification or free-running telemetry (no waiter owns it) |
-| **non-zero** | Completes exactly one waiter that owns that token |
-
-Rules:
-
-- Runtime results and errors for a solicited command **echo the same token**.
-- Main-thread control deferred matching keys on `request_token` first. Type-only
-  matching of `CPU_STATE` / similar is forbidden for control completions.
-- Control-originated deferred work always uses non-zero tokens.
-- UI free-run / poll telemetry may use token 0. A token-0 (or wrong-token) event
-  **must never** complete a control deferred entry.
-- Wire request ids are a **client/connection** concern and are not the same as
-  `request_token`. Correlation across threads:
-
-  - Client-facing: `(connection_epoch, wire_request_id)`
-  - Runtime-facing: `request_token`
-  - Asker-facing: runtime **session id** (history cursor owner; see
-    `sessions.md`) — distinct from connection epoch
-
-### Connection epoch
-
-On each accepted control connection, main bumps a `connection_epoch`
-(TCP connection generation — not the same as a runtime session id). Deferred
-table entries and in-flight responses are tagged with that epoch. The TCP
-client is also bound to one `kind=control` runtime session for that epoch
-(C64M/7; released on disconnect).
-
-On disconnect / `quit-client` teardown:
-
-- Cancel all outstanding deferred entries for that epoch.
-- Close the bound control runtime session (history cursor slot reusable).
-- Free any owned RPC payloads for those entries.
-- Drain or tag-drop in-flight responses so they cannot be delivered to the next
-  client.
-- Queues that outlive connections must not leak pointer payloads across
-  connections.
-
-Duplicate outstanding wire request ids within one epoch: reject with `bad-id`.
-
-### Telemetry slots vs RPC results
-
-| Channel class | Semantics | Examples |
-|---------------|-----------|----------|
-| **Telemetry / snapshot slots** | Latest-wins; intermediate values may drop; generation may detect replacement | `frame_slot`, free-run machine/CPU telemetry, UI debug-memory *display* slot |
-| **RPC results** | Exactly-once delivery to the waiter that owns the token, or explicit cancel/error | Solicited `get-memory`, `get-cpu`, assemble complete, save/load state complete |
-
-A single latest-wins slot is **not** a reliable multi-outstanding RPC channel.
-Generation numbers detect overwrite; they do **not** preserve lost results.
-
-Bulk RPC data uses the bounded generic `runtime_rpc_payload_pool`, keyed by
-`request_token` and payload kind. Memory and HST1 history payloads cannot be
-claimed through each other's APIs. Claim transfers the owned heap buffer to the
-caller; queue failure, cancellation, disconnect, timeout, and shutdown release
-unclaimed buffers. Do not enlarge `runtime_event` unions to carry 64K memory,
-write-history arrays, or history pages.
-
-### Lossy vs reliable delivery
-
-`message_queue_push` may return false when full. Classification:
-
-| Class | On queue full | Examples |
-|-------|----------------|----------|
-| **Lossy notification** | Drop OK; optional drop counter | `FRAME_READY`, free-run telemetry |
-| **Reliable completion** | Must not silently vanish: backpressure, `busy`/error to the deferred owner, or a completion path that cannot drop without cancel | Token-bearing memory/cpu/vic responses, assemble/save/load complete |
-| **Reliable error/cancel** | Same as reliable completion | Runtime error for a token-bearing command; connection teardown cancels outstanding tokens |
-
-Queue saturation for reliable traffic yields **deterministic backpressure or a
-`busy`/error response**, not a later deferred timeout with no explanation.
-
-### Wait concurrency
-
-At most **one outstanding control wait** is active at a time (any
-`wait-paused` / `wait-running` / `wait-frame` / `wait-event`). A second wait
-while one is deferred receives `busy`. Sticky completion latches remain
-destructive (one waiter consumes and clears). Continuous events (`frame`, etc.)
-only match while a wait is active.
-
-### Heap ownership (payloads)
-
-If commands or events carry heap payloads (Phase 5; bulk pool Phase 1):
-
-- Ownership is explicit: move-owned envelope with release, or pool checkout/checkin.
-- Every **discard** path must release: queue-full push failure, step-over/out
-  drain drops, `message_queue_destroy`, shutdown, connection epoch cancel.
-- No live `c64_t` or other machine pointers in queue items.
-
-### Implementation touchpoints
-
-- Types: `src/runtime/runtime_command.h`, `runtime_event.h`
-- Publish / drain: `src/runtime/runtime_thread.c`, `runtime_client.c`
-- Deferred match / epoch: `src/main.c`
-- Wire concurrency / pipeline: `src/control/control_server.c` (nonblocking
-  multiplex, high-water 16)
+Touchpoints: `runtime_command.h`, `runtime_event.h`, `runtime_thread.c`,
+`runtime_client.c`, deferred match in `src/main.c`, pipeline in
+`control_server.c` (high-water 16).
 
 ## Control port
 
-`src/control` implements an opt-in localhost-only server enabled by
-`--control-port PORT`. One socket client is accepted at a time. The socket thread
-owns network I/O (may pipeline requests); the SDL/main loop drains requests and
-sends responses. `--headless` requires a control port and skips window, renderer,
-frontend, controller, and host audio setup while retaining runtime frames for
-control clients; the headless loop wakes when a control request is queued.
+Opt-in localhost server: `--control-port PORT`. One client. Socket thread
+owns I/O; SDL/main drains requests. `--headless` requires a control port and
+skips window/renderer/frontend/host audio; the headless loop wakes when a
+control request is queued. `quit-client` closes the socket, not the process.
 
-Implemented protocol areas include introspection, execution (`step-frame`,
-`run-to-raster`), state/CPU/VIC/CIA/frame/memory (`get-memory` up to 64K bulk /
-`set-memory`)/debug-memory/call-stack, CPU flight-recorder queries,
-keyboard/joystick/RESTORE,
-paste, PRG/BIN/D64 operations, machine snapshot save/load (`save-state` /
-`load-state`), breakpoints (exec/read/write and count-only), waits with sticky
-completion events, assemble, find-symbol, and `set-turbo`. Binary responses carry a
-typed header and raw byte count. Deferred responses use a multi-entry table and
-must follow the message contracts above (`request_token`, epoch, lossy vs reliable).
-`set-turbo` changes the active mode without altering the configured Opt+T list;
-mode 3 (warp) warns that the live framebuffer is disabled until turbo is
-lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
-load path used by `load-state`. Wire protocol is **C64M/8** - see `control-port.md`
-(sessions + `state-changed`; `sessions.md`).
+Wire is **C64M/8**. Grammar, payloads, and client sketch: `control-port.md`.
+Recipes: `using-c64m.md`.
 
-## CPU flight recorder
+## CPU flight recorder (HST1)
 
-The runtime owns `runtime_history`; the machine owns no arena memory. A compact
-`c64_cpu_observer` is installed only while the recorder is available and
-recording. Begin/access/complete callbacks append instruction, IRQ, and NMI
-records directly from the batched machine stepping path. Successful KERNAL
-LOAD/SAVE traps become markers after the active execution record completes.
+Forensic instruction log for the main 6510. Answers "who wrote `$22` to
+`$D020`". It does **not** restore the machine. Inspector is a different
+product.
 
-Default capacity is 256 MiB. Configuration accepts 0 (disabled) or 16..4096 MiB
-through `[debug] history_memory_mb` and `--history-memory`. Allocation failure is
-nonfatal and visible through `history-info`.
+Runtime owns `runtime_history`. Default 256 MiB; `[debug] history_memory_mb`
+/ `--history-memory` accept 0 (off) or 16..4096. Allocation failure is
+nonfatal and visible through `history-info`. Observer installed only while
+available and recording.
 
-Resets retain records and advance `timeline`; successful state load clears the
-arena and advances `epoch`. Save state never serializes recorder state. Runtime
-mutation sites seal partial records and append stable markers in actual commit
-order. Recording does not disable the simple batched free-run path.
+Resets retain records and advance `timeline`. Successful state load clears
+the arena and advances `epoch`. Save-state never serializes recorder state.
+FIND/NEXT/READ require an explicitly paused runtime. One cursor **per
+session**; mutation (run/step/reset/load/poke/media/history-clear) stamps
+cursors stale (`state-changed` then re-FIND). Pages are HST1 in the RPC
+pool (`runtime_history_wire.h`: 24-byte header, 48-byte record, 8-byte
+accesses). Decoder: `tools/c64_control_client.py`.
 
-Inspector recording is a separate opt-in product (`[debug] inspector`,
-`--inspector`). Default off. It does not arm or stop HST1. See [`inspector.md`](inspector.md).
+## Frame ring and VIC ring
 
-`history-find`, `history-next`, and `history-read` require an explicitly paused
-runtime. One runtime-owned cursor binds its full query, epoch, mutation
-generation, and next scan ID. Resume, step, reset, recording control, state
-load, or direct mutation invalidates it before recorder contents change.
-Logical query results materialize opcode/operand fetches. The HST1 encoder then
-places bounded binary pages in the generic payload pool; `runtime_event` carries
-metadata only.
+Frame ring (`runtime_frame_ring`): rolling completed **indexed8** frames so
+a glitch still exists after a late human pause. Default 128 MiB (~827 PAL
+frames). Keyed by frame number **and** `machine_cycle`. Warp geometric dumps
+are not stored. Lookup: nearest at-or-before; older than the window is
+`not-found`, never a neighbour.
 
-### Turbo semantics and host throughput
+VIC ring (`runtime_vic_ring`): per-line latched VIC state, including the
+sprite X used for paint. Default 16 MiB. `vic-ring-record off` stops
+**store**; the observer still builds the record until budget is 0.
 
-Turbo is three discrete modes (not a MHz ladder). Field names still say
-`active_turbo_multiplier` / `turbo_speeds` for historical compatibility; values
-are mode IDs:
+Join film, VIC lines, HST1, and Inspector checkpoints by **`machine_cycle`**,
+not frame number. Frame numbers have gaps.
 
-| Mode | Name  | Pacing   | Live pixels | Notes |
-|------|-------|----------|-------------|-------|
-| 1    | normal | 1× real-time | yes | PAL ~0.985 MHz / NTSC ~1.023 MHz Φ2 |
-| 2    | max   | free-run | yes | Full correctness (collisions, paint) |
-| 3    | warp  | free-run | no  | Debug geometry only; collision latches skip |
+## Guarded breakpoints
 
-**Max (mode 2) is the performance bar for full correctness.** Absolute free-run
-Φ2 rates and the pure-core vs product cost ladder live in
-**`perf-baseline-turbo2.md`** (host, recipes, and comparison rows). Do not
-disable pixel output except in warp (mode 3). 1541 units are soft-powered (see
-`disk-iec1541.md`); unpowered units are not stepped. When a unit is powered with
-ROM loaded, dual-drive cost can dominate free-run — re-measure against the
-baseline after changes.
+`runtime_breakpoint_condition.{c,h}`: after address/access/mapping already
+matched, evaluate a bounded AND-list (max 4 terms). No OR, no grouping. If
+a case needs OR, arm two breakpoints. `value` plus exec is rejected at
+create. Invalid `when=` is sanitized to unguarded. INI uses `;` because the
+list is comma-separated. Same list in live and Inspect. Wire syntax:
+`control-port.md`.
 
-For the actual wire format, command grammar, response payload layouts, and a working
-Python client, read `control-port.md`.
+## Inspector
 
-## Save-state boundary
+Opt-in time travel: checkpoint ring + input log + land + sealed re-execute
+into the **one true** `c64_t`. Names: `runtime_inspector_*` only.
 
-Runtime file I/O for machine snapshots happens on the runtime thread. Successful
-save/load emits completion events; failed loads preserve the live machine. The
-machine serializer does not capture SDL/frontend state; with real 1541 + ROM it
-does capture full drive-object state (v9).
+Default off. `--inspector` / `[debug] inspector`. Memory
+`--inspector-memory` / `inspector_memory_mb` (0 or 16..4096; default 128).
+Does **not** arm or stop HST1. `--inspector-off-on-max` (default true):
+turbo 2/3 wipes Record (and film if Record was on) and remembers it for
+leave-max; turbo 1 restores Record into an empty window.
 
-## Common pitfalls
+| Term | Meaning |
+|------|---------|
+| Record | Opt-in checkpoint + input log (+ film if the frame-ring budget is > 0) |
+| Inspect | Mode: the live `c64_t` **is** the past. Views keep talking to it. |
+| Land | Load nearest checkpoint `<=` cycle. Far right = restore NOW. |
+| Film | Indexed8 frame-ring preview. Missing stills are **pink**, never invented. |
+| Sealed | During re-execute: CPU observer off, mem-access CB off, no frame-ring push, no host audio, no host media write-through |
+| NOW | Blob of live state taken on enter. Leave restores it, paused. |
 
-`--headless` is not a general multi-client service and `quit-client` only closes the
-client. Do not introduce runtime fanout, non-local binding, or socket-thread machine
-access without changing the architecture deliberately and adding tests.
+Pinned product rules:
+
+- One debugger skin. Enter Inspect starts at live. Leave restores NOW.
+- Pokes/media/save-state/history-record fail with `read-only-inspector`.
+- Forward = sealed execute toward live (F10-family, `[+]`, F12). Backward =
+  earlier checkpoint + re-execute. Nothing executes past live.
+- F12 stops on the one breakpoint list or at live; stays in Inspect.
+- Guest media **write that succeeds** cuts the window (older checkpoints,
+  inputs, and film drop). A refused write-protect does not cut. Housekeeping
+  (eject flush, save-state, export) must not cut.
+- Timeline is oldest retained checkpoint -> live. A media cut or max/warp
+  wipe moves `oldest`; never leave islands.
+- Promote / Branch is out (`known-gaps.md`).
+
+Control: `get-state` reports `mode=live|inspector` and `focus_cycle`.
+`enter-inspector` / `leave-inspector`. Tests: `runtime_inspector`,
+`runtime_inspector_replay`, `runtime_inspector_mode`,
+`inspector_control_integration`. UI: `frontend-debugger.md`.
+
+## Save-state
+
+Runtime file I/O on the worker. Failed load preserves the live machine.
+Successful load clears HST1, frame/VIC rings, and Inspector tape. Format:
+`machine.md`.
