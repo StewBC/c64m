@@ -90,6 +90,22 @@ void runtime_frame_ring_set_recording(runtime_frame_ring *ring, bool recording) 
     runtime_frame_ring_unlock(ring);
 }
 
+void runtime_frame_ring_drop_older_than(runtime_frame_ring *ring, uint64_t cycle) {
+    if (ring == NULL || !runtime_frame_ring_usable(ring)) {
+        return;
+    }
+    runtime_frame_ring_lock(ring);
+    while (ring->count > 0u) {
+        uint32_t tail =
+            (ring->head + ring->capacity - ring->count) % ring->capacity;
+        if (ring->slots[tail].machine_cycle >= cycle) {
+            break;
+        }
+        ring->count--;
+    }
+    runtime_frame_ring_unlock(ring);
+}
+
 bool runtime_frame_ring_push(runtime_frame_ring *ring, const c64_frame *frame) {
     if (!runtime_frame_ring_usable(ring) || frame == NULL) {
         return false;

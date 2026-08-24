@@ -58,6 +58,13 @@ typedef struct runtime_config {
     /* Startup-only per-line VIC ring budget; 0 disables. */
     uint32_t vic_ring_memory_mb;
     bool vic_ring_memory_mb_configured;
+    /* Inspector recording (opt-in, default off). Does not arm HST1.
+       inspector_memory_mb is stored for I1; 0 is an empty tape. When
+       inspector_memory_mb_configured is false, runtime_create uses
+       RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB. */
+    bool inspector;
+    uint32_t inspector_memory_mb;
+    bool inspector_memory_mb_configured;
 } runtime_config;
 
 void runtime_config_set_turbo_defaults(runtime_config *config);

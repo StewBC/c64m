@@ -250,6 +250,10 @@ bool runtime_client_session_close(
     runtime_client *client,
     uint32_t session_id,
     uint64_t request_token);
+bool runtime_client_inspector_set_enabled(
+    runtime_client *client,
+    bool enabled,
+    uint64_t request_token);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

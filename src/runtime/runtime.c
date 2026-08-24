@@ -5,6 +5,7 @@
 #include "runtime_breakpoint_ini.h"
 #include "runtime_command.h"
 #include "runtime_internal.h"
+#include "runtime_inspector.h"
 #include "thread.h"
 
 #include <stdlib.h>
@@ -192,6 +193,10 @@ runtime *runtime_create(const runtime_config *config) {
         rt->vic_ring_memory_mb = config->vic_ring_memory_mb_configured ?
             config->vic_ring_memory_mb :
             RUNTIME_VIC_RING_DEFAULT_MEMORY_MB;
+        rt->inspector = config->inspector;
+        rt->inspector_memory_mb = config->inspector_memory_mb_configured ?
+            config->inspector_memory_mb :
+            RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB;
 
         if ((config->basic_rom_path && !rt->basic_rom_path) ||
             (config->char_rom_path && !rt->char_rom_path) ||
@@ -209,6 +214,8 @@ runtime *runtime_create(const runtime_config *config) {
         rt->history_memory_mb = RUNTIME_HISTORY_DEFAULT_MEMORY_MB;
         rt->frame_ring_memory_mb = RUNTIME_FRAME_RING_DEFAULT_MEMORY_MB;
         rt->vic_ring_memory_mb = RUNTIME_VIC_RING_DEFAULT_MEMORY_MB;
+        rt->inspector = false;
+        rt->inspector_memory_mb = RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB;
     }
 
     /* A frame ring that fails to allocate is not fatal: the emulator runs
@@ -259,6 +266,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->audio_record_path);
     runtime_history_destroy(rt->history);
     rt->history = NULL;
+    runtime_inspector_recorder_destroy(rt);
     runtime_frame_ring_destroy(&rt->frame_ring);
     runtime_vic_ring_destroy(&rt->vic_ring);
     if (rt->rpc_payload_pool.mutex != NULL) {

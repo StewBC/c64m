@@ -417,6 +417,23 @@ typedef struct c64_cpu_observer {
     void (*host_trap)(void *user, const c64_cpu_observer_trap *trap);
 } c64_cpu_observer;
 
+enum {
+    C64_INPUT_EVENT_KEY = 0,
+    C64_INPUT_EVENT_JOYSTICK = 1
+};
+
+/* Host input log for Inspector replay. kind is C64_INPUT_EVENT_*. */
+typedef void (*c64_input_event_fn)(
+    void *user,
+    uint64_t cycle,
+    int kind,
+    uint32_t a,
+    uint32_t b,
+    uint32_t c);
+
+/* Successful guest media write. device is 8 or 9. */
+typedef void (*c64_media_event_fn)(void *user, uint64_t cycle, int device);
+
 typedef struct c64_t {
     c64_bus_t bus;
     C6510 cpu;
@@ -439,6 +456,12 @@ typedef struct c64_t {
     void *memory_access_user;
     c64_cpu_observer cpu_observer;
     void *cpu_observer_user;
+    /* Inspector sealed replay: mute host side effects on this machine. */
+    bool replay_sealed;
+    c64_input_event_fn input_event;
+    void *input_event_user;
+    c64_media_event_fn media_event;
+    void *media_event_user;
     c64_cpu_instruction_trace last_cpu_trace;
     c64_cpu_instruction_trace pending_cpu_trace;
     uint64_t write_history[C64_RAM_SIZE];
@@ -530,6 +553,11 @@ void c64_set_video_output_enabled(c64_t *machine, bool enabled);
 bool c64_video_output_enabled(const c64_t *machine);
 void c64_restore(c64_t *machine);
 void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callback, void *user);
+void c64_set_replay_sealed(c64_t *machine, bool sealed);
+void c64_set_input_event_callback(c64_t *machine, c64_input_event_fn fn, void *user);
+void c64_set_media_event_callback(c64_t *machine, c64_media_event_fn fn, void *user);
+/* Successful guest 1541/KERNAL write. No-op when sealed. */
+void c64_notify_guest_media_write(c64_t *machine, int device);
 /* Install a per-raster-line VIC-II derived-state observer (NULL disables).
    Preserved across snapshot load like the memory-access hook. */
 void c64_set_vicii_line_observer(

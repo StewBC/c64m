@@ -72,7 +72,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_HISTORY_READ,
     RUNTIME_COMMAND_HISTORY_CLOSE,
     RUNTIME_COMMAND_SESSION_OPEN,
-    RUNTIME_COMMAND_SESSION_CLOSE
+    RUNTIME_COMMAND_SESSION_CLOSE,
+    RUNTIME_COMMAND_INSPECTOR_SET_ENABLED
 } runtime_command_type;
 
 enum {
@@ -318,5 +319,9 @@ typedef struct runtime_command {
         struct {
             uint32_t session_id;
         } session_close;
+
+        struct {
+            uint8_t enabled;
+        } inspector_set_enabled;
     } data;
 } runtime_command;

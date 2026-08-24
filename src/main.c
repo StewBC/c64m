@@ -6809,6 +6809,9 @@ int main(int argc, char **argv) {
     runtime_cfg.frame_ring_memory_mb_configured = true;
     runtime_cfg.vic_ring_memory_mb = (uint32_t)options.vic_ring_memory_mb;
     runtime_cfg.vic_ring_memory_mb_configured = true;
+    runtime_cfg.inspector = options.inspector;
+    runtime_cfg.inspector_memory_mb = (uint32_t)options.inspector_memory_mb;
+    runtime_cfg.inspector_memory_mb_configured = true;
     {
         runtime_config turbo_cfg = runtime_config_from_options(&options);
         memcpy(runtime_cfg.turbo_speeds, turbo_cfg.turbo_speeds, sizeof(runtime_cfg.turbo_speeds));

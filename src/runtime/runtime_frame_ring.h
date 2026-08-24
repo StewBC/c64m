@@ -69,6 +69,9 @@ void runtime_frame_ring_clear(runtime_frame_ring *ring);
 
 void runtime_frame_ring_set_recording(runtime_frame_ring *ring, bool recording);
 
+/* Drop retained frames with machine_cycle < cycle. Recording state is kept. */
+void runtime_frame_ring_drop_older_than(runtime_frame_ring *ring, uint64_t cycle);
+
 /* Copy one completed frame in, overwriting the oldest when full. Returns false
    when the ring is disabled, not recording, or the frame is NULL. */
 bool runtime_frame_ring_push(runtime_frame_ring *ring, const c64_frame *frame);

@@ -451,7 +451,13 @@ static void media_shift_bit_write(c1541 *drive, c1541_track *tr) {
         m->last_write_bit = bit;
         m->bits_in_byte = 0;
         if (tr != NULL) {
-            set_track_bit(tr, m->head_bit_pos, bit);
+            int was_dirty = tr->dirty;
+            if (drive->c64 == NULL || !drive->c64->replay_sealed) {
+                set_track_bit(tr, m->head_bit_pos, bit);
+                if (!was_dirty && tr->dirty) {
+                    c64_notify_guest_media_write(drive->c64, drive->device_number);
+                }
+            }
         }
         if (m->write_bits_left == 0) {
             /* Byte shifted out — BYTE READY until the next Port A write.
@@ -467,7 +473,13 @@ static void media_shift_bit_write(c1541 *drive, c1541_track *tr) {
            latches forward into the next sector header. */
         bit = m->last_write_bit;
         if (tr != NULL) {
-            set_track_bit(tr, m->head_bit_pos, bit);
+            int was_dirty = tr->dirty;
+            if (drive->c64 == NULL || !drive->c64->replay_sealed) {
+                set_track_bit(tr, m->head_bit_pos, bit);
+                if (!was_dirty && tr->dirty) {
+                    c64_notify_guest_media_write(drive->c64, drive->device_number);
+                }
+            }
         }
         m->bits_in_byte++;
         if (m->bits_in_byte >= 8) {

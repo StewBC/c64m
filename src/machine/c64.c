@@ -1071,6 +1071,10 @@ static bool c64_try_kernal_save_trap(c64_t *machine) {
         c64_kernal_save_return(machine, false, 0x05);
         return true;
     }
+    if (machine->replay_sealed) {
+        c64_kernal_save_return(machine, true, 0);
+        return true;
+    }
 
     start_pointer_zp = machine->cpu.cpu.A;
     machine->bus.ram[C64_ZP_EAL] = machine->cpu.cpu.X;
@@ -1126,6 +1130,7 @@ static bool c64_try_kernal_save_trap(c64_t *machine) {
     slot->image_content_seq++;
     slot->last_result = C64_DRIVE_STATUS_OK;
     d64_image_destroy(image);
+    c64_notify_guest_media_write(machine, (int)device);
 
     /* KERNAL trap may run with media caches still present from an earlier
        media_1541 session; force rebuild when media is re-enabled. */
@@ -2219,6 +2224,15 @@ void c64_set_key(c64_t *machine, c64_key key, bool pressed) {
 
     c64_keyboard_set_key(&machine->keyboard, key, pressed);
     machine->keyboard_events++;
+    if (!machine->replay_sealed && machine->input_event != NULL) {
+        machine->input_event(
+            machine->input_event_user,
+            machine->clock.cycle,
+            C64_INPUT_EVENT_KEY,
+            (uint32_t)key,
+            pressed ? 1u : 0u,
+            0u);
+    }
 }
 
 void c64_set_matrix(c64_t *machine, uint8_t row, uint8_t col, bool pressed) {
@@ -2235,6 +2249,17 @@ void c64_set_joystick(c64_t *machine, unsigned port, uint8_t inputs) {
         machine->joystick1 = (uint8_t)(inputs & 0x1fu);
     } else if (port == 2u) {
         machine->joystick2 = (uint8_t)(inputs & 0x1fu);
+    } else {
+        return;
+    }
+    if (!machine->replay_sealed && machine->input_event != NULL) {
+        machine->input_event(
+            machine->input_event_user,
+            machine->clock.cycle,
+            C64_INPUT_EVENT_JOYSTICK,
+            (uint32_t)port,
+            (uint32_t)(inputs & 0x1fu),
+            0u);
     }
 }
 
@@ -2352,6 +2377,33 @@ void c64_set_memory_access_callback(c64_t *machine, c64_memory_access_fn callbac
 
     machine->memory_access = callback;
     machine->memory_access_user = user;
+}
+
+void c64_set_replay_sealed(c64_t *machine, bool sealed) {
+    assert(machine);
+
+    machine->replay_sealed = sealed;
+}
+
+void c64_set_input_event_callback(c64_t *machine, c64_input_event_fn fn, void *user) {
+    assert(machine);
+
+    machine->input_event = fn;
+    machine->input_event_user = user;
+}
+
+void c64_set_media_event_callback(c64_t *machine, c64_media_event_fn fn, void *user) {
+    assert(machine);
+
+    machine->media_event = fn;
+    machine->media_event_user = user;
+}
+
+void c64_notify_guest_media_write(c64_t *machine, int device) {
+    if (machine == NULL || machine->replay_sealed || machine->media_event == NULL) {
+        return;
+    }
+    machine->media_event(machine->media_event_user, machine->clock.cycle, device);
 }
 
 void c64_set_vicii_line_observer(

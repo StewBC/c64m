@@ -1436,6 +1436,128 @@ static void test_history_memory_options(void) {
     remove("test_history_memory.ini");
 }
 
+static void test_inspector_options(void) {
+    app_options options;
+    FILE *file;
+    char *default_argv[] = {
+        "test_app_options",
+        "--noini",
+    };
+    char *on_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--inspector",
+    };
+    char *off_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--no-inspector",
+    };
+    char *zero_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--inspector-memory=0",
+    };
+    char *invalid_argv[] = {
+        "test_app_options",
+        "--noini",
+        "--inspector-memory=5",
+    };
+    char *ini_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector.ini",
+    };
+    char *override_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector.ini",
+        "--no-inspector",
+    };
+    char *garbage_argv[] = {
+        "test_app_options",
+        "--inifile",
+        "test_inspector_garbage.ini",
+    };
+
+    if (!app_options_load_startup(&options, 2, default_argv)) {
+        fprintf(stderr, "inspector default load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector default", 0, options.inspector);
+    expect_int("inspector memory default", 128, options.inspector_memory_mb);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, on_argv)) {
+        fprintf(stderr, "inspector --inspector load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector cli on", 1, options.inspector);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, off_argv)) {
+        fprintf(stderr, "inspector --no-inspector load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector cli off", 0, options.inspector);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 3, zero_argv)) {
+        fprintf(stderr, "inspector memory zero load failed\n");
+        exit(1);
+    }
+    expect_int("inspector memory disabled", 0, options.inspector_memory_mb);
+    app_options_destroy(&options);
+
+    if (app_options_load_startup(&options, 3, invalid_argv)) {
+        fprintf(stderr, "invalid inspector memory should fail\n");
+        app_options_destroy(&options);
+        exit(1);
+    }
+    app_options_destroy(&options);
+
+    file = fopen("test_inspector.ini", "w");
+    if (file == NULL) {
+        fprintf(stderr, "failed to create inspector ini\n");
+        exit(1);
+    }
+    fputs("[debug]\ninspector=1\ninspector_memory_mb=0\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, ini_argv)) {
+        fprintf(stderr, "inspector ini load failed\n");
+        exit(1);
+    }
+    expect_bool("inspector ini", 1, options.inspector);
+    expect_int("inspector memory ini zero", 0, options.inspector_memory_mb);
+    app_options_destroy(&options);
+
+    if (!app_options_load_startup(&options, 4, override_argv)) {
+        fprintf(stderr, "inspector --no-inspector override failed\n");
+        exit(1);
+    }
+    expect_bool("inspector ini overridden off", 0, options.inspector);
+    expect_int("inspector memory still zero", 0, options.inspector_memory_mb);
+    app_options_destroy(&options);
+    remove("test_inspector.ini");
+
+    file = fopen("test_inspector_garbage.ini", "w");
+    if (file == NULL) {
+        fprintf(stderr, "failed to create inspector garbage ini\n");
+        exit(1);
+    }
+    fputs("[debug]\ninspector_memory_mb=nope\n", file);
+    fclose(file);
+
+    if (!app_options_load_startup(&options, 3, garbage_argv)) {
+        fprintf(stderr, "inspector garbage ini load failed\n");
+        exit(1);
+    }
+    expect_int("inspector garbage budget", 128, options.inspector_memory_mb);
+    app_options_destroy(&options);
+    remove("test_inspector_garbage.ini");
+}
+
 static void test_headless_requires_control_port(void) {
     app_options options;
     char *argv[] = {
@@ -1626,6 +1748,7 @@ int main(void) {
     test_audio_record_options();
     test_control_port_option();
     test_history_memory_options();
+    test_inspector_options();
     test_headless_requires_control_port();
     test_headless_with_control_port();
     test_crt_path_with_spaces();

@@ -1003,6 +1003,21 @@ bool runtime_client_history_clear(
         client, RUNTIME_COMMAND_HISTORY_CLEAR, request_token);
 }
 
+bool runtime_client_inspector_set_enabled(
+    runtime_client *client,
+    bool enabled,
+    uint64_t request_token) {
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_INSPECTOR_SET_ENABLED,
+        .request_token = request_token,
+    };
+    if (client == NULL) {
+        return false;
+    }
+    command.data.inspector_set_enabled.enabled = enabled ? 1u : 0u;
+    return runtime_client_push(client, &command);
+}
+
 bool runtime_client_history_find(
     runtime_client *client,
     uint32_t session_id,

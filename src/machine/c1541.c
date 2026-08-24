@@ -304,11 +304,15 @@ static uint8_t c1541_copy_job_buffer_to_sector(c1541 *drive, uint8_t n) {
     if (!slot->writable) {
         return C1541_JOB_WRITE_PROT;
     }
+    if (drive->c64 != NULL && drive->c64->replay_sealed) {
+        return C1541_JOB_OK;
+    }
 
     buf_addr = (uint16_t)(C1541_RAM_SECTOR_BUF + (uint16_t)n * 0x0100u);
     memcpy(slot->image_bytes + offset, &drive->ram[buf_addr], 256);
     slot->dirty = true;
     slot->image_content_seq++;
+    c64_notify_guest_media_write(drive->c64, drive->device_number);
     return C1541_JOB_OK;
 }
 
@@ -335,6 +339,9 @@ static uint8_t c1541_format_track(c1541 *drive, uint8_t n) {
     if (!slot->writable) {
         return C1541_JOB_WRITE_PROT;
     }
+    if (drive->c64 != NULL && drive->c64->replay_sealed) {
+        return C1541_JOB_OK;
+    }
     if ((size_t)(off0 + sectors * 256) > slot->image_size) {
         return C1541_JOB_ERROR;
     }
@@ -342,6 +349,7 @@ static uint8_t c1541_format_track(c1541 *drive, uint8_t n) {
     memset(slot->image_bytes + off0, 0, (size_t)sectors * 256);
     slot->dirty = true;
     slot->image_content_seq++;
+    c64_notify_guest_media_write(drive->c64, drive->device_number);
     return C1541_JOB_OK;
 }
 

@@ -195,6 +195,13 @@ struct runtime {
     uint32_t frame_ring_memory_mb;
     runtime_vic_ring vic_ring;
     uint32_t vic_ring_memory_mb;
+    /* Startup request from runtime_config.inspector; worker applies it via
+       runtime_inspector_set_enabled. */
+    bool inspector;
+    bool inspector_enabled;
+    uint32_t inspector_memory_mb;
+    bool inspector_empty_tape_warned;
+    struct runtime_inspector_recorder *inspector_recorder;
     uint64_t history_mutation_generation;
     uint64_t next_history_cursor_id;
     runtime_session sessions[RUNTIME_SESSION_CAPACITY];

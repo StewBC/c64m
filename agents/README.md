@@ -99,10 +99,10 @@ Component handoffs:
   inform. Wire **C64M/7**; control TCP bind lives in `main.c` (c64m has no
   `control_dispatch.c`). Sibling A2M/11 in `../a2m/agents/sessions.md`.
   Unblocks [`inspector.md`](inspector.md) (I2+).
-- `inspector.md` - **Roadmap (not started):** Inspector time-travel product
-  (checkpoints + land + sealed re-execute). Separate from HST1 forensics.
-  Phases [`I0.md`](I0.md)–[`I4.md`](I4.md). CLI `--inspector`. Wire **C64M/8**
-  in I2. Promote/Branch is out. Do not name this TimeMachine.
+- `inspector.md` - **I0–I1 landed** (I2–I4 not started): Inspector time-travel
+  product (checkpoints + land + sealed re-execute). Separate from HST1
+  forensics. Phases [`I0.md`](I0.md)–[`I4.md`](I4.md). CLI `--inspector`.
+  Wire **C64M/8** in I2. Promote/Branch is out. Do not name this TimeMachine.
 - `guarded-breakpoints-plan.md` - **implemented** (Tier 1A): condition-guarded
   breakpoints (`when=`, bounded AND-list of CPU/flag/value/mem/raster terms);
   the "machine stops itself on nuance" primitive. Wire syntax and semantics
@@ -137,10 +137,12 @@ Component handoffs:
   mount wire, VIC/CIA/frame rings). Sibling list:
   `../a2m-v2/agents/backlog.md` E1–E4.
 
-Current baseline is 70/70 passing (includes `c64_snapshot_1541_midload`, the
+Current baseline is 75/75 passing (includes `c64_snapshot_1541_midload`, the
 history integration test, the machine/runtime recorder tests, the guarded-
 breakpoint condition/ini/control tests, the frame-ring and VIC-ring
-unit/control tests, and `help_view`, which renders the help window headlessly
+unit/control tests, Inspector I0/I1 (`runtime_inspector`,
+`runtime_inspector_replay`), and `help_view`,
+which renders the help window headlessly
 and inspects the emitted nuklear draw commands). That baseline includes the real 1541 ROM/IEC, G64,
 Arkanoid, Robocop, and full 1541 drive-object snapshot paths.
 

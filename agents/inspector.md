@@ -1,6 +1,6 @@
 # Inspector: time-travel debugger (roadmap)
 
-**Status:** Roadmap. **Not implementation.** Phases **I0–I4** are Not started.  
+**Status:** I0–I1 landed. I2–I4 not started.  
 **Product name:** Inspector — runtime-owned time travel (checkpoints + land + sealed re-execute).  
 **Not:** the CPU flight recorder (HST1). That is a separate forensic product.  
 **Depends on:** sessions S0–S4 (C64M/7, closed); machine snapshots (`c64_snapshot_save` / `load`); frame ring (film preview); guarded breakpoints (the one BP list).  
@@ -176,8 +176,8 @@ Implement in order. Each phase ends with: **build + ctest green**, **Landed** in
 
 | Phase | Doc | Summary |
 |-------|-----|---------|
-| **I0** | [`I0.md`](I0.md) | Epic contract + opt-in config. No engine. |
-| **I1** | [`I1.md`](I1.md) | Checkpoint ring + input log + sealed replay to a **scratch** `c64_t`. |
+| **I0** | [`I0.md`](I0.md) | Epic contract + opt-in config. No engine. **Landed.** |
+| **I1** | [`I1.md`](I1.md) | Checkpoint ring + input log + sealed replay to a **scratch** `c64_t`. **Landed.** |
 | **I2** | [`I2.md`](I2.md) | Land / enter / leave into the one true `c64_t`; control honesty (C64M/8). |
 | **I3** | [`I3.md`](I3.md) | Misc Inspector tab; film / land / keys / chrome (A1–A18). |
 | **I4** | [`I4.md`](I4.md) | Max and warp wipe Record; restore Record on leave into an empty window. |

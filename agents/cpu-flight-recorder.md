@@ -255,10 +255,14 @@ HST1 fixes these marker IDs and arguments:
 10 kernal-load-trap     arg0=start address, arg1=byte count
 11 kernal-save-trap     arg0=start address, arg1=byte count
 12 clock-discontinuity  arg0=stable HST1 clock-discontinuity kind
+13 media-changed        arg0=runtime_history_media_change_kind, arg1=device
 ```
 
+Marker 13 is additive (Inspector D10). `arg0` is `0` unknown or `1` guest-write.
+`arg1` is the drive device number when known (8 or 9). No C64M bump; I2 owns C64M/8.
+
 Unknown future marker IDs must be skipped/presented as unknown using the
-record’s encoded size, not treated as malformed.
+record's encoded size, not treated as malformed.
 
 HST1 also fixes the following reset-kind values for marker 4 `arg0`:
 

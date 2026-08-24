@@ -32,6 +32,7 @@
 #define C64M_DEFAULT_HISTORY_MEMORY_MB 256
 #define C64M_DEFAULT_FRAME_RING_MEMORY_MB 128
 #define C64M_DEFAULT_VIC_RING_MEMORY_MB 16
+#define C64M_DEFAULT_INSPECTOR_MEMORY_MB 128
 #define C64M_SYSTEM_ROM_SIZE 16384
 #define C64M_BASIC_ROM_SIZE 8192
 #define C64M_KERNAL_ROM_SIZE 8192
@@ -1577,6 +1578,24 @@ static void apply_config(app_options *options, config *cfg)
             options->vic_ring_memory_mb = (int)parsed;
         }
     }
+    options->inspector = config_get_bool(
+        cfg, "debug", "inspector", options->inspector);
+    value = config_get(cfg, "debug", "inspector_memory_mb");
+    if (value != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(value, &end, 0);
+        if (end == value || *end != '\0' ||
+            (parsed != 0u && (parsed < 16u || parsed > 4096u))) {
+            fprintf(
+                stderr,
+                "invalid [debug] inspector_memory_mb `%s`; using %d\n",
+                value,
+                C64M_DEFAULT_INSPECTOR_MEMORY_MB);
+            options->inspector_memory_mb = C64M_DEFAULT_INSPECTOR_MEMORY_MB;
+        } else {
+            options->inspector_memory_mb = (int)parsed;
+        }
+    }
 
     value = config_get(cfg, "assembler", "file");
     if (value != NULL) {
@@ -1742,6 +1761,10 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *turbo = NULL;
     const char *video_standard = NULL;
     const char *history_memory = NULL;
+    const char *inspector_memory = NULL;
+    int inspector = 0;
+    int inspector_cli = -1;
+    int i;
     struct argparse argparse;
     const char *const usages[] = {
         "c64m [options]",
@@ -1759,6 +1782,8 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_INTEGER('\0', "control-port", &control_port, "enable localhost control server on port", NULL, 0, 0),
         OPT_BOOLEAN('\0', "headless", &headless, "run without creating a window; requires --control-port", NULL, 0, OPT_NONEG),
         OPT_STRING('\0', "history-memory", &history_memory, "CPU flight-recorder memory budget in MiB (0 or 16..4096)", NULL, 0, 0),
+        OPT_BOOLEAN('\0', "inspector", &inspector, "enable Inspector recording (checkpoints; default off)", NULL, 0, 0),
+        OPT_STRING('\0', "inspector-memory", &inspector_memory, "Inspector recording memory budget in MiB (0 or 16..4096)", NULL, 0, 0),
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
@@ -1778,9 +1803,24 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_END(),
     };
 
+    /* Scan original argv before argparse compact-shifts it so --inspector /
+       --no-inspector can override INI (argparse BOOLEAN cannot tell unset
+       from --no-inspector when the default is off). Last occurrence wins. */
+    for (i = 1; i < argc; ++i) {
+        if (argv[i] == NULL) {
+            continue;
+        }
+        if (strcmp(argv[i], "--inspector") == 0) {
+            inspector_cli = 1;
+        } else if (strcmp(argv[i], "--no-inspector") == 0) {
+            inspector_cli = 0;
+        }
+    }
+
     argparse_init(&argparse, parse_options, usages, 0);
     argparse_describe(&argparse, "A Commodore 64 emulator written by Codex, Claude Code and Grok, produced by Stefan Wessels, 2026.", NULL);
     argparse_parse(&argparse, argc, (const char **)argv);
+    (void)inspector; /* consumed so --inspector is a known flag; CLI value comes from inspector_cli */
 
     if (defaults) {
         options->defaults = true;
@@ -1885,6 +1925,21 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         }
         options->history_memory_mb = (int)parsed;
     }
+    if (inspector_cli >= 0) {
+        options->inspector = inspector_cli != 0;
+    }
+    if (inspector_memory != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(inspector_memory, &end, 0);
+        if (end == inspector_memory || *end != '\0' ||
+            (parsed != 0u && (parsed < 16u || parsed > 4096u))) {
+            fprintf(
+                stderr,
+                "--inspector-memory expects 0 or a value from 16 through 4096 MiB\n");
+            return false;
+        }
+        options->inspector_memory_mb = (int)parsed;
+    }
     if (options->headless && options->control_port <= 0) {
         fprintf(stderr, "--headless requires --control-port PORT\n");
         return false;
@@ -1922,6 +1977,8 @@ void app_options_init(app_options *options)
     options->history_memory_mb = C64M_DEFAULT_HISTORY_MEMORY_MB;
     options->frame_ring_memory_mb = C64M_DEFAULT_FRAME_RING_MEMORY_MB;
     options->vic_ring_memory_mb = C64M_DEFAULT_VIC_RING_MEMORY_MB;
+    options->inspector = false;
+    options->inspector_memory_mb = C64M_DEFAULT_INSPECTOR_MEMORY_MB;
 }
 
 bool app_options_apply_ini_file(app_options *options, const char *path)
@@ -1991,6 +2048,8 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->history_memory_mb = src->history_memory_mb;
     dest->frame_ring_memory_mb = src->frame_ring_memory_mb;
     dest->vic_ring_memory_mb = src->vic_ring_memory_mb;
+    dest->inspector = src->inspector;
+    dest->inspector_memory_mb = src->inspector_memory_mb;
 
     if (!replace_string(&dest->keyboard_joystick_layout, src->keyboard_joystick_layout) ||
         !replace_string(&dest->ini_path, src->ini_path) ||
@@ -2129,6 +2188,8 @@ bool app_options_save_shutdown(const app_options *options)
     config_set_int(cfg, "debug", "history_memory_mb", options->history_memory_mb);
     config_set_int(cfg, "debug", "frame_ring_memory_mb", options->frame_ring_memory_mb);
     config_set_int(cfg, "debug", "vic_ring_memory_mb", options->vic_ring_memory_mb);
+    config_set_int(cfg, "debug", "inspector", options->inspector ? 1 : 0);
+    config_set_int(cfg, "debug", "inspector_memory_mb", options->inspector_memory_mb);
     /* The snapshot folder is now [browse] snapshot; drop the legacy key. */
     config_remove_prefix(cfg, "state", "quicksave_folder");
     if (options->symbol_files != NULL &&

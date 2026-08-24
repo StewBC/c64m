@@ -330,7 +330,9 @@ epoch=N count=N cursor=N more=0|1 oldest=N newest=N
 The payload is little-endian HST1: a 24-byte header, followed by records with a
 48-byte header and 8-byte materialized bus-access entries. Exact field offsets,
 stable marker/reset reason IDs, error strings, and lifecycle semantics are in
-`cpu-flight-recorder.md`. `tools/c64_control_client.py` validates and decodes
+`cpu-flight-recorder.md`. Marker 13 (`media-changed`) is additive: `arg0` is
+`0` unknown or `1` guest-write; `arg1` is the drive device when known. No
+protocol bump (still C64M/7). `tools/c64_control_client.py` validates and decodes
 HST1 through `history_info()`, `history_find()`, `history_next()`, and
 `history_read()`.
 

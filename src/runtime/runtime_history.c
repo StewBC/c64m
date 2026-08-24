@@ -873,6 +873,45 @@ bool runtime_history_transition_timeline(runtime_history *history) {
     return true;
 }
 
+bool runtime_history_retain_from(
+    runtime_history *history,
+    uint64_t epoch,
+    uint64_t id)
+{
+    runtime_history_record rec;
+    size_t i;
+
+    if (history == NULL || !history->available || id == 0u) {
+        return false;
+    }
+    if (epoch != history->epoch) {
+        return false;
+    }
+    if (!runtime_history_lookup(history, epoch, id, &rec)) {
+        return false;
+    }
+    for (i = 0u; i < history->block_count; ++i) {
+        runtime_history_block *block = &history->blocks[i];
+        if (!block->occupied || block->epoch != history->epoch) {
+            continue;
+        }
+        if (block->last_id < id) {
+            memset(block, 0, sizeof(*block));
+        }
+    }
+    return true;
+}
+
+bool runtime_history_force_new_block(
+    runtime_history *history, uint64_t machine_cycle)
+{
+    if (history == NULL || !history->available) {
+        return false;
+    }
+    (void)runtime_history_seal_partial(history);
+    return history_advance_block(history, machine_cycle);
+}
+
 bool runtime_history_set_timeline(runtime_history *history, uint32_t timeline) {
     if (history == NULL || !history->available) {
         return false;

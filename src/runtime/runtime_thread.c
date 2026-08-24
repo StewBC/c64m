@@ -10,6 +10,7 @@
 #include "runtime_event.h"
 #include "runtime_assembler.h"
 #include "runtime_history_wire.h"
+#include "runtime_inspector.h"
 #include "crt.h"
 #include "d64.h"
 #include "disasm_6502.h"
@@ -1024,6 +1025,7 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
                     command->data.mount_d64.device,
                     true);
             }
+            runtime_inspector_on_history_invalidate(rt);
         } else {
             int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
             if (slot_index >= 0 && slot_index < C64_DRIVE_SLOT_COUNT) {
@@ -1111,6 +1113,7 @@ static void runtime_mount_d64(runtime *rt, const runtime_command *command) {
         command->data.mount_d64.writable != 0);
     if (status_result == C64_DRIVE_STATUS_OK) {
         int slot_index = (int)(command->data.mount_d64.device - C64_DRIVE_MIN_DEVICE);
+        runtime_inspector_on_history_invalidate(rt);
         snprintf(
             rt->mounted_disk_paths[slot_index],
             sizeof(rt->mounted_disk_paths[slot_index]),
@@ -2091,6 +2094,7 @@ static bool runtime_reset_machine(
         runtime_publish_error(rt, error);
         return false;
     }
+    runtime_inspector_on_history_invalidate(rt);
     if (runtime_history_transition_timeline(rt->history)) {
         (void)runtime_history_append_marker(
             rt->history,
@@ -2860,6 +2864,7 @@ static bool runtime_step_cycle(runtime *rt) {
 
     runtime_audio_advance_cycle(rt);
     runtime_flush_dirty_disks(rt);
+    runtime_inspector_after_step(rt);
     return true;
 }
 
@@ -2876,6 +2881,7 @@ static bool runtime_step_cycle_free_run(runtime *rt) {
     }
 
     runtime_audio_advance_cycle(rt);
+    runtime_inspector_after_step(rt);
     return true;
 }
 
@@ -2910,6 +2916,7 @@ static uint32_t runtime_step_cycles_free_run(runtime *rt, uint32_t count) {
             runtime_audio_advance_cycle(rt);
         }
     }
+    runtime_inspector_after_step(rt);
     return ran;
 }
 
@@ -2956,6 +2963,7 @@ static bool runtime_step_instruction(runtime *rt) {
         return false;
     }
     runtime_flush_dirty_disks(rt);
+    runtime_inspector_after_step(rt);
 
     rt->breakpoint_hit_pending = false;
     c64_copy_cpu_snapshot(&rt->machine, &snapshot);
@@ -2987,6 +2995,7 @@ static bool runtime_run_instructions(runtime *rt, size_t count) {
             return false;
         }
         runtime_flush_dirty_disks(rt);
+        runtime_inspector_after_step(rt);
 
         if (runtime_pause_if_breakpoint_pending(rt)) {
             return true;
@@ -5090,6 +5099,7 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
        lookup match a frame from a different run. */
     runtime_frame_ring_clear(&rt->frame_ring);
     runtime_vic_ring_clear(&rt->vic_ring);
+    runtime_inspector_on_history_invalidate(rt);
     rt->pending_history_trap = 0u;
     runtime_history_sync_observer(rt);
     runtime_clear_host_transients_after_state_load(rt);
@@ -5225,6 +5235,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             runtime_history_prepare_discontinuity(rt);
             (void)runtime_history_clear(
                 rt->history, rt->machine.clock.cycle);
+            runtime_inspector_on_history_invalidate(rt);
             runtime_history_sync_observer(rt);
             runtime_publish_history_status(rt, command->request_token);
             break;
@@ -5239,6 +5250,11 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_HISTORY_READ:
             runtime_history_read_command(rt, command);
+            break;
+
+        case RUNTIME_COMMAND_INSPECTOR_SET_ENABLED:
+            runtime_inspector_set_enabled(
+                rt, command->data.inspector_set_enabled.enabled != 0u);
             break;
 
         case RUNTIME_COMMAND_HISTORY_CLOSE: {
@@ -6136,6 +6152,7 @@ int runtime_thread_main(void *userdata) {
         rt->machine.clock.cycle);
     runtime_history_sync_observer(rt);
     runtime_vic_ring_sync_observer(rt);
+    runtime_inspector_set_enabled(rt, rt->inspector);
     rt->exec_state = RUNTIME_EXEC_PAUSED;
     rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
     rt->speed_mode = RUNTIME_SPEED_MODE_SLOW;

@@ -1037,6 +1037,30 @@ target_link_libraries(test_runtime_frame_ring PRIVATE
 
 add_test(NAME runtime_frame_ring COMMAND test_runtime_frame_ring)
 
+add_executable(test_runtime_inspector
+    tests/runtime/test_runtime_inspector.c
+)
+
+target_compile_features(test_runtime_inspector PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_inspector PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_inspector COMMAND test_runtime_inspector)
+
+add_executable(test_runtime_inspector_replay
+    tests/runtime/test_runtime_inspector_replay.c
+)
+
+target_compile_features(test_runtime_inspector_replay PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_inspector_replay PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_inspector_replay COMMAND test_runtime_inspector_replay)
+
 add_executable(test_runtime_vic_ring
     tests/runtime/test_runtime_vic_ring.c
 )

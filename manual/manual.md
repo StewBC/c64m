@@ -42,6 +42,7 @@ Useful flags:
 | `--kbdjoy <0|1|2>`     | Drive the keyboard joystick on the given C64 port (`0` disables) |
 | `--kbdjoy-layout <numpad|wasd>` | Select the keyboard joystick key layout        |
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
+| `--inspector`          | Enable Inspector recording (checkpoints; default off). `--inspector-memory=<MiB>` sets the budget (0 or 16..4096) |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file stores
 configuration, window size, debugger layout, and breakpoints.

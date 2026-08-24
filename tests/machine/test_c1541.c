@@ -10,6 +10,15 @@ static void fail(const char *msg) {
     exit(1);
 }
 
+static int g_media_writes;
+
+static void test_media_write_cb(void *user, uint64_t cycle, int device) {
+    (void)user;
+    (void)cycle;
+    (void)device;
+    g_media_writes++;
+}
+
 static void expect_eq_u8(const char *name, uint8_t expected, uint8_t actual) {
     if (expected != actual) {
         fprintf(stderr, "FAIL: %s: expected 0x%02X, got 0x%02X\n", name, expected, actual);
@@ -677,6 +686,8 @@ static void test_queued_write_job_success(void) {
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
+    g_media_writes = 0;
+    c64_set_media_event_callback(&c64, test_media_write_cb, NULL);
 
     img = make_test_d64(0x11);
     result = c64_mount_d64_ex(
@@ -696,6 +707,8 @@ static void test_queued_write_job_success(void) {
     c1541_advance_one_cycle(&drive);
 
     expect_eq_u8("queued write job result", 0x01u, drive.ram[0x02]);
+    if (g_media_writes < 1)
+        fail("test_queued_write_job_success: guest write did not notify");
 
     slot = c64_get_drive_slot(&c64, 8);
     if (!slot || !slot->image_bytes)
@@ -740,6 +753,8 @@ static void test_queued_write_job_write_protect(void) {
     c1541_init(&drive, &c64, 8);
     load_nop_rom(&drive);
     c1541_reset(&drive);
+    g_media_writes = 0;
+    c64_set_media_event_callback(&c64, test_media_write_cb, NULL);
 
     img = make_test_d64(0x22);
     result = c64_mount_d64(
@@ -758,6 +773,8 @@ static void test_queued_write_job_write_protect(void) {
     c1541_advance_one_cycle(&drive);
 
     expect_eq_u8("write-protect job result", 0x08u, drive.ram[0x02]);
+    if (g_media_writes != 0)
+        fail("test_queued_write_job_write_protect: refused write notified");
 
     slot = c64_get_drive_slot(&c64, 8);
     if (!slot || !slot->image_bytes)

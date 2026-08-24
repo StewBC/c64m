@@ -99,6 +99,10 @@ typedef struct app_options {
     int history_memory_mb;
     int frame_ring_memory_mb;
     int vic_ring_memory_mb;
+    /* Inspector recording master switch (default off) and checkpoint budget
+       in MiB: 0 or 16..4096. 0 is an empty tape, not a refuse. */
+    bool inspector;
+    int inspector_memory_mb;
     /* Host-keyboard joystick: layout name ("numpad" or "wasd") and the C64 port
        it drives (0 = disabled, 1 or 2 = active). */
     char *keyboard_joystick_layout;

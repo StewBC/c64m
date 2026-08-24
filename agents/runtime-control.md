@@ -190,6 +190,9 @@ arena and advances `epoch`. Save state never serializes recorder state. Runtime
 mutation sites seal partial records and append stable markers in actual commit
 order. Recording does not disable the simple batched free-run path.
 
+Inspector recording is a separate opt-in product (`[debug] inspector`,
+`--inspector`). Default off. It does not arm or stop HST1. See [`inspector.md`](inspector.md).
+
 `history-find`, `history-next`, and `history-read` require an explicitly paused
 runtime. One runtime-owned cursor binds its full query, epoch, mutation
 generation, and next scan ID. Resume, step, reset, recording control, state
