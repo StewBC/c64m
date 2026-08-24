@@ -307,8 +307,8 @@ No game change; pure control-port orchestration, consistent with coop's charter.
 
 ## Non-goals
 
-- Not reverse execution or state restore — the ring is read-only forensic pixels
-  and VIC state, not a time machine (that stays a separate checkpoint/replay
-  feature, per the recorder spec).
+- Not reverse execution or state restore — the ring is read-only stills and VIC
+  state, not Inspector. Inspector ([`inspector.md`](inspector.md)) is the
+  checkpoint/replay product; this ring is its optional film preview.
 - Not audio/SID history (separate ring if ever needed).
 - Not drive-VIC (there is none) or drive-CPU frames.

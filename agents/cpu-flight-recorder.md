@@ -23,7 +23,8 @@ The source and tests are authoritative for current behavior.
 - Replace the old history commands and bump the wire protocol. There is no
   backward-compatibility requirement inside or outside this repository.
 - Deliver the recorder core and remote API first. A UI history browser is a
-  follow-up. Time travel is a separate checkpoint-and-replay feature.
+  follow-up. Inspector time travel is a separate product:
+  [`inspector.md`](inspector.md). HST1 does not restore the machine.
 
 ## Why this exists
 
@@ -1041,14 +1042,12 @@ not parse control-protocol payloads. Candidate interactions:
 
 No UI code is part of the initial implementation.
 
-## Future time travel
+## Inspector (separate product)
 
 The recorder is not sufficient to undo machine execution. VIC-II, CIA, SID,
 interrupt pipelines, powered 1541s, media rotation, read side effects, and host
 inputs evolve independently of CPU register/RAM changes.
 
-Future time travel should use periodic lightweight in-memory checkpoints plus a
-deterministic host-input/mutation log, then restore and replay to a recorder
-record ID. This recorder helps with searchable destinations and validation, but
-checkpoint/replay has its own feature brief, performance budget, and correctness
-work.
+Do not replay to an HST1 record ID. That path was tried and discarded.
+Inspector ([`inspector.md`](inspector.md)) is checkpoints + land + sealed
+re-execute on the live `c64_t`. HST1 stays FIND.

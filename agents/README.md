@@ -96,9 +96,13 @@ Component handoffs:
 - `cpu-flight-recorder-plan.md` - completed test-first implementation record,
   performance gates, measurements, and acceptance checklist
 - `sessions.md` - **Closed foundation:** multi-asker sessions + `state-changed`
-  inform (Inspector prep; no UI). Wire **C64M/7**; control TCP bind lives in
-  `main.c` (c64m has no `control_dispatch.c`). Sibling A2M/11 in
-  `../a2m/agents/sessions.md`.
+  inform. Wire **C64M/7**; control TCP bind lives in `main.c` (c64m has no
+  `control_dispatch.c`). Sibling A2M/11 in `../a2m/agents/sessions.md`.
+  Unblocks [`inspector.md`](inspector.md) (I2+).
+- `inspector.md` - **Roadmap (not started):** Inspector time-travel product
+  (checkpoints + land + sealed re-execute). Separate from HST1 forensics.
+  Phases [`I0.md`](I0.md)–[`I4.md`](I4.md). CLI `--inspector`. Wire **C64M/8**
+  in I2. Promote/Branch is out. Do not name this TimeMachine.
 - `guarded-breakpoints-plan.md` - **implemented** (Tier 1A): condition-guarded
   breakpoints (`when=`, bounded AND-list of CPU/flag/value/mem/raster terms);
   the "machine stops itself on nuance" primitive. Wire syntax and semantics
@@ -127,7 +131,8 @@ Component handoffs:
 - `debug-ergonomics-looklater.md` - **Not active work.** Ranked look-later ideas
   (mem workshop fill/move/diff, live media session reconfig, state
   checkpoint/rewind, frame gate / HW snaps) harvested from an a2m-v2 vs
-  AltirraBridge comparison. **BUT CHECK against this tree’s source before any
+  AltirraBridge comparison. **E3 rewind is [`inspector.md`](inspector.md), not
+  this note.** **BUT CHECK against this tree’s source before any
   implementation** — c64m may already cover large parts (e.g. `step-frame`,
   mount wire, VIC/CIA/frame rings). Sibling list:
   `../a2m-v2/agents/backlog.md` E1–E4.

@@ -46,7 +46,7 @@ Altirra’s profiler/symbols suite as parity.
 |------|----|------|--------------------------------------|
 | 1 | **E1** | Memory workshop ops (fill / move / named range backup + diff) | **UI first**, wire second if cheap |
 | 2 | **E2** | Live media remount / session reconfig | UI + wire; session pain not “every INI key” |
-| 3 | **E3** | Machine-state checkpoint / rewind | Not history; not mem-range backup — full restore |
+| 3 | **E3** | Machine-state checkpoint / rewind | **See [`inspector.md`](inspector.md)** (in-RAM checkpoints + Inspect). Path `save-state` / `load-state` remains file snapshots, not this. |
 | 4 | **E4** | Deterministic frame gate + richer HW snapshots | Goldens / deep RE; often lower value if already covered |
 
 ### E1 — Memory workshop
@@ -80,13 +80,19 @@ c64m may already be ahead of a2m here.
 
 ### E3 — Machine-state checkpoint / rewind
 
-**Hypothesis:** history + mem backup do **not** restore the machine. Probe path
-wants: save slot → poke / run → if dead, **rewind**, try next hypothesis.
+**Product for in-RAM rewind:** [`inspector.md`](inspector.md) (I0–I4). Do not
+open a second rewind epic.
 
-**BUT CHECK:** path `save-state` / `load-state`, snapshot version rules
-([`machine.md`](machine.md)), pause preservation, whether named/in-memory slots
-or quicksave chords exist ([`frontend-debugger.md`](frontend-debugger.md)).
-Do not reinvent if path + UI load is already the product answer.
+Path `save-state` / `load-state` and Opt+Shift+`>`/`<` quicksave remain **file**
+snapshots ([`machine.md`](machine.md), [`frontend-debugger.md`](frontend-debugger.md)).
+That is not Inspector. Inspector is opt-in recording + land + sealed re-execute
+on the live `c64_t`, then leave restores NOW.
+
+Promote / Branch ("make this past become live") is **out** of the Inspector
+campaign. If that is still wanted later, it is a new brief, not E3.
+
+**BUT CHECK** before any extra work on top of Inspector: named slots, multiple
+NOW blobs, or file-snapshot UX gaps. Do not reinvent the checkpoint ring.
 
 ### E4 — Deterministic frame gate + richer HW snapshots
 

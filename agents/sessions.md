@@ -1,18 +1,20 @@
-# Sessions: multi-asker query foundation (Inspector prep)
+# Sessions: multi-asker query foundation
 
 **Status:** Closed (foundation). **No Inspector UI in this epic.**  
 **Sibling:** Closed foundation in `../a2m` as **A2M/11** — see
 `../a2m/agents/sessions.md` and commits `5e203fc`…`173873c`.  
-**Product name (later UI):** Inspector (F9-like second view; not this campaign).  
+**Later consumer:** Inspector — the time-travel **mode** of the one debugger
+skin, not a second view ([`inspector.md`](inspector.md)). Not this campaign.  
 **Depends on:** flight recorder + history wire (C64M/3+), frame ring (C64M/5+).  
-**Unblocks:** Inspector UI / shared flight-recorder browsing between human UI and
-socket agent without cursor stomp.  
+**Unblocks:** Inspector (I2 control honesty + I3 UI) and shared HST1 browsing
+between human UI and socket agent without cursor stomp.  
 **Wire:** **C64M/7** (unsolicited `state-changed` + `sessions` / `state-changed`
 capabilities).
 
 Related: [`control-port.md`](control-port.md) · [`using-c64m.md`](using-c64m.md) ·
 [`cpu-flight-recorder.md`](cpu-flight-recorder.md) ·
-[`runtime-control.md`](runtime-control.md) · [`testing.md`](testing.md).
+[`runtime-control.md`](runtime-control.md) · [`testing.md`](testing.md) ·
+[`inspector.md`](inspector.md).
 
 Source is authoritative. If this brief and code disagree after implementation,
 fix the brief in the same change.
@@ -74,7 +76,9 @@ Today the *capability surface* exists (C64M verbs + `runtime_client`). The
 per runtime.” That claim becomes false when S0 lands — update it in the same
 change.
 
-**Sessions** are the fix. Inspector UI is a later consumer of the same API.
+**Sessions** are the fix. Inspector ([`inspector.md`](inspector.md)) is a later
+consumer of the same API (cooperative one-state + `state-changed`). HST1 FIND
+cursors stay per-session regardless.
 
 ---
 
@@ -82,7 +86,7 @@ change.
 
 | Topic | Decision |
 |-------|----------|
-| Name (product, later) | **Inspector** — out of scope for UI here |
+| Name (product, later) | **Inspector** ([`inspector.md`](inspector.md)) — out of scope for UI here |
 | Unit of multi-asker | **`session`**: endpoint + stateful query bits + reply routing |
 | Where sessions live | **Runtime-authoritative** for history cursors / mutation notify. Control binds the TCP client to one session. UI will later bind via `runtime_client` session APIs. |
 | Capacity | Fixed small **N = 4** slots (product needs 2: UI + socket; 4 avoids a resize story) |
@@ -149,7 +153,7 @@ Request correlation stays as today:
 - Inspector UI, key chord, layout, Nuklear panels
 - Auto-pause-on-Inspector-open (UI policy later; may call existing `pause`)
 - Multi-TCP clients
-- Time travel / reverse execution
+- Time travel / reverse execution (that is [`inspector.md`](inspector.md), not this epic)
 - Changing C64M command *semantics* for single-client scripts beyond additive
   session fields / events (old one-client scripts should keep working)
 - Replacing `coop_watch` / `Ctl` (update them only as needed for new events)
