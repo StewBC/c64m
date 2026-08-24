@@ -19,3 +19,12 @@ void frontend_format_window_title(
     uint32_t turbo_multiplier,
     frontend_runtime_state state,
     runtime_stop_reason stop_reason);
+
+void frontend_format_window_title_ex(
+    char *out,
+    size_t out_size,
+    const char *video_standard,
+    uint32_t turbo_multiplier,
+    frontend_runtime_state state,
+    runtime_stop_reason stop_reason,
+    bool inspecting);

@@ -34,5 +34,21 @@ int main(void)
         "PAL", 2, FRONTEND_RUNTIME_STATE_PAUSED, RUNTIME_STOP_REASON_BRK);
     expect_title("error", "c64m - NTSC - Normal - Error",
         "NTSC", 1, FRONTEND_RUNTIME_STATE_ERROR, RUNTIME_STOP_REASON_ERROR);
+    {
+        char actual[96];
+        frontend_format_window_title_ex(
+            actual,
+            sizeof(actual),
+            "PAL",
+            1,
+            FRONTEND_RUNTIME_STATE_PAUSED,
+            RUNTIME_STOP_REASON_PAUSE_COMMAND,
+            true);
+        if (strcmp(actual, "c64m - PAL - Normal - Inspect") != 0) {
+            fprintf(stderr, "inspect: expected `c64m - PAL - Normal - Inspect`, got `%s`\n",
+                actual);
+            exit(1);
+        }
+    }
     return 0;
 }

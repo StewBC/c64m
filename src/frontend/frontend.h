@@ -70,6 +70,11 @@ typedef struct frontend_debug_state {
     uint64_t inspector_focus_cycle;
     uint8_t inspector_start_kind;
     uint32_t inspector_start_arg1;
+    bool inspecting;
+    bool inspector_window_valid;
+    uint64_t inspector_oldest_cycle;
+    uint64_t inspector_newest_cycle;
+    uint32_t inspector_clock_hz;
 } frontend_debug_state;
 
 const char *frontend_runtime_state_name(frontend_runtime_state state);
@@ -138,7 +143,12 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_SAVE_PATHS_ONLY,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_PATH_DIALOG,
     FRONTEND_DEBUGGER_INTENT_CONFIG_PICK_ROM_DIALOG,
-    FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT
+    FRONTEND_DEBUGGER_INTENT_FILE_BROWSER_RESULT,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_SET_ENABLED,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP
 } frontend_debugger_intent_type;
 
 /* File-browser "default folder" slots. Each remembers the last directory used by
@@ -206,6 +216,7 @@ typedef struct frontend_debugger_intent {
     /* File browser result */
     frontend_debugger_intent_type file_browser_purpose;
     char file_browser_path[1024];
+    uint64_t inspector_cycle;
 } frontend_debugger_intent;
 
 typedef struct frontend_load_bin_dialog_state {
@@ -259,6 +270,9 @@ bool frontend_routes_keyboard_to_c64(const frontend *ui);
 bool frontend_wants_text_input(const frontend *ui);
 bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
+/* True while the Inspector thumb is down (film/pink preview). */
+bool frontend_inspector_preview(const frontend *ui, uint64_t *out_cycle);
+void frontend_inspector_set_preview_film(frontend *ui, bool has_film);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
 /* Force disk activity LEDs off (e.g. machine reset). */
 void frontend_clear_disk_activity_leds(frontend *ui);

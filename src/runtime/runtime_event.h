@@ -253,6 +253,10 @@ typedef struct runtime_machine_snapshot {
     uint64_t inspector_focus_cycle;
     uint8_t inspector_start_kind;
     uint32_t inspector_start_arg1;
+    uint8_t inspector_window_valid;
+    uint64_t inspector_oldest_cycle;
+    uint64_t inspector_newest_cycle; /* live end of oldest-snapshot -> live */
+    uint32_t inspector_clock_hz;
 } runtime_machine_snapshot;
 
 typedef struct runtime_memory_snapshot {

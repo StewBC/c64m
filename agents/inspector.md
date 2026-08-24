@@ -1,6 +1,6 @@
 # Inspector: time-travel debugger (roadmap)
 
-**Status:** I0–I2 landed. I3–I4 not started.  
+**Status:** I0–I3 landed. I4 not started.  
 **Product name:** Inspector — runtime-owned time travel (checkpoints + land + sealed re-execute).  
 **Not:** the CPU flight recorder (HST1). That is a separate forensic product.  
 **Depends on:** sessions S0–S4 (C64M/7, closed); machine snapshots (`c64_snapshot_save` / `load`); frame ring (film preview); guarded breakpoints (the one BP list).  
@@ -179,7 +179,7 @@ Implement in order. Each phase ends with: **build + ctest green**, **Landed** in
 | **I0** | [`I0.md`](I0.md) | Epic contract + opt-in config. No engine. **Landed.** |
 | **I1** | [`I1.md`](I1.md) | Checkpoint ring + input log + sealed replay to a **scratch** `c64_t`. **Landed.** |
 | **I2** | [`I2.md`](I2.md) | Land / enter / leave into the one true `c64_t`; control honesty (C64M/8). **Landed.** |
-| **I3** | [`I3.md`](I3.md) | Misc Inspector tab; film / land / keys / chrome (A1–A18). |
+| **I3** | [`I3.md`](I3.md) | Misc Inspector tab; film / land / keys / chrome (A1–A18). **Landed.** |
 | **I4** | [`I4.md`](I4.md) | Max and warp wipe Record; restore Record on leave into an empty window. |
 
 ```text
@@ -223,8 +223,8 @@ Keep [`testing.md`](testing.md) gate green every phase.
 - [ ] Checkpoint + sealed re-execution reconstructs CPU/mem/VIC/CIA/SID/1541 in window
 - [ ] Seal proven: materialize leaves HST1, frame ring, watchpoints, audio and host files untouched
 - [ ] Inspect replaces the machine with past; views/display update under the head
-- [ ] One debugger skin; Misc Inspector tab is the only Inspect entry
-- [ ] Film / land / re-execute; drag does not mutate the C64; HST1 unused on this path
+- [x] One debugger skin; Misc Inspector tab is the only Inspect entry
+- [x] Film / land / re-execute; drag does not mutate the C64; HST1 unused on this path
 - [ ] Read-only pokes; leave restores live NOW paused
 - [ ] Guest media write cuts the window, with marker + honest UI text; housekeeping writes do not
 - [ ] Cooperative one-state + `state-changed` + control-visible mode/leave (C64M/8)

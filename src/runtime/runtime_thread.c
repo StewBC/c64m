@@ -549,7 +549,12 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.drive9_hardware = drive9_hardware;
     {
         runtime_inspector_window window;
+        uint64_t oldest = 0u;
+        uint64_t live = 0u;
+        uint64_t count = 0u;
+
         runtime_inspector_window_info(rt, &window);
+        runtime_inspector_timeline_bounds(rt, &oldest, &live, &count);
         event.data.machine_state.inspector_mode =
             (uint8_t)runtime_inspector_current_mode(rt);
         event.data.machine_state.inspector_enabled =
@@ -558,6 +563,11 @@ static void runtime_publish_machine_state(runtime *rt) {
             rt->inspector_focus.cycle : rt->machine.clock.cycle;
         event.data.machine_state.inspector_start_kind = (uint8_t)window.start_kind;
         event.data.machine_state.inspector_start_arg1 = window.start_arg1;
+        event.data.machine_state.inspector_window_valid = count > 0u ? 1u : 0u;
+        event.data.machine_state.inspector_oldest_cycle = oldest;
+        event.data.machine_state.inspector_newest_cycle = live;
+        event.data.machine_state.inspector_clock_hz =
+            c64_config_clock_hz(&rt->machine.config);
     }
 
     runtime_publish_event(rt, &event);

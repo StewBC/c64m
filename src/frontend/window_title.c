@@ -18,13 +18,14 @@ static const char *window_title_stop_reason_name(runtime_stop_reason reason)
     }
 }
 
-void frontend_format_window_title(
+void frontend_format_window_title_ex(
     char *out,
     size_t out_size,
     const char *video_standard,
     uint32_t turbo_multiplier,
     frontend_runtime_state state,
-    runtime_stop_reason stop_reason)
+    runtime_stop_reason stop_reason,
+    bool inspecting)
 {
     const char *video = "?";
     char turbo[16];
@@ -52,6 +53,11 @@ void frontend_format_window_title(
         snprintf(turbo, sizeof(turbo), "%u", (unsigned int)turbo_multiplier);
     }
 
+    if (inspecting) {
+        snprintf(out, out_size, "c64m - %s - %s - Inspect", video, turbo);
+        return;
+    }
+
     switch (state) {
         case FRONTEND_RUNTIME_STATE_RUNNING:
             snprintf(state_text, sizeof(state_text), "Running");
@@ -69,4 +75,16 @@ void frontend_format_window_title(
             break;
     }
     snprintf(out, out_size, "c64m - %s - %s - %s", video, turbo, state_text);
+}
+
+void frontend_format_window_title(
+    char *out,
+    size_t out_size,
+    const char *video_standard,
+    uint32_t turbo_multiplier,
+    frontend_runtime_state state,
+    runtime_stop_reason stop_reason)
+{
+    frontend_format_window_title_ex(
+        out, out_size, video_standard, turbo_multiplier, state, stop_reason, false);
 }

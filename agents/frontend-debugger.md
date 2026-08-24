@@ -16,13 +16,15 @@ must show completion.
 ## Current UI
 
 The Nuklear frontend consumes copied runtime snapshots and provides Machine,
-disassembly, memory, CPU/register, hardware, assembler, help, configuration,
+disassembly, memory, CPU/register, hardware, assembler, Inspector, help, configuration,
 disk/program/state, breakpoint, symbol lookup, and file-browser views. It never
 reads live machine state directly. Memory views distinguish CPU map, raw RAM, ROM,
 and 1541 map sources; debugger edits go through runtime commands.
+Misc tabs are Machine / Debugger / Breakpoints / Hardware / Assembler / Inspector
+(two rows of three). Inspector is the only Inspect entry (see `inspector.md` I3).
 The window title is `c64m - VIDEO - TURBO - STATE`; it refreshes when PAL/NTSC,
-the active turbo mode, state, or stop reason changes. Modes render as `Normal`,
-`Max`, and `Warp`.
+the active turbo mode, state, stop reason, or Inspect mode changes. Modes render as `Normal`,
+`Max`, and `Warp`. Inspecting replaces the state with `Inspect`.
 
 Host file selection uses the in-app cross-platform browser backed by
 `platform_fs`; it does not shell out to macOS scripts. Remembered browse directories

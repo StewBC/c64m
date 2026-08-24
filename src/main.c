@@ -1312,6 +1312,17 @@ static void update_debug_state_from_event(
                 event->data.machine_state.inspector_start_kind;
             debug_state->inspector_start_arg1 =
                 event->data.machine_state.inspector_start_arg1;
+            debug_state->inspecting =
+                event->data.machine_state.inspector_mode ==
+                (uint8_t)RUNTIME_INSPECTOR_MODE_INSPECT;
+            debug_state->inspector_window_valid =
+                event->data.machine_state.inspector_window_valid != 0u;
+            debug_state->inspector_oldest_cycle =
+                event->data.machine_state.inspector_oldest_cycle;
+            debug_state->inspector_newest_cycle =
+                event->data.machine_state.inspector_newest_cycle;
+            debug_state->inspector_clock_hz =
+                event->data.machine_state.inspector_clock_hz;
             debug_state->has_cpu = true;
             debug_state->has_memory_banking = true;
             debug_state->has_hardware = true;
@@ -1364,6 +1375,9 @@ static void update_debug_state_from_event(
             debug_state->inspector_focus_cycle = event->data.inspector_mode.focus.cycle;
             debug_state->inspector_start_kind = event->data.inspector_mode.start_kind;
             debug_state->inspector_start_arg1 = event->data.inspector_mode.start_arg1;
+            debug_state->inspecting =
+                event->data.inspector_mode.mode ==
+                (uint8_t)RUNTIME_INSPECTOR_MODE_INSPECT;
             break;
 
         case RUNTIME_EVENT_FRAME_READY:
@@ -4149,6 +4163,39 @@ static void sdl_c64_controllers_close(sdl_c64_controller_state *state, runtime_c
     sdl_c64_controller_send_ports(state, client);
 }
 
+static bool intent_mutates_in_inspect(frontend_debugger_intent_type type)
+{
+    switch (type) {
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC:
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_SP:
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_A:
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_X:
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_Y:
+        case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_STATUS:
+        case FRONTEND_DEBUGGER_INTENT_MEMORY_WRITE_BYTE:
+        case FRONTEND_DEBUGGER_INTENT_MACHINE_RESET:
+        case FRONTEND_DEBUGGER_INTENT_ASSEMBLE_RUN:
+        case FRONTEND_DEBUGGER_INTENT_LOAD_BIN_EXECUTE:
+        case FRONTEND_DEBUGGER_INTENT_SAVE_BIN_EXECUTE:
+        case FRONTEND_DEBUGGER_INTENT_STATE_SAVE_AS_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_STATE_LOAD_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_PROGRAM_LOAD_PRG_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_DISK_MOUNT_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_DISK_ADD_DIALOG:
+        case FRONTEND_DEBUGGER_INTENT_DISK_UNMOUNT:
+        case FRONTEND_DEBUGGER_INTENT_DISK_EJECT_ALL:
+        case FRONTEND_DEBUGGER_INTENT_DISK_POWER_ON:
+        case FRONTEND_DEBUGGER_INTENT_DISK_POWER_OFF:
+        case FRONTEND_DEBUGGER_INTENT_DISK_SELECT:
+        case FRONTEND_DEBUGGER_INTENT_DISK_SET_WRITABLE:
+        case FRONTEND_DEBUGGER_INTENT_CONFIG_APPLY:
+        case FRONTEND_DEBUGGER_INTENT_INSPECTOR_SET_ENABLED:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void dispatch_debugger_intents(
     platform_window *window,
     runtime_client *client,
@@ -4165,6 +4212,12 @@ static void dispatch_debugger_intents(
 
     while (frontend_poll_debugger_intent(ui, &intent)) {
         bool sent = false;
+
+        if (debug_state != NULL && debug_state->inspecting &&
+            intent_mutates_in_inspect(intent.type)) {
+            app_options_destroy(&intent.config);
+            continue;
+        }
 
         switch (intent.type) {
             case FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC:
@@ -4686,6 +4739,39 @@ static void dispatch_debugger_intents(
             case FRONTEND_DEBUGGER_INTENT_REQUEST_CALL_STACK:
                 sent = runtime_client_request_call_stack(client);
                 break;
+
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_SET_ENABLED: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_set_enabled(
+                    client, intent.enabled, token);
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_enter(client, token);
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_leave(client, token);
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_land(
+                    client, intent.inspector_cycle, token);
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_frame_step(
+                    client, intent.enabled ? 1 : -1, token);
+                break;
+            }
 
             case FRONTEND_DEBUGGER_INTENT_NONE:
             default:
@@ -6400,11 +6486,18 @@ static void update_window_title(
     const char *video_standard,
     uint32_t turbo_multiplier,
     frontend_runtime_state state,
-    runtime_stop_reason stop_reason) {
+    runtime_stop_reason stop_reason,
+    bool inspecting) {
     char title[96];
 
-    frontend_format_window_title(
-        title, sizeof(title), video_standard, turbo_multiplier, state, stop_reason);
+    frontend_format_window_title_ex(
+        title,
+        sizeof(title),
+        video_standard,
+        turbo_multiplier,
+        state,
+        stop_reason,
+        inspecting);
     platform_window_set_title(window, title);
 }
 
@@ -6425,6 +6518,7 @@ static bool run_main_loop(
     frontend_runtime_state last_title_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
     runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
     uint32_t last_title_turbo_multiplier = 0u;
+    bool last_title_inspecting = false;
     char last_title_video_standard[8] = "";
     frontend_input_mapper input_mapper;
     sdl_c64_controller_state controller_state;
@@ -6457,7 +6551,9 @@ static bool run_main_loop(
         while (SDL_PollEvent(&event)) {
             bool send_event_to_frontend = ui_visible || frontend_help_is_open(ui);
 
-            sdl_c64_controller_handle_event(&controller_state, client, &event);
+            if (!debug_state.inspecting) {
+                sdl_c64_controller_handle_event(&controller_state, client, &event);
+            }
 
             if (event.type == SDL_QUIT) {
                 running = false;
@@ -6489,7 +6585,9 @@ static bool run_main_loop(
                 } else if (event.key.keysym.sym == SDLK_a &&
                            frontend_input_has_option_modifier(&event.key) &&
                            frontend_input_has_shift_modifier(&event.key)) {
-                    frontend_trigger_assembler(ui);
+                    if (!debug_state.inspecting) {
+                        frontend_trigger_assembler(ui);
+                    }
                     send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_m &&
                            frontend_input_has_option_modifier(&event.key) &&
@@ -6541,10 +6639,14 @@ static bool run_main_loop(
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
                 } else if (key_is_quicksave_shortcut(&event.key)) {
-                    send_quicksave(client, options, ui);
+                    if (!debug_state.inspecting) {
+                        send_quicksave(client, options, ui);
+                    }
                     send_event_to_frontend = false;
                 } else if (key_is_quickload_shortcut(&event.key)) {
-                    send_quickload(client, options, ui);
+                    if (!debug_state.inspecting) {
+                        send_quickload(client, options, ui);
+                    }
                     send_event_to_frontend = false;
                 } else if ((event.key.keysym.sym == SDLK_0 ||
                             event.key.keysym.sym == SDLK_1 ||
@@ -6580,31 +6682,38 @@ static bool run_main_loop(
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
                            frontend_input_has_option_modifier(&event.key) &&
                            frontend_input_has_shift_modifier(&event.key)) {
-                    char *text = SDL_GetClipboardText();
-                    if (text && text[0] != '\0') {
-                        paste_event_t       events[PASTE_EVENTS_MAX];
-                        size_t              count = 0;
-                        paste_parse_error_t perr  = { -1, NULL };
-                        if (paste_parse(text, events, PASTE_EVENTS_MAX, &count, &perr)
-                                && count > 0) {
-                            runtime_client_paste_events(client, events, count);
-                        } else if (perr.offset >= 0) {
-                            SDL_Log("paste parse error at offset %d: %s",
-                                    perr.offset, perr.message ? perr.message : "");
+                    if (!debug_state.inspecting) {
+                        char *text = SDL_GetClipboardText();
+                        if (text && text[0] != '\0') {
+                            paste_event_t       events[PASTE_EVENTS_MAX];
+                            size_t              count = 0;
+                            paste_parse_error_t perr  = { -1, NULL };
+                            if (paste_parse(text, events, PASTE_EVENTS_MAX, &count, &perr)
+                                    && count > 0) {
+                                runtime_client_paste_events(client, events, count);
+                            } else if (perr.offset >= 0) {
+                                SDL_Log("paste parse error at offset %d: %s",
+                                        perr.offset, perr.message ? perr.message : "");
+                            }
                         }
+                        SDL_free(text);
                     }
-                    SDL_free(text);
+                    send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_INSERT &&
                            frontend_input_has_option_modifier(&event.key) &&
                            !frontend_input_has_shift_modifier(&event.key)) {
-                    char *text = SDL_GetClipboardText();
-                    if (text && text[0] != '\0') {
-                        runtime_client_paste_text_buffer(client, text, strlen(text));
+                    if (!debug_state.inspecting) {
+                        char *text = SDL_GetClipboardText();
+                        if (text && text[0] != '\0') {
+                            runtime_client_paste_text_buffer(client, text, strlen(text));
+                        }
+                        SDL_free(text);
                     }
-                    SDL_free(text);
+                    send_event_to_frontend = false;
                 } else if (ui_visible && frontend_handle_view_cycle_key(ui, &event.key)) {
                     send_event_to_frontend = false;
-                } else if (!ui_visible || frontend_routes_keyboard_to_c64(ui)) {
+                } else if (!debug_state.inspecting &&
+                           (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                     if (frontend_joystick_consumes(&kbd_joystick, event.key.keysym.sym)) {
                         if (frontend_joystick_handle_key(&kbd_joystick, &event.key)) {
                             sdl_c64_controller_send_ports(&controller_state, client);
@@ -6616,6 +6725,7 @@ static bool run_main_loop(
                 }
             } else if (event.type == SDL_KEYUP &&
                        !frontend_help_is_open(ui) &&
+                       !debug_state.inspecting &&
                        (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                 if (frontend_joystick_consumes(&kbd_joystick, event.key.keysym.sym)) {
                     if (frontend_joystick_handle_key(&kbd_joystick, &event.key)) {
@@ -6626,7 +6736,9 @@ static bool run_main_loop(
                 }
                 send_event_to_frontend = false;
             } else if (event.type == SDL_DROPFILE) {
-                handle_drop_file(client, options, event.drop.file);
+                if (!debug_state.inspecting) {
+                    handle_drop_file(client, options, event.drop.file);
+                }
                 send_event_to_frontend = false;
             }
 
@@ -6647,6 +6759,23 @@ static bool run_main_loop(
             &deferred_control,
             &control_cache,
             &event_latch);
+        {
+            uint64_t preview_cycle = 0u;
+            if (frontend_inspector_preview(ui, &preview_cycle)) {
+                static c64_frame film;
+                if (runtime_client_copy_frame_at(client, preview_cycle, true, &film)) {
+                    frontend_inspector_set_preview_film(ui, true);
+                    (void)frontend_submit_frame(ui, &film);
+                    debug_state.has_frame = true;
+                    debug_state.frame_number = film.frame_number;
+                    debug_state.frame_cycle = film.machine_cycle;
+                } else {
+                    frontend_inspector_set_preview_film(ui, false);
+                }
+            } else {
+                frontend_inspector_set_preview_film(ui, false);
+            }
+        }
         check_deferred_control_session(
             control,
             client,
@@ -6670,6 +6799,7 @@ static bool run_main_loop(
             debug_state.runtime_state != last_title_state ||
             debug_state.stop_reason != last_title_stop_reason ||
             debug_state.active_turbo_multiplier != last_title_turbo_multiplier ||
+            debug_state.inspecting != last_title_inspecting ||
             strcmp(last_title_video_standard,
                 options->video_standard != NULL ? options->video_standard : "") != 0) {
             update_window_title(
@@ -6677,10 +6807,12 @@ static bool run_main_loop(
                 options->video_standard,
                 debug_state.active_turbo_multiplier,
                 debug_state.runtime_state,
-                debug_state.stop_reason);
+                debug_state.stop_reason,
+                debug_state.inspecting);
             last_title_state = debug_state.runtime_state;
             last_title_stop_reason = debug_state.stop_reason;
             last_title_turbo_multiplier = debug_state.active_turbo_multiplier;
+            last_title_inspecting = debug_state.inspecting;
             snprintf(last_title_video_standard, sizeof(last_title_video_standard), "%s",
                 options->video_standard != NULL ? options->video_standard : "");
             title_set = true;

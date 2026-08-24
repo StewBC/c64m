@@ -99,8 +99,8 @@ Component handoffs:
   inform. Wire **C64M/7**; control TCP bind lives in `main.c` (c64m has no
   `control_dispatch.c`). Sibling A2M/11 in `../a2m/agents/sessions.md`.
   Unblocks [`inspector.md`](inspector.md) (I2+).
-- `inspector.md` - **I0–I2 landed** (I3–I4 not started): Inspector time-travel
-  product (checkpoints + land + sealed re-execute). Separate from HST1
+- `inspector.md` - **I0–I3 landed** (I4 not started): Inspector time-travel
+  product (checkpoints + land + sealed re-execute; Misc Inspector tab). Separate from HST1
   forensics. Phases [`I0.md`](I0.md)–[`I4.md`](I4.md). CLI `--inspector`.
   Wire **C64M/8**. Promote/Branch is out. Do not name this TimeMachine.
 - `guarded-breakpoints-plan.md` - **implemented** (Tier 1A): condition-guarded
@@ -140,9 +140,9 @@ Component handoffs:
 Current baseline is 77/77 passing (includes `c64_snapshot_1541_midload`, the
 history integration test, the machine/runtime recorder tests, the guarded-
 breakpoint condition/ini/control tests, the frame-ring and VIC-ring
-unit/control tests, Inspector I0–I2 (`runtime_inspector`,
+unit/control tests, Inspector I0–I3 (`runtime_inspector`,
 `runtime_inspector_replay`, `runtime_inspector_mode`,
-`inspector_control_integration`), and `help_view`,
+`inspector_control_integration`, Misc Inspector tab), and `help_view`,
 which renders the help window headlessly
 and inspects the emitted nuklear draw commands). That baseline includes the real 1541 ROM/IEC, G64,
 Arkanoid, Robocop, and full 1541 drive-object snapshot paths.

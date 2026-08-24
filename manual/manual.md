@@ -210,6 +210,7 @@ even when Debug Mode is closed and no other indicator is visible:
 | `c64m - NTSC - Max - Paused (reason)`  | NTSC video in max free-run; execution has stopped. `reason` is one of `breakpoint`, `BRK`, `step`, `reset`, `pause`, or `run complete`. |
 | `c64m - PAL - Warp - Running`          | Warp free-run (live paint off; skip-ahead only). |
 | `c64m - NTSC - Normal - Error`         | The runtime hit an error and stopped.        |
+| `c64m - PAL - Normal - Inspect`        | Inspector mode: the C64 is a reconstructed past point. |
 
 This lets you tell whether the emulator is paused or running without opening the debugger.
 
@@ -223,7 +224,7 @@ In Debug Mode, the window is divided into four main areas:
 | Upper right   | CPU register view                                           |
 | Right, below  | Disassembly view                                            |
 | Lower left    | Memory view                                                 |
-| Lower right   | Misc panel (Machine, Debugger, Breakpoints, Hardware, Assembler tabs) |
+| Lower right   | Misc panel (Machine, Debugger, Breakpoints, Hardware, Assembler, Inspector tabs) |
 
 c64m tracks an active view for keyboard input. When no modal dialog is open, the active
 C64 display, Disassembly, Misc, or Memory view has a neutral gray outline. Click a view
@@ -242,6 +243,33 @@ Drag the splitters to resize the panes. A **corner handle** at the bottom-right 
 display region moves both splitters together; clicking it without dragging snaps the
 display region to the C64's true aspect (see **Display and Scaling**). The window size and
 splitter positions are saved to the INI file on quit.
+
+### Inspector
+
+Inspector is time travel inside Debug Mode (F9). It is not a second debugger. Host **F7**
+is not bound to Inspector; open the **Inspector** tab in Misc.
+
+Recording is off by default. Enable it with `--inspector` (and optional
+`--inspector-memory=<MiB>`) or the **Record** checkbox on that tab. Recording stores
+checkpoints and stills. It does not arm the CPU flight recorder.
+
+With Record on, **Inspect** enters Inspector at the live (paused NOW) end. Leave Inspector
+restores that NOW and stays paused; it does not resume.
+
+While Inspecting, window titles use **Inspect** and pane headers turn cobalt. Memory and
+registers are read-only. The Breakpoints tab is the same live list.
+
+The slider is **oldest retained snapshot -> live**. Drag is preview only: the C64 does not
+move. The CRT shows a stored still if the frame ring has one at that cycle, otherwise a
+loud pink fill of the CRT area (`RGB 255,0,255`). Releasing the thumb **lands** (loads the
+checkpoint at or before that time, or live at the right end) and paints from the landed
+C64. `[-]` / `[+]` step one guest video frame. F10 / F11 / Shift+F10 / F12 / Shift+F12
+re-execute on that C64 and stop at a breakpoint or live; they stay in Inspector. F12 does
+not resume the live line. Opt+Left is unbound. Opt+B still toggles the same breakpoint
+list.
+
+A successful guest disk write **drops earlier Inspector history**. The tab shows
+`disk write, device N @ cycle X` at the left edge of the remaining window.
 
 ### Turbo Mode
 
@@ -410,10 +438,10 @@ of jump as entering the writer PC with `Opt+A`.
 | Key             | Action                                                     |
 |-----------------|------------------------------------------------------------|
 | `Opt+A`         | Enter address-jump mode; type four hex digits then Enter   |
-| `Opt+B`         | Toggle execute breakpoint at cursor (paused only)          |
+| `Opt+B`         | Toggle execute breakpoint at cursor (paused only; same list while Inspecting) |
 | `Opt+M`         | Cycle source mode: Map -> ROM -> RAM -> Map                |
 | `Opt+S`         | Open the Symbol Lookup dialog                              |
-| `Opt+Left`      | Set PC to cursor address (paused only)                     |
+| `Opt+Left`      | Set PC to cursor address (paused only; unbound while Inspecting) |
 | `Up` / `Down`   | Move cursor one instruction                                |
 | `PgUp` / `PgDn` | Scroll one page                                            |
 | `Home` / `End`  | Jump to first or last line of the current view             |
@@ -1747,11 +1775,11 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 | **Opt+H**       | Toggle in-emulator help on/off                             |
 | **Shift+Opt+A** | Assemble the configured source file using the Assembler settings |
 | **Shift+Opt+M** | Toggle keyboard joystick mapping between Numpad and WASD   |
-| **F10**         | Step instruction (paused) or Pause (running)               |
-| **Shift+F10**   | Step out of current subroutine                             |
-| **F11**             | Step over JSR                                         |
-| **F12**         | Run (resume execution)                                     |
-| **Shift+F12**   | Run to the cursor address in the Disassembly view          |
+| **F10**         | Step instruction (paused) or Pause (running). In Inspector: sealed step (no-op at live) |
+| **Shift+F10**   | Step out of current subroutine. In Inspector: sealed step-out (no-op at live) |
+| **F11**             | Step over JSR. In Inspector: sealed step-over (no-op at live) |
+| **F12**         | Run (resume execution). In Inspector: re-execute to a breakpoint or live; stay in Inspector |
+| **Shift+F12**   | Run to the cursor address in the Disassembly view. In Inspector: same, still stops at live |
 | **Opt+T**       | Cycle turbo mode                                           |
 | **Opt+Tab**     | Cycle active view: C64 -> Disassembly -> Misc -> Memory    |
 | **Shift+Opt+Tab** | Cycle active view in reverse                            |

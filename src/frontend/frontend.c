@@ -4,6 +4,7 @@
 #include "help_view.h"
 #include "nuklear_config.h"
 #include "nuklear_sdl.h"
+#include "runtime_inspector.h"
 
 #include "c64_layout.h"
 #include "c64_pro_mono_font_data.h"
@@ -249,13 +250,18 @@ typedef enum frontend_misc_tab {
     FRONTEND_MISC_TAB_DEBUGGER,
     FRONTEND_MISC_TAB_BREAKPOINTS,
     FRONTEND_MISC_TAB_HARDWARE,
-    FRONTEND_MISC_TAB_ASSEMBLER
+    FRONTEND_MISC_TAB_ASSEMBLER,
+    FRONTEND_MISC_TAB_INSPECTOR
 } frontend_misc_tab;
 
 typedef struct frontend_misc_view_state {
     frontend_misc_tab active_tab;
     bool initialized;
     bool active;
+    int inspector_slider; /* 0..1000 over oldest snapshot -> live */
+    bool inspector_thumb_down;
+    uint64_t inspector_preview_cycle;
+    bool inspector_preview_has_film;
 } frontend_misc_view_state;
 
 typedef enum frontend_active_view {
@@ -2797,7 +2803,8 @@ static void frontend_commit_register_edit(
     }
 
     state = &ui->registers;
-    if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
+    if (debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED ||
+        debug_state->inspecting) {
         frontend_format_register_buffers(state, &debug_state->cpu, FRONTEND_REGISTER_FIELD_NONE);
         return;
     }
@@ -2880,7 +2887,10 @@ static void frontend_draw_display_placeholder(frontend *ui, struct nk_rect bound
         canvas = nk_window_get_canvas(ui->ctx);
         nk_fill_rect(canvas, canvas_bounds, 0.0f, nk_rgb(17, 22, 28));
 
-        if (ui->has_frame && ui->display_texture != NULL) {
+        if (ui->misc.inspector_thumb_down && !ui->misc.inspector_preview_has_film) {
+            nk_fill_rect(canvas, canvas_bounds, 0.0f, nk_rgb(255, 0, 255));
+            nk_stroke_rect(canvas, canvas_bounds, 0.0f, 1.0f, nk_rgb(75, 94, 112));
+        } else if (ui->has_frame && ui->display_texture != NULL) {
             SDL_Texture *render_texture = frontend_display_texture_for_render(ui);
             int texture_scale = render_texture == ui->crt_texture ?
                 FRONTEND_CRT_RENDER_SCALE : 1;
@@ -3014,7 +3024,8 @@ static void frontend_draw_registers(
     }
 
     editable = debug_state->has_cpu &&
-        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED;
+        debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED &&
+        !debug_state->inspecting;
 
     if (!editable) {
         ui->registers.active_field = FRONTEND_REGISTER_FIELD_NONE;
@@ -3818,8 +3829,12 @@ static void frontend_disassembly_handle_key(
     }
 
     if (sym == SDLK_LEFT) {
-        if (alt && debug_state != NULL && debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
-            frontend_push_debugger_intent(ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC, view->cursor_address);
+        if (alt && debug_state != NULL &&
+            debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED) {
+            if (!debug_state->inspecting) {
+                frontend_push_debugger_intent(
+                    ui, FRONTEND_DEBUGGER_INTENT_REGISTER_SET_PC, view->cursor_address);
+            }
         } else if (row < 0) {
             frontend_disassembly_center_cursor(ui);
         }
@@ -4838,7 +4853,9 @@ static void frontend_memory_write_byte(
 {
     frontend_memory_view_state *memory = &ui->memory_views[ui->memory_active_view_index];
 
-    if (debug_state == NULL || debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED) {
+    if (debug_state == NULL ||
+        debug_state->runtime_state != FRONTEND_RUNTIME_STATE_PAUSED ||
+        debug_state->inspecting) {
         return;
     }
     if (!frontend_memory_mode_is_editable(memory->mode) ||
@@ -5127,6 +5144,7 @@ static void frontend_memory_draw_status_footer(
         (memory->edit_field == FRONTEND_MEMORY_EDIT_ADDRESS ? "Address" : "Hex");
     editable = debug_state != NULL &&
         debug_state->runtime_state == FRONTEND_RUNTIME_STATE_PAUSED &&
+        !debug_state->inspecting &&
         frontend_memory_mode_is_editable(memory->mode) ?
         "editable" : "read-only";
     snprintf(address, sizeof(address), "Address: %04X", memory->cursor_address);
@@ -7328,6 +7346,299 @@ static void frontend_draw_misc_assembler(frontend *ui)
     }
 }
 
+static bool frontend_nk_action_button(
+    struct nk_context *ctx,
+    const char *label,
+    bool enabled)
+{
+    if (!enabled) {
+        nk_label(ctx, label, NK_TEXT_CENTERED);
+        return false;
+    }
+    return nk_button_label(ctx, label) != 0;
+}
+
+static void frontend_push_inspector_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    bool enabled,
+    uint64_t cycle)
+{
+    size_t next;
+    size_t i;
+
+    if (ui == NULL) {
+        return;
+    }
+    if (type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND) {
+        i = ui->intent_read;
+        while (i != ui->intent_write) {
+            if (ui->intents[i].type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND) {
+                ui->intents[i].inspector_cycle = cycle;
+                return;
+            }
+            i = (i + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+        }
+    }
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return;
+    }
+    memset(&ui->intents[ui->intent_write], 0, sizeof(ui->intents[ui->intent_write]));
+    ui->intents[ui->intent_write].type = type;
+    ui->intents[ui->intent_write].enabled = enabled;
+    ui->intents[ui->intent_write].inspector_cycle = cycle;
+    ui->intent_write = next;
+}
+
+static void frontend_format_inspector_window_reason(
+    const frontend_debug_state *debug,
+    char *out,
+    size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (debug == NULL || !debug->inspector_window_valid) {
+        return;
+    }
+    if (debug->inspector_start_kind ==
+        (uint8_t)RUNTIME_HISTORY_MEDIA_CHANGE_GUEST_WRITE) {
+        snprintf(
+            out,
+            out_size,
+            "disk write, device %u @ cycle %llu",
+            (unsigned)debug->inspector_start_arg1,
+            (unsigned long long)debug->inspector_oldest_cycle);
+    }
+}
+
+static int frontend_inspector_cycle_to_slider(
+    const frontend_debug_state *debug,
+    uint64_t cycle)
+{
+    uint64_t span;
+
+    if (debug == NULL || !debug->inspector_window_valid ||
+        debug->inspector_newest_cycle <= debug->inspector_oldest_cycle) {
+        return 1000;
+    }
+    if (cycle <= debug->inspector_oldest_cycle) {
+        return 0;
+    }
+    if (cycle >= debug->inspector_newest_cycle) {
+        return 1000;
+    }
+    span = debug->inspector_newest_cycle - debug->inspector_oldest_cycle;
+    return (int)(((cycle - debug->inspector_oldest_cycle) * 1000ull) / span);
+}
+
+static uint64_t frontend_inspector_slider_to_cycle(
+    const frontend_debug_state *debug,
+    int slider)
+{
+    uint64_t span;
+
+    if (debug == NULL || !debug->inspector_window_valid) {
+        return 0u;
+    }
+    if (slider <= 0) {
+        return debug->inspector_oldest_cycle;
+    }
+    if (slider >= 1000 ||
+        debug->inspector_newest_cycle <= debug->inspector_oldest_cycle) {
+        return debug->inspector_newest_cycle;
+    }
+    span = debug->inspector_newest_cycle - debug->inspector_oldest_cycle;
+    return debug->inspector_oldest_cycle + (span * (uint64_t)slider) / 1000ull;
+}
+
+static void frontend_draw_inspector_window_summary(
+    struct nk_context *ctx,
+    const frontend_debug_state *debug)
+{
+    char line[64];
+    char reason[128];
+    uint64_t oldest;
+    uint64_t live;
+    uint64_t span;
+    uint32_t hz;
+    uint64_t secs;
+
+    if (ctx == NULL || debug == NULL || !debug->inspector_window_valid) {
+        return;
+    }
+    oldest = debug->inspector_oldest_cycle;
+    live = debug->inspector_newest_cycle;
+    span = live >= oldest ? live - oldest : 0u;
+    hz = debug->inspector_clock_hz != 0u ? debug->inspector_clock_hz : 985248u;
+    secs = span / (uint64_t)hz;
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 0.48f);
+    nk_label(ctx, "History start cycle", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.52f);
+    snprintf(line, sizeof(line), "%llu", (unsigned long long)oldest);
+    nk_label(ctx, line, NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 0.48f);
+    nk_label(ctx, "Live cycle", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.52f);
+    snprintf(line, sizeof(line), "%llu", (unsigned long long)live);
+    nk_label(ctx, line, NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 0.48f);
+    nk_label(ctx, "Duration", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.52f);
+    snprintf(line, sizeof(line), "%llu seconds", (unsigned long long)secs);
+    nk_label(ctx, line, NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+
+    frontend_format_inspector_window_reason(debug, reason, sizeof(reason));
+    if (reason[0] != '\0') {
+        nk_layout_row_dynamic(ctx, 32.0f, 1);
+        nk_label_wrap(ctx, reason);
+    }
+}
+
+static void frontend_draw_misc_inspector(
+    frontend *ui,
+    const frontend_debug_state *debug)
+{
+    struct nk_context *ctx;
+    char line[192];
+    nk_bool rec;
+    bool inspecting;
+    bool can_enter;
+    int slider;
+
+    if (ui == NULL || ui->ctx == NULL) {
+        return;
+    }
+    ctx = ui->ctx;
+    inspecting = debug != NULL && debug->inspecting;
+    can_enter = debug != NULL && debug->inspector_enabled != 0u &&
+        debug->inspector_window_valid;
+
+    if (!inspecting) {
+        rec = (debug != NULL && debug->inspector_enabled != 0u) ? nk_true : nk_false;
+        nk_layout_row_dynamic(ctx, 22.0f, 1);
+        if (nk_checkbox_label(ctx, "Record", &rec)) {
+            bool want = rec != nk_false;
+            bool have = debug != NULL && debug->inspector_enabled != 0u;
+            if (want != have) {
+                frontend_push_inspector_intent(
+                    ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_SET_ENABLED, want, 0u);
+            }
+        }
+    }
+
+    if (debug == NULL || debug->inspector_enabled == 0u) {
+        return;
+    }
+
+    if (!inspecting) {
+        if (can_enter) {
+            nk_layout_row_dynamic(ctx, 24.0f, 1);
+            if (nk_button_label(ctx, "Inspect")) {
+                frontend_push_inspector_intent(
+                    ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER, false, 0u);
+            }
+            frontend_draw_inspector_window_summary(ctx, debug);
+        } else if (!debug->inspector_window_valid) {
+            nk_layout_row_dynamic(ctx, 36.0f, 1);
+            nk_label_wrap(ctx, "No Inspector snapshots yet.");
+        }
+        return;
+    }
+
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Leave Inspector")) {
+        frontend_push_inspector_intent(
+            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE, false, 0u);
+    }
+
+    slider = ui->misc.inspector_slider;
+    {
+        bool down = nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT);
+        bool at_oldest = debug->inspector_focus_cycle <= debug->inspector_oldest_cycle;
+        bool at_live = debug->inspector_focus_cycle >= debug->inspector_newest_cycle;
+        bool thumb = ui->misc.inspector_thumb_down;
+
+        if (!thumb) {
+            slider = frontend_inspector_cycle_to_slider(
+                debug, debug->inspector_focus_cycle);
+        }
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
+        nk_layout_row_push(ctx, 0.08f);
+        if (frontend_nk_action_button(ctx, "-", !thumb && !at_oldest)) {
+            frontend_push_inspector_intent(
+                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP, false, 0u);
+        }
+        nk_layout_row_push(ctx, 0.84f);
+        {
+            /* Peek this column before the slider consumes it. After
+               nk_slider_int, nk_widget_bounds is the [+] slot. */
+            struct nk_rect bounds = nk_widget_bounds(ctx);
+            nk_bool moved = nk_slider_int(ctx, 0, &slider, 1000, 1);
+            bool hovered =
+                nk_input_is_mouse_hovering_rect(&ctx->input, bounds);
+
+            if (moved && down) {
+                ui->misc.inspector_thumb_down = true;
+            }
+            if (ui->misc.inspector_thumb_down) {
+                uint64_t cycle = frontend_inspector_slider_to_cycle(debug, slider);
+                ui->misc.inspector_preview_cycle = cycle;
+                if (!down) {
+                    frontend_push_inspector_intent(
+                        ui,
+                        FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND,
+                        false,
+                        cycle);
+                    ui->misc.inspector_thumb_down = false;
+                }
+            } else if ((hovered || moved) && down) {
+                ui->misc.inspector_thumb_down = true;
+                ui->misc.inspector_preview_cycle =
+                    frontend_inspector_slider_to_cycle(debug, slider);
+            }
+        }
+        nk_layout_row_push(ctx, 0.08f);
+        if (frontend_nk_action_button(ctx, "+", !thumb && !at_live)) {
+            frontend_push_inspector_intent(
+                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP, true, 0u);
+        }
+        nk_layout_row_end(ctx);
+        ui->misc.inspector_slider = slider;
+    }
+
+    nk_layout_row_dynamic(ctx, 28.0f, 1);
+    nk_label_wrap(
+        ctx,
+        "retained snapshots -> live; stills where we have them, pink where we do not");
+
+    nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
+    nk_layout_row_push(ctx, 0.48f);
+    nk_label(ctx, "Current cycle", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, 0.52f);
+    snprintf(
+        line,
+        sizeof(line),
+        "%llu",
+        (unsigned long long)(ui->misc.inspector_thumb_down ?
+            ui->misc.inspector_preview_cycle : debug->inspector_focus_cycle));
+    nk_label(ctx, line, NK_TEXT_LEFT);
+    nk_layout_row_end(ctx);
+    frontend_draw_inspector_window_summary(ctx, debug);
+}
+
 static void frontend_draw_misc_tab_button(
     frontend *ui,
     frontend_misc_tab tab,
@@ -7365,14 +7676,18 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
 
     ctx = ui->ctx;
     if (nk_begin(ctx, "Misc", bounds, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-        nk_layout_row_dynamic(ctx, tab_h, 5);
+        nk_layout_row_dynamic(ctx, tab_h, 3);
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_PROGRAMS, "Machine");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_DEBUGGER, "Debugger");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_BREAKPOINTS, "Breakpoints");
+        nk_layout_row_dynamic(ctx, tab_h, 3);
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_HARDWARE, "Hardware");
         frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_ASSEMBLER, "Assembler");
+        frontend_draw_misc_tab_button(ui, FRONTEND_MISC_TAB_INSPECTOR, "Inspector");
 
-        content_h = bounds.h - tab_h - 55.0f;
+        /* 55.0f is the original one-row chrome (title, pad, borders, reserved
+           window scrollbar). Each extra tab row also costs window.spacing.y. */
+        content_h = bounds.h - (tab_h * 2.0f) - 55.0f - ctx->style.window.spacing.y;
         if (content_h < 24.0f) {
             content_h = 24.0f;
         }
@@ -7394,6 +7709,10 @@ static void frontend_draw_misc(frontend *ui, struct nk_rect bounds, const fronte
 
                 case FRONTEND_MISC_TAB_HARDWARE:
                     frontend_draw_misc_hardware(ui, debug_state);
+                    break;
+
+                case FRONTEND_MISC_TAB_INSPECTOR:
+                    frontend_draw_misc_inspector(ui, debug_state);
                     break;
 
                 case FRONTEND_MISC_TAB_ASSEMBLER:
@@ -8057,6 +8376,25 @@ void frontend_end_input(frontend *ui)
     }
 
     nk_input_end(ui->ctx);
+}
+
+bool frontend_inspector_preview(const frontend *ui, uint64_t *out_cycle)
+{
+    if (ui == NULL || !ui->misc.inspector_thumb_down) {
+        return false;
+    }
+    if (out_cycle != NULL) {
+        *out_cycle = ui->misc.inspector_preview_cycle;
+    }
+    return true;
+}
+
+void frontend_inspector_set_preview_film(frontend *ui, bool has_film)
+{
+    if (ui == NULL) {
+        return;
+    }
+    ui->misc.inspector_preview_has_film = has_film;
 }
 
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
@@ -9729,7 +10067,25 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
     }
 
     if (!ui_visible && !help_view_is_open(&ui->help)) {
-        frontend_render_display_only(ui);
+        if (ui->misc.inspector_thumb_down && !ui->misc.inspector_preview_has_film) {
+            SDL_Rect dest;
+            int fit_w = 0;
+            int fit_h = 0;
+
+            if (frontend_display_fills_view(ui)) {
+                dest.x = 0;
+                dest.y = 0;
+                dest.w = width;
+                dest.h = height;
+            } else {
+                frontend_display_fit_source(ui, &fit_w, &fit_h);
+                dest = frontend_fit_rect(0, 0, width, height, fit_w, fit_h);
+            }
+            SDL_SetRenderDrawColor(ui->renderer, 255, 0, 255, 255);
+            SDL_RenderFillRect(ui->renderer, &dest);
+        } else {
+            frontend_render_display_only(ui);
+        }
         frontend_draw_disk_activity_leds(ui, width, height, debug_state);
         return;
     }
@@ -9753,7 +10109,20 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         if (width < min_debug_w || height < min_debug_h) {
             frontend_render_display_only(ui);
         } else {
+            struct nk_style_window saved_window_style;
+            int inspect_style = 0;
+
             parent = nk_rect(0.0f, 0.0f, (float)width, (float)height);
+            if (debug_state->inspecting) {
+                saved_window_style = ui->ctx->style.window;
+                inspect_style = 1;
+                ui->ctx->style.window.header.normal =
+                    nk_style_item_color(nk_rgb(24, 62, 118));
+                ui->ctx->style.window.header.hover =
+                    nk_style_item_color(nk_rgb(32, 76, 136));
+                ui->ctx->style.window.header.active =
+                    nk_style_item_color(nk_rgb(40, 88, 152));
+            }
             c64_layout_compute(&ui->layout, parent, &ui->limits);
             if (!frontend_any_dialog_open(ui)) {
                 debugger_scrollbar_active = ui->memory_views[ui->memory_active_view_index].scrollbar_dragging ||
@@ -9801,6 +10170,9 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
             frontend_draw_assembler_error_dialog(ui, width, height);
             frontend_draw_symbol_lookup(ui, width, height);
             frontend_draw_file_browser(ui, width, height);
+            if (inspect_style) {
+                ui->ctx->style.window = saved_window_style;
+            }
         }
     } else {
         frontend_render_display_only(ui);
