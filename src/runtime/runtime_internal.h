@@ -6,6 +6,7 @@
 #include "runtime_frame_ring.h"
 #include "runtime_vic_ring.h"
 #include "runtime_history.h"
+#include "runtime_inspector.h"
 
 #include "audio_buffer.h"
 #include "c64.h"
@@ -202,6 +203,11 @@ struct runtime {
     uint32_t inspector_memory_mb;
     bool inspector_empty_tape_warned;
     struct runtime_inspector_recorder *inspector_recorder;
+    bool inspecting;
+    uint8_t *inspector_now_blob;
+    size_t inspector_now_size;
+    uint64_t inspector_now_cycle;
+    runtime_inspector_focus inspector_focus;
     uint64_t history_mutation_generation;
     uint64_t next_history_cursor_id;
     runtime_session sessions[RUNTIME_SESSION_CAPACITY];

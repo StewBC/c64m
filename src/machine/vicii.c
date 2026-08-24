@@ -4008,6 +4008,21 @@ bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine
     return true;
 }
 
+bool vicii_copy_paint_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle) {
+    const c64_frame *src;
+
+    assert(v);
+    assert(out_frame);
+
+    src = vicii_paint_buf(v);
+    if (src->width == 0u || src->height == 0u) {
+        return false;
+    }
+    memcpy(out_frame, src, sizeof(*out_frame));
+    out_frame->machine_cycle = machine_cycle;
+    return true;
+}
+
 typedef struct {
     bool    active;
     uint8_t data[3];

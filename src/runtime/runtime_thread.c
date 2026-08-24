@@ -49,6 +49,9 @@ enum {
 static void runtime_history_sync_observer(runtime *rt);
 static void runtime_history_prepare_discontinuity(runtime *rt);
 static void runtime_history_invalidate_cursor(runtime *rt);
+static bool runtime_inspector_pause_at_live(runtime *rt);
+static bool runtime_exec_step_instruction(runtime *rt);
+static void runtime_publish_presented_frame(runtime *rt);
 static bool runtime_history_append_commit_marker(
     runtime *rt,
     uint16_t marker_kind,
@@ -419,6 +422,22 @@ static void runtime_publish_error(
     runtime_publish_event(rt, &event);
 }
 
+static void runtime_publish_error_code(
+    runtime *rt,
+    const char *code,
+    const char *message) {
+    runtime_event event = {
+        .type = RUNTIME_EVENT_ERROR,
+    };
+
+    if (code != NULL) {
+        snprintf(event.data.error.code, sizeof(event.data.error.code), "%s", code);
+    }
+    snprintf(event.data.error.message, sizeof(event.data.error.message), "%s", message);
+    rt->last_stop_reason = RUNTIME_STOP_REASON_ERROR;
+    runtime_publish_event(rt, &event);
+}
+
 static void runtime_publish_symbols(runtime *rt);
 
 static void runtime_publish_cpu_state_token(runtime *rt, uint64_t request_token) {
@@ -528,6 +547,18 @@ static void runtime_publish_machine_state(runtime *rt) {
     event.data.machine_state.sid_hardware = sid_hardware;
     event.data.machine_state.drive8_hardware = drive8_hardware;
     event.data.machine_state.drive9_hardware = drive9_hardware;
+    {
+        runtime_inspector_window window;
+        runtime_inspector_window_info(rt, &window);
+        event.data.machine_state.inspector_mode =
+            (uint8_t)runtime_inspector_current_mode(rt);
+        event.data.machine_state.inspector_enabled =
+            runtime_inspector_enabled(rt) ? 1u : 0u;
+        event.data.machine_state.inspector_focus_cycle = rt->inspecting ?
+            rt->inspector_focus.cycle : rt->machine.clock.cycle;
+        event.data.machine_state.inspector_start_kind = (uint8_t)window.start_kind;
+        event.data.machine_state.inspector_start_arg1 = window.start_arg1;
+    }
 
     runtime_publish_event(rt, &event);
 }
@@ -1208,7 +1239,33 @@ static bool runtime_publish_debug_frame(runtime *rt) {
     return runtime_publish_frame_copy(rt, &rt->publish_frame);
 }
 
+/* A16: present the CRT after a stop (or land). Paint-off (warp, sealed F12)
+ * has no beam image — dump VIC+RAM. Otherwise publish the beam buffer. */
+static void runtime_publish_presented_frame(runtime *rt) {
+    bool paint_off;
+
+    if (rt == NULL) {
+        return;
+    }
+    paint_off = !c64_video_output_enabled(&rt->machine) ||
+        runtime_turbo_display_mode(rt);
+    if (paint_off) {
+        if (!c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
+            return;
+        }
+    } else if (!c64_copy_paint_frame(&rt->machine, &rt->publish_frame)) {
+        if (!c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
+            return;
+        }
+    }
+    (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
+}
+
 static bool runtime_publish_completed_frame(runtime *rt) {
+    if (rt->inspecting) {
+        /* D16: sealed execute does not push the frame ring. */
+        return true;
+    }
     if (runtime_turbo_display_mode(rt)) {
         /* Warp: the live renderer is off, so there are no real pixels to
            record. The ring deliberately stalls rather than storing geometric
@@ -1224,6 +1281,11 @@ static bool runtime_publish_completed_frame(runtime *rt) {
     /* Record before publishing: the ring must see every completed frame, even
        the ones the UI drops because it is still holding the previous one. */
     (void)runtime_frame_ring_push(&rt->frame_ring, &rt->publish_frame);
+
+    if (rt->inspecting) {
+        /* D16: sealed execute does not push the frame ring. */
+        return true;
+    }
 
     return runtime_publish_frame_copy(rt, &rt->publish_frame);
 }
@@ -2805,6 +2867,7 @@ static void runtime_pause_for_breakpoint(runtime *rt) {
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
     runtime_publish_machine_state(rt);
     runtime_publish_breakpoints(rt);
+    runtime_publish_presented_frame(rt);
 }
 
 static bool runtime_pause_if_breakpoint_pending(runtime *rt) {
@@ -2851,6 +2914,7 @@ static void runtime_pause_for_brk(runtime *rt) {
     rt->last_stop_reason = RUNTIME_STOP_REASON_BRK;
     runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
     runtime_publish_machine_state(rt);
+    runtime_publish_presented_frame(rt);
 }
 
 static bool runtime_step_cycle(runtime *rt) {
@@ -2939,7 +3003,8 @@ static bool runtime_publish_step_complete(runtime *rt) {
     runtime_publish_simple_event(rt, RUNTIME_EVENT_STEP_COMPLETE);
     runtime_publish_cpu_state(rt);
     runtime_publish_machine_state(rt);
-    return runtime_publish_debug_frame(rt);
+    runtime_publish_presented_frame(rt);
+    return true;
 }
 
 static bool runtime_step_cycle_command(runtime *rt) {
@@ -4401,7 +4466,6 @@ static bool runtime_flow_abort_requested(runtime *rt, bool *alive) {
 }
 
 static bool runtime_step_out(runtime *rt, bool *alive) {
-    char error[256];
     int interrupt_depth = 0;
     uint64_t irq_before, nmi_before;
     uint8_t opcode;
@@ -4438,11 +4502,9 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
         irq_before = rt->machine.cpu.cpu.irq_entries;
         nmi_before = rt->machine.cpu.cpu.nmi_entries;
 
-        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
-            runtime_publish_error(rt, error);
+        if (!runtime_exec_step_instruction(rt)) {
             return false;
         }
-        runtime_flush_dirty_disks(rt);
 
         rt->suppress_execute_bp = false;
 
@@ -4460,11 +4522,17 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
             } else if (opcode == 0x60u /* RTS */) {
                 jsr_counter--;
                 if (jsr_counter <= 0) {
+                    if (runtime_inspector_pause_at_live(rt)) {
+                        return true;
+                    }
                     return runtime_publish_step_complete(rt);
                 }
             }
         }
 
+        if (runtime_inspector_pause_at_live(rt)) {
+            return true;
+        }
         if (runtime_pause_if_breakpoint_pending(rt)) {
             return true;
         }
@@ -4478,7 +4546,6 @@ static bool runtime_step_out(runtime *rt, bool *alive) {
 }
 
 static bool runtime_step_over(runtime *rt, bool *alive) {
-    char error[256];
     uint8_t opcode;
     uint16_t stop_pc;
     int jsr_counter;
@@ -4490,12 +4557,13 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
 
     if (opcode != 0x20u /* JSR */) {
         rt->suppress_execute_bp = false;
-        if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
-            runtime_publish_error(rt, error);
+        if (!runtime_exec_step_instruction(rt)) {
             return false;
         }
-        runtime_flush_dirty_disks(rt);
         rt->breakpoint_hit_pending = false;
+        if (runtime_inspector_pause_at_live(rt)) {
+            return true;
+        }
         return runtime_publish_step_complete(rt);
     }
 
@@ -4529,11 +4597,9 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             irq_before = rt->machine.cpu.cpu.irq_entries;
             nmi_before = rt->machine.cpu.cpu.nmi_entries;
 
-            if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
-                runtime_publish_error(rt, error);
+            if (!runtime_exec_step_instruction(rt)) {
                 return false;
             }
-            runtime_flush_dirty_disks(rt);
 
             rt->suppress_execute_bp = false;
 
@@ -4564,6 +4630,10 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             }
 
             if (runtime_pause_if_breakpoint_pending(rt)) {
+                return true;
+            }
+
+            if (runtime_inspector_pause_at_live(rt)) {
                 return true;
             }
 
@@ -5117,6 +5187,142 @@ static void runtime_load_state(runtime *rt, const runtime_command *command) {
     runtime_publish_debug_frame(rt);
 }
 
+static bool runtime_inspector_command_mutates_machine(runtime_command_type type)
+{
+    switch (type) {
+    case RUNTIME_COMMAND_RESET:
+    case RUNTIME_COMMAND_WRITE_MEMORY_BYTE:
+    case RUNTIME_COMMAND_WRITE_MEMORY:
+    case RUNTIME_COMMAND_SET_CPU_REGISTER:
+    case RUNTIME_COMMAND_LOAD_STATE:
+    case RUNTIME_COMMAND_SAVE_STATE:
+    case RUNTIME_COMMAND_LOAD_BIN:
+    case RUNTIME_COMMAND_LOAD_PRG:
+    case RUNTIME_COMMAND_LOAD_CRT:
+    case RUNTIME_COMMAND_ASSEMBLE_FILE:
+    case RUNTIME_COMMAND_MOUNT_D64:
+    case RUNTIME_COMMAND_UNMOUNT_DISK:
+    case RUNTIME_COMMAND_POWER_ON_DRIVE:
+    case RUNTIME_COMMAND_POWER_OFF_DRIVE:
+    case RUNTIME_COMMAND_SET_DISK_WRITABLE:
+    case RUNTIME_COMMAND_APPLY_MACHINE_CONFIG:
+    case RUNTIME_COMMAND_PASTE_TEXT:
+    case RUNTIME_COMMAND_PASTE_EVENTS:
+    case RUNTIME_COMMAND_KEYBOARD_KEY:
+    case RUNTIME_COMMAND_RESTORE:
+    case RUNTIME_COMMAND_SET_JOYSTICK:
+    case RUNTIME_COMMAND_HISTORY_CLEAR:
+    case RUNTIME_COMMAND_HISTORY_RECORD:
+    case RUNTIME_COMMAND_INSPECTOR_SET_ENABLED:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void runtime_inspector_reattach_live_hooks(runtime *rt)
+{
+    c64_set_memory_access_callback(&rt->machine, runtime_memory_access, rt);
+    runtime_history_sync_observer(rt);
+    runtime_vic_ring_sync_observer(rt);
+    runtime_update_sid_sample_output(rt);
+    runtime_update_video_output(rt);
+}
+
+static void runtime_publish_inspector_mode(
+    runtime *rt,
+    uint64_t token,
+    uint8_t op,
+    runtime_inspector_enter_status status)
+{
+    runtime_event event;
+    runtime_inspector_window window;
+
+    memset(&event, 0, sizeof(event));
+    event.type = RUNTIME_EVENT_INSPECTOR_MODE;
+    event.request_token = token;
+    event.data.inspector_mode.op = op;
+    event.data.inspector_mode.mode = (uint8_t)runtime_inspector_current_mode(rt);
+    event.data.inspector_mode.status = (uint8_t)status;
+    event.data.inspector_mode.focus = rt->inspector_focus;
+    runtime_inspector_window_info(rt, &window);
+    event.data.inspector_mode.start_kind = (uint8_t)window.start_kind;
+    event.data.inspector_mode.start_arg1 = window.start_arg1;
+    runtime_publish_event(rt, &event);
+}
+
+static void runtime_inspector_publish_head(runtime *rt)
+{
+    runtime_publish_cpu_state(rt);
+    runtime_publish_machine_state(rt);
+    runtime_publish_presented_frame(rt);
+}
+
+static void runtime_inspector_publish_head_dump(runtime *rt)
+{
+    runtime_publish_cpu_state(rt);
+    runtime_publish_machine_state(rt);
+    (void)runtime_publish_debug_frame(rt);
+}
+
+static bool runtime_inspector_pause_at_live(runtime *rt)
+{
+    if (rt == NULL || !rt->inspecting || !runtime_inspector_at_live(rt)) {
+        return false;
+    }
+    (void)runtime_inspector_restore_live(rt);
+    rt->temp_bp_active = false;
+    runtime_update_video_output(rt);
+    runtime_publish_presented_frame(rt);
+    if (rt->exec_state == RUNTIME_EXEC_RUNNING) {
+        rt->exec_state = RUNTIME_EXEC_PAUSED;
+        rt->last_stop_reason = RUNTIME_STOP_REASON_RUN_COMPLETE;
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_RUN_COMPLETE);
+        runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+        runtime_inspector_publish_head(rt);
+    }
+    return true;
+}
+
+static void runtime_finish_to_instruction_boundary(runtime *rt)
+{
+    char error[256];
+
+    while (!runtime_at_instruction_boundary(rt)) {
+        if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+            break;
+        }
+    }
+}
+
+static bool runtime_exec_step_instruction(runtime *rt)
+{
+    char error[256];
+    uint64_t c0;
+
+    if (rt == NULL) {
+        return false;
+    }
+    c0 = rt->machine.clock.cycle;
+    if (!c64_step_instruction(&rt->machine, error, sizeof(error))) {
+        runtime_publish_error(rt, error);
+        return false;
+    }
+    if (rt->inspecting) {
+        runtime_inspector_apply_logged_inputs(
+            rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
+        if (runtime_inspector_at_live(rt)) {
+            (void)runtime_inspector_restore_live(rt);
+        } else {
+            runtime_inspector_sync_focus(rt);
+        }
+    } else {
+        runtime_flush_dirty_disks(rt);
+        runtime_inspector_after_step(rt);
+    }
+    return true;
+}
+
 static bool runtime_command_invalidates_history_cursor(
     runtime_command_type type) {
     switch (type) {
@@ -5149,6 +5355,14 @@ static bool runtime_command_invalidates_history_cursor(
 }
 
 static bool runtime_process_command(runtime *rt, const runtime_command *command, bool *alive) {
+    if (rt->inspecting &&
+        runtime_inspector_command_mutates_machine(command->type)) {
+        runtime_publish_error_code(
+            rt,
+            RUNTIME_ERROR_READ_ONLY_INSPECTOR,
+            "machine is read-only while Inspecting");
+        return true;
+    }
     if (runtime_command_invalidates_history_cursor(command->type)) {
         runtime_history_invalidate_cursor(rt);
         runtime_publish_state_changed(
@@ -5172,6 +5386,12 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_RUN:
             fprintf(stderr, "RUN command received\n");
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
+            if (rt->inspecting) {
+                c64_set_video_output_enabled(&rt->machine, false);
+            }
             rt->exec_state = RUNTIME_EXEC_RUNNING;
             rt->last_stop_reason = RUNTIME_STOP_REASON_NONE;
             runtime_reset_pacer(rt);
@@ -5182,21 +5402,44 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             fprintf(stderr, "PAUSE command received\n");
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
+            if (rt->inspecting) {
+                runtime_update_video_output(rt);
+            }
             runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
             runtime_publish_machine_state(rt);
+            runtime_publish_presented_frame(rt);
             runtime_publish_state_changed(
                 rt, RUNTIME_STATE_CHANGED_PAUSE, command->session_id);
             break;
 
         case RUNTIME_COMMAND_STEP_CYCLE:
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             runtime_step_cycle_command(rt);
+            if (rt->inspecting) {
+                (void)runtime_inspector_pause_at_live(rt);
+            }
             break;
 
         case RUNTIME_COMMAND_STEP_INSTRUCTION:
             fprintf(stderr, "STEP_INSTRUCTION command received\n");
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
             rt->exec_state = RUNTIME_EXEC_PAUSED;
-            runtime_step_instruction(rt);
+            if (rt->inspecting) {
+                rt->suppress_execute_bp = false;
+                if (runtime_exec_step_instruction(rt)) {
+                    rt->breakpoint_hit_pending = false;
+                    if (!runtime_inspector_pause_at_live(rt)) {
+                        (void)runtime_publish_step_complete(rt);
+                    }
+                }
+            } else {
+                runtime_step_instruction(rt);
+            }
             break;
 
         case RUNTIME_COMMAND_RUN_CYCLES:
@@ -5204,7 +5447,20 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_STEP_FRAME:
-            runtime_step_frame(rt);
+            if (rt->inspecting) {
+                if (runtime_inspector_at_live(rt)) {
+                    break;
+                }
+                if (runtime_inspector_frame_step(rt, 1)) {
+                    runtime_inspector_publish_head(rt);
+                    runtime_publish_state_changed(
+                        rt,
+                        RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
+                        command->session_id);
+                }
+            } else {
+                runtime_step_frame(rt);
+            }
             break;
 
         case RUNTIME_COMMAND_RUN_TO_RASTER:
@@ -5255,6 +5511,88 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         case RUNTIME_COMMAND_INSPECTOR_SET_ENABLED:
             runtime_inspector_set_enabled(
                 rt, command->data.inspector_set_enabled.enabled != 0u);
+            break;
+
+        case RUNTIME_COMMAND_INSPECTOR_ENTER: {
+            runtime_inspector_enter_status st;
+
+            if (!rt->inspecting) {
+                runtime_finish_to_instruction_boundary(rt);
+                if (rt->exec_state == RUNTIME_EXEC_RUNNING) {
+                    rt->exec_state = RUNTIME_EXEC_PAUSED;
+                    rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
+                    runtime_publish_machine_state(rt);
+                    runtime_publish_simple_event(rt, RUNTIME_EVENT_PAUSED);
+                    runtime_publish_cpu_state(rt);
+                }
+            }
+            st = runtime_inspector_enter(rt);
+            if (st != RUNTIME_INSPECTOR_ENTER_OK) {
+                runtime_inspector_reattach_live_hooks(rt);
+                c64_set_replay_sealed(&rt->machine, false);
+            } else {
+                runtime_inspector_publish_head(rt);
+                runtime_publish_state_changed(
+                    rt, RUNTIME_STATE_CHANGED_INSPECTOR_ENTER, command->session_id);
+            }
+            runtime_publish_inspector_mode(rt, command->request_token, 0u, st);
+            break;
+        }
+
+        case RUNTIME_COMMAND_INSPECTOR_LEAVE:
+            runtime_inspector_leave(rt);
+            runtime_inspector_reattach_live_hooks(rt);
+            runtime_inspector_publish_head(rt);
+            runtime_publish_state_changed(
+                rt, RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE, command->session_id);
+            runtime_publish_inspector_mode(
+                rt, command->request_token, 1u, RUNTIME_INSPECTOR_ENTER_OK);
+            break;
+
+        case RUNTIME_COMMAND_INSPECTOR_LAND: {
+            uint64_t oldest = 0u;
+            uint64_t live = 0u;
+            uint64_t count = 0u;
+            uint64_t cycle = command->data.inspector_land.cycle;
+            bool dump;
+
+            if (!rt->inspecting) {
+                runtime_publish_error(rt, "not inspecting");
+                break;
+            }
+            runtime_inspector_timeline_bounds(rt, &oldest, &live, &count);
+            if (count == 0u || cycle < oldest) {
+                runtime_publish_error(rt, "inspector land outside timeline");
+                break;
+            }
+            dump = cycle < live;
+            if (runtime_inspector_land(rt, cycle)) {
+                if (dump) {
+                    runtime_inspector_publish_head_dump(rt);
+                } else {
+                    runtime_inspector_publish_head(rt);
+                }
+                runtime_publish_state_changed(
+                    rt,
+                    RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
+                    command->session_id);
+            } else {
+                runtime_publish_error(rt, "inspector land failed");
+            }
+            break;
+        }
+
+        case RUNTIME_COMMAND_INSPECTOR_FRAME_STEP:
+            if (rt->inspecting) {
+                if (runtime_inspector_frame_step(
+                        rt, (int)command->data.inspector_frame_step.direction)) {
+                    runtime_inspector_publish_head(rt);
+                    runtime_publish_state_changed(
+                        rt,
+                        RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
+                        command->session_id);
+                }
+            }
             break;
 
         case RUNTIME_COMMAND_HISTORY_CLOSE: {
@@ -5575,16 +5913,28 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
         }
 
         case RUNTIME_COMMAND_STEP_OUT:
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             runtime_step_out(rt, alive);
             break;
 
         case RUNTIME_COMMAND_STEP_OVER:
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             runtime_step_over(rt, alive);
             break;
 
         case RUNTIME_COMMAND_RUN_TO_CURSOR:
+            if (rt->inspecting && runtime_inspector_at_live(rt)) {
+                break;
+            }
+            if (rt->inspecting) {
+                c64_set_video_output_enabled(&rt->machine, false);
+            }
             rt->temp_bp_active = true;
             rt->temp_bp_address = command->data.run_to_cursor.address;
             rt->temp_bp_skip_current =
@@ -6192,7 +6542,62 @@ int runtime_thread_main(void *userdata) {
                 }
             }
 
-            if (runtime_free_run_is_simple(rt)) {
+            if (rt->inspecting) {
+                int batch = RUNTIME_RUN_BATCH_CYCLES;
+                char error[256];
+                for (i = 0; alive && rt->exec_state == RUNTIME_EXEC_RUNNING &&
+                     i < batch; i++) {
+                    uint64_t c0;
+                    if (runtime_inspector_pause_at_live(rt)) {
+                        break;
+                    }
+                    if (!rt->suppress_execute_bp &&
+                        runtime_breakpoint_matches_pc(rt)) {
+                        runtime_update_video_output(rt);
+                        runtime_pause_for_breakpoint(rt);
+                        break;
+                    }
+                    c0 = rt->machine.clock.cycle;
+                    if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+                        rt->exec_state = RUNTIME_EXEC_PAUSED;
+                        runtime_publish_error(rt, error);
+                        break;
+                    }
+                    runtime_inspector_apply_logged_inputs(
+                        rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
+                    if (runtime_inspector_at_live(rt)) {
+                        (void)runtime_inspector_restore_live(rt);
+                        (void)runtime_inspector_pause_at_live(rt);
+                        break;
+                    }
+                    runtime_inspector_sync_focus(rt);
+                    if (runtime_pause_if_breakpoint_pending(rt)) {
+                        runtime_update_video_output(rt);
+                        runtime_publish_presented_frame(rt);
+                        break;
+                    }
+                    if (rt->suppress_execute_bp &&
+                        runtime_at_instruction_boundary(rt)) {
+                        rt->suppress_execute_bp = false;
+                    }
+                    if (rt->temp_bp_active && runtime_at_instruction_boundary(rt)) {
+                        if (rt->temp_bp_skip_current &&
+                            rt->machine.cpu.cpu.pc != rt->temp_bp_address) {
+                            rt->temp_bp_skip_current = false;
+                        }
+                        if (!rt->temp_bp_skip_current &&
+                            rt->machine.cpu.cpu.pc == rt->temp_bp_address) {
+                            rt->temp_bp_active = false;
+                            rt->temp_bp_skip_current = false;
+                            rt->suppress_execute_bp = false;
+                            rt->exec_state = RUNTIME_EXEC_PAUSED;
+                            runtime_update_video_output(rt);
+                            runtime_publish_step_complete(rt);
+                            break;
+                        }
+                    }
+                }
+            } else if (runtime_free_run_is_simple(rt)) {
                 /* Slim free-run: no BP/paste/history/pending loads. Still
                    auto-pause on BRK and publish frames. BRK only needs a peek
                    at instruction boundaries (micro inactive). */

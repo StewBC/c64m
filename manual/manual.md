@@ -1838,7 +1838,7 @@ combine headless mode with `--sna`:
 The server always binds to `127.0.0.1`. It accepts one client at a time. The socket
 thread performs network I/O only; runtime commands and snapshot requests are dispatched
 by the main loop, so remote control follows the same thread-ownership rules as the GUI
-debugger. The current protocol name is `C64M/7`.
+debugger. The current protocol name is `C64M/8`.
 
 Unsolicited events may arrive with request id `0`, for example
 `0 event state-changed reason=step session=2 cycles=… frame=… epoch=…`. Scripts that
@@ -1960,8 +1960,8 @@ is still paced by present/vsync (~16 ms class).
 
 | Command | Response |
 |---------|----------|
-| `hello` | `ok name=c64m protocol=C64M/7` |
-| `version` | `ok protocol=C64M/7 app=0.1.0` |
+| `hello` | `ok name=c64m protocol=C64M/8` |
+| `version` | `ok protocol=C64M/8 app=0.1.0` |
 | `capabilities` | Space-separated capability names |
 | `ping` | `ok` |
 | `quit-client` | `ok`, then the server closes the client connection |

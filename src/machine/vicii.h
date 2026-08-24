@@ -318,6 +318,7 @@ uint8_t vicii_debug_read_register(const vicii *v, uint16_t addr);
 void vicii_write_register(vicii *v, uint16_t addr, uint8_t value);
 bool vicii_consume_frame_complete(vicii *v);
 bool vicii_copy_completed_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);
+bool vicii_copy_paint_frame(vicii *v, c64_frame *out_frame, uint64_t machine_cycle);
 bool vicii_make_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle);
 bool vicii_make_current_frame_snapshot(vicii *v, const c64_bus_t *bus, c64_frame *out_frame, uint64_t machine_cycle);
 void vicii_copy_snapshot(const vicii *v, c64_vicii_snapshot *out);

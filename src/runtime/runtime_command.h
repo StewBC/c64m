@@ -73,7 +73,11 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_HISTORY_CLOSE,
     RUNTIME_COMMAND_SESSION_OPEN,
     RUNTIME_COMMAND_SESSION_CLOSE,
-    RUNTIME_COMMAND_INSPECTOR_SET_ENABLED
+    RUNTIME_COMMAND_INSPECTOR_SET_ENABLED,
+    RUNTIME_COMMAND_INSPECTOR_ENTER,
+    RUNTIME_COMMAND_INSPECTOR_LEAVE,
+    RUNTIME_COMMAND_INSPECTOR_LAND,
+    RUNTIME_COMMAND_INSPECTOR_FRAME_STEP
 } runtime_command_type;
 
 enum {
@@ -323,5 +327,13 @@ typedef struct runtime_command {
         struct {
             uint8_t enabled;
         } inspector_set_enabled;
+
+        struct {
+            uint64_t cycle;
+        } inspector_land;
+
+        struct {
+            int8_t direction;
+        } inspector_frame_step;
     } data;
 } runtime_command;

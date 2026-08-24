@@ -170,7 +170,7 @@ must follow the message contracts above (`request_token`, epoch, lossy vs reliab
 `set-turbo` changes the active mode without altering the configured Opt+T list;
 mode 3 (warp) warns that the live framebuffer is disabled until turbo is
 lowered to 1 or 2. CLI startup also accepts `--sna <path>` for the same snapshot
-load path used by `load-state`. Wire protocol is **C64M/7** - see `control-port.md`
+load path used by `load-state`. Wire protocol is **C64M/8** - see `control-port.md`
 (sessions + `state-changed`; `sessions.md`).
 
 ## CPU flight recorder

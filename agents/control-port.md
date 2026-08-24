@@ -49,8 +49,9 @@ Wire identity is advertised by `hello` / `version` as `protocol=C64M/N`.
 **Versioning policy (this work series):** there is no dual-path compatibility
 layer for older clients. When wire behavior or control concurrency semantics
 change in a way that scripts must learn, bump `N` in the same change as the
-code and this document. **Current: C64M/7** (multi-asker sessions + unsolicited
-`state-changed` informs; see `sessions.md`. Prior: C64M/6 per-line VIC ring,
+code and this document. **Current: C64M/8** (Inspect honesty: `mode=live|inspector`,
+`leave-inspector`, capability `inspector`, `state-changed` reasons `inspector-*`.
+Prior: C64M/7 sessions + unsolicited `state-changed`; C64M/6 per-line VIC ring,
 C64M/5 frame ring, C64M/4 guarded breakpoints, C64M/3 HST1 flight-recorder
 queries, C64M/2 bulk-memory/token behavior).
 
@@ -86,8 +87,10 @@ match replies by id must skip or queue these lines. `tools/c64_control_client.py
 ```
 
 Reason tokens: `step`, `run`, `pause`, `poke`, `reset`, `load-state`,
-`history-clear`, `media`, `other`. `session` is the source asker id (0 if
-unknown). Awareness only — not a lock. See `sessions.md`.
+`history-clear`, `media`, `inspector-enter`, `inspector-land`, `inspector-leave`,
+`other`. `session` is the source asker id (0 if unknown). Awareness only — not a
+lock. See `sessions.md`. Inspect mode is global: `get-memory` returns past bytes
+while Inspecting and mutating verbs fail with `error read-only-inspector`.
 
 Data responses have a header, exactly `byte_count` raw bytes, and one final `\n`:
 
@@ -262,21 +265,40 @@ N set-turbo <mode 1|2|3>
 Current fixed responses:
 
 ```text
-hello        -> ok name=c64m protocol=C64M/7
-version      -> ok protocol=C64M/7 app=0.1.0
-capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed
+hello        -> ok name=c64m protocol=C64M/8
+version      -> ok protocol=C64M/8 app=0.1.0
+capabilities -> ok connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed inspector
 ping         -> ok
 ```
 
 `get-state` is an immediate cached response such as:
 
 ```text
-N ok state=paused has_cpu=1 frame=123 cycle=456 stop=breakpoint turbo=1 raster=48 vic_cycle=12
+N ok state=paused has_cpu=1 frame=123 cycle=456 stop=breakpoint turbo=1 raster=48 vic_cycle=12 mode=live focus_cycle=456 start=unknown start_arg1=0
 ```
+
+`mode=` is `live` or `inspector`. `focus_cycle=` is the landed `c64` cycle (the
+one true machine; not an HST1 id). `start=` is the Inspector window-left reason
+(`unknown` / `guest-write`); `start_arg1=` is the device number where known.
 
 `raster=` and `vic_cycle=` are present when the main loop has received a machine
 hardware snapshot (any prior `get-cpu` / `get-vic` / pause / step). They are the
 VIC-II beam position, not the host frame counter.
+
+Inspect verbs:
+
+```text
+N leave-inspector
+N enter-inspector
+```
+
+`leave-inspector` is required so a socket peer can recover from a UI Inspect
+session: fire-and-forget `ok accepted=1`, restores live NOW, does not auto-resume.
+`enter-inspector` is optional (UI uses `runtime_client`); same fire-and-forget
+shape. While `mode=inspector`, `set-memory` / keys / media / save-load-state /
+history-record/clear fail immediately with `error read-only-inspector`. Socket
+`run` / `step-*` while Inspecting perform sealed execute clamped to live (same
+as the UI F10/F12 family), not the unclamped live line.
 
 `step-frame` advances until the next completed VIC-II frame is published, then
 pauses with `run-complete` (or a breakpoint/BRK). It is the reliable way to capture
@@ -331,8 +353,8 @@ The payload is little-endian HST1: a 24-byte header, followed by records with a
 48-byte header and 8-byte materialized bus-access entries. Exact field offsets,
 stable marker/reset reason IDs, error strings, and lifecycle semantics are in
 `cpu-flight-recorder.md`. Marker 13 (`media-changed`) is additive: `arg0` is
-`0` unknown or `1` guest-write; `arg1` is the drive device when known. No
-protocol bump (still C64M/7). `tools/c64_control_client.py` validates and decodes
+`0` unknown or `1` guest-write; `arg1` is the drive device when known (I1 did
+not bump the protocol for it). `tools/c64_control_client.py` validates and decodes
 HST1 through `history_info()`, `history_find()`, `history_next()`, and
 `history_read()`.
 

@@ -254,6 +254,12 @@ bool runtime_client_inspector_set_enabled(
     runtime_client *client,
     bool enabled,
     uint64_t request_token);
+bool runtime_client_inspector_enter(runtime_client *client, uint64_t request_token);
+bool runtime_client_inspector_leave(runtime_client *client, uint64_t request_token);
+bool runtime_client_inspector_land(
+    runtime_client *client, uint64_t cycle, uint64_t request_token);
+bool runtime_client_inspector_frame_step(
+    runtime_client *client, int direction, uint64_t request_token);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

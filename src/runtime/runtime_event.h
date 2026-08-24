@@ -3,6 +3,7 @@
 #include "c64.h"
 #include "runtime_breakpoint_condition.h"
 #include "runtime_history.h"
+#include "runtime_inspector.h"
 
 #include <stdint.h>
 
@@ -36,8 +37,11 @@ typedef enum runtime_event_type {
     RUNTIME_EVENT_HISTORY_STATUS_RESPONSE,
     RUNTIME_EVENT_HISTORY_RESULT_RESPONSE,
     RUNTIME_EVENT_SESSION_RESPONSE,
-    RUNTIME_EVENT_STATE_CHANGED
+    RUNTIME_EVENT_STATE_CHANGED,
+    RUNTIME_EVENT_INSPECTOR_MODE
 } runtime_event_type;
+
+#define RUNTIME_ERROR_READ_ONLY_INSPECTOR "read-only-inspector"
 
 typedef enum runtime_state_changed_reason {
     RUNTIME_STATE_CHANGED_STEP = 0,
@@ -48,6 +52,9 @@ typedef enum runtime_state_changed_reason {
     RUNTIME_STATE_CHANGED_LOAD_STATE,
     RUNTIME_STATE_CHANGED_HISTORY_CLEAR,
     RUNTIME_STATE_CHANGED_MEDIA,
+    RUNTIME_STATE_CHANGED_INSPECTOR_ENTER,
+    RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
+    RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE,
     RUNTIME_STATE_CHANGED_OTHER
 } runtime_state_changed_reason;
 
@@ -241,6 +248,11 @@ typedef struct runtime_machine_snapshot {
     c64_sid_hardware_snapshot sid_hardware;
     c64_1541_hardware_snapshot drive8_hardware;
     c64_1541_hardware_snapshot drive9_hardware;
+    uint8_t inspector_mode; /* runtime_inspector_mode */
+    uint8_t inspector_enabled;
+    uint64_t inspector_focus_cycle;
+    uint8_t inspector_start_kind;
+    uint32_t inspector_start_arg1;
 } runtime_machine_snapshot;
 
 typedef struct runtime_memory_snapshot {
@@ -337,6 +349,7 @@ typedef struct runtime_event {
         } pong;
 
         struct {
+            char code[64];
             char message[1024];
         } error;
 
@@ -393,5 +406,14 @@ typedef struct runtime_event {
             uint64_t frame;
             uint64_t history_epoch;
         } state_changed;
+
+        struct {
+            uint8_t op; /* 0 = enter, 1 = leave */
+            uint8_t mode; /* runtime_inspector_mode */
+            uint8_t status; /* runtime_inspector_enter_status */
+            runtime_inspector_focus focus;
+            uint8_t start_kind;
+            uint32_t start_arg1;
+        } inspector_mode;
     } data;
 } runtime_event;

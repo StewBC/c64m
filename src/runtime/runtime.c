@@ -266,6 +266,7 @@ void runtime_destroy(runtime *rt) {
     free(rt->audio_record_path);
     runtime_history_destroy(rt->history);
     rt->history = NULL;
+    runtime_inspector_destroy(rt);
     runtime_inspector_recorder_destroy(rt);
     runtime_frame_ring_destroy(&rt->frame_ring);
     runtime_vic_ring_destroy(&rt->vic_ring);

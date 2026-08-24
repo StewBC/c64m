@@ -575,6 +575,19 @@ set_tests_properties(vic_ring_control_integration PROPERTIES
     TIMEOUT 60
 )
 
+add_test(
+    NAME inspector_control_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/control/test_inspector_control.py
+        $<TARGET_FILE:c64m>
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(inspector_control_integration PROPERTIES
+    TIMEOUT 30
+)
+
 add_executable(test_disasm_pc_lock
     tests/frontend/test_disasm_pc_lock.c
     src/frontend/disasm_pc_lock.c
@@ -1060,6 +1073,18 @@ target_link_libraries(test_runtime_inspector_replay PRIVATE
 )
 
 add_test(NAME runtime_inspector_replay COMMAND test_runtime_inspector_replay)
+
+add_executable(test_runtime_inspector_mode
+    tests/runtime/test_runtime_inspector_mode.c
+)
+
+target_compile_features(test_runtime_inspector_mode PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_inspector_mode PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_inspector_mode COMMAND test_runtime_inspector_mode)
 
 add_executable(test_runtime_vic_ring
     tests/runtime/test_runtime_vic_ring.c

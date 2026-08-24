@@ -1018,6 +1018,47 @@ bool runtime_client_inspector_set_enabled(
     return runtime_client_push(client, &command);
 }
 
+bool runtime_client_inspector_enter(runtime_client *client, uint64_t request_token)
+{
+    return runtime_client_send_command_token(
+        client, RUNTIME_COMMAND_INSPECTOR_ENTER, request_token);
+}
+
+bool runtime_client_inspector_leave(runtime_client *client, uint64_t request_token)
+{
+    return runtime_client_send_command_token(
+        client, RUNTIME_COMMAND_INSPECTOR_LEAVE, request_token);
+}
+
+bool runtime_client_inspector_land(
+    runtime_client *client, uint64_t cycle, uint64_t request_token)
+{
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_INSPECTOR_LAND,
+        .request_token = request_token,
+    };
+    if (client == NULL) {
+        return false;
+    }
+    command.data.inspector_land.cycle = cycle;
+    return runtime_client_push(client, &command);
+}
+
+bool runtime_client_inspector_frame_step(
+    runtime_client *client, int direction, uint64_t request_token)
+{
+    runtime_command command = {
+        .type = RUNTIME_COMMAND_INSPECTOR_FRAME_STEP,
+        .request_token = request_token,
+    };
+    if (client == NULL) {
+        return false;
+    }
+    command.data.inspector_frame_step.direction =
+        direction > 0 ? 1 : (direction < 0 ? -1 : 0);
+    return runtime_client_push(client, &command);
+}
+
 bool runtime_client_history_find(
     runtime_client *client,
     uint32_t session_id,

@@ -696,3 +696,468 @@ uint32_t runtime_inspector_cadence_cycles(const runtime *rt)
     }
     return 19656u;
 }
+
+void runtime_inspector_get_focus(const runtime *rt, runtime_inspector_focus *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    if (rt == NULL) {
+        memset(out, 0, sizeof(*out));
+        return;
+    }
+    *out = rt->inspector_focus;
+}
+
+runtime_inspector_mode runtime_inspector_current_mode(const runtime *rt)
+{
+    return (rt != NULL && rt->inspecting) ?
+        RUNTIME_INSPECTOR_MODE_INSPECT : RUNTIME_INSPECTOR_MODE_LIVE;
+}
+
+bool runtime_inspector_in_inspect(const runtime *rt)
+{
+    return rt != NULL && rt->inspecting;
+}
+
+const char *runtime_inspector_window_start_name(runtime_history_media_change_kind kind)
+{
+    switch (kind) {
+    case RUNTIME_HISTORY_MEDIA_CHANGE_GUEST_WRITE:
+        return "guest-write";
+    case RUNTIME_HISTORY_MEDIA_CHANGE_UNKNOWN:
+    default:
+        return "unknown";
+    }
+}
+
+bool runtime_inspector_snapshot_machine(runtime *rt, uint8_t **blob, size_t *size)
+{
+    size_t need;
+    uint8_t *bytes;
+    size_t written;
+
+    if (rt == NULL || blob == NULL || size == NULL) {
+        return false;
+    }
+    need = c64_snapshot_size(&rt->machine);
+    if (need == 0u) {
+        return false;
+    }
+    bytes = (uint8_t *)malloc(need);
+    if (bytes == NULL) {
+        return false;
+    }
+    written = c64_snapshot_save(&rt->machine, bytes, need);
+    if (written != need) {
+        free(bytes);
+        return false;
+    }
+    *blob = bytes;
+    *size = written;
+    return true;
+}
+
+bool runtime_inspector_restore_blob(runtime *rt, const uint8_t *blob, size_t size)
+{
+    if (rt == NULL || blob == NULL || size == 0u) {
+        return false;
+    }
+    return c64_snapshot_load(&rt->machine, blob, size);
+}
+
+void runtime_inspector_destroy(runtime *rt)
+{
+    if (rt == NULL) {
+        return;
+    }
+    free(rt->inspector_now_blob);
+    rt->inspector_now_blob = NULL;
+    rt->inspector_now_size = 0u;
+    rt->inspector_now_cycle = 0u;
+    rt->inspecting = false;
+    memset(&rt->inspector_focus, 0, sizeof(rt->inspector_focus));
+}
+
+uint64_t runtime_inspector_live_cycle(const runtime *rt)
+{
+    uint64_t oldest = 0u;
+    uint64_t newest_cp = 0u;
+    uint64_t count = 0u;
+    uint64_t live;
+
+    if (rt == NULL) {
+        return 0u;
+    }
+    if (rt->inspecting && rt->inspector_now_blob != NULL) {
+        live = rt->inspector_now_cycle;
+    } else {
+        live = rt->machine.clock.cycle;
+    }
+    if (rt->inspector_recorder != NULL && rt->inspector_recorder->count > 0u) {
+        newest_cp = inspector_cp_at_const(
+            rt->inspector_recorder, rt->inspector_recorder->count - 1u)->cycle;
+        oldest = inspector_cp_at_const(rt->inspector_recorder, 0u)->cycle;
+        count = rt->inspector_recorder->count;
+        (void)oldest;
+        (void)count;
+        if (newest_cp > live) {
+            live = newest_cp;
+        }
+    }
+    return live;
+}
+
+void runtime_inspector_timeline_bounds(
+    const runtime *rt, uint64_t *oldest, uint64_t *live, uint64_t *count)
+{
+    uint64_t n = 0u;
+    uint64_t cp_old = 0u;
+
+    if (oldest != NULL) {
+        *oldest = 0u;
+    }
+    if (live != NULL) {
+        *live = 0u;
+    }
+    if (count != NULL) {
+        *count = 0u;
+    }
+    if (rt == NULL || rt->inspector_recorder == NULL ||
+        rt->inspector_recorder->count == 0u) {
+        return;
+    }
+    n = rt->inspector_recorder->count;
+    cp_old = inspector_cp_at_const(rt->inspector_recorder, 0u)->cycle;
+    if (oldest != NULL) {
+        *oldest = cp_old;
+    }
+    if (live != NULL) {
+        *live = runtime_inspector_live_cycle(rt);
+    }
+    if (count != NULL) {
+        *count = n;
+    }
+}
+
+bool runtime_inspector_at_live(const runtime *rt)
+{
+    uint64_t live;
+
+    if (rt == NULL || !rt->inspecting) {
+        return false;
+    }
+    live = rt->inspector_now_cycle;
+    if (live == 0u) {
+        live = runtime_inspector_live_cycle(rt);
+    }
+    return rt->machine.clock.cycle >= live;
+}
+
+void runtime_inspector_sync_focus(runtime *rt)
+{
+    if (rt == NULL) {
+        return;
+    }
+    memset(&rt->inspector_focus, 0, sizeof(rt->inspector_focus));
+    rt->inspector_focus.valid = true;
+    rt->inspector_focus.cycle = rt->machine.clock.cycle;
+    rt->inspector_focus.pc = rt->machine.cpu.cpu.pc;
+    rt->inspector_focus.a = rt->machine.cpu.cpu.A;
+    rt->inspector_focus.x = rt->machine.cpu.cpu.X;
+    rt->inspector_focus.y = rt->machine.cpu.cpu.Y;
+    rt->inspector_focus.p = rt->machine.cpu.cpu.flags;
+    rt->inspector_focus.sp = (uint8_t)(rt->machine.cpu.cpu.sp & 0xffu);
+}
+
+runtime_inspector_enter_status runtime_inspector_can_enter(const runtime *rt)
+{
+    if (rt == NULL) {
+        return RUNTIME_INSPECTOR_ENTER_UNAVAILABLE;
+    }
+    if (rt->inspecting) {
+        return RUNTIME_INSPECTOR_ENTER_OK;
+    }
+    if (!rt->inspector_enabled) {
+        return RUNTIME_INSPECTOR_ENTER_UNAVAILABLE;
+    }
+    if (runtime_inspector_checkpoint_count(rt) == 0u) {
+        return RUNTIME_INSPECTOR_ENTER_EMPTY;
+    }
+    return RUNTIME_INSPECTOR_ENTER_OK;
+}
+
+void runtime_inspector_apply_live_seal(runtime *rt)
+{
+    if (rt == NULL) {
+        return;
+    }
+    c64_set_cpu_observer(&rt->machine, NULL, NULL);
+    c64_set_memory_access_callback(&rt->machine, NULL, NULL);
+    c64_set_vicii_line_observer(&rt->machine, NULL, NULL);
+    c64_set_audio_output_enabled(&rt->machine, false);
+    c64_set_replay_sealed(&rt->machine, true);
+}
+
+void runtime_inspector_apply_logged_inputs(
+    runtime *rt, c64_t *dst, uint64_t from_inclusive, uint64_t to_inclusive)
+{
+    struct runtime_inspector_recorder *rec;
+    uint32_t i;
+    uint32_t tail;
+
+    if (rt == NULL || dst == NULL || rt->inspector_recorder == NULL) {
+        return;
+    }
+    rec = rt->inspector_recorder;
+    if (to_inclusive < from_inclusive || rec->input_count == 0u) {
+        return;
+    }
+    tail = (rec->input_head + rec->input_cap - rec->input_count) % rec->input_cap;
+    for (i = 0u; i < rec->input_count; ++i) {
+        const runtime_inspector_input *ev =
+            &rec->inputs[(tail + i) % rec->input_cap];
+        if (ev->cycle < from_inclusive) {
+            continue;
+        }
+        if (ev->cycle > to_inclusive) {
+            break;
+        }
+        inspector_apply_input(dst, ev);
+    }
+}
+
+bool runtime_inspector_restore_live(runtime *rt)
+{
+    if (rt == NULL || rt->inspector_now_blob == NULL || rt->inspector_now_size == 0u) {
+        return false;
+    }
+    if (!runtime_inspector_restore_blob(rt, rt->inspector_now_blob, rt->inspector_now_size)) {
+        return false;
+    }
+    runtime_inspector_apply_live_seal(rt);
+    runtime_inspector_sync_focus(rt);
+    return true;
+}
+
+bool runtime_inspector_land(runtime *rt, uint64_t cycle)
+{
+    uint64_t oldest = 0u;
+    uint64_t live = 0u;
+    uint64_t count = 0u;
+    uint8_t *then_blob = NULL;
+    size_t then_size = 0u;
+    bool ok;
+
+    if (rt == NULL || !rt->inspecting) {
+        return false;
+    }
+    runtime_inspector_timeline_bounds(rt, &oldest, &live, &count);
+    if (count == 0u) {
+        return false;
+    }
+    if (cycle < oldest) {
+        return false;
+    }
+    if (cycle >= live) {
+        return runtime_inspector_restore_live(rt);
+    }
+    if (!runtime_inspector_snapshot_machine(rt, &then_blob, &then_size)) {
+        return false;
+    }
+    ok = runtime_inspector_load_nearest_checkpoint(rt, cycle, &rt->machine);
+    if (!ok) {
+        (void)runtime_inspector_restore_blob(rt, then_blob, then_size);
+        runtime_inspector_apply_live_seal(rt);
+        free(then_blob);
+        return false;
+    }
+    free(then_blob);
+    runtime_inspector_apply_live_seal(rt);
+    runtime_inspector_sync_focus(rt);
+    return true;
+}
+
+bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle)
+{
+    uint64_t live;
+
+    if (rt == NULL || !rt->inspecting) {
+        return false;
+    }
+    live = runtime_inspector_live_cycle(rt);
+    if (target_cycle > live) {
+        target_cycle = live;
+    }
+    runtime_inspector_apply_live_seal(rt);
+    while (rt->machine.clock.cycle < target_cycle) {
+        uint64_t c0 = rt->machine.clock.cycle;
+        char error[256];
+        if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+            break;
+        }
+        runtime_inspector_apply_logged_inputs(
+            rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
+    }
+    if (rt->machine.clock.cycle >= live) {
+        return runtime_inspector_restore_live(rt);
+    }
+    runtime_inspector_apply_live_seal(rt);
+    runtime_inspector_sync_focus(rt);
+    return true;
+}
+
+bool runtime_inspector_frame_step(runtime *rt, int direction)
+{
+    uint64_t oldest = 0u;
+    uint64_t live = 0u;
+    uint64_t count = 0u;
+    uint64_t here;
+
+    if (rt == NULL || !rt->inspecting) {
+        return false;
+    }
+    runtime_inspector_timeline_bounds(rt, &oldest, &live, &count);
+    if (count == 0u) {
+        return false;
+    }
+    here = rt->machine.clock.cycle;
+    if (direction > 0) {
+        if (here >= live) {
+            return runtime_inspector_restore_live(rt);
+        }
+        (void)c64_consume_frame_complete(&rt->machine);
+        runtime_inspector_apply_live_seal(rt);
+        c64_set_video_output_enabled(&rt->machine, true);
+        while (rt->machine.clock.cycle < live) {
+            uint64_t c0 = rt->machine.clock.cycle;
+            char error[256];
+            if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+                break;
+            }
+            runtime_inspector_apply_logged_inputs(
+                rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
+            if (c64_consume_frame_complete(&rt->machine)) {
+                break;
+            }
+        }
+        if (rt->machine.clock.cycle >= live) {
+            return runtime_inspector_restore_live(rt);
+        }
+        runtime_inspector_apply_live_seal(rt);
+        runtime_inspector_sync_focus(rt);
+        return true;
+    }
+    if (direction < 0) {
+        uint64_t last_fr;
+        uint8_t *then_blob = NULL;
+        size_t then_size = 0u;
+
+        if (here <= oldest) {
+            return true;
+        }
+        if (!runtime_inspector_snapshot_machine(rt, &then_blob, &then_size)) {
+            return false;
+        }
+        if (!runtime_inspector_load_nearest_checkpoint(rt, here - 1u, &rt->machine)) {
+            (void)runtime_inspector_restore_blob(rt, then_blob, then_size);
+            runtime_inspector_apply_live_seal(rt);
+            free(then_blob);
+            return false;
+        }
+        free(then_blob);
+        last_fr = rt->machine.clock.cycle;
+        (void)c64_consume_frame_complete(&rt->machine);
+        runtime_inspector_apply_live_seal(rt);
+        c64_set_video_output_enabled(&rt->machine, true);
+        while (rt->machine.clock.cycle < here) {
+            uint64_t c0 = rt->machine.clock.cycle;
+            char error[256];
+            if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
+                break;
+            }
+            runtime_inspector_apply_logged_inputs(
+                rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
+            if (c64_consume_frame_complete(&rt->machine)) {
+                uint64_t c = rt->machine.clock.cycle;
+                if (c < here) {
+                    last_fr = c;
+                } else {
+                    break;
+                }
+            }
+        }
+        if (rt->machine.clock.cycle != last_fr) {
+            if (!runtime_inspector_load_nearest_checkpoint(rt, last_fr, &rt->machine)) {
+                return false;
+            }
+            if (!runtime_inspector_reexecute_to(rt, last_fr)) {
+                return false;
+            }
+        }
+        runtime_inspector_apply_live_seal(rt);
+        runtime_inspector_sync_focus(rt);
+        return true;
+    }
+    return true;
+}
+
+runtime_inspector_enter_status runtime_inspector_enter(runtime *rt)
+{
+    runtime_inspector_enter_status can;
+    uint8_t *now = NULL;
+    size_t now_size = 0u;
+
+    if (rt == NULL) {
+        return RUNTIME_INSPECTOR_ENTER_UNAVAILABLE;
+    }
+    if (rt->inspecting) {
+        return RUNTIME_INSPECTOR_ENTER_OK;
+    }
+    can = runtime_inspector_can_enter(rt);
+    if (can != RUNTIME_INSPECTOR_ENTER_OK) {
+        return can;
+    }
+
+    (void)runtime_inspector_checkpoint_take(rt);
+    if (runtime_inspector_checkpoint_count(rt) == 0u) {
+        return RUNTIME_INSPECTOR_ENTER_EMPTY;
+    }
+    if (!runtime_inspector_snapshot_machine(rt, &now, &now_size)) {
+        return RUNTIME_INSPECTOR_ENTER_FAILED;
+    }
+
+    runtime_inspector_recorder_set_enabled(rt, false);
+    runtime_inspector_apply_live_seal(rt);
+
+    rt->inspector_now_blob = now;
+    rt->inspector_now_size = now_size;
+    rt->inspector_now_cycle = rt->machine.clock.cycle;
+    rt->inspecting = true;
+    runtime_inspector_sync_focus(rt);
+    return RUNTIME_INSPECTOR_ENTER_OK;
+}
+
+void runtime_inspector_leave(runtime *rt)
+{
+    if (rt == NULL) {
+        return;
+    }
+    if (!rt->inspecting) {
+        return;
+    }
+    if (rt->inspector_now_blob != NULL && rt->inspector_now_size > 0u) {
+        (void)runtime_inspector_restore_blob(
+            rt, rt->inspector_now_blob, rt->inspector_now_size);
+    }
+    c64_set_replay_sealed(&rt->machine, false);
+    rt->inspecting = false;
+    free(rt->inspector_now_blob);
+    rt->inspector_now_blob = NULL;
+    rt->inspector_now_size = 0u;
+    rt->inspector_now_cycle = 0u;
+    memset(&rt->inspector_focus, 0, sizeof(rt->inspector_focus));
+    if (rt->inspector_enabled) {
+        runtime_inspector_recorder_set_enabled(rt, true);
+    }
+}

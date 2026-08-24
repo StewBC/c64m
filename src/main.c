@@ -11,6 +11,7 @@
 #include "platform_audio.h"
 #include "runtime.h"
 #include "runtime_client.h"
+#include "runtime_inspector.h"
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
@@ -1303,6 +1304,14 @@ static void update_debug_state_from_event(
             debug_state->nmi_entries = event->data.machine_state.nmi_entries;
             debug_state->restore_requests = event->data.machine_state.restore_requests;
             debug_state->cartridge_attached = event->data.machine_state.cartridge_attached != 0;
+            debug_state->inspector_mode = event->data.machine_state.inspector_mode;
+            debug_state->inspector_enabled = event->data.machine_state.inspector_enabled;
+            debug_state->inspector_focus_cycle =
+                event->data.machine_state.inspector_focus_cycle;
+            debug_state->inspector_start_kind =
+                event->data.machine_state.inspector_start_kind;
+            debug_state->inspector_start_arg1 =
+                event->data.machine_state.inspector_start_arg1;
             debug_state->has_cpu = true;
             debug_state->has_memory_banking = true;
             debug_state->has_hardware = true;
@@ -1348,6 +1357,13 @@ static void update_debug_state_from_event(
                 debug_state->disk_status[index] = event->data.disk_status;
                 debug_state->has_disk_status[index] = true;
             }
+            break;
+
+        case RUNTIME_EVENT_INSPECTOR_MODE:
+            debug_state->inspector_mode = event->data.inspector_mode.mode;
+            debug_state->inspector_focus_cycle = event->data.inspector_mode.focus.cycle;
+            debug_state->inspector_start_kind = event->data.inspector_mode.start_kind;
+            debug_state->inspector_start_arg1 = event->data.inspector_mode.start_arg1;
             break;
 
         case RUNTIME_EVENT_FRAME_READY:
@@ -3207,6 +3223,12 @@ static const char *state_changed_reason_name(runtime_state_changed_reason reason
         return "history-clear";
     case RUNTIME_STATE_CHANGED_MEDIA:
         return "media";
+    case RUNTIME_STATE_CHANGED_INSPECTOR_ENTER:
+        return "inspector-enter";
+    case RUNTIME_STATE_CHANGED_INSPECTOR_LAND:
+        return "inspector-land";
+    case RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE:
+        return "inspector-leave";
     case RUNTIME_STATE_CHANGED_OTHER:
     default:
         return "other";
@@ -4712,6 +4734,35 @@ static void handle_drop_file(runtime_client *client, app_options *options, char 
     SDL_free(path);
 }
 
+static bool control_command_inspector_forbidden(control_command_type type)
+{
+    switch (type) {
+        case CONTROL_COMMAND_RESET:
+        case CONTROL_COMMAND_SET_MEMORY:
+        case CONTROL_COMMAND_KEY_DOWN:
+        case CONTROL_COMMAND_KEY_UP:
+        case CONTROL_COMMAND_RESTORE:
+        case CONTROL_COMMAND_JOYSTICK:
+        case CONTROL_COMMAND_PASTE_TEXT:
+        case CONTROL_COMMAND_PASTE_EVENTS:
+        case CONTROL_COMMAND_PASTE_TEXT_DATA:
+        case CONTROL_COMMAND_PASTE_EVENTS_DATA:
+        case CONTROL_COMMAND_LOAD_PRG:
+        case CONTROL_COMMAND_LOAD_BIN:
+        case CONTROL_COMMAND_LOAD_STATE:
+        case CONTROL_COMMAND_SAVE_STATE:
+        case CONTROL_COMMAND_MOUNT_D64:
+        case CONTROL_COMMAND_UNMOUNT_DISK:
+        case CONTROL_COMMAND_POWER_DRIVE:
+        case CONTROL_COMMAND_ASSEMBLE:
+        case CONTROL_COMMAND_HISTORY_CLEAR:
+        case CONTROL_COMMAND_HISTORY_RECORD:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool control_command_mutates_machine(control_command_type type)
 {
     switch (type) {
@@ -4803,6 +4854,19 @@ static void dispatch_control_request(
         control_cache_invalidate_hot(control_cache);
     }
 
+    if (debug_state != NULL &&
+        debug_state->inspector_mode == (uint8_t)RUNTIME_INSPECTOR_MODE_INSPECT &&
+        control_command_inspector_forbidden(request->type)) {
+        control_protocol_format_error(
+            &response,
+            request->id,
+            RUNTIME_ERROR_READ_ONLY_INSPECTOR,
+            "machine is read-only while Inspecting",
+            false);
+        (void)control_server_post_response(control, &response);
+        return;
+    }
+
     /* Drop stale execution-state latches so a wait-event issued after this
        command targets the stop it produces, not the previous one. Fresh
        running/paused/breakpoints events (drained below or matched live) re-latch. */
@@ -4818,7 +4882,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "name=c64m protocol=C64M/7",
+                "name=c64m protocol=C64M/8",
                 false);
             break;
 
@@ -4826,7 +4890,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "protocol=C64M/7 app=0.1.0",
+                "protocol=C64M/8 app=0.1.0",
                 false);
             break;
 
@@ -4834,7 +4898,7 @@ static void dispatch_control_request(
             control_protocol_format_ok(
                 &response,
                 request->id,
-                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed",
+                "connection introspection execution state step turbo frame memory debug-memory call-stack input disk file snapshot breakpoints wait assemble symbols drive-cpu vic cia run-to-raster history power-drive frame-ring vic-ring sessions state-changed inspector",
                 false);
             break;
 
@@ -4857,6 +4921,18 @@ static void dispatch_control_request(
         case CONTROL_COMMAND_PAUSE:
             accepted = runtime_client_pause(client);
             break;
+
+        case CONTROL_COMMAND_LEAVE_INSPECTOR: {
+            uint64_t token = runtime_client_alloc_request_token(client);
+            accepted = runtime_client_inspector_leave(client, token);
+            break;
+        }
+
+        case CONTROL_COMMAND_ENTER_INSPECTOR: {
+            uint64_t token = runtime_client_alloc_request_token(client);
+            accepted = runtime_client_inspector_enter(client, token);
+            break;
+        }
 
         case CONTROL_COMMAND_STEP_CYCLE:
             accepted = runtime_client_step_cycle(client);
@@ -5097,7 +5173,7 @@ static void dispatch_control_request(
                     text,
                     sizeof(text),
                     "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u "
-                    "raster=%u vic_cycle=%u",
+                    "raster=%u vic_cycle=%u mode=%s focus_cycle=%llu start=%s start_arg1=%u",
                     control_runtime_state_name(debug_state->runtime_state),
                     debug_state->has_cpu ? 1u : 0u,
                     (unsigned long long)debug_state->frame_number,
@@ -5105,18 +5181,33 @@ static void dispatch_control_request(
                     control_stop_reason_name(debug_state->stop_reason),
                     debug_state->active_turbo_multiplier,
                     debug_state->vicii_hardware.raster_line,
-                    debug_state->vicii_hardware.cycle_in_line);
+                    debug_state->vicii_hardware.cycle_in_line,
+                    debug_state->inspector_mode ==
+                        (uint8_t)RUNTIME_INSPECTOR_MODE_INSPECT ? "inspector" : "live",
+                    (unsigned long long)debug_state->inspector_focus_cycle,
+                    runtime_inspector_window_start_name(
+                        (runtime_history_media_change_kind)debug_state->inspector_start_kind),
+                    (unsigned)debug_state->inspector_start_arg1);
             } else {
                 snprintf(
                     text,
                     sizeof(text),
-                    "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u",
+                    "state=%s has_cpu=%u frame=%llu cycle=%llu stop=%s turbo=%u "
+                    "mode=%s focus_cycle=%llu start=%s start_arg1=%u",
                     has_state ? control_runtime_state_name(debug_state->runtime_state) : "unknown",
                     has_state && debug_state->has_cpu ? 1u : 0u,
                     has_state ? (unsigned long long)debug_state->frame_number : 0ull,
                     has_state ? (unsigned long long)debug_state->machine_cycle : 0ull,
                     has_state ? control_stop_reason_name(debug_state->stop_reason) : "none",
-                    has_state ? debug_state->active_turbo_multiplier : 0u);
+                    has_state ? debug_state->active_turbo_multiplier : 0u,
+                    has_state && debug_state->inspector_mode ==
+                        (uint8_t)RUNTIME_INSPECTOR_MODE_INSPECT ? "inspector" : "live",
+                    has_state ? (unsigned long long)debug_state->inspector_focus_cycle : 0ull,
+                    runtime_inspector_window_start_name(
+                        has_state ?
+                            (runtime_history_media_change_kind)debug_state->inspector_start_kind :
+                            RUNTIME_HISTORY_MEDIA_CHANGE_UNKNOWN),
+                    has_state ? (unsigned)debug_state->inspector_start_arg1 : 0u);
             }
             control_protocol_format_ok(&response, request->id, text, false);
             break;
@@ -6182,6 +6273,8 @@ static void dispatch_control_request(
     }
 
     switch (request->type) {
+        case CONTROL_COMMAND_LEAVE_INSPECTOR:
+        case CONTROL_COMMAND_ENTER_INSPECTOR:
         case CONTROL_COMMAND_RESET:
         case CONTROL_COMMAND_RUN:
         case CONTROL_COMMAND_PAUSE:

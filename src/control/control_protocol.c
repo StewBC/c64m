@@ -388,6 +388,12 @@ static control_command_type command_from_name(const char *name, size_t length)
     if (length == 9 && strncmp(name, "set-turbo", length) == 0) {
         return CONTROL_COMMAND_SET_TURBO;
     }
+    if (length == 15 && strncmp(name, "leave-inspector", length) == 0) {
+        return CONTROL_COMMAND_LEAVE_INSPECTOR;
+    }
+    if (length == 15 && strncmp(name, "enter-inspector", length) == 0) {
+        return CONTROL_COMMAND_ENTER_INSPECTOR;
+    }
     if (length == 9 && strncmp(name, "get-state", length) == 0) {
         return CONTROL_COMMAND_GET_STATE;
     }

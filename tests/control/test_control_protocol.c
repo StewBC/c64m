@@ -106,6 +106,16 @@ static void test_parse_known_commands(void)
     expect_true("parse get-state", control_protocol_parse_request("13 get-state", &request, &error));
     expect_int("get-state type", CONTROL_COMMAND_GET_STATE, request.type);
 
+    expect_true(
+        "parse leave-inspector",
+        control_protocol_parse_request("40 leave-inspector", &request, &error));
+    expect_int("leave-inspector type", CONTROL_COMMAND_LEAVE_INSPECTOR, request.type);
+
+    expect_true(
+        "parse enter-inspector",
+        control_protocol_parse_request("41 enter-inspector", &request, &error));
+    expect_int("enter-inspector type", CONTROL_COMMAND_ENTER_INSPECTOR, request.type);
+
     expect_true("parse get-cpu", control_protocol_parse_request("14 get-cpu", &request, &error));
     expect_int("get-cpu type", CONTROL_COMMAND_GET_CPU, request.type);
 

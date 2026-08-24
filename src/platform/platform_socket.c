@@ -116,6 +116,12 @@ platform_socket_connection *platform_socket_accept(platform_socket_listener *lis
     if (handle == C64M_INVALID_SOCKET) {
         return NULL;
     }
+#if defined(SO_NOSIGPIPE)
+    {
+        int one = 1;
+        (void)setsockopt(handle, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+    }
+#endif
 
     connection = (platform_socket_connection *)calloc(1, sizeof(*connection));
     if (connection == NULL) {
@@ -169,7 +175,11 @@ bool platform_socket_write_all(
     }
 
     while (remaining > 0) {
+#if defined(MSG_NOSIGNAL)
+        int sent = (int)send(connection->handle, cursor, (int)remaining, MSG_NOSIGNAL);
+#else
         int sent = (int)send(connection->handle, cursor, (int)remaining, 0);
+#endif
         if (sent > 0) {
             cursor += sent;
             remaining -= (size_t)sent;

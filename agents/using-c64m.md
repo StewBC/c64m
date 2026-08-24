@@ -10,7 +10,7 @@ scripts rely on changes.
 contract live in `control-port.md`. VICE comparison load flags live in
 `vice-oracle.md`.
 
-Current protocol identity: **C64M/7** (ask `hello` / `version` to confirm).
+Current protocol identity: **C64M/8** (ask `hello` / `version` to confirm).
 Unsolicited `0 event state-changed …` lines may arrive at any time; `Ctl` in
 `tools/c64_control_client.py` skips them during `cmd()` matching.
 
@@ -198,7 +198,7 @@ Below, `N` is any client-chosen decimal id. In practice your client auto-numbers
 4 get-state
 ```
 
-Expect `protocol=C64M/7` (or whatever the build advertises).
+Expect `protocol=C64M/8` (or whatever the build advertises).
 
 ### 4.2 Load a PRG and RUN it
 
@@ -372,11 +372,13 @@ control clients in parallel. Co-op means **one** automated client owns the port
 while a human uses the **windowed** emulator (keyboard/pause UI).
 
 **C64M/7 sessions:** the TCP client auto-binds one runtime session (history
-FIND/NEXT cursor). Inspector ([`inspector.md`](inspector.md), C64M/8 when it
-lands) will use a separate session id so the two askers do not stomp each
-other's history pages. Mutations are **open** (no ask-to-step); peers get
-`0 event state-changed ...` as awareness only. Prefer `Ctl` so events do not
-break request matching (`drain_events` / `events`).
+FIND/NEXT cursor). Inspector (C64M/8) is a **global** mode of the one true
+`c64_t`: `get-state` reports `mode=live|inspector`, and while Inspecting every
+peer sees past bytes. `leave-inspector` restores live NOW (no auto-resume).
+Mutating pokes fail with `error read-only-inspector`. Socket `run` / `step-*`
+while Inspecting are sealed execute clamped to live. Mutations are **open** (no
+ask-to-step); peers get `0 event state-changed ...` as awareness only. Prefer
+`Ctl` so events do not break request matching (`drain_events` / `events`).
 
 ### 6.1 Pattern A — agent-only automation
 

@@ -65,6 +65,11 @@ typedef struct frontend_debug_state {
     bool has_disk_status[2];
     bool has_call_stack;
     bool cartridge_attached;
+    uint8_t inspector_mode;
+    uint8_t inspector_enabled;
+    uint64_t inspector_focus_cycle;
+    uint8_t inspector_start_kind;
+    uint32_t inspector_start_arg1;
 } frontend_debug_state;
 
 const char *frontend_runtime_state_name(frontend_runtime_state state);

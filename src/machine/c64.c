@@ -2203,6 +2203,13 @@ bool c64_copy_completed_frame(c64_t *machine, c64_frame *out_frame) {
     return vicii_copy_completed_frame(&machine->vic, out_frame, machine->clock.cycle);
 }
 
+bool c64_copy_paint_frame(c64_t *machine, c64_frame *out_frame) {
+    assert(machine);
+    assert(out_frame);
+
+    return vicii_copy_paint_frame(&machine->vic, out_frame, machine->clock.cycle);
+}
+
 bool c64_consume_frame_complete(c64_t *machine) {
     assert(machine);
 
