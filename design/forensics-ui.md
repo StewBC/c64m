@@ -4,7 +4,7 @@
 |-------|-------|
 | **Author** | swessels |
 | **Date** | 2026-08-25 |
-| **Status** | Draft (active) |
+| **Status** | Landed |
 | **Canonical path** | [`design/forensics-ui.md`](forensics-ui.md) |
 | **Origin** | Port of a2m `design/forensics-ui.md` (landed there); adapted for c64m |
 
@@ -893,13 +893,16 @@ ship the broken intermediate and patch later.
   `design/README.md` → **landed**, this design Status → Landed
 - **Dependencies:** PR 1–7
 - **Checklist:**
-  - [ ] Read `manual/HELP_MARKDOWN.md` first (ASCII-only subset)
-  - [ ] Manual **Forensics** section (Opt+R, verbs, copy, Land before/exact)
-  - [ ] Cross-links from Interface / `[debug]` / flight recorder as appropriate
-  - [ ] `tools/gen_help.py` regen
-  - [ ] design README active → landed; this doc Status → Landed
-  - [ ] Update checklists before commit
+  - [x] Read `manual/HELP_MARKDOWN.md` first (ASCII-only subset)
+  - [x] Manual **Forensics** section (Opt+R, verbs, copy, Land before/exact)
+  - [x] Cross-links from Interface / `[debug]` / flight recorder as appropriate
+  - [x] `tools/gen_help.py` regen
+  - [x] design README active → landed; this doc Status → Landed
+  - [x] Update checklists before commit
 - **Description:** User-facing docs only after the feature works. ASCII only.
+- **Notes (PR 8):** Interface / Inspector / Keyboard / Remote flight-recorder
+  cross-links. FIND prerequisite is paused + HST1 retained records (not
+  Inspector Record). Help regenerated via frontend build.
 
 ### Rollback
 

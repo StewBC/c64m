@@ -4,7 +4,7 @@
 |-------|-------|
 | **Author** | swessels |
 | **Date** | 2026-08-25 |
-| **Status** | Shipped with PR 4 (walker + FIND path) |
+| **Status** | Landed |
 | **Parent** | [`forensics-ui.md`](forensics-ui.md) |
 | **Canonical path** | [`design/forensics-query-guide.md`](forensics-query-guide.md) |
 | **Origin** | Port of a2m `design/forensics-query-guide.md`; adapted for c64m |

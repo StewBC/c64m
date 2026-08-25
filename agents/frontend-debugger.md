@@ -64,7 +64,7 @@ Forensics like F9 (debugger paused; abandon CRT resume latch) and selects
 Misc → Inspector. Cancel / soft-fail / incomplete land stay in Forensics.
 Click selects a logical entry/block; **Copy** uses the full unwrapped text.
 Double-click `id=` / `cyc=` / `pc=$...` copies that token. UI strings are
-ASCII-only. User manual for Forensics is still pending (design PR 8).
+ASCII-only. User docs: `manual/manual.md` (**Forensics**).
 
 ## Input
 

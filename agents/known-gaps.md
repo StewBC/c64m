@@ -35,8 +35,8 @@ the bottom.
 
 Inspector itself is shipped (opt-in `--inspector` / `[debug] inspector`, Misc
 Inspector tab, `enter-inspector` / `leave-inspector`). Forensics (Opt+R /
-Inspector **Forensics...**) is the in-emulator HST1 FIND transcript; user
-manual for it is still pending. File snapshots (`save-state` / `load-state`)
+Inspector **Forensics...**) is the in-emulator HST1 FIND transcript (see the
+manual **Forensics** section). File snapshots (`save-state` / `load-state`)
 are a different product.
 
 ## Tests and oracles

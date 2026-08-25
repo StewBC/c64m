@@ -198,7 +198,8 @@ available area. Whether it keeps the true CRT shape while doing so, or simply st
 to fill, is the **True Aspect Ratio** setting. See **Display and Scaling**.
 
 Press **F9** to open or close Debug Mode. Press **Opt+H** to open or close the in-emulator
-help. On macOS, **Cmd+Q** quits.
+help. Press **Opt+R** to open or close **Forensics** (CPU flight recorder FIND UI; see
+**Forensics**). On macOS, **Cmd+Q** quits.
 
 ### Window Title
 
@@ -279,6 +280,11 @@ off. While in max/warp the Record checkbox is locked off. Turbo 1 still records.
 Opt out with `--no-inspector-off-on-max` or `[debug] inspector_off_on_max=false`.
 This does not pause the CPU flight recorder.
 
+**Forensics...** (or **Opt+R**) opens the full-window FIND UI over the CPU flight
+recorder. **Land before** / **Land exact** jump Inspect to a FIND hit's cycle; they
+do not drive the scrubber. A successful land then opens the debugger on the
+Inspector tab. See **Forensics**.
+
 ### Turbo Mode
 
 **Opt+T** cycles through the configured turbo mode list (default when unset is
@@ -342,6 +348,65 @@ Keyboard shortcuts active while the help overlay is open:
 | **Home** | Scroll to top of the current section |
 | **End** | Scroll to bottom of the current section |
 | **ESC** | Close the help overlay |
+
+### Forensics
+
+**Forensics** is a full-window debugger mode for searching the CPU flight
+recorder (HST1 FIND / NEXT / READ). It is not the Inspector slider: FIND answers
+"who wrote this?", then you can land Inspect at a hit's machine cycle.
+
+Open from Misc -> Inspector (**Forensics...**) or **Opt+R** (works from the
+full-screen CRT or with F9 Debug Mode up). Forensics and Help cannot both be
+open.
+
+| Transition | Behavior |
+|------------|----------|
+| Open Forensics | **Pauses** if the machine was running. Remembers whether you came from the CRT or the debugger. |
+| **Opt+R** / **Close** | Return to that entry surface. CRT entry resumes only if it was running when Forensics opened. Debugger entry stays paused. |
+| **F9** | Always open the debugger, paused (abandons any CRT resume latch). |
+| Successful **Land before** / **Land exact** | Same as **F9**: debugger, paused. Also selects Misc -> Inspector. Cancel or failed land stays in Forensics. |
+| **Esc** | Does **not** leave Forensics (Help still uses Esc). |
+
+FIND requires a paused machine and retained flight-recorder records (the
+recorder is on by default when `[debug] history_memory_mb` is non-zero; use
+control-port `history-record` / `history-info` if you turned it off). Inspector
+**Record** is separate and does not arm the flight recorder. **Clear view**
+clears the transcript only; it does not call `history-clear`.
+
+**Query line** (Enter to run). The first token must be a verb (`find`, `next`,
+`read`, `info`). Bare `key=value` is not FIND (control-port `history-find` still
+accepts bare keys). Up/Down browses recent queries. Tab unique-completes the next
+expected token or prints that hole's syntax on the status strip. With the caret
+at the end of the line, Tab unique-expands every token (`find add=$D020 acc=re`
+becomes `find address=$D020 access=read`). Open values (ids, hex, ranges,
+limits) are not completed.
+
+| Input | Meaning |
+|-------|---------|
+| `find [key=value ...]` | FIND with the shared option grammar (same keys as `history-find`) |
+| `next [limit=N]` | Continue the last FIND page |
+| `read <id> [before=N] [after=N] [epoch=N]` | Read one retained id with context (`id` and keys may be in any order) |
+| `info` | Refresh recorder status (also runs quietly when Forensics opens) |
+
+Click a transcript line to select it (or a `---` header to select the whole
+result block). **Copy** copies the full selected text. Double-click `id=`,
+`cyc=`, or `pc=$...` on a record line to copy that token alone.
+
+With a record selected:
+
+| Button | Meaning |
+|--------|---------|
+| **Land before** | Inspect land at the nearest checkpoint at or before `cyc=` (often early so you can step into the hit) |
+| **Land exact** | Inspect land exactly at `cyc=` (checkpoint then re-execute to that cycle) |
+
+If you are not yet Inspecting but checkpoints exist, either land button asks to
+**Inspect & Land** first. Soft-fail if there is no Inspector window. Status
+reports the post-land `focus_cycle` versus the requested cycle (clamp, live, or
+quantized). After a successful land, Forensics closes and the debugger opens
+paused on the Inspector tab. Cancel or a failed land leaves you in Forensics.
+**Opt+R** / **Close** still return to the entry surface as above.
+
+See **CPU Flight Recorder** under **Remote** for the wire grammar and budgets.
 
 ## CPU View
 
@@ -1784,6 +1849,7 @@ Keys listed here are intercepted by the emulator before reaching the C64. On mac
 |-----------------|------------------------------------------------------------|
 | **F9**          | Toggle Debug Mode on/off                                   |
 | **Opt+H**       | Toggle in-emulator help on/off                             |
+| **Opt+R**       | Toggle Forensics (CPU flight recorder FIND UI)             |
 | **Shift+Opt+A** | Assemble the configured source file using the Assembler settings |
 | **Shift+Opt+M** | Toggle keyboard joystick mapping between Numpad and WASD   |
 | **F10**         | Step instruction (paused) or Pause (running). In Inspector: sealed step (no-op at live) |
@@ -2063,6 +2129,10 @@ The flight recorder continuously retains recent main-CPU execution and physical
 bus accesses in a bounded memory arena. The default budget is 256 MiB. Set it
 with `--history-memory=<MiB>` or `[debug] history_memory_mb`; `0` disables the
 feature and other valid values are 16 through 4096.
+
+In the debugger UI, **Forensics** (**Opt+R**) is the interactive FIND surface
+over this recorder (see **Forensics**). The control-port verbs below are the
+same engine for scripts. Inspector Record does not arm or stop this recorder.
 
 | Command | Meaning |
 |---------|---------|
