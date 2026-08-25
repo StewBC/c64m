@@ -394,6 +394,24 @@ target_link_libraries(test_help_view PRIVATE
 
 add_test(NAME help_view COMMAND test_help_view)
 
+add_executable(test_forensics_view
+    tests/frontend/test_forensics_view.c
+)
+
+target_compile_features(test_forensics_view PRIVATE c_std_99)
+
+target_compile_definitions(test_forensics_view PRIVATE SDL_MAIN_HANDLED)
+
+target_include_directories(test_forensics_view PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+)
+
+target_link_libraries(test_forensics_view PRIVATE
+    frontend
+)
+
+add_test(NAME forensics_view COMMAND test_forensics_view)
+
 add_executable(test_frontend_joystick
     tests/frontend/test_frontend_joystick.c
 )

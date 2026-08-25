@@ -3749,6 +3749,44 @@ static void close_help(frontend *ui, runtime_client *client, const frontend_debu
     }
 }
 
+/*
+ * Leave Forensics.
+ * force_debugger (F9 or successful Land): always debugger, never resume.
+ * Otherwise (Opt+R / Close): return to entry surface; resume only if that
+ * surface was full-screen CRT and it was running when Forensics opened.
+ * PR 3: no history_close cursor / HISTORY RPC yet.
+ */
+static void leave_forensics_mode(
+    platform_window *window,
+    runtime_client *client,
+    frontend *ui,
+    bool *ui_visible,
+    bool force_debugger)
+{
+    bool show_debugger = true;
+    bool resume = false;
+    int min_w = 0;
+    int min_h = 0;
+
+    if (ui == NULL || ui_visible == NULL || !frontend_forensics_is_open(ui)) {
+        return;
+    }
+    if (!force_debugger && frontend_forensics_entered_from_crt(ui)) {
+        show_debugger = false;
+        resume = frontend_forensics_crt_was_running(ui);
+    }
+    frontend_close_forensics(ui);
+    *ui_visible = show_debugger;
+    if (show_debugger) {
+        frontend_debug_min_window_size(ui, &min_w, &min_h);
+        request_debug_state(client);
+    }
+    platform_window_set_minimum_size(window, min_w, min_h);
+    if (resume) {
+        send_run_command(client);
+    }
+}
+
 static void send_step_instruction_command(runtime_client *client) {
     SDL_Log("STEP instruction requested");
     if (runtime_client_step_instruction(client)) {
@@ -6517,6 +6555,9 @@ static bool run_main_loop(
        press-and-hold accent popup. Seed from SDL's current state so the first
        frame only calls SDL when the desired state actually differs. */
     bool text_input_active = SDL_IsTextInputActive() == SDL_TRUE;
+    /* Block TEXTINPUT after Opt+H / Opt+R until Option is released so the
+       chord letter does not type into Help/Forensics edit fields. */
+    bool suppress_text_after_option_chord = false;
     frontend_runtime_state last_title_state = FRONTEND_RUNTIME_STATE_UNKNOWN;
     runtime_stop_reason last_title_stop_reason = RUNTIME_STOP_REASON_NONE;
     uint32_t last_title_turbo_multiplier = 0u;
@@ -6551,7 +6592,16 @@ static bool run_main_loop(
 
         frontend_begin_input(ui);
         while (SDL_PollEvent(&event)) {
-            bool send_event_to_frontend = ui_visible || frontend_help_is_open(ui);
+            bool send_event_to_frontend =
+                ui_visible || frontend_help_is_open(ui) ||
+                frontend_forensics_is_open(ui);
+
+            if (event.type == SDL_TEXTINPUT && suppress_text_after_option_chord) {
+                send_event_to_frontend = false;
+            } else if (event.type == SDL_KEYUP &&
+                       (SDL_GetModState() & KMOD_ALT) == 0) {
+                suppress_text_after_option_chord = false;
+            }
 
             if (!debug_state.inspecting) {
                 sdl_c64_controller_handle_event(&controller_state, client, &event);
@@ -6564,6 +6614,7 @@ static bool run_main_loop(
                 send_event_to_frontend = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat != 0 &&
                        !frontend_help_is_open(ui) &&
+                       !frontend_forensics_is_open(ui) &&
                        handle_step_key_event(client, &debug_state, &event.key, false)) {
                 send_event_to_frontend = false;
             } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
@@ -6574,15 +6625,76 @@ static bool run_main_loop(
                     if (frontend_help_is_open(ui)) {
                         close_help(ui, client, &debug_state);
                     } else {
+                        /* frontend_open_help closes Forensics and transfers latch. */
                         open_help(ui, client, &debug_state);
+                    }
+                    suppress_text_after_option_chord = true;
+                    send_event_to_frontend = false;
+                } else if (
+                    event.key.keysym.sym == SDLK_r &&
+                    frontend_input_has_option_modifier(&event.key) &&
+                    !frontend_input_has_shift_modifier(&event.key)) {
+                    /* Opt+R: toggle Forensics; leave returns to entry surface. */
+                    if (frontend_forensics_is_open(ui)) {
+                        leave_forensics_mode(
+                            window, client, ui, &ui_visible, false);
+                    } else {
+                        bool from_debugger = ui_visible;
+                        bool was_running =
+                            debug_state.runtime_state == FRONTEND_RUNTIME_STATE_RUNNING;
+                        frontend_open_forensics(
+                            ui, from_debugger, was_running);
+                    }
+                    suppress_text_after_option_chord = true;
+                    send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_F9) {
+                    if (frontend_forensics_is_open(ui)) {
+                        /* F9 from Forensics -> debugger, always paused. */
+                        leave_forensics_mode(
+                            window, client, ui, &ui_visible, true);
+                    } else {
+                        ui_visible = !ui_visible;
+                        SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
+                        {
+                            int min_w = 0;
+                            int min_h = 0;
+                            if (ui_visible) {
+                                frontend_debug_min_window_size(ui, &min_w, &min_h);
+                            }
+                            platform_window_set_minimum_size(window, min_w, min_h);
+                        }
                     }
                     send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_ESCAPE && frontend_help_is_open(ui)) {
+                    /* Esc closes Help only; never leaves Forensics. */
                     close_help(ui, client, &debug_state);
+                    send_event_to_frontend = false;
+                } else if (frontend_handle_forensics_key(ui, &event.key)) {
                     send_event_to_frontend = false;
                 } else if (frontend_handle_help_key(ui, &event.key, options->scroll_wheel_lines)) {
                     send_event_to_frontend = false;
-                } else if (frontend_help_is_open(ui)) {
+                } else if (handle_step_key_event(client, &debug_state, &event.key, true)) {
+                    /* F10/F11 work while Forensics is open (before catch-all). */
+                    send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_F10 &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    debug_state.step_cycle_start = debug_state.machine_cycle;
+                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
+                    send_step_out_command(client);
+                    send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_F12 &&
+                           !frontend_input_has_shift_modifier(&event.key)) {
+                    debug_state.step_cycle_start = debug_state.machine_cycle;
+                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
+                    send_run_command(client);
+                    send_event_to_frontend = false;
+                } else if (event.key.keysym.sym == SDLK_F12 &&
+                           frontend_input_has_shift_modifier(&event.key)) {
+                    debug_state.step_cycle_start = debug_state.machine_cycle;
+                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
+                    send_run_to_cursor_command(client, ui, &debug_state);
+                    send_event_to_frontend = false;
+                } else if (frontend_help_is_open(ui) || frontend_forensics_is_open(ui)) {
                     send_event_to_frontend = true;
                 } else if (event.key.keysym.sym == SDLK_a &&
                            frontend_input_has_option_modifier(&event.key) &&
@@ -6609,34 +6721,6 @@ static bool run_main_loop(
                     SDL_Log("keyboard joystick layout: %s",
                             frontend_joystick_layout_to_string(next_layout));
                     send_event_to_frontend = false;
-                } else if (event.key.keysym.sym == SDLK_F9) {
-                    ui_visible = !ui_visible;
-                    SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
-                    {
-                        int min_w = 0;
-                        int min_h = 0;
-                        if (ui_visible) {
-                            frontend_debug_min_window_size(ui, &min_w, &min_h);
-                        }
-                        platform_window_set_minimum_size(window, min_w, min_h);
-                    }
-                } else if (handle_step_key_event(client, &debug_state, &event.key, true)) {
-                    send_event_to_frontend = false;
-                } else if (event.key.keysym.sym == SDLK_F10 &&
-                           frontend_input_has_shift_modifier(&event.key)) {
-                    debug_state.step_cycle_start = debug_state.machine_cycle;
-                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                    send_step_out_command(client);
-                } else if (event.key.keysym.sym == SDLK_F12 &&
-                           !frontend_input_has_shift_modifier(&event.key)) {
-                    debug_state.step_cycle_start = debug_state.machine_cycle;
-                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                    send_run_command(client);
-                } else if (event.key.keysym.sym == SDLK_F12 &&
-                           frontend_input_has_shift_modifier(&event.key)) {
-                    debug_state.step_cycle_start = debug_state.machine_cycle;
-                    debug_state.step_cpu_cycle_start = debug_state.cpu.cycles;
-                    send_run_to_cursor_command(client, ui, &debug_state);
                 } else if (event.key.keysym.sym == SDLK_t &&
                            frontend_input_has_option_modifier(&event.key)) {
                     runtime_client_cycle_turbo_speed(client);
@@ -6727,6 +6811,7 @@ static bool run_main_loop(
                 }
             } else if (event.type == SDL_KEYUP &&
                        !frontend_help_is_open(ui) &&
+                       !frontend_forensics_is_open(ui) &&
                        !debug_state.inspecting &&
                        (!ui_visible || frontend_routes_keyboard_to_c64(ui))) {
                 if (frontend_joystick_consumes(&kbd_joystick, event.key.keysym.sym)) {
@@ -6824,6 +6909,19 @@ static bool run_main_loop(
             return false;
         }
         frontend_render(ui, ui_visible, &debug_state);
+        if (frontend_forensics_consume_pause_request(ui)) {
+            if (debug_state.runtime_state == FRONTEND_RUNTIME_STATE_RUNNING) {
+                send_pause_command(client);
+            }
+        }
+        if (frontend_forensics_consume_close_request(ui)) {
+            /* Close button == Opt+R (return to entry surface). */
+            leave_forensics_mode(window, client, ui, &ui_visible, false);
+        }
+        if (frontend_forensics_consume_leave_debugger_request(ui)) {
+            /* Successful Land before/exact -> debugger paused + Inspector tab. */
+            leave_forensics_mode(window, client, ui, &ui_visible, true);
+        }
         {
             /* frontend_render has just built this frame's UI, so the edit-focus
                state is now current. Sync SDL text input to it. */

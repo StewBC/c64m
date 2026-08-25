@@ -149,8 +149,23 @@ typedef enum frontend_debugger_intent_type {
     FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER,
     FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE,
     FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND,
-    FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE,
+    FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP,
+    FRONTEND_DEBUGGER_INTENT_HISTORY_FIND,
+    FRONTEND_DEBUGGER_INTENT_HISTORY_NEXT,
+    FRONTEND_DEBUGGER_INTENT_HISTORY_READ,
+    FRONTEND_DEBUGGER_INTENT_HISTORY_INFO,
+    FRONTEND_DEBUGGER_INTENT_HISTORY_CLOSE
 } frontend_debugger_intent_type;
+
+typedef enum frontend_history_verb {
+    FRONTEND_HISTORY_VERB_NONE = 0,
+    FRONTEND_HISTORY_VERB_FIND = 1,
+    FRONTEND_HISTORY_VERB_NEXT,
+    FRONTEND_HISTORY_VERB_READ,
+    FRONTEND_HISTORY_VERB_INFO,
+    FRONTEND_HISTORY_VERB_CLOSE
+} frontend_history_verb;
 
 /* File-browser "default folder" slots. Each remembers the last directory used by
    a family of callers so the browser reopens there. The order must match the
@@ -218,6 +233,17 @@ typedef struct frontend_debugger_intent {
     frontend_debugger_intent_type file_browser_purpose;
     char file_browser_path[1024];
     uint64_t inspector_cycle;
+    /* Forensics HISTORY_* (structured; main does not re-parse find options). */
+    frontend_history_verb history_verb;
+    runtime_history_query history_query;
+    runtime_history_from_kind history_from_kind;
+    uint64_t history_from_id;
+    uint16_t history_limit;
+    uint64_t history_read_id;
+    uint64_t history_read_epoch; /* 0 = current */
+    uint16_t history_before;
+    uint16_t history_after;
+    char history_label[160];
 } frontend_debugger_intent;
 
 typedef struct frontend_load_bin_dialog_state {
@@ -282,6 +308,39 @@ bool frontend_close_help(frontend *ui);
 bool frontend_help_is_open(const frontend *ui);
 bool frontend_help_paused_by_help(const frontend *ui);
 bool frontend_handle_help_key(frontend *ui, const SDL_KeyboardEvent *key, int scroll_wheel_lines);
+/* Forensics full-window mode (mutually exclusive with Help).
+   from_debugger: opened with F9 debugger up; else full-screen CRT.
+   crt_was_running: recorded only for CRT entry (restore on Opt+R/Close). */
+void frontend_open_forensics(
+    frontend *ui,
+    bool from_debugger,
+    bool crt_was_running);
+void frontend_close_forensics(frontend *ui); /* Misc->Inspector; no run/pause */
+bool frontend_forensics_is_open(const frontend *ui);
+bool frontend_forensics_entered_from_crt(const frontend *ui);
+bool frontend_forensics_crt_was_running(const frontend *ui);
+bool frontend_forensics_consume_close_request(frontend *ui);
+/* After successful Land: leave like F9 (debugger paused; Inspector tab). */
+bool frontend_forensics_consume_leave_debugger_request(frontend *ui);
+bool frontend_forensics_consume_pause_request(frontend *ui);
+bool frontend_handle_forensics_key(frontend *ui, const SDL_KeyboardEvent *key);
+/* Apply HISTORY RPC results (main.c after claim/decode). */
+void frontend_forensics_apply_result(
+    frontend *ui,
+    frontend_history_verb verb,
+    const char *label,
+    const runtime_history_rpc_meta *meta,
+    const runtime_history_record *records,
+    size_t record_count,
+    const bool *anchor_matches);
+void frontend_forensics_apply_status(
+    frontend *ui,
+    const runtime_history_status *status,
+    bool append_transcript_note);
+void frontend_forensics_apply_rpc_error(
+    frontend *ui,
+    runtime_history_rpc_status status);
+uint64_t frontend_forensics_last_cursor(const frontend *ui);
 bool frontend_poll_debugger_intent(frontend *ui, frontend_debugger_intent *out_intent);
 void frontend_set_layout_state(frontend *ui, const frontend_layout_state *state);
 void frontend_get_layout_state(frontend *ui, frontend_layout_state *out_state);

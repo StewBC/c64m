@@ -775,14 +775,20 @@ ship the broken intermediate and patch later.
   exclusion), Misc Inspector **Forensics…** button
 - **Dependencies:** none functionally; after PR 1 preferred for status copy
 - **Checklist:**
-  - [ ] Open/close; layout; Clear view; query edit + history UI-only
-  - [ ] Pause on enter; Opt+R toggle; Inspector button
-  - [ ] Mutual exclusion with Help; Esc does not leave
-  - [ ] **Transcript scroll preserve/restore** (`transcript_scroll_y` /
+  - [x] Open/close; layout; Clear view; query edit + history UI-only
+  - [x] Pause on enter; Opt+R toggle; Inspector button
+  - [x] Mutual exclusion with Help; Esc does not leave
+  - [x] **Transcript scroll preserve/restore** (`transcript_scroll_y` /
         `pending_scroll_restore`, Help pattern)
-  - [ ] ASCII chrome strings
-  - [ ] Update this design checklist before commit
+  - [x] ASCII chrome strings
+  - [x] Update this design checklist before commit
 - **Description:** Shell only. Copy can stub until PR 4 has lines.
+- **Notes (PR 3):** Full-window shell lifted from a2m. Query Enter parses and
+  pushes query history but does **not** emit HISTORY_* intents yet
+  (`FIND path lands in PR 4`). Land flush stubs with
+  `Land lands in PR 5` (no INSPECTOR_LAND / LAND_TO_CYCLE). No history-info on
+  open; no `runtime_client_history_*` from main. HISTORY_* + LAND_TO_CYCLE
+  intent enums/fields present for later PRs.
 
 ### PR 4 — FIND / NEXT / READ + verb-first query line
 

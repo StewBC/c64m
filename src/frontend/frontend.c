@@ -1,6 +1,7 @@
 #include "frontend.h"
 
 #include "frontend_input.h"
+#include "forensics_view.h"
 #include "help_view.h"
 #include "nuklear_config.h"
 #include "nuklear_sdl.h"
@@ -446,6 +447,7 @@ struct frontend {
     frontend_load_bin_dialog_state load_bin_dialog;
     frontend_save_bin_dialog_state save_bin_dialog;
     frontend_help_state help;
+    frontend_forensics_state forensics;
     frontend_symbol_lookup_state symbol_lookup;
     frontend_file_browser_state file_browser;
     /* Remembered default folder per browse slot (session memory; main.c bridges
@@ -7358,6 +7360,66 @@ static bool frontend_nk_action_button(
     return nk_button_label(ctx, label) != 0;
 }
 
+/* PR 3: parse/status only; HISTORY_* intents land in PR 4. */
+static void frontend_forensics_flush_query_submit(frontend *ui)
+{
+    frontend_forensics_query_parsed parsed;
+
+    if (ui == NULL || !ui->forensics.request_submit) {
+        return;
+    }
+    ui->forensics.request_submit = false;
+    if (ui->forensics.query[0] == '\0') {
+        return;
+    }
+    if (!forensics_view_parse_query(
+            ui->forensics.query, ui->forensics.last_cursor, &parsed)) {
+        forensics_view_set_status(
+            &ui->forensics,
+            parsed.error[0] != '\0' ? parsed.error : "bad-args");
+        return;
+    }
+    if (parsed.empty) {
+        return;
+    }
+    forensics_view_query_history_push(&ui->forensics, ui->forensics.query);
+    forensics_view_set_status(&ui->forensics, "FIND path lands in PR 4");
+    ui->forensics.query[0] = '\0';
+    ui->forensics.query_history_index = 0u;
+}
+
+static void frontend_forensics_land_context_from_debug(
+    const frontend_debug_state *debug,
+    frontend_forensics_land_context *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (debug == NULL) {
+        return;
+    }
+    out->inspecting = debug->inspecting;
+    out->window_valid = debug->inspector_window_valid;
+    out->can_enter = debug->inspector_enabled != 0u && debug->inspector_window_valid;
+    out->focus_cycle = debug->inspector_focus_cycle;
+    out->oldest_cycle = debug->inspector_oldest_cycle;
+    out->newest_cycle = debug->inspector_newest_cycle;
+}
+
+/* PR 3: acknowledge Land UI without pushing INSPECTOR_LAND* intents (PR 5/6). */
+static void frontend_forensics_flush_land(frontend *ui)
+{
+    if (ui == NULL || !ui->forensics.request_land) {
+        return;
+    }
+    ui->forensics.request_land = false;
+    ui->forensics.request_land_enter = false;
+    ui->forensics.request_land_exact = false;
+    ui->forensics.pending_land_cycle = 0u;
+    forensics_view_set_status(&ui->forensics, "Land lands in PR 5");
+}
+
 static void frontend_push_inspector_intent(
     frontend *ui,
     frontend_debugger_intent_type type,
@@ -7543,6 +7605,12 @@ static void frontend_draw_misc_inspector(
         if (debug != NULL && debug->inspector_stopped_for_max) {
             nk_widget_disable_end(ctx);
         }
+    }
+
+    nk_layout_row_dynamic(ctx, 24.0f, 1);
+    if (nk_button_label(ctx, "Forensics...")) {
+        /* Inspector lives in the debugger; entry surface is debugger. */
+        frontend_open_forensics(ui, true, false);
     }
 
     if (debug == NULL || debug->inspector_enabled == 0u) {
@@ -7840,6 +7908,7 @@ frontend *frontend_create(platform_window *window)
     ui->limits.corner_px = 22;
     c64_layout_init(&ui->layout);
     help_view_init(&ui->help);
+    forensics_view_init(&ui->forensics);
     ui->show_disk_leds = true; /* matches app_options default until set_config_state */
 
     ui->led_green_texture = frontend_load_png_texture(
@@ -8184,6 +8253,9 @@ void frontend_destroy(frontend *ui)
         return;
     }
 
+    (void)forensics_view_close(&ui->forensics);
+    forensics_view_clear_transcript(&ui->forensics);
+
     if (ui->ctx != NULL) {
         nk_sdl_shutdown();
     }
@@ -8225,7 +8297,7 @@ void frontend_handle_event(frontend *ui, SDL_Event *event)
         return;
     }
 
-    if (help_view_is_open(&ui->help)) {
+    if (help_view_is_open(&ui->help) || forensics_view_is_open(&ui->forensics)) {
         nk_sdl_handle_event(event);
         return;
     }
@@ -8326,6 +8398,7 @@ bool frontend_routes_keyboard_to_c64(const frontend *ui)
 {
     return ui != NULL && ui->c64_input_active
         && !help_view_is_open(&ui->help)
+        && !forensics_view_is_open(&ui->forensics)
         && !frontend_any_dialog_open(ui);
 }
 
@@ -8364,7 +8437,8 @@ bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key)
     if (ui == NULL || key == NULL || key->type != SDL_KEYDOWN || key->repeat != 0) {
         return false;
     }
-    if (help_view_is_open(&ui->help) || frontend_any_dialog_open(ui)) {
+    if (help_view_is_open(&ui->help) || forensics_view_is_open(&ui->forensics) ||
+        frontend_any_dialog_open(ui)) {
         return false;
     }
     if (key->keysym.sym != SDLK_TAB || (key->keysym.mod & KMOD_ALT) == 0) {
@@ -10073,7 +10147,8 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         return;
     }
 
-    if (!ui_visible && !help_view_is_open(&ui->help)) {
+    if (!ui_visible && !help_view_is_open(&ui->help) &&
+        !forensics_view_is_open(&ui->forensics)) {
         if (ui->misc.inspector_thumb_down && !ui->misc.inspector_preview_has_film) {
             SDL_Rect dest;
             int fit_w = 0;
@@ -10097,7 +10172,8 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         return;
     }
 
-    if (debug_state == NULL && ui_visible && !help_view_is_open(&ui->help)) {
+    if (debug_state == NULL && ui_visible && !help_view_is_open(&ui->help) &&
+        !forensics_view_is_open(&ui->forensics)) {
         return;
     }
 
@@ -10106,6 +10182,18 @@ void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *
         help_view_render(ui->ctx, &ui->help, ui->help_font, width, height);
         nk_sdl_render(NK_ANTI_ALIASING_ON);
         frontend_draw_disk_activity_leds(ui, width, height, debug_state);
+        return;
+    }
+
+    if (forensics_view_is_open(&ui->forensics)) {
+        frontend_forensics_land_context land;
+        /* Full-window mode: no CRT behind (unlike Help overlay). */
+        frontend_forensics_land_context_from_debug(debug_state, &land);
+        forensics_view_apply_land_focus(&ui->forensics, &land);
+        forensics_view_render(ui->ctx, &ui->forensics, width, height, &land);
+        frontend_forensics_flush_query_submit(ui);
+        frontend_forensics_flush_land(ui);
+        nk_sdl_render(NK_ANTI_ALIASING_ON);
         return;
     }
 
@@ -10194,6 +10282,12 @@ void frontend_open_help(frontend *ui, bool paused_by_help)
     if (ui == NULL) {
         return;
     }
+    /* Mutual exclusion: leave Forensics without resuming (machine already paused). */
+    if (forensics_view_is_open(&ui->forensics)) {
+        (void)forensics_view_close(&ui->forensics);
+        /* Forensics already paused the machine; do not make Help auto-resume. */
+        paused_by_help = false;
+    }
     help_view_open(&ui->help, paused_by_help);
     frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_NONE);
 }
@@ -10209,6 +10303,151 @@ bool frontend_close_help(frontend *ui)
     paused_by_help = help_view_paused_by_help(&ui->help);
     help_view_close(&ui->help);
     return paused_by_help;
+}
+
+void frontend_open_forensics(
+    frontend *ui,
+    bool from_debugger,
+    bool crt_was_running)
+{
+    frontend_forensics_entry entry;
+
+    if (ui == NULL) {
+        return;
+    }
+    /* Mutual exclusion with Help: close without resuming. */
+    if (help_view_is_open(&ui->help)) {
+        help_view_close(&ui->help);
+    }
+    entry = from_debugger ? FRONTEND_FORENSICS_ENTRY_DEBUGGER :
+                            FRONTEND_FORENSICS_ENTRY_CRT;
+    forensics_view_open(&ui->forensics, entry, crt_was_running);
+    frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_NONE);
+    /* PR 3: do not push history-info on open (FIND path is PR 4). */
+}
+
+void frontend_close_forensics(frontend *ui)
+{
+    if (ui == NULL || !forensics_view_is_open(&ui->forensics)) {
+        return;
+    }
+    forensics_view_close(&ui->forensics);
+    ui->misc.active_tab = FRONTEND_MISC_TAB_INSPECTOR;
+    ui->misc.initialized = true;
+}
+
+bool frontend_forensics_is_open(const frontend *ui)
+{
+    return ui != NULL && forensics_view_is_open(&ui->forensics);
+}
+
+bool frontend_forensics_entered_from_crt(const frontend *ui)
+{
+    return ui != NULL &&
+        forensics_view_entry(&ui->forensics) == FRONTEND_FORENSICS_ENTRY_CRT;
+}
+
+bool frontend_forensics_crt_was_running(const frontend *ui)
+{
+    return ui != NULL && forensics_view_crt_was_running(&ui->forensics);
+}
+
+bool frontend_forensics_consume_close_request(frontend *ui)
+{
+    if (ui == NULL || !ui->forensics.request_close) {
+        return false;
+    }
+    ui->forensics.request_close = false;
+    return true;
+}
+
+bool frontend_forensics_consume_leave_debugger_request(frontend *ui)
+{
+    if (ui == NULL || !ui->forensics.request_leave_debugger) {
+        return false;
+    }
+    ui->forensics.request_leave_debugger = false;
+    return true;
+}
+
+bool frontend_forensics_consume_pause_request(frontend *ui)
+{
+    if (ui == NULL || !ui->forensics.request_host_pause) {
+        return false;
+    }
+    ui->forensics.request_host_pause = false;
+    return true;
+}
+
+bool frontend_handle_forensics_key(frontend *ui, const SDL_KeyboardEvent *key)
+{
+    if (ui == NULL || key == NULL || !forensics_view_is_open(&ui->forensics)) {
+        return false;
+    }
+    switch (key->keysym.sym) {
+        case SDLK_UP:
+            return forensics_view_query_history_prev(&ui->forensics);
+        case SDLK_DOWN:
+            return forensics_view_query_history_next(&ui->forensics);
+        case SDLK_TAB:
+            /* Always consume Tab in Forensics so focus does not escape. */
+            (void)forensics_view_autocomplete(&ui->forensics);
+            return true;
+        default:
+            break;
+    }
+    return false;
+}
+
+void frontend_forensics_apply_result(
+    frontend *ui,
+    frontend_history_verb verb,
+    const char *label,
+    const runtime_history_rpc_meta *meta,
+    const runtime_history_record *records,
+    size_t record_count,
+    const bool *anchor_matches)
+{
+    if (ui == NULL || !forensics_view_is_open(&ui->forensics)) {
+        return;
+    }
+    forensics_view_apply_result(
+        &ui->forensics,
+        (int)verb,
+        label,
+        meta,
+        records,
+        record_count,
+        anchor_matches);
+}
+
+void frontend_forensics_apply_status(
+    frontend *ui,
+    const runtime_history_status *status,
+    bool append_transcript_note)
+{
+    if (ui == NULL || !forensics_view_is_open(&ui->forensics)) {
+        return;
+    }
+    forensics_view_apply_status(&ui->forensics, status, append_transcript_note);
+}
+
+void frontend_forensics_apply_rpc_error(
+    frontend *ui,
+    runtime_history_rpc_status status)
+{
+    if (ui == NULL || !forensics_view_is_open(&ui->forensics)) {
+        return;
+    }
+    forensics_view_apply_rpc_error(&ui->forensics, status);
+}
+
+uint64_t frontend_forensics_last_cursor(const frontend *ui)
+{
+    if (ui == NULL) {
+        return 0u;
+    }
+    return ui->forensics.last_cursor;
 }
 
 bool frontend_help_is_open(const frontend *ui)

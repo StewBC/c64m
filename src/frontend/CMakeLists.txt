@@ -35,6 +35,8 @@ add_library(frontend STATIC
     frontend_joystick_input.h
     help_view.c
     help_view.h
+    forensics_view.c
+    forensics_view.h
     window_title.c
     window_title.h
     "${C64M_HELP_CONTENT}"
