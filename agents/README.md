@@ -34,6 +34,13 @@ mapper, analog SID, or full 1541 mechanics. See `known-gaps.md`.
 No hacks. The goal is to meet hardware so software that works on hardware (or
 VICE) also works here.
 
+## Design docs (proposals, not product-as-is)
+
+In-flight and historical design writeups live under [`design/`](../design/).
+Start at [`design/README.md`](../design/README.md) for the index (active /
+landed / abandoned). Do not treat design drafts as agent handoff truth —
+source and `agents/*.md` win when they disagree.
+
 ## User manual
 
 `manual/manual.md` is the user-facing manual. `tools/gen_help.py` compiles it
