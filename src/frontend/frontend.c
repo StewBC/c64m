@@ -7728,6 +7728,9 @@ static void frontend_draw_misc_inspector(
 
     nk_layout_row_dynamic(ctx, 24.0f, 1);
     if (nk_button_label(ctx, "Leave Inspector")) {
+        /* Stop scrub preview immediately so it cannot overwrite the NOW frame. */
+        ui->misc.inspector_thumb_down = false;
+        ui->misc.inspector_preview_has_film = false;
         frontend_push_inspector_intent(
             ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE, false, 0u);
     }
@@ -8570,6 +8573,15 @@ void frontend_inspector_set_preview_film(frontend *ui, bool has_film)
         return;
     }
     ui->misc.inspector_preview_has_film = has_film;
+}
+
+void frontend_inspector_clear_preview(frontend *ui)
+{
+    if (ui == NULL) {
+        return;
+    }
+    ui->misc.inspector_thumb_down = false;
+    ui->misc.inspector_preview_has_film = false;
 }
 
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame)

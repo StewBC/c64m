@@ -59,6 +59,7 @@ static bool runtime_history_append_commit_marker(
     uint32_t arg1);
 static void runtime_inspector_reattach_live_hooks(runtime *rt);
 static void runtime_inspector_publish_head(runtime *rt);
+static void runtime_inspector_publish_leave_frame(runtime *rt, uint64_t now_cycle);
 static void runtime_commit_turbo_mode(runtime *rt, uint32_t multiplier);
 
 /* Turbo mode helpers. Field name remains active_turbo_multiplier; values are
@@ -2418,9 +2419,10 @@ static void runtime_inspector_apply_max_policy(runtime *rt, bool entering, bool 
 
     if (entering) {
         if (rt->inspecting) {
+            uint64_t now_cycle = rt->inspector_now_cycle;
             runtime_inspector_leave(rt);
             runtime_inspector_reattach_live_hooks(rt);
-            runtime_inspector_publish_head(rt);
+            runtime_inspector_publish_leave_frame(rt, now_cycle);
             runtime_publish_state_changed(
                 rt,
                 RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE,
@@ -5332,6 +5334,26 @@ static void runtime_inspector_publish_head_dump(runtime *rt)
     (void)runtime_publish_debug_frame(rt);
 }
 
+/*
+ * After Leave restores NOW, present a CRT that matches live — not the last
+ * scrub film. Prefer the frame-ring still nearest at-or-before now_cycle
+ * (raster-correct); fall back to a VIC+RAM dump when film is missing.
+ */
+static void runtime_inspector_publish_leave_frame(runtime *rt, uint64_t now_cycle)
+{
+    if (rt == NULL) {
+        return;
+    }
+    runtime_publish_cpu_state(rt);
+    runtime_publish_machine_state(rt);
+    if (runtime_frame_ring_copy_by_cycle(
+            &rt->frame_ring, now_cycle, &rt->publish_frame)) {
+        (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
+        return;
+    }
+    (void)runtime_publish_debug_frame(rt);
+}
+
 static bool runtime_inspector_pause_at_live(runtime *rt)
 {
     if (rt == NULL || !rt->inspecting || !runtime_inspector_at_live(rt)) {
@@ -5606,15 +5628,17 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
         }
 
-        case RUNTIME_COMMAND_INSPECTOR_LEAVE:
+        case RUNTIME_COMMAND_INSPECTOR_LEAVE: {
+            uint64_t now_cycle = rt->inspector_now_cycle;
             runtime_inspector_leave(rt);
             runtime_inspector_reattach_live_hooks(rt);
-            runtime_inspector_publish_head(rt);
+            runtime_inspector_publish_leave_frame(rt, now_cycle);
             runtime_publish_state_changed(
                 rt, RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE, command->session_id);
             runtime_publish_inspector_mode(
                 rt, command->request_token, 1u, RUNTIME_INSPECTOR_ENTER_OK);
             break;
+        }
 
         case RUNTIME_COMMAND_INSPECTOR_LAND: {
             uint64_t oldest = 0u;

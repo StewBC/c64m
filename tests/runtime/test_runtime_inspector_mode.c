@@ -515,7 +515,82 @@ int main(void)
         expect_true("f12 live cycle", rt->machine.clock.cycle == cycles_now);
     }
 
-    /* Wipe CPs mid-session; leave still restores NOW. */
+    /* Land far back, then Leave: CRT must present NOW film (not the landed past). */
+    {
+        c64_frame film_now;
+        c64_frame presented;
+        uint64_t land_old = 0u;
+        uint64_t live = 0u;
+        uint64_t n = 0u;
+        int got_frame = 0;
+        clock_t t0;
+
+        runtime_inspector_timeline_bounds(rt, &land_old, &live, &n);
+        expect_true(
+            "film at now before leave",
+            runtime_frame_ring_copy_by_cycle(&rt->frame_ring, cycles_now, &film_now));
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "land past before leave",
+            runtime_client_inspector_land(client, land_old, token));
+        t0 = clock();
+        while (rt->machine.clock.cycle != land_old &&
+               (double)(clock() - t0) / CLOCKS_PER_SEC < 2.0) {
+        }
+        expect_true("landed past", rt->machine.clock.cycle == land_old);
+
+        drain(client);
+        token = runtime_client_alloc_request_token(client);
+        expect_true("exit", runtime_client_inspector_leave(client, token));
+        expect_true(
+            "exit event",
+            wait_inspector_mode(
+                client, token, &ev, &saw_reason, RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE));
+        expect_true("exit ok", ev.data.inspector_mode.status == RUNTIME_INSPECTOR_ENTER_OK);
+        expect_true("exit inform", saw_reason);
+        expect_true("mode live", ev.data.inspector_mode.mode == RUNTIME_INSPECTOR_MODE_LIVE);
+        expect_true("not inspecting", !runtime_inspector_in_inspect(rt));
+        expect_true("unsealed", !rt->machine.replay_sealed);
+        expect_true("still paused", rt->exec_state != RUNTIME_EXEC_RUNNING);
+        expect_true("pc restored", rt->machine.cpu.cpu.pc == pc_now);
+        expect_true("cycles restored", rt->machine.clock.cycle == cycles_now);
+        expect_true("ram restored", c64_debug_read_ram(&rt->machine, 0x0000) == ram_now);
+        expect_true("sid restored", rt->machine.sid.regs[0] == sid0_now);
+        expect_true("1541 pc restored", rt->machine.drive8.cpu.cpu.pc == drive_pc_now);
+        expect_true("cpu after exit", wait_cpu(client, &cpu));
+        expect_true("cpu pc now", cpu.pc == pc_now);
+
+        t0 = clock();
+        while ((double)(clock() - t0) / CLOCKS_PER_SEC < 2.0) {
+            if (runtime_client_poll_frame(client, &presented)) {
+                got_frame = 1;
+                break;
+            }
+        }
+        expect_true("leave published frame", got_frame);
+        /* Prefer film at NOW: cycle must be near enter NOW, not the landed past. */
+        expect_true(
+            "leave frame near now",
+            presented.machine_cycle >= land_old + (cycles_now - land_old) / 2u);
+        expect_true(
+            "leave frame not past land",
+            presented.machine_cycle != land_old || land_old == cycles_now);
+    }
+
+    /* Wipe CPs mid-session after leave; re-enter path covered above. */
+    {
+        /* Re-enter so wipe/leave-fail coverage below still runs. */
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "re-enter after leave crt check",
+            runtime_client_inspector_enter(client, token));
+        expect_true(
+            "re-enter event",
+            wait_inspector_mode(
+                client, token, &ev, NULL, RUNTIME_STATE_CHANGED_INSPECTOR_ENTER));
+        expect_true("re-inspecting", runtime_inspector_in_inspect(rt));
+    }
+
     runtime_inspector_on_history_invalidate(rt);
     expect_true("cps cleared", runtime_inspector_checkpoint_count(rt) == 0u);
     token = runtime_client_alloc_request_token(client);
@@ -526,24 +601,13 @@ int main(void)
     expect_true("still inspecting after fail", runtime_inspector_in_inspect(rt));
 
     token = runtime_client_alloc_request_token(client);
-    expect_true("exit", runtime_client_inspector_leave(client, token));
+    expect_true("exit after wipe", runtime_client_inspector_leave(client, token));
     expect_true(
-        "exit event",
+        "exit after wipe event",
         wait_inspector_mode(
             client, token, &ev, &saw_reason, RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE));
-    expect_true("exit ok", ev.data.inspector_mode.status == RUNTIME_INSPECTOR_ENTER_OK);
-    expect_true("exit inform", saw_reason);
-    expect_true("mode live", ev.data.inspector_mode.mode == RUNTIME_INSPECTOR_MODE_LIVE);
-    expect_true("not inspecting", !runtime_inspector_in_inspect(rt));
-    expect_true("unsealed", !rt->machine.replay_sealed);
-    expect_true("still paused", rt->exec_state != RUNTIME_EXEC_RUNNING);
-    expect_true("pc restored", rt->machine.cpu.cpu.pc == pc_now);
-    expect_true("cycles restored", rt->machine.clock.cycle == cycles_now);
-    expect_true("ram restored", c64_debug_read_ram(&rt->machine, 0x0000) == ram_now);
-    expect_true("sid restored", rt->machine.sid.regs[0] == sid0_now);
-    expect_true("1541 pc restored", rt->machine.drive8.cpu.cpu.pc == drive_pc_now);
-    expect_true("cpu after exit", wait_cpu(client, &cpu));
-    expect_true("cpu pc now", cpu.pc == pc_now);
+    expect_true("exit after wipe ok", ev.data.inspector_mode.status == RUNTIME_INSPECTOR_ENTER_OK);
+    expect_true("exit after wipe live", !runtime_inspector_in_inspect(rt));
 
     drain(client);
     expect_true(

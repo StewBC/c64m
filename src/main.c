@@ -3571,6 +3571,9 @@ static void poll_runtime_events(
             control_post_state_changed(control, &event);
         }
         update_debug_state_from_event(debug_state, &event);
+        if (ui != NULL && debug_state != NULL && !debug_state->inspecting) {
+            frontend_inspector_clear_preview(ui);
+        }
         control_event_latch_note(event_latch, event.type);
         if (deferred_table != NULL) {
             size_t di;

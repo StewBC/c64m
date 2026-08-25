@@ -300,6 +300,8 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
 /* True while the Inspector thumb is down (film/pink preview). */
 bool frontend_inspector_preview(const frontend *ui, uint64_t *out_cycle);
 void frontend_inspector_set_preview_film(frontend *ui, bool has_film);
+/* Drop scrub preview so Leave / mode exit cannot keep showing a past still. */
+void frontend_inspector_clear_preview(frontend *ui);
 void frontend_render(frontend *ui, bool ui_visible, const frontend_debug_state *debug_state);
 /* Force disk activity LEDs off (e.g. machine reset). */
 void frontend_clear_disk_activity_leds(frontend *ui);
