@@ -399,6 +399,39 @@ int main(void)
             expect_true("hst1 unchanged", hist.record_count == hst1_before);
         }
 
+        /* Exact land: checkpoint <= mid then reexecute to mid. */
+        {
+            uint64_t mid = old + (live - old) / 2u;
+            if (mid <= old) {
+                mid = old + 1u;
+            }
+            if (mid >= live) {
+                mid = live > old + 1u ? live - 1u : old;
+            }
+            token = runtime_client_alloc_request_token(client);
+            expect_true(
+                "land_to_cycle",
+                runtime_client_inspector_land_to_cycle(client, mid, token));
+            {
+                clock_t t0 = clock();
+                while (rt->machine.clock.cycle != mid &&
+                       (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
+                }
+            }
+            expect_true("cpu after exact", wait_cpu(client, &cpu));
+            if (rt->machine.clock.cycle != mid) {
+                fprintf(
+                    stderr,
+                    "land_to_cycle got=%llu want=%llu old=%llu live=%llu\n",
+                    (unsigned long long)rt->machine.clock.cycle,
+                    (unsigned long long)mid,
+                    (unsigned long long)old,
+                    (unsigned long long)live);
+            }
+            expect_true("exact cycle", rt->machine.clock.cycle == mid);
+            expect_true("sealed after exact", rt->machine.replay_sealed);
+        }
+
         {
             uint64_t c0 = rt->machine.clock.cycle;
             clock_t t0;

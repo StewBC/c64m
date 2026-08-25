@@ -90,6 +90,9 @@ void runtime_inspector_apply_logged_inputs(
 void runtime_inspector_apply_live_seal(runtime *rt);
 bool runtime_inspector_restore_live(runtime *rt);
 bool runtime_inspector_land(runtime *rt, uint64_t cycle);
+/* Exact land: nearest checkpoint <= target then sealed reexecute_to(target).
+   One helper / one publish at command end — do not split into two UI RPCs. */
+bool runtime_inspector_land_to_cycle(runtime *rt, uint64_t target_cycle);
 bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle);
 bool runtime_inspector_frame_step(runtime *rt, int direction);
 runtime_inspector_mode runtime_inspector_current_mode(const runtime *rt);

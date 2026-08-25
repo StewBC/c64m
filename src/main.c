@@ -4991,6 +4991,13 @@ static void dispatch_debugger_intents(
                 break;
             }
 
+            case FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE: {
+                uint64_t token = runtime_client_alloc_request_token(client);
+                sent = runtime_client_inspector_land_to_cycle(
+                    client, intent.inspector_cycle, token);
+                break;
+            }
+
             case FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP: {
                 uint64_t token = runtime_client_alloc_request_token(client);
                 sent = runtime_client_inspector_frame_step(

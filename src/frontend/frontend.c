@@ -7516,26 +7516,21 @@ static void frontend_push_inspector_intent(
     frontend_push_inspector_intent_ex(ui, type, enabled, cycle, true);
 }
 
-/* PR 5: quantized Land before only. Exact (LAND_TO_CYCLE) is PR 6. */
 static void frontend_forensics_flush_land(frontend *ui)
 {
     uint64_t cycle;
     bool need_enter;
+    bool exact;
+    frontend_debugger_intent_type land_type;
 
     if (ui == NULL || !ui->forensics.request_land) {
         return;
     }
     cycle = ui->forensics.pending_land_cycle;
     need_enter = ui->forensics.request_land_enter;
-    if (ui->forensics.request_land_exact) {
-        /* Land exact button is disabled until PR 6; reject any stray request. */
-        ui->forensics.request_land = false;
-        ui->forensics.request_land_enter = false;
-        ui->forensics.request_land_exact = false;
-        ui->forensics.pending_land_cycle = 0u;
-        forensics_view_set_status(&ui->forensics, "Land exact lands in PR 6");
-        return;
-    }
+    exact = ui->forensics.request_land_exact;
+    land_type = exact ? FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE :
+                        FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND;
     ui->forensics.request_land = false;
     ui->forensics.request_land_enter = false;
     ui->forensics.request_land_exact = false;
@@ -7543,15 +7538,13 @@ static void frontend_forensics_flush_land(frontend *ui)
         /* ENTER then land must stay ordered; do not coalesce over a prior land. */
         frontend_push_inspector_intent_ex(
             ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER, false, 0u, false);
-        frontend_push_inspector_intent_ex(
-            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND, false, cycle, false);
+        frontend_push_inspector_intent_ex(ui, land_type, false, cycle, false);
     } else {
-        frontend_push_inspector_intent(
-            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND, false, cycle);
+        frontend_push_inspector_intent(ui, land_type, false, cycle);
     }
     ui->forensics.land_requested_cycle = cycle;
     ui->forensics.land_awaiting_focus = true;
-    ui->forensics.land_awaiting_exact = false;
+    ui->forensics.land_awaiting_exact = exact;
 }
 
 static void frontend_format_inspector_window_reason(

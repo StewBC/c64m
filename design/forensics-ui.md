@@ -852,16 +852,19 @@ ship the broken intermediate and patch later.
   dispatch, `main.c` intent, Forensics dual land buttons, inspector tests
 - **Dependencies:** PR 5
 - **Checklist:**
-  - [ ] `runtime_inspector_land_to_cycle` (checkpoint ≤ N + sealed reexecute_to; one publish)
-  - [ ] Client/command/intent `LAND_TO_CYCLE`
-  - [ ] Forensics **Land before** (keep PR 5) + **Land exact**
-  - [ ] Inspect & Land confirm for either when live + can_enter
-  - [ ] Same success leave as PR 5
-  - [ ] Slider stays quantized `land` only
-  - [ ] Partial failure → status with actual `focus_cycle`
-  - [ ] Update this design checklist before commit
+  - [x] `runtime_inspector_land_to_cycle` (checkpoint ≤ N + sealed reexecute_to; one publish)
+  - [x] Client/command/intent `LAND_TO_CYCLE`
+  - [x] Forensics **Land before** (keep PR 5) + **Land exact**
+  - [x] Inspect & Land confirm for either when live + can_enter
+  - [x] Same success leave as PR 5
+  - [x] Slider stays quantized `land` only
+  - [x] Partial failure → status with actual `focus_cycle`
+  - [x] Update this design checklist before commit
 - **Description:** Lift a2m helper pattern. Atomic nearest-checkpoint + sealed
   reexecute without intermediate UI publish.
+- **Notes (PR 6):** Worker helper + `RUNTIME_COMMAND_INSPECTOR_LAND_TO_CYCLE`;
+  thread publishes once even on partial. Forensics Land exact re-enabled;
+  flush picks LAND vs LAND_TO_CYCLE. Slider release remains quantized LAND.
 
 ### PR 7 — Token-aware copy + agents handoff
 

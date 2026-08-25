@@ -5649,6 +5649,21 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
         }
 
+        case RUNTIME_COMMAND_INSPECTOR_LAND_TO_CYCLE:
+            if (rt->inspecting) {
+                /* Publish once after exact land even on partial (best-effort focus). */
+                (void)runtime_inspector_land_to_cycle(
+                    rt, command->data.inspector_land_to_cycle.cycle);
+                runtime_inspector_publish_head(rt);
+                runtime_publish_state_changed(
+                    rt,
+                    RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
+                    command->session_id);
+            } else {
+                runtime_publish_error(rt, "not inspecting");
+            }
+            break;
+
         case RUNTIME_COMMAND_INSPECTOR_FRAME_STEP:
             if (rt->inspecting) {
                 if (runtime_inspector_frame_step(

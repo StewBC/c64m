@@ -2159,16 +2159,21 @@ void forensics_view_render(
             nk_widget_disable_end(ctx);
         }
         nk_layout_row_push(ctx, 100.0f);
-        /* Land exact (land_to_cycle) ships in PR 6. */
-        nk_widget_disable_begin(ctx);
-        (void)nk_button_label(ctx, "Land exact");
-        nk_widget_disable_end(ctx);
+        if (state->has_land_selection) {
+            if (nk_button_label(ctx, "Land exact")) {
+                forensics_try_land_button(state, land, true);
+            }
+        } else {
+            nk_widget_disable_begin(ctx);
+            (void)nk_button_label(ctx, "Land exact");
+            nk_widget_disable_end(ctx);
+        }
         nk_layout_row_end(ctx);
 
         nk_layout_row_dynamic(ctx, hint_h, 1);
         nk_label(
             ctx,
-            "Opt+R/Close return to entry. Land before/F9 -> debugger (paused). Tab completes keys. Double-click id=/cyc=/pc=$ to copy.",
+            "Opt+R/Close return to entry. Land/F9 -> debugger (paused). Tab completes keys. Double-click id=/cyc=/pc=$ to copy.",
             NK_TEXT_LEFT);
 
         ctx->style.window.background = fr_bg;
