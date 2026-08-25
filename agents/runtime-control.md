@@ -78,12 +78,13 @@ Recipes: `using-c64m.md`.
 
 Forensic instruction log for the main 6510. Answers "who wrote `$22` to
 `$D020`". It does **not** restore the machine. Inspector is a different
-product.
+product. The in-emulator UI for FIND is **Forensics** (`frontend-debugger.md`);
+HST1 remains the data name.
 
 Runtime owns `runtime_history`. Default 256 MiB; `[debug] history_memory_mb`
 / `--history-memory` accept 0 (off) or 16..4096. Allocation failure is
 nonfatal and visible through `history-info`. Observer installed only while
-available and recording.
+available and recording. Inspector Record does **not** arm or stop HST1.
 
 Resets retain records and advance `timeline`. Successful state load clears
 the arena and advances `epoch`. Save-state never serializes recorder state.
@@ -91,7 +92,10 @@ FIND/NEXT/READ require an explicitly paused runtime. One cursor **per
 session**; mutation (run/step/reset/load/poke/media/history-clear) stamps
 cursors stale (`state-changed` then re-FIND). Pages are HST1 in the RPC
 pool (`runtime_history_wire.h`: 24-byte header, 48-byte record, 8-byte
-accesses). Decoder: `tools/c64_control_client.py`.
+accesses). Encode and decode: `runtime_history_wire_*`. Find-option grammar:
+`runtime_history_query_parse.*` (duplicate keys last-wins; public key/access
+tables). Python: `tools/c64_control_client.py` (`Ctl.decode_hst1`). Forensics
+reuses default UI session `0` and closes the history cursor on leave.
 
 ## Frame ring and VIC ring
 
@@ -132,7 +136,7 @@ leave-max; turbo 1 restores Record into an empty window.
 |------|---------|
 | Record | Opt-in checkpoint + input log (+ film if the frame-ring budget is > 0) |
 | Inspect | Mode: the live `c64_t` **is** the past. Views keep talking to it. |
-| Land | Load nearest checkpoint `<=` cycle. Far right = restore NOW. |
+| Land | Quantized: nearest checkpoint `<=` cycle. Exact: `land_to_cycle` (checkpoint + sealed reexecute). Far right / live = restore NOW. |
 | Film | Indexed8 frame-ring preview. Missing stills are **pink**, never invented. |
 | Sealed | During re-execute: CPU observer off, mem-access CB off, no frame-ring push, no host audio, no host media write-through |
 | NOW | Blob of live state taken on enter. Leave restores it, paused. |

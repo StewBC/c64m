@@ -8,8 +8,9 @@ From the repository root:
 ctest --test-dir build --output-on-failure
 ```
 
-77 tests are registered in the root `CMakeLists.txt`. Do not treat an older
-count in a comment or changelog as current.
+About 80 tests are registered in the root `CMakeLists.txt` (count drifts as
+targets land). Do not treat an older count in a comment or changelog as
+current.
 
 ### Asset SKIP, not fail
 
@@ -41,8 +42,8 @@ not a regression.
   `history_control_integration`, `run_to_raster_control_integration`,
   `guarded_breakpoint_control_integration`, `frame_ring_control_integration`,
   `vic_ring_control_integration`, `inspector_control_integration`
-- Frontend: `frontend_input`, `frontend_joystick`, `help_view`, `window_title`,
-  `crt_renderer`, `disasm_pc_lock`
+- Frontend: `frontend_input`, `frontend_joystick`, `help_view`, `forensics_view`,
+  `window_title`, `crt_renderer`, `disasm_pc_lock`
 - Tools/util: assembler tests, `disasm_6502`, `symbol_table`, `t64`, `crt`,
   `basic_v2`, `paste_parser`
 

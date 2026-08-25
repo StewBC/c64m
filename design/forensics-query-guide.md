@@ -262,7 +262,8 @@ Illustrative addresses use `$D020` (C64 VIC register) instead of Apple softswitc
 - Data: static verb table in `forensics_view.c`; find keys/access from `runtime_history_query_parse`. Find-key help built from `runtime_history_find_option_keys()`. `direction` / `from` enum lists can stay local or sit next to the verb table. `from=` still unique-completes `oldest` / `newest`; a numeric `from=` value is an open id.
 - Rebuild `state->query`; on any change set `query_rewrite_pending` (caret-to-end).
 - Tests in `tests/frontend/test_forensics_view.c`: table of (input, after-Tab line, status substring) from this guide; implicit FIND rejected on Enter; `info foo` rejected. Headless caret-at-end on a **verb-first** rewrite (`find ad` -> `find address=`, not bare `ad`).
-- Agents: fold the query-line rule into `agents/frontend-debugger.md` when PR 4/7 lands. Manual Forensics query table waits for parent **PR 8**.
+- Agents: query-line rules are in `agents/frontend-debugger.md` (PR 7). Manual
+  Forensics query table waits for parent **PR 8**.
 - ASCII-only status strings.
 
 ---

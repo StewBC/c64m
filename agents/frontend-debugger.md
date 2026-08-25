@@ -4,8 +4,8 @@
 
 `src/frontend/`, integration in `src/main.c`, runtime-facing APIs in
 `src/runtime/runtime_client.h`, platform in `src/platform/`. Automated
-coverage: `frontend_input`, `frontend_joystick`, `help_view`, `window_title`,
-`crt_renderer`, `disasm_pc_lock`. Most Nuklear UI is manual smoke.
+coverage: `frontend_input`, `frontend_joystick`, `help_view`, `forensics_view`,
+`window_title`, `crt_renderer`, `disasm_pc_lock`. Most Nuklear UI is manual smoke.
 
 SDL events become frontend intents, intents become `runtime_client` commands,
 and `poll_runtime_events()` updates copied debugger state. A new UI action
@@ -34,7 +34,37 @@ cycle lines. Thumb-down is film preview or pink; release lands. Window
 headers use dark cobalt while Inspecting; do not tint the window background.
 
 Product rules and control honesty: `runtime-control.md`. Do not walk HST1
-to place the slider.
+to place the slider. Inspector Record does **not** arm or stop HST1.
+
+## Forensics
+
+Full-window HST1 FIND surface (`forensics_view.*`), not a Misc tab and not a
+Help-style CRT overlay. **Forensics...** on the Inspector tab and **Opt+R**
+open it (pauses on enter). **Opt+R** / **Close** return to the entry surface
+(CRT restores prior run state if it was running; debugger stays paused).
+**F9** from Forensics always opens the debugger paused. **Esc** does not
+leave. Mutually exclusive with Help.
+
+Query line → structured `HISTORY_*` intents → `main.c` claim/decode →
+transcript (`session_id = 0`; `history_close` on exit). Find options use
+shared `runtime_history_parse_find_options` / public key tables. The query
+line is **verb-first** (`find` / `next` / `read` / `info`); bare `key=value`
+is not FIND (status = verb help, same string as Tab). Control-port
+`history-find` still accepts bare keys. Tab is a grammar walker:
+unique-complete or ASCII slot help; caret at end unique-expands every token
+(explicit `edit.cursor` after rewrite). Transcript scroll is kept in
+`transcript_scroll_y` and restored on re-open (Help `section_scroll_y`
+pattern); Clear view resets it and does not call `history-clear`.
+
+**Land before** / **Land exact** on a selected hit: quantized checkpoint
+`<=` N vs `runtime_inspector_land_to_cycle`. Live + can enter → **Inspect &
+Land** confirm then ENTER+land; soft-fail without checkpoints. Successful
+land (any Inspect focus update used for the land status strip) leaves
+Forensics like F9 (debugger paused; abandon CRT resume latch) and selects
+Misc → Inspector. Cancel / soft-fail / incomplete land stay in Forensics.
+Click selects a logical entry/block; **Copy** uses the full unwrapped text.
+Double-click `id=` / `cyc=` / `pc=$...` copies that token. UI strings are
+ASCII-only. User manual for Forensics is still pending (design PR 8).
 
 ## Input
 

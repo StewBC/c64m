@@ -32,11 +32,12 @@ the bottom.
 | Drive CPU in HST1 | Main 6510 only. |
 | Memory fill / move / named range diff | Debugger has get/set memory and HST1. Classic monitor fill/move/backup-diff is not a product verb. |
 | Second control client | One TCP client. Co-op is windowed UI + one script (`using-c64m.md`). |
-| UI history browser | HST1 is wire + tests; no in-emulator tape browser. |
 
 Inspector itself is shipped (opt-in `--inspector` / `[debug] inspector`, Misc
-Inspector tab, `enter-inspector` / `leave-inspector`). File snapshots
-(`save-state` / `load-state`) are a different product.
+Inspector tab, `enter-inspector` / `leave-inspector`). Forensics (Opt+R /
+Inspector **Forensics...**) is the in-emulator HST1 FIND transcript; user
+manual for it is still pending. File snapshots (`save-state` / `load-state`)
+are a different product.
 
 ## Tests and oracles
 

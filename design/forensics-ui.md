@@ -874,13 +874,17 @@ ship the broken intermediate and patch later.
   `agents/known-gaps.md` (remove UI history browser gap), `design/README.md`
 - **Dependencies:** PR 4–6
 - **Checklist:**
-  - [ ] Double-click token copy
-  - [ ] Agents notes reflect Forensics as product-as-is
-  - [ ] known-gaps UI history browser row cleared / rewritten
-  - [ ] design index: still **active** until manual lands, or note pending manual
-  - [ ] Update this design checklist before commit
+  - [x] Double-click token copy
+  - [x] Agents notes reflect Forensics as product-as-is
+  - [x] known-gaps UI history browser row cleared / rewritten
+  - [x] design index: still **active** until manual lands, or note pending manual
+  - [x] Update this design checklist before commit
 - **Description:** Polish + promote durable rules into `agents/`. **No**
   `manual/manual.md` in this PR (final pass is PR 8).
+- **Notes (PR 7):** Token hit-test / double-click copy already in
+  `forensics_view` (lifted with the shell). Agents handoff updated;
+  `known-gaps` UI history browser row removed; design index stays **active**
+  until PR 8 manual.
 
 ### PR 8 — Manual + help
 
