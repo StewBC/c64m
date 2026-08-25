@@ -7467,24 +7467,12 @@ static void frontend_forensics_land_context_from_debug(
     out->newest_cycle = debug->inspector_newest_cycle;
 }
 
-/* PR 3: acknowledge Land UI without pushing INSPECTOR_LAND* intents (PR 5/6). */
-static void frontend_forensics_flush_land(frontend *ui)
-{
-    if (ui == NULL || !ui->forensics.request_land) {
-        return;
-    }
-    ui->forensics.request_land = false;
-    ui->forensics.request_land_enter = false;
-    ui->forensics.request_land_exact = false;
-    ui->forensics.pending_land_cycle = 0u;
-    forensics_view_set_status(&ui->forensics, "Land lands in PR 5");
-}
-
-static void frontend_push_inspector_intent(
+static void frontend_push_inspector_intent_ex(
     frontend *ui,
     frontend_debugger_intent_type type,
     bool enabled,
-    uint64_t cycle)
+    uint64_t cycle,
+    bool coalesce_land)
 {
     size_t next;
     size_t i;
@@ -7492,10 +7480,16 @@ static void frontend_push_inspector_intent(
     if (ui == NULL) {
         return;
     }
-    if (type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND) {
+    if (coalesce_land &&
+        (type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND ||
+         type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE)) {
         i = ui->intent_read;
         while (i != ui->intent_write) {
-            if (ui->intents[i].type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND) {
+            if (ui->intents[i].type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND ||
+                ui->intents[i].type ==
+                    FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE) {
+                /* Latest land wins; keep the requested land flavor. */
+                ui->intents[i].type = type;
                 ui->intents[i].inspector_cycle = cycle;
                 return;
             }
@@ -7511,6 +7505,53 @@ static void frontend_push_inspector_intent(
     ui->intents[ui->intent_write].enabled = enabled;
     ui->intents[ui->intent_write].inspector_cycle = cycle;
     ui->intent_write = next;
+}
+
+static void frontend_push_inspector_intent(
+    frontend *ui,
+    frontend_debugger_intent_type type,
+    bool enabled,
+    uint64_t cycle)
+{
+    frontend_push_inspector_intent_ex(ui, type, enabled, cycle, true);
+}
+
+/* PR 5: quantized Land before only. Exact (LAND_TO_CYCLE) is PR 6. */
+static void frontend_forensics_flush_land(frontend *ui)
+{
+    uint64_t cycle;
+    bool need_enter;
+
+    if (ui == NULL || !ui->forensics.request_land) {
+        return;
+    }
+    cycle = ui->forensics.pending_land_cycle;
+    need_enter = ui->forensics.request_land_enter;
+    if (ui->forensics.request_land_exact) {
+        /* Land exact button is disabled until PR 6; reject any stray request. */
+        ui->forensics.request_land = false;
+        ui->forensics.request_land_enter = false;
+        ui->forensics.request_land_exact = false;
+        ui->forensics.pending_land_cycle = 0u;
+        forensics_view_set_status(&ui->forensics, "Land exact lands in PR 6");
+        return;
+    }
+    ui->forensics.request_land = false;
+    ui->forensics.request_land_enter = false;
+    ui->forensics.request_land_exact = false;
+    if (need_enter) {
+        /* ENTER then land must stay ordered; do not coalesce over a prior land. */
+        frontend_push_inspector_intent_ex(
+            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_ENTER, false, 0u, false);
+        frontend_push_inspector_intent_ex(
+            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND, false, cycle, false);
+    } else {
+        frontend_push_inspector_intent(
+            ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND, false, cycle);
+    }
+    ui->forensics.land_requested_cycle = cycle;
+    ui->forensics.land_awaiting_focus = true;
+    ui->forensics.land_awaiting_exact = false;
 }
 
 static void frontend_format_inspector_window_reason(

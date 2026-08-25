@@ -829,17 +829,21 @@ ship the broken intermediate and patch later.
   `INSPECTOR_LAND`; main leave-debugger request; tests
 - **Dependencies:** PR 4
 - **Checklist:**
-  - [ ] Already inspecting → quantized `INSPECTOR_LAND` immediately
-  - [ ] Live + `can_enter` → **Inspect & Land** confirm → ENTER then LAND
-  - [ ] Soft-fail when cannot enter
-  - [ ] Status from post-land `inspector_focus_cycle` vs requested
-  - [ ] **Successful land → leave Forensics → debugger paused + Misc → Inspector**
-  - [ ] Soft-fail / Cancel → stay in Forensics
-  - [ ] Opt+R / Close leave rules unchanged
-  - [ ] No slider tracking
-  - [ ] Update this design checklist before commit
+  - [x] Already inspecting → quantized `INSPECTOR_LAND` immediately
+  - [x] Live + `can_enter` → **Inspect & Land** confirm → ENTER then LAND
+  - [x] Soft-fail when cannot enter
+  - [x] Status from post-land `inspector_focus_cycle` vs requested
+  - [x] **Successful land → leave Forensics → debugger paused + Misc → Inspector**
+  - [x] Soft-fail / Cancel → stay in Forensics
+  - [x] Opt+R / Close leave rules unchanged
+  - [x] No slider tracking
+  - [x] Update this design checklist before commit
 - **Description:** Quantized land with leave-on-success from day one (do not
   ship “stay in Forensics after land” then fix later).
+- **Notes (PR 5):** Unstubbed `frontend_forensics_flush_land` with
+  `push_inspector_intent_ex` so Inspect & Land keeps ENTER then LAND ordered.
+  Land exact button disabled until PR 6 (`land_to_cycle`). Leave-on-success
+  already consumed in `main` via `request_leave_debugger`.
 
 ### PR 6 — Land exact (`land_to_cycle`)
 
