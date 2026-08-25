@@ -798,22 +798,29 @@ ship the broken intermediate and patch later.
   `tests/frontend/test_forensics_view.c`, [`forensics-query-guide.md`](forensics-query-guide.md)
 - **Dependencies:** PR 2; PR 1 required (key table)
 - **Checklist:**
-  - [ ] Structured history fields on `frontend_debugger_intent`
-  - [ ] Parse in frontend via `runtime_history_parse_find_options`
-  - [ ] **Always verb-first**; no implicit FIND
-  - [ ] Tab walker: unique-complete / slot help; whole-line unique-expand at EOL
-  - [ ] **Caret at end** after any rewrite (explicit `edit.cursor`)
-  - [ ] `main.c` pending-token RPC state; one in-flight Forensics history request
-  - [ ] Handle HISTORY RESULT/STATUS when token matches; claim → decode → transcript
-  - [ ] `session_id = 0`; `history_close` on Forensics exit
-  - [ ] Status-strip error mapping (parity with control)
-  - [ ] Click line/block selection + Copy button
-  - [ ] Headless tests: query-guide table + caret-at-end on verb-first rewrite
-  - [ ] Control-port `history-find` bare keys **unchanged**
-  - [ ] Update this design + query-guide checklists before commit
+  - [x] Structured history fields on `frontend_debugger_intent`
+  - [x] Parse in frontend via `runtime_history_parse_find_options`
+  - [x] **Always verb-first**; no implicit FIND
+  - [x] Tab walker: unique-complete / slot help; whole-line unique-expand at EOL
+  - [x] **Caret at end** after any rewrite (explicit `edit.cursor`)
+  - [x] `main.c` pending-token RPC state; one in-flight Forensics history request
+  - [x] Handle HISTORY RESULT/STATUS when token matches; claim → decode → transcript
+  - [x] `session_id = 0`; `history_close` on Forensics exit
+  - [x] Status-strip error mapping (parity with control)
+  - [x] Click line/block selection + Copy button
+  - [x] Headless tests: query-guide table + caret-at-end on verb-first rewrite
+  - [x] Control-port `history-find` bare keys **unchanged**
+  - [x] Update this design + query-guide checklists before commit
 - **Description:** End-to-end FIND transcript with the final query-line language
   (not a temporary last-token-only Tab). See
   [`forensics-query-guide.md`](forensics-query-guide.md).
+- **Notes (PR 4):** Wired FIND/NEXT/READ/INFO/CLOSE through `frontend_push_history_intent`
+  → `dispatch_debugger_intents` → `runtime_client_history_*` (`session_id = 0`).
+  `main.c` owns one in-flight `forensics_history_rpc`; matching STATUS/RESULT events
+  claim/decode into the transcript. Open pushes empty-label INFO (status strip only);
+  leave calls `history_close`. Verb-first Tab walker + caret-at-end already in
+  `forensics_view` from PR 3; headless query-guide tests cover them. Land remains
+  stubbed for PR 5.
 
 ### PR 5 — Land before (quantized) + leave on success
 

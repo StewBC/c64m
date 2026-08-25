@@ -4,7 +4,7 @@
 |-------|-------|
 | **Author** | swessels |
 | **Date** | 2026-08-25 |
-| **Status** | Draft (active) |
+| **Status** | Shipped with PR 4 (walker + FIND path) |
 | **Parent** | [`forensics-ui.md`](forensics-ui.md) |
 | **Canonical path** | [`design/forensics-query-guide.md`](forensics-query-guide.md) |
 | **Origin** | Port of a2m `design/forensics-query-guide.md`; adapted for c64m |
@@ -283,7 +283,11 @@ Illustrative addresses use `$D020` (C64 VIC register) instead of Apple softswitc
 | PR (parent plan) | Role |
 |------------------|------|
 | 1 | Shared find-option parse + key/access tables (last wins) |
-| 4 | FIND/NEXT/READ path **and** this verb-first Tab walker + caret-to-end |
+| 4 | FIND/NEXT/READ path **and** this verb-first Tab walker + caret-to-end (**shipped**) |
 | 8 | Manual / help (final); documents the query line for users |
 
 Do not land a temporary last-token-only Tab and replace it later.
+
+**Notes (PR 4):** Walker + caret-at-end live in `forensics_view_autocomplete` /
+`frontend_handle_forensics_key`; Enter submits via `frontend_forensics_flush_query_submit`
+→ HISTORY intents → `main.c` claim/decode. Control-port bare `key=value` FIND unchanged.

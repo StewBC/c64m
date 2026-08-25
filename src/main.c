@@ -11,6 +11,7 @@
 #include "platform_audio.h"
 #include "runtime.h"
 #include "runtime_client.h"
+#include "runtime_history_wire.h"
 #include "runtime_inspector.h"
 
 #include <SDL2/SDL.h>
@@ -3533,6 +3534,11 @@ static void poll_symbols_into(
     free(symbols);
 }
 
+static void forensics_handle_history_event(
+    runtime_client *client,
+    frontend *ui,
+    const runtime_event *event);
+
 static void poll_runtime_events(
     runtime_client *client,
     frontend *ui,
@@ -3674,6 +3680,9 @@ static void poll_runtime_events(
                     }
                 }
             }
+        } else if (event.type == RUNTIME_EVENT_HISTORY_STATUS_RESPONSE ||
+                   event.type == RUNTIME_EVENT_HISTORY_RESULT_RESPONSE) {
+            forensics_handle_history_event(client, ui, &event);
         }
     }
 
@@ -3749,12 +3758,187 @@ static void close_help(frontend *ui, runtime_client *client, const frontend_debu
     }
 }
 
+/* One in-flight Forensics HISTORY RPC (mirrors RUNTIME_HISTORY_RPC_REQUEST_ACTIVE). */
+typedef struct forensics_history_rpc {
+    bool pending;
+    uint64_t token;
+    frontend_history_verb verb;
+    char label[160];
+} forensics_history_rpc;
+
+static forensics_history_rpc g_forensics_history_rpc;
+
+static void forensics_history_rpc_clear(void)
+{
+    g_forensics_history_rpc.pending = false;
+    g_forensics_history_rpc.token = 0u;
+    g_forensics_history_rpc.verb = FRONTEND_HISTORY_VERB_NONE;
+    g_forensics_history_rpc.label[0] = '\0';
+}
+
+static void forensics_history_close_cursor(runtime_client *client, frontend *ui)
+{
+    uint64_t token;
+    uint64_t cursor;
+
+    if (client == NULL) {
+        return;
+    }
+    if (g_forensics_history_rpc.pending) {
+        (void)runtime_client_cancel_rpc(client, g_forensics_history_rpc.token);
+        forensics_history_rpc_clear();
+    }
+    cursor = frontend_forensics_last_cursor(ui);
+    token = runtime_client_alloc_request_token(client);
+    if (token == 0u) {
+        return;
+    }
+    /* Fire-and-forget: clear UI session cursor; do not session_close default. */
+    (void)runtime_client_history_close(client, 0u, cursor, token);
+}
+
+static bool forensics_history_begin_rpc(
+    runtime_client *client,
+    frontend *ui,
+    frontend_history_verb verb,
+    const char *label,
+    uint64_t *out_token)
+{
+    uint64_t token;
+
+    if (client == NULL || out_token == NULL) {
+        return false;
+    }
+    if (g_forensics_history_rpc.pending) {
+        if (ui != NULL) {
+            frontend_forensics_apply_rpc_error(
+                ui, RUNTIME_HISTORY_RPC_REQUEST_ACTIVE);
+        }
+        return false;
+    }
+    token = runtime_client_alloc_request_token(client);
+    if (token == 0u) {
+        return false;
+    }
+    g_forensics_history_rpc.pending = true;
+    g_forensics_history_rpc.token = token;
+    g_forensics_history_rpc.verb = verb;
+    if (label != NULL) {
+        snprintf(
+            g_forensics_history_rpc.label,
+            sizeof(g_forensics_history_rpc.label),
+            "%s",
+            label);
+    } else {
+        g_forensics_history_rpc.label[0] = '\0';
+    }
+    *out_token = token;
+    return true;
+}
+
+static void forensics_handle_history_event(
+    runtime_client *client,
+    frontend *ui,
+    const runtime_event *event)
+{
+    if (client == NULL || event == NULL || !g_forensics_history_rpc.pending ||
+        event->request_token != g_forensics_history_rpc.token) {
+        return;
+    }
+
+    if (event->type == RUNTIME_EVENT_HISTORY_STATUS_RESPONSE) {
+        /* User-typed `info` carries label; open-time refresh uses empty label. */
+        bool note = g_forensics_history_rpc.verb == FRONTEND_HISTORY_VERB_INFO &&
+            g_forensics_history_rpc.label[0] != '\0';
+        frontend_forensics_apply_status(
+            ui, &event->data.history_status, note);
+        forensics_history_rpc_clear();
+        return;
+    }
+
+    if (event->type != RUNTIME_EVENT_HISTORY_RESULT_RESPONSE) {
+        return;
+    }
+
+    {
+        const runtime_history_rpc_meta *meta = &event->data.history_rpc;
+        if (meta->status != RUNTIME_HISTORY_RPC_OK) {
+            frontend_forensics_apply_rpc_error(ui, meta->status);
+            forensics_history_rpc_clear();
+            return;
+        }
+        if (meta->byte_length == 0u) {
+            /* status-only success (history-close) */
+            if (g_forensics_history_rpc.verb == FRONTEND_HISTORY_VERB_CLOSE &&
+                frontend_forensics_is_open(ui)) {
+                frontend_forensics_apply_result(
+                    ui,
+                    FRONTEND_HISTORY_VERB_CLOSE,
+                    g_forensics_history_rpc.label,
+                    meta,
+                    NULL,
+                    0u,
+                    NULL);
+            }
+            forensics_history_rpc_clear();
+            return;
+        }
+        {
+            uint8_t *bytes = NULL;
+            uint32_t length = 0u;
+            runtime_history_rpc_meta claimed;
+            runtime_history_record *records = NULL;
+            bool *anchors = NULL;
+            size_t count = 0u;
+            uint64_t epoch = 0u;
+
+            if (!runtime_client_claim_history_rpc(
+                    client,
+                    g_forensics_history_rpc.token,
+                    &bytes,
+                    &length,
+                    &claimed)) {
+                frontend_forensics_apply_rpc_error(
+                    ui, RUNTIME_HISTORY_RPC_ERROR);
+                forensics_history_rpc_clear();
+                return;
+            }
+            if (runtime_history_wire_decode(
+                    bytes,
+                    length,
+                    &epoch,
+                    &records,
+                    &anchors,
+                    &count) != RUNTIME_HISTORY_WIRE_OK) {
+                free(bytes);
+                free(records);
+                free(anchors);
+                frontend_forensics_apply_rpc_error(
+                    ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                forensics_history_rpc_clear();
+                return;
+            }
+            frontend_forensics_apply_result(
+                ui,
+                g_forensics_history_rpc.verb,
+                g_forensics_history_rpc.label,
+                &claimed,
+                records,
+                count,
+                anchors);
+            free(bytes);
+            free(records);
+            free(anchors);
+            forensics_history_rpc_clear();
+        }
+    }
+}
+
 /*
  * Leave Forensics.
  * force_debugger (F9 or successful Land): always debugger, never resume.
  * Otherwise (Opt+R / Close): return to entry surface; resume only if that
  * surface was full-screen CRT and it was running when Forensics opened.
- * PR 3: no history_close cursor / HISTORY RPC yet.
  */
 static void leave_forensics_mode(
     platform_window *window,
@@ -3771,6 +3955,7 @@ static void leave_forensics_mode(
     if (ui == NULL || ui_visible == NULL || !frontend_forensics_is_open(ui)) {
         return;
     }
+    forensics_history_close_cursor(client, ui);
     if (!force_debugger && frontend_forensics_entered_from_crt(ui)) {
         show_debugger = false;
         resume = frontend_forensics_crt_was_running(ui);
@@ -4810,6 +4995,107 @@ static void dispatch_debugger_intents(
                 uint64_t token = runtime_client_alloc_request_token(client);
                 sent = runtime_client_inspector_frame_step(
                     client, intent.enabled ? 1 : -1, token);
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_HISTORY_FIND: {
+                uint64_t token = 0u;
+                if (!forensics_history_begin_rpc(
+                        client, ui, FRONTEND_HISTORY_VERB_FIND, intent.history_label,
+                        &token)) {
+                    break;
+                }
+                if (!runtime_client_history_find(
+                        client,
+                        0u,
+                        &intent.history_query,
+                        intent.history_from_kind,
+                        intent.history_from_id,
+                        intent.history_limit != 0u ? intent.history_limit : 64u,
+                        token)) {
+                    forensics_history_rpc_clear();
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                }
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_HISTORY_NEXT: {
+                uint64_t token = 0u;
+                uint64_t cursor = frontend_forensics_last_cursor(ui);
+                if (cursor == 0u) {
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                    break;
+                }
+                if (!forensics_history_begin_rpc(
+                        client, ui, FRONTEND_HISTORY_VERB_NEXT, intent.history_label,
+                        &token)) {
+                    break;
+                }
+                if (!runtime_client_history_next(
+                        client,
+                        0u,
+                        cursor,
+                        intent.history_limit != 0u ? intent.history_limit : 64u,
+                        token)) {
+                    forensics_history_rpc_clear();
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                }
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_HISTORY_READ: {
+                uint64_t token = 0u;
+                if (!forensics_history_begin_rpc(
+                        client, ui, FRONTEND_HISTORY_VERB_READ, intent.history_label,
+                        &token)) {
+                    break;
+                }
+                if (!runtime_client_history_read(
+                        client,
+                        0u,
+                        intent.history_read_epoch,
+                        intent.history_read_id,
+                        intent.history_before,
+                        intent.history_after,
+                        token)) {
+                    forensics_history_rpc_clear();
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                }
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_HISTORY_INFO: {
+                uint64_t token = 0u;
+                if (!forensics_history_begin_rpc(
+                        client, ui, FRONTEND_HISTORY_VERB_INFO, intent.history_label,
+                        &token)) {
+                    break;
+                }
+                if (!runtime_client_history_info(client, token)) {
+                    forensics_history_rpc_clear();
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                }
+                break;
+            }
+
+            case FRONTEND_DEBUGGER_INTENT_HISTORY_CLOSE: {
+                uint64_t token = 0u;
+                uint64_t cursor = frontend_forensics_last_cursor(ui);
+                if (!forensics_history_begin_rpc(
+                        client, ui, FRONTEND_HISTORY_VERB_CLOSE, intent.history_label,
+                        &token)) {
+                    break;
+                }
+                if (!runtime_client_history_close(client, 0u, cursor, token)) {
+                    forensics_history_rpc_clear();
+                    frontend_forensics_apply_rpc_error(
+                        ui, RUNTIME_HISTORY_RPC_BAD_ARGS);
+                }
                 break;
             }
 

@@ -25,8 +25,8 @@ The agents index points here: [`agents/README.md`](../agents/README.md) → Desi
 
 | Design | Status | Last worked on | Path |
 |--------|--------|----------------|------|
-| Forensics UI (flight recorder / HST1 FIND) | **active** | 2026-08-25 | [`forensics-ui.md`](forensics-ui.md) |
-| Forensics query guide (verb-first Tab) | **active** | 2026-08-25 | [`forensics-query-guide.md`](forensics-query-guide.md) |
+| Forensics UI (flight recorder / HST1 FIND) | **active** (PR 4 landed; PR 5+) | 2026-08-25 | [`forensics-ui.md`](forensics-ui.md) |
+| Forensics query guide (verb-first Tab) | **active** (shipped with PR 4) | 2026-08-25 | [`forensics-query-guide.md`](forensics-query-guide.md) |
 
 ## Conventions
 

@@ -7360,7 +7360,63 @@ static bool frontend_nk_action_button(
     return nk_button_label(ctx, label) != 0;
 }
 
-/* PR 3: parse/status only; HISTORY_* intents land in PR 4. */
+static frontend_debugger_intent_type frontend_history_intent_type(
+    frontend_history_verb verb)
+{
+    switch (verb) {
+    case FRONTEND_HISTORY_VERB_FIND:
+        return FRONTEND_DEBUGGER_INTENT_HISTORY_FIND;
+    case FRONTEND_HISTORY_VERB_NEXT:
+        return FRONTEND_DEBUGGER_INTENT_HISTORY_NEXT;
+    case FRONTEND_HISTORY_VERB_READ:
+        return FRONTEND_DEBUGGER_INTENT_HISTORY_READ;
+    case FRONTEND_HISTORY_VERB_INFO:
+        return FRONTEND_DEBUGGER_INTENT_HISTORY_INFO;
+    case FRONTEND_HISTORY_VERB_CLOSE:
+        return FRONTEND_DEBUGGER_INTENT_HISTORY_CLOSE;
+    default:
+        return FRONTEND_DEBUGGER_INTENT_NONE;
+    }
+}
+
+static bool frontend_push_history_intent(
+    frontend *ui,
+    const frontend_forensics_query_parsed *parsed)
+{
+    size_t next;
+    frontend_debugger_intent *slot;
+    frontend_history_verb verb;
+    frontend_debugger_intent_type type;
+
+    if (ui == NULL || parsed == NULL || !parsed->ok || parsed->empty) {
+        return false;
+    }
+    verb = (frontend_history_verb)parsed->verb_code;
+    type = frontend_history_intent_type(verb);
+    if (type == FRONTEND_DEBUGGER_INTENT_NONE) {
+        return false;
+    }
+    next = (ui->intent_write + 1u) % FRONTEND_DEBUGGER_INTENT_CAPACITY;
+    if (next == ui->intent_read) {
+        return false;
+    }
+    slot = &ui->intents[ui->intent_write];
+    memset(slot, 0, sizeof(*slot));
+    slot->type = type;
+    slot->history_verb = verb;
+    slot->history_query = parsed->query;
+    slot->history_from_kind = parsed->from_kind;
+    slot->history_from_id = parsed->from_id;
+    slot->history_limit = parsed->limit;
+    slot->history_read_id = parsed->read_id;
+    slot->history_read_epoch = parsed->read_epoch;
+    slot->history_before = parsed->before;
+    slot->history_after = parsed->after;
+    snprintf(slot->history_label, sizeof(slot->history_label), "%s", parsed->label);
+    ui->intent_write = next;
+    return true;
+}
+
 static void frontend_forensics_flush_query_submit(frontend *ui)
 {
     frontend_forensics_query_parsed parsed;
@@ -7383,7 +7439,11 @@ static void frontend_forensics_flush_query_submit(frontend *ui)
         return;
     }
     forensics_view_query_history_push(&ui->forensics, ui->forensics.query);
-    forensics_view_set_status(&ui->forensics, "FIND path lands in PR 4");
+    if (!frontend_push_history_intent(ui, &parsed)) {
+        forensics_view_set_status(&ui->forensics, "history-request-active");
+        return;
+    }
+    forensics_view_set_status(&ui->forensics, "querying...");
     ui->forensics.query[0] = '\0';
     ui->forensics.query_history_index = 0u;
 }
@@ -10323,7 +10383,14 @@ void frontend_open_forensics(
                             FRONTEND_FORENSICS_ENTRY_CRT;
     forensics_view_open(&ui->forensics, entry, crt_was_running);
     frontend_set_active_view(ui, FRONTEND_ACTIVE_VIEW_NONE);
-    /* PR 3: do not push history-info on open (FIND path is PR 4). */
+    /* history-info on open (status strip only; no transcript note). */
+    {
+        frontend_forensics_query_parsed info;
+        memset(&info, 0, sizeof(info));
+        info.ok = true;
+        info.verb_code = (int)FRONTEND_HISTORY_VERB_INFO;
+        (void)frontend_push_history_intent(ui, &info);
+    }
 }
 
 void frontend_close_forensics(frontend *ui)
