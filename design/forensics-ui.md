@@ -759,12 +759,14 @@ ship the broken intermediate and patch later.
 - **Files:** `runtime_history_wire.c/.h`, golden fixture test (Python-compatible)
 - **Dependencies:** none (parallel to PR 1)
 - **Checklist:**
-  - [ ] `runtime_history_wire_decode`
-  - [ ] Validate magic/version/reserved like `Ctl.decode_hst1`
-  - [ ] Golden test vs Python decode
-  - [ ] Update this design checklist before commit
+  - [x] `runtime_history_wire_decode`
+  - [x] Validate magic/version/reserved like `Ctl.decode_hst1`
+  - [x] Golden test vs Python decode
+  - [x] Update this design checklist before commit
 - **Description:** Lift from a2m; required before Forensics can claim HST1 bytes
   in `main.c`.
+- **Notes (PR 2):** Decode API + round-trip / invalid / Python golden
+  (`tests/runtime/check_hst1_decode_golden.py` via `Ctl.decode_hst1`).
 
 ### PR 3 — Forensics mode shell
 
