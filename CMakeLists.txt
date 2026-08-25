@@ -1122,6 +1122,18 @@ target_link_libraries(test_runtime_history_wire PRIVATE
 
 add_test(NAME runtime_history_wire COMMAND test_runtime_history_wire)
 
+add_executable(test_runtime_history_query_parse
+    tests/runtime/test_runtime_history_query_parse.c
+)
+
+target_compile_features(test_runtime_history_query_parse PRIVATE c_std_99)
+
+target_link_libraries(test_runtime_history_query_parse PRIVATE
+    runtime
+)
+
+add_test(NAME runtime_history_query_parse COMMAND test_runtime_history_query_parse)
+
 add_executable(test_runtime_history_sessions
     tests/runtime/test_runtime_history_sessions.c
 )

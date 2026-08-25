@@ -10,6 +10,7 @@ add_library(runtime STATIC
     runtime_frame_ring.c
     runtime_vic_ring.c
     runtime_history.c
+    runtime_history_query_parse.c
     runtime_history_wire.c
     runtime_inspector.c
     runtime.c

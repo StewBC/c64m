@@ -19,6 +19,7 @@ target_link_libraries(control
     PUBLIC
         platform
         util
+        runtime
     PRIVATE
         SDL2::SDL2
 )

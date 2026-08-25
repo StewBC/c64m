@@ -739,13 +739,19 @@ ship the broken intermediate and patch later.
   `agents/control-port.md` as needed
 - **Dependencies:** none
 - **Checklist:**
-  - [ ] Lift shared parse; **last-wins** duplicates
-  - [ ] Public `runtime_history_find_option_keys()` / `_access_names()`
-  - [ ] Control path uses shared parse only
-  - [ ] Shared test table matches wire keys/access names
-  - [ ] Update this design checklist before commit
+  - [x] Lift shared parse; **last-wins** duplicates
+  - [x] Public `runtime_history_find_option_keys()` / `_access_names()`
+  - [x] Control path uses shared parse only
+  - [x] Shared test table matches wire keys/access names
+  - [x] Update this design checklist before commit
 - **Description:** One grammar for control and (later) Forensics Tab. Prefer
   a2m lift over rewriting.
+- **Notes (PR 1):** Lifted a2m `runtime_history_query_parse.*`. Control
+  `history-find` is a thin caller. Intentional wire changes vs prior c64m
+  private parse: duplicate keys last-wins; `value` uses `$NN`/`0xNN`/decimal/`?`
+  (slash `NN/MM` removed); single access name (comma-OR lists rejected);
+  `execute`/`fetch` clear `has_access`; `data-read`/`data-write` match
+  `read`/`write` aggregates. `agents/control-port.md` updated.
 
 ### PR 2 — HST1 decode for in-process UI
 

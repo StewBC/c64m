@@ -329,18 +329,27 @@ N history-close <cursor>
 
 `history-info`, recording control, clear, and close may be issued while running.
 Find, next, and read require a paused machine and otherwise return
-`busy machine-running`. Searches are newest-first by default. Find keys are:
+`busy machine-running`. Searches are newest-first by default. Find-option
+grammar lives in `src/runtime/runtime_history_query_parse.*` (shared with the
+Forensics UI). Published key/access tables:
+`runtime_history_find_option_keys()` / `runtime_history_find_access_names()`.
+Duplicate keys: **last wins**. Find keys are:
 
 ```text
 epoch timeline cycle from direction pc address access value opcodes limit
 ```
 
-Ranges are inclusive and non-wrapping. `from` accepts `oldest`, `newest`, or a
-retained record ID. `direction` is `backward` or `forward`. Access categories
-are `execute`, `opcode`, `operand`, `data-read`, `data-write`, `dummy-read`,
-`rmw-dummy-write`, `stack-read`, `stack-write`, and `vector-read`; aliases are
-`fetch`, `read`, `write`, and `data`. Opcode patterns contain 1..32
-comma-separated bytes with `?` nibble wildcards, for example `A9,??,8D`.
+Ranges are inclusive and non-wrapping (`lo-hi` with `-`). `from` accepts
+`oldest`, `newest`, or a retained record ID. `direction` is `backward` or
+`forward`. Access is a **single** name (no comma lists): `execute` / `fetch`
+clear the access filter (instruction stream; use `pc` to narrow);
+`data-read` / `read` and `data-write` / `write` are aggregates; fine names are
+`opcode`, `operand`, `dummy-read`, `rmw-dummy-write`, `stack-read`,
+`stack-write`, `vector-read`; `data` is the physical data-read|data-write bits
+only. `value` is a byte as decimal, `$NN`, or `0xNN`; hex forms may use `?`
+nibble wildcards (`$2?`, `$??`). Opcode patterns contain 1..32 comma-separated
+bytes with `?` nibble wildcards, for example `A9,??,8D` (no `$` inside the
+list).
 
 Find/next/read return counted `data history` responses with metadata:
 

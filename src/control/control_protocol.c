@@ -1,5 +1,7 @@
 #include "control_protocol.h"
 
+#include "runtime_history_query_parse.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -661,371 +663,75 @@ static bool parse_history_u16_range(
     return true;
 }
 
-static bool parse_history_u64_range(
-    const char *start,
-    const char *end,
-    uint64_t *out_first,
-    uint64_t *out_last) {
-    const char *value_end;
-    uint64_t first;
-    uint64_t last;
-
-    if (!parse_u64_token(start, &value_end, &first)) {
-        return false;
-    }
-    if (value_end == end) {
-        *out_first = first;
-        *out_last = first;
-        return true;
-    }
-    if (*value_end != '-' ||
-        !parse_u64_token(value_end + 1, &value_end, &last) ||
-        value_end != end || last < first) {
-        return false;
-    }
-    *out_first = first;
-    *out_last = last;
-    return true;
-}
-
-static int history_hex_nibble(char c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
-
-static bool parse_history_value(
-    const char *start,
-    const char *end,
-    uint8_t *out_value,
-    uint8_t *out_mask) {
-    int high;
-    int low;
-    int mask_high = 15;
-    int mask_low = 15;
-
-    if ((size_t)(end - start) != 2u &&
-        (size_t)(end - start) != 5u) {
-        return false;
-    }
-    high = history_hex_nibble(start[0]);
-    low = history_hex_nibble(start[1]);
-    if (high < 0 || low < 0) {
-        return false;
-    }
-    if ((size_t)(end - start) == 5u) {
-        if (start[2] != '/') {
-            return false;
-        }
-        mask_high = history_hex_nibble(start[3]);
-        mask_low = history_hex_nibble(start[4]);
-        if (mask_high < 0 || mask_low < 0) {
-            return false;
-        }
-    }
-    *out_mask = (uint8_t)((mask_high << 4) | mask_low);
-    *out_value =
-        (uint8_t)(((high << 4) | low) & *out_mask);
-    return true;
-}
-
-static bool history_access_name_mask(
-    const char *start,
-    size_t length,
-    uint16_t *out_mask) {
-    static const struct {
-        const char *name;
-        uint16_t mask;
-    } names[] = {
-        { "data-read", 1u << 0 },
-        { "data-write", 1u << 1 },
-        { "opcode", 1u << 2 },
-        { "operand", 1u << 3 },
-        { "dummy-read", 1u << 4 },
-        { "rmw-dummy-write", 1u << 5 },
-        { "stack-read", 1u << 6 },
-        { "stack-write", 1u << 7 },
-        { "vector-read", 1u << 8 },
-        { "execute", 1u << 9 },
-        { "fetch", (1u << 2) | (1u << 3) },
-        { "read", (1u << 0) | (1u << 2) | (1u << 3) |
-                  (1u << 4) | (1u << 6) | (1u << 8) },
-        { "write", (1u << 1) | (1u << 5) | (1u << 7) },
-        { "data", (1u << 0) | (1u << 1) },
-    };
-    size_t i;
-
-    for (i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
-        if (strlen(names[i].name) == length &&
-            strncmp(start, names[i].name, length) == 0) {
-            *out_mask = names[i].mask;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool parse_history_access_list(
-    const char *start,
-    const char *end,
-    uint16_t *out_mask) {
-    uint16_t mask = 0u;
-
-    if (start == end) {
-        return false;
-    }
-    while (start < end) {
-        const char *item_end = start;
-        uint16_t item_mask;
-        while (item_end < end && *item_end != ',') {
-            item_end++;
-        }
-        if (item_end == start ||
-            !history_access_name_mask(
-                start, (size_t)(item_end - start), &item_mask)) {
-            return false;
-        }
-        mask |= item_mask;
-        if (item_end == end) {
-            break;
-        }
-        start = item_end + 1;
-    }
-    *out_mask = mask;
-    return mask != 0u;
-}
-
-static bool parse_history_opcode_pattern(
-    const char *start,
-    const char *end,
-    control_args *args) {
-    uint8_t count = 0u;
-
-    if (start == end) {
-        return false;
-    }
-    while (start < end) {
-        const char *item_end = start;
-        int high;
-        int low;
-        uint8_t value = 0u;
-        uint8_t mask = 0u;
-        while (item_end < end && *item_end != ',') {
-            item_end++;
-        }
-        if ((size_t)(item_end - start) != 2u ||
-            count >= CONTROL_HISTORY_MAX_OPCODE_PATTERN) {
-            return false;
-        }
-        if (start[0] != '?') {
-            high = history_hex_nibble(start[0]);
-            if (high < 0) {
-                return false;
-            }
-            value |= (uint8_t)(high << 4);
-            mask |= 0xf0u;
-        }
-        if (start[1] != '?') {
-            low = history_hex_nibble(start[1]);
-            if (low < 0) {
-                return false;
-            }
-            value |= (uint8_t)low;
-            mask |= 0x0fu;
-        }
-        args->history_opcode_values[count] = value;
-        args->history_opcode_masks[count] = mask;
-        count++;
-        if (item_end == end) {
-            break;
-        }
-        start = item_end + 1;
-    }
-    args->history_opcode_pattern_length = count;
-    return count != 0u;
-}
-
+/* history-find options: shared runtime parser; duplicate keys last-wins. */
 static bool parse_history_find_options(
     const char **cursor,
     control_args *args,
-    const char **out_message) {
-    enum {
-        SEEN_EPOCH = 1u << 0,
-        SEEN_TIMELINE = 1u << 1,
-        SEEN_CYCLE = 1u << 2,
-        SEEN_FROM = 1u << 3,
-        SEEN_DIRECTION = 1u << 4,
-        SEEN_PC = 1u << 5,
-        SEEN_ADDRESS = 1u << 6,
-        SEEN_ACCESS = 1u << 7,
-        SEEN_VALUE = 1u << 8,
-        SEEN_OPCODES = 1u << 9,
-        SEEN_LIMIT = 1u << 10
-    };
-    uint16_t seen = 0u;
+    const char **out_message)
+{
+    char buf[RUNTIME_HISTORY_FIND_OPTIONS_MAX];
+    const char *start;
+    const char *end;
+    size_t len;
+    size_t i;
+    runtime_history_query query;
+    runtime_history_from_kind from_kind = RUNTIME_HISTORY_FROM_DEFAULT;
+    uint64_t from_id = 0u;
+    uint16_t limit = 64u;
 
-    args->history_limit = 64u;
-    args->history_direction = 0u;
-    args->history_from_kind = 0u;
-    for (;;) {
-        const char *start;
-        const char *end;
-        const char *equals;
-        const char *value;
-        uint16_t bit = 0u;
-        const char *value_end;
-        uint64_t number;
-
-        if (!token_bounds(*cursor, &start, &end)) {
-            break;
-        }
-        equals = start;
-        while (equals < end && *equals != '=') {
-            equals++;
-        }
-        if (equals == start || equals == end || equals + 1 == end) {
-            *out_message = "history option must be key=value";
-            return false;
-        }
-        value = equals + 1;
-        if ((size_t)(equals - start) == 5u &&
-            strncmp(start, "epoch", 5u) == 0) {
-            bit = SEEN_EPOCH;
-            if (!parse_u64_token(value, &value_end, &number) ||
-                value_end != end) {
-                *out_message = "invalid history epoch";
-                return false;
-            }
-            args->history_query_has_epoch = true;
-            args->history_query_epoch = number;
-        } else if ((size_t)(equals - start) == 8u &&
-                   strncmp(start, "timeline", 8u) == 0) {
-            bit = SEEN_TIMELINE;
-            if (!parse_u64_token(value, &value_end, &number) ||
-                value_end != end || number > UINT32_MAX) {
-                *out_message = "invalid history timeline";
-                return false;
-            }
-            args->history_query_has_timeline = true;
-            args->history_query_timeline = (uint32_t)number;
-        } else if ((size_t)(equals - start) == 5u &&
-                   strncmp(start, "cycle", 5u) == 0) {
-            bit = SEEN_CYCLE;
-            if (!parse_history_u64_range(
-                    value, end,
-                    &args->history_cycle_first,
-                    &args->history_cycle_last)) {
-                *out_message = "invalid history cycle range";
-                return false;
-            }
-            args->history_query_has_cycle = true;
-        } else if ((size_t)(equals - start) == 4u &&
-                   strncmp(start, "from", 4u) == 0) {
-            bit = SEEN_FROM;
-            if ((size_t)(end - value) == 6u &&
-                strncmp(value, "oldest", 6u) == 0) {
-                args->history_from_kind = 2u;
-            } else if ((size_t)(end - value) == 6u &&
-                       strncmp(value, "newest", 6u) == 0) {
-                args->history_from_kind = 3u;
-            } else if (parse_u64_token(value, &value_end, &number) &&
-                       value_end == end && number != 0u) {
-                args->history_from_kind = 1u;
-                args->history_from_id = number;
-            } else {
-                *out_message = "invalid history start record";
-                return false;
-            }
-        } else if ((size_t)(equals - start) == 9u &&
-                   strncmp(start, "direction", 9u) == 0) {
-            bit = SEEN_DIRECTION;
-            if ((size_t)(end - value) == 8u &&
-                strncmp(value, "backward", 8u) == 0) {
-                args->history_direction = 0u;
-            } else if ((size_t)(end - value) == 7u &&
-                       strncmp(value, "forward", 7u) == 0) {
-                args->history_direction = 1u;
-            } else {
-                *out_message = "invalid history direction";
-                return false;
-            }
-        } else if ((size_t)(equals - start) == 2u &&
-                   strncmp(start, "pc", 2u) == 0) {
-            bit = SEEN_PC;
-            if (!parse_history_u16_range(
-                    value, end,
-                    &args->history_pc_first,
-                    &args->history_pc_last)) {
-                *out_message = "invalid history PC range";
-                return false;
-            }
-            args->history_query_has_pc = true;
-        } else if ((size_t)(equals - start) == 7u &&
-                   strncmp(start, "address", 7u) == 0) {
-            bit = SEEN_ADDRESS;
-            if (!parse_history_u16_range(
-                    value, end,
-                    &args->history_address_first,
-                    &args->history_address_last)) {
-                *out_message = "invalid history address range";
-                return false;
-            }
-            args->history_query_has_address = true;
-        } else if ((size_t)(equals - start) == 6u &&
-                   strncmp(start, "access", 6u) == 0) {
-            bit = SEEN_ACCESS;
-            if (!parse_history_access_list(
-                    value, end, &args->history_access_mask)) {
-                *out_message = "invalid history access list";
-                return false;
-            }
-            args->history_query_has_access = true;
-        } else if ((size_t)(equals - start) == 5u &&
-                   strncmp(start, "value", 5u) == 0) {
-            bit = SEEN_VALUE;
-            if (!parse_history_value(
-                    value, end,
-                    &args->history_value,
-                    &args->history_value_mask)) {
-                *out_message = "invalid history value/mask";
-                return false;
-            }
-            args->history_query_has_value = true;
-        } else if ((size_t)(equals - start) == 7u &&
-                   strncmp(start, "opcodes", 7u) == 0) {
-            bit = SEEN_OPCODES;
-            if (!parse_history_opcode_pattern(value, end, args)) {
-                *out_message = "invalid history opcode pattern";
-                return false;
-            }
-        } else if ((size_t)(equals - start) == 5u &&
-                   strncmp(start, "limit", 5u) == 0) {
-            bit = SEEN_LIMIT;
-            if (!parse_u64_token(value, &value_end, &number) ||
-                value_end != end || number == 0u || number > 256u) {
-                *out_message = "history limit must be 1..256";
-                return false;
-            }
-            args->history_limit = (uint16_t)number;
-        } else {
-            *out_message = "unknown history option";
-            return false;
-        }
-        if ((seen & bit) != 0u) {
-            *out_message = "duplicate history option";
-            return false;
-        }
-        seen |= bit;
-        *cursor = end;
-        skip_spaces(cursor);
+    start = *cursor;
+    end = start;
+    while (*end != '\0' && *end != '\r' && *end != '\n') {
+        end++;
     }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        end--;
+    }
+    len = (size_t)(end - start);
+    if (len >= sizeof(buf)) {
+        *out_message = "history-find options too long";
+        return false;
+    }
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+
+    if (!runtime_history_parse_find_options(
+            buf, &query, &from_kind, &from_id, &limit)) {
+        *out_message = "invalid history query";
+        return false;
+    }
+
+    args->history_limit = limit;
+    args->history_direction =
+        (query.direction == RUNTIME_HISTORY_QUERY_FORWARD) ? 1u : 0u;
+    args->history_from_kind = (uint8_t)from_kind;
+    args->history_from_id = from_id;
+    args->history_query_has_epoch = query.has_epoch;
+    args->history_query_epoch = query.epoch;
+    args->history_query_has_timeline = query.has_timeline;
+    args->history_query_timeline = query.timeline;
+    args->history_query_has_cycle = query.has_cycle;
+    args->history_cycle_first = query.cycle_first;
+    args->history_cycle_last = query.cycle_last;
+    args->history_query_has_pc = query.has_pc;
+    args->history_pc_first = query.pc_first;
+    args->history_pc_last = query.pc_last;
+    args->history_query_has_address = query.has_address;
+    args->history_address_first = query.address_first;
+    args->history_address_last = query.address_last;
+    args->history_query_has_access = query.has_access;
+    args->history_access_mask = query.access_mask;
+    args->history_query_has_value = query.has_value;
+    args->history_value = query.value;
+    args->history_value_mask = query.value_mask;
+    args->history_opcode_pattern_length = query.opcode_pattern_length;
+    for (i = 0u; i < query.opcode_pattern_length; ++i) {
+        args->history_opcode_values[i] = query.opcode_pattern[i].value;
+        args->history_opcode_masks[i] = query.opcode_pattern[i].mask;
+    }
+
+    *cursor = end;
+    skip_spaces(cursor);
     return true;
 }
 

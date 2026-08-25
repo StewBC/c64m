@@ -652,25 +652,30 @@ static void test_parse_history_commands(void)
     char long_pattern[256];
     size_t used = 0u;
     unsigned i;
+    /* data-read/data-write match read/write aggregates (shared parser). */
     static const struct {
         const char *name;
         uint16_t mask;
+        int clears_access; /* execute/fetch: has_access cleared */
     } access_names[] = {
-        { "data-read", 1u << 0 },
-        { "data-write", 1u << 1 },
-        { "opcode", 1u << 2 },
-        { "operand", 1u << 3 },
-        { "dummy-read", 1u << 4 },
-        { "rmw-dummy-write", 1u << 5 },
-        { "stack-read", 1u << 6 },
-        { "stack-write", 1u << 7 },
-        { "vector-read", 1u << 8 },
-        { "execute", 1u << 9 },
-        { "fetch", (1u << 2) | (1u << 3) },
-        { "read", (1u << 0) | (1u << 2) | (1u << 3) |
-                  (1u << 4) | (1u << 6) | (1u << 8) },
-        { "write", (1u << 1) | (1u << 5) | (1u << 7) },
-        { "data", (1u << 0) | (1u << 1) },
+        { "data-read",
+          (1u << 0) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 6) | (1u << 8),
+          0 },
+        { "data-write", (1u << 1) | (1u << 5) | (1u << 7), 0 },
+        { "opcode", 1u << 2, 0 },
+        { "operand", 1u << 3, 0 },
+        { "dummy-read", 1u << 4, 0 },
+        { "rmw-dummy-write", 1u << 5, 0 },
+        { "stack-read", 1u << 6, 0 },
+        { "stack-write", 1u << 7, 0 },
+        { "vector-read", 1u << 8, 0 },
+        { "execute", 0u, 1 },
+        { "fetch", 0u, 1 },
+        { "read",
+          (1u << 0) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 6) | (1u << 8),
+          0 },
+        { "write", (1u << 1) | (1u << 5) | (1u << 7), 0 },
+        { "data", (1u << 0) | (1u << 1), 0 },
     };
 
     expect_true(
@@ -714,7 +719,7 @@ static void test_parse_history_commands(void)
         control_protocol_parse_request(
             "85 history-find epoch=3 timeline=2 cycle=100-200 "
             "from=oldest direction=forward pc=$E000-$EFFF "
-            "address=$D015 access=write,opcode value=A0/F0 "
+            "address=$D015 access=write value=$A? "
             "opcodes=A9,??,8D limit=32",
             &request,
             &error));
@@ -727,9 +732,10 @@ static void test_parse_history_commands(void)
     expect_u32("history forward", 1u, request.args.history_direction);
     expect_u32("history pc first", 0xe000u, request.args.history_pc_first);
     expect_u32("history pc last", 0xefffu, request.args.history_pc_last);
+    expect_true("history access present", request.args.history_query_has_access);
     expect_u32(
-        "history access alias mask",
-        (1u << 1) | (1u << 2) | (1u << 5) | (1u << 7),
+        "history access write mask",
+        (1u << 1) | (1u << 5) | (1u << 7),
         request.args.history_access_mask);
     expect_u32("history value", 0xa0u, request.args.history_value);
     expect_u32("history value mask", 0xf0u, request.args.history_value_mask);
@@ -751,10 +757,19 @@ static void test_parse_history_commands(void)
         expect_true(
             "history canonical/alias access",
             control_protocol_parse_request(line, &request, &error));
-        expect_u32(
-            "history canonical/alias mask",
-            access_names[i].mask,
-            request.args.history_access_mask);
+        if (access_names[i].clears_access) {
+            expect_false(
+                "history execute/fetch clears access",
+                request.args.history_query_has_access);
+        } else {
+            expect_true(
+                "history access flag",
+                request.args.history_query_has_access);
+            expect_u32(
+                "history canonical/alias mask",
+                access_names[i].mask,
+                request.args.history_access_mask);
+        }
     }
 
     expect_true(
@@ -817,10 +832,15 @@ static void test_parse_history_commands(void)
         "legacy get history removed",
         control_protocol_parse_request(
             "93 get-cpu-history", &request, &error));
-    expect_false(
-        "duplicate history option",
+    expect_true(
+        "duplicate history option last-wins",
         control_protocol_parse_request(
-            "94 history-find pc=$1000 pc=$2000", &request, &error));
+            "94 history-find pc=$1000 pc=$2000 limit=8 limit=32",
+            &request,
+            &error));
+    expect_u32("dup pc last", 0x2000u, request.args.history_pc_first);
+    expect_u32("dup pc last end", 0x2000u, request.args.history_pc_last);
+    expect_u32("dup limit last", 32u, request.args.history_limit);
     expect_false(
         "unknown history option",
         control_protocol_parse_request(
@@ -830,9 +850,13 @@ static void test_parse_history_commands(void)
         control_protocol_parse_request(
             "96 history-find address=$2000-$1000", &request, &error));
     expect_false(
-        "bad history value",
+        "bad history value slash mask",
         control_protocol_parse_request(
-            "97 history-find value=A/F0", &request, &error));
+            "97 history-find value=A0/F0", &request, &error));
+    expect_false(
+        "comma access list rejected",
+        control_protocol_parse_request(
+            "97 history-find access=write,opcode", &request, &error));
     expect_false(
         "history next garbage",
         control_protocol_parse_request(
