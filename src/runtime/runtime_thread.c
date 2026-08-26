@@ -5366,7 +5366,6 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
         return;
     }
 
-    /* Single snapshot attempt (no second dump path that retries the same call). */
     paint_off = !c64_video_output_enabled(&rt->machine) ||
         runtime_turbo_display_mode(rt);
     if (paint_off) {
