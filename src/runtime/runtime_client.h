@@ -292,10 +292,18 @@ void runtime_client_get_frame_ring_info(
     runtime_client *client,
     runtime_frame_ring_info *out_info);
 
+/* Nearest-≤ lookup (frame number or machine_cycle). Keep for non-Inspector
+   callers; Inspector film stills must use copy_frame_exact_cycle. */
 bool runtime_client_copy_frame_at(
     runtime_client *client,
     uint64_t target,
     bool by_cycle,
+    c64_frame *out_frame);
+
+/* Exact machine_cycle match only; false on any miss (no nearest-≤ fallback). */
+bool runtime_client_copy_frame_exact_cycle(
+    runtime_client *client,
+    uint64_t machine_cycle,
     c64_frame *out_frame);
 
 void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording);

@@ -189,6 +189,37 @@ static void test_find_by_cycle_nearest(void) {
     free(got);
 }
 
+static void test_find_by_cycle_exact(void) {
+    runtime_frame_ring ring;
+    c64_frame *got = malloc(sizeof(*got));
+
+    CHECK(got != NULL);
+    CHECK(runtime_frame_ring_init(&ring, 8u * sizeof(c64_frame)));
+    push_n(&ring, 10u, 5u);   /* cycles 10000..14000, step 1000 */
+
+    /* Exact hit copies the matching still, pixels included. */
+    CHECK(runtime_frame_ring_copy_by_cycle_exact(&ring, 12000u, got));
+    CHECK(got->frame_number == 12u);
+    CHECK(got->machine_cycle == 12000u);
+    CHECK(frame_pixels_match(got, 12u));
+
+    /* Between retained cycles is a miss — no nearest-≤ neighbour. */
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 12500u, got));
+
+    /* Past the newest is also a miss (unlike nearest, which clamps). */
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 999999u, got));
+
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 9999u, got));
+
+    /* Null out_frame / empty ring stay false. */
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 12000u, NULL));
+    runtime_frame_ring_clear(&ring);
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 12000u, got));
+
+    runtime_frame_ring_destroy(&ring);
+    free(got);
+}
+
 static void test_recording_toggle(void) {
     runtime_frame_ring ring;
     runtime_frame_ring_info info;
@@ -253,6 +284,7 @@ static void test_empty_and_null_safety(void) {
     CHECK(info.count == 0u);
     CHECK(!runtime_frame_ring_copy_by_frame(&ring, 0u, got));
     CHECK(!runtime_frame_ring_copy_by_cycle(&ring, 0u, got));
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 0u, got));
     runtime_frame_ring_destroy(&ring);
 
     /* An uninitialized (failed-init) ring must answer safely. */
@@ -261,6 +293,7 @@ static void test_empty_and_null_safety(void) {
     CHECK(info.capacity == 0u);
     CHECK(info.count == 0u);
     CHECK(!runtime_frame_ring_copy_by_frame(&ring, 1u, got));
+    CHECK(!runtime_frame_ring_copy_by_cycle_exact(&ring, 1u, got));
     CHECK(!runtime_frame_ring_push(&ring, NULL));
     runtime_frame_ring_destroy(&ring);
     free(got);
@@ -272,6 +305,7 @@ int main(void) {
     test_wrap_drops_oldest();
     test_find_by_frame_nearest();
     test_find_by_cycle_nearest();
+    test_find_by_cycle_exact();
     test_recording_toggle();
     test_clear();
     test_empty_and_null_safety();

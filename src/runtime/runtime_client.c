@@ -1338,6 +1338,17 @@ bool runtime_client_copy_frame_at(
         runtime_frame_ring_copy_by_frame(client->frame_ring, target, out_frame);
 }
 
+bool runtime_client_copy_frame_exact_cycle(
+    runtime_client *client,
+    uint64_t machine_cycle,
+    c64_frame *out_frame) {
+    if (client == NULL || client->frame_ring == NULL || out_frame == NULL) {
+        return false;
+    }
+    return runtime_frame_ring_copy_by_cycle_exact(
+        client->frame_ring, machine_cycle, out_frame);
+}
+
 void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording) {
     if (client == NULL || client->frame_ring == NULL) {
         return;

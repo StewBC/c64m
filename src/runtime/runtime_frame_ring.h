@@ -84,13 +84,22 @@ void runtime_frame_ring_get_info(
    when the ring is empty or the target predates the retained window (the frame
    was dropped, and saying so beats returning a neighbour that looks right); a
    target past the newest clamps to the newest, so scrubbing forward from a
-   stale target lands on the most recent frame. */
+   stale target lands on the most recent frame. Non-Inspector forensics may
+   keep using this; Inspector film blit must use the exact-cycle helper. */
 bool runtime_frame_ring_copy_by_frame(
     runtime_frame_ring *ring,
     uint64_t frame_number,
     c64_frame *out_frame);
 
 bool runtime_frame_ring_copy_by_cycle(
+    runtime_frame_ring *ring,
+    uint64_t machine_cycle,
+    c64_frame *out_frame);
+
+/* Copy out the retained frame whose machine_cycle equals the target exactly.
+   Returns false on miss (empty ring, dropped still, or any neighbour-only
+   hit) — never substitutes nearest-≤. */
+bool runtime_frame_ring_copy_by_cycle_exact(
     runtime_frame_ring *ring,
     uint64_t machine_cycle,
     c64_frame *out_frame);

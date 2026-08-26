@@ -231,3 +231,24 @@ bool runtime_frame_ring_copy_by_cycle(
     c64_frame *out_frame) {
     return runtime_frame_ring_copy(ring, machine_cycle, true, out_frame);
 }
+
+bool runtime_frame_ring_copy_by_cycle_exact(
+    runtime_frame_ring *ring,
+    uint64_t machine_cycle,
+    c64_frame *out_frame) {
+    const c64_frame *found;
+    bool ok = false;
+
+    if (ring == NULL || out_frame == NULL) {
+        return false;
+    }
+
+    runtime_frame_ring_lock(ring);
+    found = runtime_frame_ring_find_locked(ring, machine_cycle, true);
+    if (found != NULL && found->machine_cycle == machine_cycle) {
+        *out_frame = *found;
+        ok = true;
+    }
+    runtime_frame_ring_unlock(ring);
+    return ok;
+}
