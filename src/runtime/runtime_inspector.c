@@ -12,6 +12,7 @@ enum { RUNTIME_INSPECTOR_INPUT_CAP_DEFAULT = 65536u };
 
 typedef struct runtime_inspector_checkpoint {
     uint64_t cycle;
+    uint64_t film_cycle; /* preferred still; 0 = none at birth */
     size_t size;
     uint8_t *blob;
 } runtime_inspector_checkpoint;
@@ -45,7 +46,7 @@ struct runtime_inspector_recorder {
     uint32_t input_head;
 };
 
-static uint32_t inspector_cp_index(
+static uint32_t inspector_cp_slot(
     const struct runtime_inspector_recorder *rec, uint32_t logical)
 {
     return (rec->head + rec->slot_count - rec->count + logical) % rec->slot_count;
@@ -54,16 +55,198 @@ static uint32_t inspector_cp_index(
 static runtime_inspector_checkpoint *inspector_cp_at(
     struct runtime_inspector_recorder *rec, uint32_t logical)
 {
-    return &rec->slots[inspector_cp_index(rec, logical)];
+    return &rec->slots[inspector_cp_slot(rec, logical)];
 }
 
 static const runtime_inspector_checkpoint *inspector_cp_at_const(
     const struct runtime_inspector_recorder *rec, uint32_t logical)
 {
-    return &rec->slots[inspector_cp_index(rec, logical)];
+    return &rec->slots[inspector_cp_slot(rec, logical)];
 }
 
-static void inspector_drop_oldest(struct runtime_inspector_recorder *rec)
+static uint32_t inspector_slot_count_for_budget(uint32_t memory_mb)
+{
+    uint64_t budget;
+    uint32_t slots;
+
+    if (memory_mb == 0u) {
+        return 0u;
+    }
+    budget = (uint64_t)memory_mb * 1024ull * 1024ull;
+    slots = (uint32_t)(budget / (64ull * 1024ull));
+    if (slots < 2u) {
+        slots = 2u;
+    }
+    if (slots > 4096u) {
+        slots = 4096u;
+    }
+    return slots;
+}
+
+static void inspector_cp_index_lock(runtime_inspector_cp_index *index)
+{
+    if (index != NULL && index->mutex != NULL) {
+        mutex_lock(index->mutex);
+    }
+}
+
+static void inspector_cp_index_unlock(runtime_inspector_cp_index *index)
+{
+    if (index != NULL && index->mutex != NULL) {
+        mutex_unlock(index->mutex);
+    }
+}
+
+bool runtime_inspector_cp_index_init(
+    runtime_inspector_cp_index *index, uint32_t capacity)
+{
+    if (index == NULL) {
+        return false;
+    }
+    memset(index, 0, sizeof(*index));
+    if (capacity == 0u) {
+        return true;
+    }
+    index->entries = (runtime_inspector_cp_index_entry *)calloc(
+        capacity, sizeof(*index->entries));
+    if (index->entries == NULL) {
+        return false;
+    }
+    index->mutex = mutex_create();
+    if (index->mutex == NULL) {
+        free(index->entries);
+        memset(index, 0, sizeof(*index));
+        return false;
+    }
+    index->capacity = capacity;
+    return true;
+}
+
+void runtime_inspector_cp_index_destroy(runtime_inspector_cp_index *index)
+{
+    if (index == NULL) {
+        return;
+    }
+    mutex_destroy(index->mutex);
+    free(index->entries);
+    memset(index, 0, sizeof(*index));
+}
+
+void runtime_inspector_cp_index_clear(runtime_inspector_cp_index *index)
+{
+    if (index == NULL) {
+        return;
+    }
+    inspector_cp_index_lock(index);
+    index->count = 0u;
+    index->head = 0u;
+    inspector_cp_index_unlock(index);
+}
+
+static void inspector_cp_index_push_locked(
+    runtime_inspector_cp_index *index, uint64_t cycle, uint64_t film_cycle)
+{
+    if (index == NULL || index->entries == NULL || index->capacity == 0u) {
+        return;
+    }
+    index->entries[index->head].cycle = cycle;
+    index->entries[index->head].film_cycle = film_cycle;
+    index->head = (index->head + 1u) % index->capacity;
+    if (index->count < index->capacity) {
+        index->count++;
+    }
+}
+
+static void inspector_cp_index_drop_oldest_locked(runtime_inspector_cp_index *index)
+{
+    if (index == NULL || index->count == 0u) {
+        return;
+    }
+    index->count--;
+}
+
+static void inspector_cp_index_push(
+    runtime_inspector_cp_index *index, uint64_t cycle, uint64_t film_cycle)
+{
+    inspector_cp_index_lock(index);
+    if (index != NULL && index->count == index->capacity && index->capacity > 0u) {
+        inspector_cp_index_drop_oldest_locked(index);
+    }
+    inspector_cp_index_push_locked(index, cycle, film_cycle);
+    inspector_cp_index_unlock(index);
+}
+
+static void inspector_cp_index_drop_oldest(runtime_inspector_cp_index *index)
+{
+    inspector_cp_index_lock(index);
+    inspector_cp_index_drop_oldest_locked(index);
+    inspector_cp_index_unlock(index);
+}
+
+static uint32_t inspector_cp_index_logical_slot(
+    const runtime_inspector_cp_index *index, uint32_t logical)
+{
+    return (index->head + index->capacity - index->count + logical) % index->capacity;
+}
+
+static void inspector_cp_index_sync_from_recorder(
+    runtime *rt, const struct runtime_inspector_recorder *rec)
+{
+    uint32_t i;
+
+    if (rt == NULL) {
+        return;
+    }
+    inspector_cp_index_lock(&rt->inspector_cp_index);
+    rt->inspector_cp_index.count = 0u;
+    rt->inspector_cp_index.head = 0u;
+    if (rec != NULL) {
+        for (i = 0u; i < rec->count; ++i) {
+            const runtime_inspector_checkpoint *cp = inspector_cp_at_const(rec, i);
+            inspector_cp_index_push_locked(
+                &rt->inspector_cp_index, cp->cycle, cp->film_cycle);
+        }
+    }
+    inspector_cp_index_unlock(&rt->inspector_cp_index);
+}
+
+bool runtime_inspector_cp_index_lookup_film(
+    runtime_inspector_cp_index *index,
+    uint64_t preview_cycle,
+    uint64_t *out_cell_cycle,
+    uint64_t *out_film_cycle)
+{
+    uint32_t i;
+    const runtime_inspector_cp_index_entry *best = NULL;
+    bool ok = false;
+
+    if (index == NULL) {
+        return false;
+    }
+    inspector_cp_index_lock(index);
+    for (i = 0u; i < index->count; ++i) {
+        const runtime_inspector_cp_index_entry *entry =
+            &index->entries[inspector_cp_index_logical_slot(index, i)];
+        if (entry->cycle <= preview_cycle) {
+            best = entry;
+        } else {
+            break;
+        }
+    }
+    if (best != NULL && best->film_cycle != 0u) {
+        if (out_cell_cycle != NULL) {
+            *out_cell_cycle = best->cycle;
+        }
+        if (out_film_cycle != NULL) {
+            *out_film_cycle = best->film_cycle;
+        }
+        ok = true;
+    }
+    inspector_cp_index_unlock(index);
+    return ok;
+}
+
+static void inspector_drop_oldest(runtime *rt, struct runtime_inspector_recorder *rec)
 {
     runtime_inspector_checkpoint *cp;
 
@@ -76,6 +259,9 @@ static void inspector_drop_oldest(struct runtime_inspector_recorder *rec)
     memset(cp, 0, sizeof(*cp));
     rec->count--;
     rec->dropped++;
+    if (rt != NULL) {
+        inspector_cp_index_drop_oldest(&rt->inspector_cp_index);
+    }
 }
 
 static void inspector_input_drop_older_than(
@@ -115,6 +301,7 @@ void runtime_inspector_recorder_destroy(runtime *rt)
     }
     inspector_recorder_free(rt->inspector_recorder);
     rt->inspector_recorder = NULL;
+    runtime_inspector_cp_index_clear(&rt->inspector_cp_index);
 }
 
 static struct runtime_inspector_recorder *inspector_recorder_ensure(runtime *rt)
@@ -142,13 +329,7 @@ static struct runtime_inspector_recorder *inspector_recorder_ensure(runtime *rt)
     if (rec->cadence_cycles == 0u) {
         rec->cadence_cycles = 19656u;
     }
-    slots = (uint32_t)(budget / (64ull * 1024ull));
-    if (slots < 2u) {
-        slots = 2u;
-    }
-    if (slots > 4096u) {
-        slots = 4096u;
-    }
+    slots = inspector_slot_count_for_budget(rt->inspector_memory_mb);
     rec->slots = (runtime_inspector_checkpoint *)calloc(slots, sizeof(*rec->slots));
     rec->slot_count = slots;
     rec->input_cap = RUNTIME_INSPECTOR_INPUT_CAP_DEFAULT;
@@ -192,7 +373,7 @@ static void inspector_on_media(void *user, uint64_t cycle, int device)
     runtime_inspector_on_media_event((runtime *)user, cycle, device);
 }
 
-bool runtime_inspector_checkpoint_take(runtime *rt)
+bool runtime_inspector_checkpoint_take_for_frame(runtime *rt, uint64_t film_cycle)
 {
     struct runtime_inspector_recorder *rec;
     runtime_inspector_checkpoint *cp;
@@ -216,10 +397,10 @@ bool runtime_inspector_checkpoint_take(runtime *rt)
         return false;
     }
     while (rec->count > 0u && rec->used + size > rec->memory_budget) {
-        inspector_drop_oldest(rec);
+        inspector_drop_oldest(rt, rec);
     }
     if (rec->count == rec->slot_count) {
-        inspector_drop_oldest(rec);
+        inspector_drop_oldest(rt, rec);
     }
     blob = (uint8_t *)malloc(size);
     if (blob == NULL) {
@@ -233,15 +414,22 @@ bool runtime_inspector_checkpoint_take(runtime *rt)
     free(cp->blob);
     memset(cp, 0, sizeof(*cp));
     cp->cycle = cycle;
+    cp->film_cycle = film_cycle;
     cp->size = size;
     cp->blob = blob;
     rec->head = (rec->head + 1u) % rec->slot_count;
     rec->count++;
     rec->used += size;
     rec->last_checkpoint_cycle = cycle;
+    inspector_cp_index_push(&rt->inspector_cp_index, cycle, film_cycle);
     inspector_input_drop_older_than(
         rec, rec->count > 0u ? inspector_cp_at(rec, 0u)->cycle : cycle);
     return true;
+}
+
+bool runtime_inspector_checkpoint_take(runtime *rt)
+{
+    return runtime_inspector_checkpoint_take_for_frame(rt, 0u);
 }
 
 void runtime_inspector_recorder_set_enabled(runtime *rt, bool enabled)
@@ -356,18 +544,8 @@ bool runtime_inspector_recorder_is_recording(const runtime *rt)
 
 void runtime_inspector_after_step(runtime *rt)
 {
-    struct runtime_inspector_recorder *rec;
-    uint64_t cycle;
-
-    if (rt == NULL || rt->inspector_recorder == NULL ||
-        !rt->inspector_recorder->recording) {
-        return;
-    }
-    rec = rt->inspector_recorder;
-    cycle = rt->machine.clock.cycle;
-    if (cycle - rec->last_checkpoint_cycle >= (uint64_t)rec->cadence_cycles) {
-        (void)runtime_inspector_checkpoint_take(rt);
-    }
+    /* Record lattice births on frame publish + boundary, not cadence. */
+    (void)rt;
 }
 
 static const runtime_inspector_checkpoint *inspector_nearest_cp(
@@ -610,6 +788,7 @@ static void inspector_truncate_to_cycle(
         rec->used = 0u;
     }
     inspector_input_drop_older_than(rec, cycle);
+    inspector_cp_index_sync_from_recorder(rt, rec);
 }
 
 void runtime_inspector_on_media_event(runtime *rt, uint64_t cycle, int device)
@@ -653,7 +832,11 @@ void runtime_inspector_on_history_invalidate(runtime *rt)
     struct runtime_inspector_recorder *rec;
     uint32_t i;
 
-    if (rt == NULL || rt->inspector_recorder == NULL) {
+    if (rt == NULL) {
+        return;
+    }
+    if (rt->inspector_recorder == NULL) {
+        runtime_inspector_cp_index_clear(&rt->inspector_cp_index);
         return;
     }
     rec = rt->inspector_recorder;
@@ -669,6 +852,7 @@ void runtime_inspector_on_history_invalidate(runtime *rt)
     rec->input_head = 0u;
     rec->start_kind = RUNTIME_HISTORY_MEDIA_CHANGE_UNKNOWN;
     rec->start_arg1 = 0u;
+    runtime_inspector_cp_index_clear(&rt->inspector_cp_index);
     if (rec->recording) {
         (void)runtime_inspector_checkpoint_take(rt);
     }

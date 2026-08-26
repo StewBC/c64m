@@ -1349,6 +1349,24 @@ bool runtime_client_copy_frame_by_cycle_exact(
         client->frame_ring, machine_cycle, out_frame);
 }
 
+bool runtime_client_copy_inspector_cell_film(
+    runtime_client *client,
+    uint64_t preview_cycle,
+    c64_frame *out_frame) {
+    uint64_t film_cycle = 0u;
+
+    if (client == NULL || client->inspector_cp_index == NULL ||
+        client->frame_ring == NULL || out_frame == NULL) {
+        return false;
+    }
+    if (!runtime_inspector_cp_index_lookup_film(
+            client->inspector_cp_index, preview_cycle, NULL, &film_cycle)) {
+        return false;
+    }
+    return runtime_frame_ring_copy_by_cycle_exact(
+        client->frame_ring, film_cycle, out_frame);
+}
+
 void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording) {
     if (client == NULL || client->frame_ring == NULL) {
         return;

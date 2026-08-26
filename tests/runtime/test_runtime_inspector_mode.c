@@ -697,6 +697,152 @@ int main(void)
     expect_true("leave noop live", !runtime_inspector_in_inspect(rt));
 
     stop_runtime(rt, client);
+
+    /* PR2: frame-synced CP birth + scrub cell-film join. */
+    {
+        uint64_t cps0;
+        uint64_t cps1;
+        uint64_t film_a = 0u;
+        uint64_t film_b = 0u;
+        uint64_t cell_a = 0u;
+        uint64_t cell_b = 0u;
+        c64_frame got;
+        runtime_frame_ring_info fi;
+        uint64_t mid;
+
+        fill_base_config(&config);
+        rt = start_runtime(&config, &client);
+        drain(client);
+        expect_true("pr2 inspector on", runtime_inspector_enabled(rt));
+        cps0 = runtime_inspector_checkpoint_count(rt);
+        expect_true("pr2 startup cp", cps0 >= 1u);
+
+        /* Many after_step cycles without frame_complete must not mint CPs. */
+        {
+            uint64_t before = runtime_inspector_checkpoint_count(rt);
+            size_t i;
+            for (i = 0u; i < 64u; ++i) {
+                runtime_inspector_after_step(rt);
+            }
+            expect_true(
+                "pr2 no cadence take",
+                runtime_inspector_checkpoint_count(rt) == before);
+        }
+
+        expect_true("pr2 step frame a", runtime_client_step_frame(client));
+        expect_true(
+            "pr2 frame a done",
+            poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+        drain(client);
+        cps1 = runtime_inspector_checkpoint_count(rt);
+        expect_true("pr2 birth on frame a", cps1 == cps0 + 1u);
+        expect_true(
+            "pr2 film a",
+            runtime_inspector_cp_index_lookup_film(
+                &rt->inspector_cp_index,
+                rt->machine.clock.cycle,
+                &cell_a,
+                &film_a));
+        expect_true("pr2 film_a nonzero", film_a != 0u);
+        expect_true(
+            "pr2 film_a exact",
+            runtime_frame_ring_copy_by_cycle_exact(&rt->frame_ring, film_a, &got));
+        expect_true("pr2 film_a cycle", got.machine_cycle == film_a);
+
+        expect_true("pr2 step frame b", runtime_client_step_frame(client));
+        expect_true(
+            "pr2 frame b done",
+            poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+        drain(client);
+        expect_true(
+            "pr2 birth on frame b",
+            runtime_inspector_checkpoint_count(rt) == cps1 + 1u);
+        expect_true(
+            "pr2 film b",
+            runtime_inspector_cp_index_lookup_film(
+                &rt->inspector_cp_index,
+                rt->machine.clock.cycle,
+                &cell_b,
+                &film_b));
+        expect_true("pr2 film_b after a", film_b > film_a);
+        expect_true("pr2 cell_b after a", cell_b > cell_a);
+
+        mid = film_a + (film_b - film_a) / 2u;
+        if (mid <= film_a) {
+            mid = film_a + 1u;
+        }
+        expect_true(
+            "pr2 exact off-key miss",
+            !runtime_frame_ring_copy_by_cycle_exact(&rt->frame_ring, mid, &got));
+        /* Quantize between films lands on cell_a and blits film_a (not pink). */
+        expect_true(
+            "pr2 join quantized cell",
+            runtime_client_copy_inspector_cell_film(client, mid, &got));
+        expect_true("pr2 join quantized film_a", got.machine_cycle == film_a);
+
+        /* Enter Inspect (recording off): index survives; join still resolves. */
+        token = runtime_client_alloc_request_token(client);
+        expect_true("pr2 enter", runtime_client_inspector_enter(client, token));
+        expect_true(
+            "pr2 enter event",
+            wait_inspector_mode(
+                client, token, &ev, NULL, RUNTIME_STATE_CHANGED_INSPECTOR_ENTER));
+        expect_true(
+            "pr2 enter ok",
+            ev.data.inspector_mode.status == RUNTIME_INSPECTOR_ENTER_OK);
+        expect_true("pr2 inspecting", runtime_inspector_in_inspect(rt));
+        expect_true(
+            "pr2 recording disarmed",
+            !runtime_inspector_recorder_is_recording(rt));
+        expect_true(
+            "pr2 post-enter join a",
+            runtime_client_copy_inspector_cell_film(client, cell_a, &got));
+        expect_true("pr2 post-enter film_a", got.machine_cycle == film_a);
+        expect_true(
+            "pr2 post-enter join b",
+            runtime_client_copy_inspector_cell_film(client, cell_b, &got));
+        expect_true("pr2 post-enter film_b", got.machine_cycle == film_b);
+        runtime_frame_ring_get_info(&rt->frame_ring, &fi);
+        expect_true("pr2 film retained", fi.count >= 2u);
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true("pr2 leave", runtime_client_inspector_leave(client, token));
+        expect_true(
+            "pr2 leave event",
+            wait_inspector_mode(
+                client, token, &ev, NULL, RUNTIME_STATE_CHANGED_INSPECTOR_LEAVE));
+
+        /* Neighbour-miss: cell film_cycle dropped; neighbour still retained.
+           nearest-≤ from a later preview would show film_b; join for cell_a
+           must not. */
+        runtime_frame_ring_drop_older_than(&rt->frame_ring, film_b);
+        expect_true(
+            "pr2 film_a dropped",
+            !runtime_frame_ring_copy_by_cycle_exact(&rt->frame_ring, film_a, &got));
+        expect_true(
+            "pr2 neighbour film_b retained",
+            runtime_frame_ring_copy_by_cycle_exact(&rt->frame_ring, film_b, &got));
+        expect_true(
+            "pr2 nearest at film_b hits neighbour",
+            runtime_frame_ring_copy_by_cycle(&rt->frame_ring, film_b, &got) &&
+                got.machine_cycle == film_b);
+        expect_true(
+            "pr2 join refuses neighbour for cell_a",
+            !runtime_client_copy_inspector_cell_film(client, cell_a, &got));
+        expect_true(
+            "pr2 join b after drop a",
+            runtime_client_copy_inspector_cell_film(client, cell_b, &got));
+        expect_true("pr2 join b cycle", got.machine_cycle == film_b);
+
+        /* Tape wipe clears the scrub index. */
+        runtime_inspector_on_history_invalidate(rt);
+        expect_true(
+            "pr2 wipe clears join",
+            !runtime_client_copy_inspector_cell_film(client, cell_b, &got));
+
+        stop_runtime(rt, client);
+    }
+
     remove("runtime_insp_mode_64c.bin");
     remove("runtime_insp_mode_character.bin");
     return 0;

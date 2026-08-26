@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 typedef struct runtime runtime;
+typedef struct mutex mutex;
 
 enum {
     RUNTIME_INSPECTOR_DEFAULT_MEMORY_MB = 128,
@@ -54,6 +55,33 @@ typedef enum runtime_inspector_enter_status {
     RUNTIME_INSPECTOR_ENTER_FAILED
 } runtime_inspector_enter_status;
 
+/* Compact shared Record index for scrub join: (cycle, film_cycle) only.
+ * Mutex-safe like the frame ring; mirrors retained CP slots across enter
+ * disarm; cleared only with the tape. */
+typedef struct runtime_inspector_cp_index_entry {
+    uint64_t cycle;
+    uint64_t film_cycle; /* 0 = no preferred still at birth */
+} runtime_inspector_cp_index_entry;
+
+typedef struct runtime_inspector_cp_index {
+    mutex *mutex;
+    runtime_inspector_cp_index_entry *entries;
+    uint32_t capacity;
+    uint32_t count;
+    uint32_t head;
+} runtime_inspector_cp_index;
+
+bool runtime_inspector_cp_index_init(
+    runtime_inspector_cp_index *index, uint32_t capacity);
+void runtime_inspector_cp_index_destroy(runtime_inspector_cp_index *index);
+void runtime_inspector_cp_index_clear(runtime_inspector_cp_index *index);
+/* Nearest retained cell with cycle <= preview. false if none or film_cycle 0. */
+bool runtime_inspector_cp_index_lookup_film(
+    runtime_inspector_cp_index *index,
+    uint64_t preview_cycle,
+    uint64_t *out_cell_cycle,
+    uint64_t *out_film_cycle);
+
 /* I0 master switch. Off->on arms film (if budget > 0) and starts the
  * checkpoint recorder. Never arms HST1. On->off stops Inspector recording
  * only; standalone HST1 / film are left alone.
@@ -66,6 +94,8 @@ uint32_t runtime_inspector_memory_mb(const runtime *rt);
 void runtime_inspector_recorder_set_enabled(runtime *rt, bool enabled);
 bool runtime_inspector_recorder_is_recording(const runtime *rt);
 bool runtime_inspector_checkpoint_take(runtime *rt);
+/* Frame-synced birth: preferred still key (0 = none / turbo-display). */
+bool runtime_inspector_checkpoint_take_for_frame(runtime *rt, uint64_t film_cycle);
 /* Load nearest checkpoint <= cycle into dst, then sealed-replay inputs to
  * cycle. I1 tests pass a scratch machine; I2 land uses load_nearest into the
  * live c64_t instead of this path. */
@@ -74,6 +104,7 @@ bool runtime_inspector_materialize(runtime *rt, uint64_t cycle, c64_t *dst);
 bool runtime_inspector_load_nearest_checkpoint(
     runtime *rt, uint64_t cycle, c64_t *dst);
 void runtime_inspector_window_info(const runtime *rt, runtime_inspector_window *out);
+/* Idle for CP birth: lattice advances on frame publish, not cadence. */
 void runtime_inspector_after_step(runtime *rt);
 void runtime_inspector_on_media_event(runtime *rt, uint64_t cycle, int device);
 void runtime_inspector_on_history_invalidate(runtime *rt);

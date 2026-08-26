@@ -61,6 +61,7 @@ static void runtime_inspector_reattach_live_hooks(runtime *rt);
 static void runtime_inspector_publish_head(runtime *rt);
 static void runtime_inspector_publish_leave_frame(runtime *rt, uint64_t now_cycle);
 static void runtime_commit_turbo_mode(runtime *rt, uint32_t multiplier);
+static void runtime_finish_to_instruction_boundary(runtime *rt);
 
 /* Turbo mode helpers. Field name remains active_turbo_multiplier; values are
    RUNTIME_TURBO_MODE_* (1=normal, 2=max free-run full paint, 3=warp free-run). */
@@ -1278,15 +1279,22 @@ static void runtime_publish_presented_frame(runtime *rt) {
 }
 
 static bool runtime_publish_completed_frame(runtime *rt) {
+    uint64_t film_cycle = 0u;
+    bool ok;
+
     if (rt->inspecting) {
-        /* D16: sealed execute does not push the frame ring. */
+        /* D16: sealed execute does not push the frame ring or birth CPs. */
         return true;
     }
     if (runtime_turbo_display_mode(rt)) {
-        /* Warp: the live renderer is off, so there are no real pixels to
-           record. The ring deliberately stalls rather than storing geometric
-           debug snapshots that would look like frames but are not. */
-        return runtime_publish_completed_frame_turbo(rt);
+        /* Warp/FAST: live pixels are off; ring stalls. Lattice still advances
+           when recording (film_cycle = 0). MAX is not turbo-display. */
+        ok = runtime_publish_completed_frame_turbo(rt);
+        if (runtime_inspector_recorder_is_recording(rt)) {
+            runtime_finish_to_instruction_boundary(rt);
+            (void)runtime_inspector_checkpoint_take_for_frame(rt, 0u);
+        }
+        return ok;
     }
 
     if (!c64_copy_completed_frame(&rt->machine, &rt->publish_frame)) {
@@ -1296,11 +1304,14 @@ static bool runtime_publish_completed_frame(runtime *rt) {
 
     /* Record before publishing: the ring must see every completed frame, even
        the ones the UI drops because it is still holding the previous one. */
-    (void)runtime_frame_ring_push(&rt->frame_ring, &rt->publish_frame);
+    if (runtime_frame_ring_push(&rt->frame_ring, &rt->publish_frame)) {
+        film_cycle = rt->publish_frame.machine_cycle;
+    }
 
-    if (rt->inspecting) {
-        /* D16: sealed execute does not push the frame ring. */
-        return true;
+    if (runtime_inspector_recorder_is_recording(rt)) {
+        /* Non-reentrant: do not use runtime_finish_pending_state_snapshot_instruction. */
+        runtime_finish_to_instruction_boundary(rt);
+        (void)runtime_inspector_checkpoint_take_for_frame(rt, film_cycle);
     }
 
     return runtime_publish_frame_copy(rt, &rt->publish_frame);

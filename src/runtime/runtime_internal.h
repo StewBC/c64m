@@ -45,6 +45,7 @@ struct runtime_client {
     struct runtime_rpc_payload_pool *rpc_payload_pool;
     struct runtime_frame_ring *frame_ring;
     struct runtime_vic_ring *vic_ring;
+    struct runtime_inspector_cp_index *inspector_cp_index;
     /* Monotonic allocator for request_token (starts at 1; 0 reserved). */
     uint64_t next_request_token;
     /* Stamped onto outgoing commands as source session (0 = unknown). */
@@ -205,6 +206,7 @@ struct runtime {
     bool inspector_enabled_saved_for_max;
     bool inspector_empty_tape_warned;
     struct runtime_inspector_recorder *inspector_recorder;
+    runtime_inspector_cp_index inspector_cp_index;
     bool inspecting;
     uint8_t *inspector_now_blob;
     size_t inspector_now_size;

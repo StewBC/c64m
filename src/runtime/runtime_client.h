@@ -306,6 +306,14 @@ bool runtime_client_copy_frame_by_cycle_exact(
     uint64_t machine_cycle,
     c64_frame *out_frame);
 
+/* Scrub cell-film join: quantize preview to nearest CP ≤, then exact film copy
+ * at that cell's film_cycle. Local shared-index read (no worker RPC). false →
+ * full pink (no still / neighbour-only). */
+bool runtime_client_copy_inspector_cell_film(
+    runtime_client *client,
+    uint64_t preview_cycle,
+    c64_frame *out_frame);
+
 void runtime_client_set_frame_ring_recording(runtime_client *client, bool recording);
 
 void runtime_client_clear_frame_ring(runtime_client *client);

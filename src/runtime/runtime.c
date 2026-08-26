@@ -145,6 +145,7 @@ runtime *runtime_create(const runtime_config *config) {
     rt->client.rpc_payload_pool = &rt->rpc_payload_pool;
     rt->client.frame_ring = &rt->frame_ring;
     rt->client.vic_ring = &rt->vic_ring;
+    rt->client.inspector_cp_index = &rt->inspector_cp_index;
 
     /* Default session for omit-session_id commands (compat / single asker). */
     rt->next_session_id = 1u;
@@ -236,6 +237,25 @@ runtime *runtime_create(const runtime_config *config) {
             &rt->vic_ring,
             (uint64_t)rt->vic_ring_memory_mb * 1024u * 1024u);
     }
+    {
+        uint32_t cp_slots = 0u;
+        if (rt->inspector_memory_mb != 0u &&
+            rt->inspector_memory_mb <= RUNTIME_INSPECTOR_MAX_MEMORY_MB) {
+            uint64_t budget =
+                (uint64_t)rt->inspector_memory_mb * 1024ull * 1024ull;
+            cp_slots = (uint32_t)(budget / (64ull * 1024ull));
+            if (cp_slots < 2u) {
+                cp_slots = 2u;
+            }
+            if (cp_slots > 4096u) {
+                cp_slots = 4096u;
+            }
+        }
+        if (!runtime_inspector_cp_index_init(&rt->inspector_cp_index, cp_slots)) {
+            runtime_destroy(rt);
+            return NULL;
+        }
+    }
 
     if (rt->history_memory_mb > 4096u ||
         (rt->history_memory_mb != 0u && rt->history_memory_mb < 16u) ||
@@ -272,6 +292,7 @@ void runtime_destroy(runtime *rt) {
     rt->history = NULL;
     runtime_inspector_destroy(rt);
     runtime_inspector_recorder_destroy(rt);
+    runtime_inspector_cp_index_destroy(&rt->inspector_cp_index);
     runtime_frame_ring_destroy(&rt->frame_ring);
     runtime_vic_ring_destroy(&rt->vic_ring);
     if (rt->rpc_payload_pool.mutex != NULL) {
