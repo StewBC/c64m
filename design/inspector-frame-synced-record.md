@@ -4,7 +4,7 @@
 |-------|-------|
 | **Author** | swessels |
 | **Date** | 2026-08-25 |
-| **Status** | Draft |
+| **Status** | Landed |
 | **Canonical path** | [`design/inspector-frame-synced-record.md`](inspector-frame-synced-record.md) |
 
 ---

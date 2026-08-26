@@ -7146,7 +7146,9 @@ static bool run_main_loop(
             uint64_t preview_cycle = 0u;
             if (frontend_inspector_preview(ui, &preview_cycle)) {
                 static c64_frame film;
-                if (runtime_client_copy_frame_at(client, preview_cycle, true, &film)) {
+                /* Cell-film join only: never nearest-<= neighbour still. */
+                if (runtime_client_copy_inspector_cell_film(
+                        client, preview_cycle, &film)) {
                     frontend_inspector_set_preview_film(ui, true);
                     (void)frontend_submit_frame(ui, &film);
                     debug_state.has_frame = true;

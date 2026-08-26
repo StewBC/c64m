@@ -102,8 +102,9 @@ reuses default UI session `0` and closes the history cursor on leave.
 Frame ring (`runtime_frame_ring`): rolling completed **indexed8** frames so
 a glitch still exists after a late human pause. Default 128 MiB (~827 PAL
 frames). Keyed by frame number **and** `machine_cycle`. Warp geometric dumps
-are not stored. Lookup: nearest at-or-before; older than the window is
-`not-found`, never a neighbour.
+are not stored. Generic lookup: nearest at-or-before; older than the window
+is `not-found`. Inspector CRT uses **exact** `machine_cycle` / cell-film join
+only (never a neighbour still labeled as this cycle).
 
 VIC ring (`runtime_vic_ring`): per-line latched VIC state, including the
 sprite X used for paint. Default 16 MiB. `vic-ring-record off` stops
@@ -137,9 +138,41 @@ leave-max; turbo 1 restores Record into an empty window.
 | Record | Opt-in checkpoint + input log (+ film if the frame-ring budget is > 0) |
 | Inspect | Mode: the live `c64_t` **is** the past. Views keep talking to it. |
 | Land | Quantized: nearest checkpoint `<=` cycle. Exact: `land_to_cycle` (checkpoint + sealed reexecute). Far right / live = restore NOW. |
-| Film | Indexed8 frame-ring preview. Missing stills are **pink**, never invented. |
+| Film | Preferred Indexed8 still for a Record cell (`film_cycle`). Scrub miss = full pink; committed miss = reconstruct. Never invent a neighbour still. |
 | Sealed | During re-execute: CPU observer off, mem-access CB off, no frame-ring push, no host audio, no host media write-through |
 | NOW | Blob of live state taken on enter. Leave restores it, paused. |
+
+### Record clock and timeline
+
+Normal checkpoints birth on the **frame publish path**
+(`runtime_publish_completed_frame`): push film (when not turbo-display) →
+non-reentrant instruction-boundary finish → checkpoint with that
+`film_cycle` (0 when the ring did not push). Free-running
+`cycles_per_frame` cadence on `after_step` is **not** the Record clock.
+Non-frame allow-list takes (`film_cycle = 0`): Record enable startup, enter
+Inspect (LIVE-adjacent), media-empty refill, history-invalidate refill.
+Sealed Inspect does not push film or birth CPs. Warp/FAST stall film but
+still birth CPs when recording; MAX can still push film.
+
+**Checkpoints are the timeline index** for scrub / `[-]` / `[+]`. Film is the
+preferred picture per cell; retention budgets may differ. Compact shared
+`(cycle, film_cycle)` index supports UI cell-film join (local read, no scrub
+RPC); index survives enter disarm and clears only with the tape.
+
+### CRT / honesty
+
+| Situation | CRT |
+|-----------|-----|
+| Scrub thumb-down, cell-film join hits | Blit that still |
+| Scrub thumb-down, no film | **Full pink** (no reconstruct on drag) |
+| After land / `[-]` / `[+]`, focus on a CP with exact `film_cycle` hit | Blit film |
+| After mid-frame focus between CP cells (`land_to_cycle` etc.) | Reconstruct only — no neighbour still |
+| After land / `[-]` / `[+]`, no usable film | **Reconstruct** from landed machine; **no** pink watermark |
+| Any path | **Never** neighbour still labeled as this cycle |
+
+Worker land/± completion uses `runtime_inspector_publish_committed_head`
+(film-first, else present/reconstruct). LIVE / NOW is the right-edge
+exception (enter/leave presentation), not "missing film ⇒ pink."
 
 Pinned product rules:
 
@@ -149,7 +182,6 @@ Pinned product rules:
   newest → LIVE/NOW). F10-family / F12 remain sealed execute toward live.
   Nothing executes past live.
 - F12 stops on the one breakpoint list or at live; stays in Inspect.
-- CRT pink policy unfinished until PR4 (scrub pink vs landed reconstruct).
 - Guest media **write that succeeds** cuts the window (older checkpoints,
   inputs, and film drop). A refused write-protect does not cut. Housekeeping
   (eject flush, save-state, export) must not cut.
@@ -161,6 +193,7 @@ Control: `get-state` reports `mode=live|inspector` and `focus_cycle`.
 `enter-inspector` / `leave-inspector`. Tests: `runtime_inspector`,
 `runtime_inspector_replay`, `runtime_inspector_mode`,
 `inspector_control_integration`. UI: `frontend-debugger.md`.
+Design history: `design/inspector-frame-synced-record.md`.
 
 ## Save-state
 

@@ -261,14 +261,16 @@ restores that NOW and stays paused; it does not resume.
 While Inspecting, window titles use **Inspect** and pane headers turn cobalt. Memory and
 registers are read-only. The Breakpoints tab is the same live list.
 
-The slider is **oldest retained snapshot -> live**. Drag is preview only: the C64 does not
-move. The CRT shows a stored still if the frame ring has one at that cycle, otherwise a
-loud pink fill of the CRT area (`RGB 255,0,255`). Releasing the thumb **lands** (loads the
-checkpoint at or before that time, or live at the right end) and paints from the landed
-C64. `[-]` / `[+]` step one guest video frame. F10 / F11 / Shift+F10 / F12 / Shift+F12
-re-execute on that C64 and stop at a breakpoint or live; they stay in Inspector. F12 does
-not resume the live line. Opt+Left is unbound. Opt+B still toggles the same breakpoint
-list.
+The slider is **oldest retained checkpoint -> live**. Drag is preview only: the C64 does
+not move. The CRT shows that cell's stored still when the Record join finds one,
+otherwise a loud pink fill of the CRT area (`RGB 255,0,255`) while the thumb is down
+(no reconstruct while dragging). Releasing the thumb **lands** (loads the checkpoint at
+or before that time, or live at the right end); the slider snaps to the landed cycle.
+After land the CRT uses the cell's still when present, otherwise paints from the landed
+C64 (no pink watermark). `[-]` / `[+]` step one retained checkpoint (past the newest,
+`[+]` restores live). F10 / F11 / Shift+F10 / F12 / Shift+F12 re-execute on that C64 and
+stop at a breakpoint or live; they stay in Inspector. F12 does not resume the live line.
+Opt+Left is unbound. Opt+B still toggles the same breakpoint list.
 
 A successful guest disk write **drops earlier Inspector history**. The tab shows
 `disk write, device N @ cycle X` at the left edge of the remaining window.

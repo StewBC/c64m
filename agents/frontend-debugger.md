@@ -30,11 +30,22 @@ in `[browse]`. State hotkeys: Opt+Shift+`>` / `<`.
 
 Record off: Record checkbox only. Record on: Inspect plus window summary
 (oldest / live / duration). In Inspect: Leave Inspector, `[-]` slider `[+]`,
-cycle lines. Thumb-down is film preview or pink; release lands. Window
-headers use dark cobalt while Inspecting; do not tint the window background.
+cycle lines. Window headers use dark cobalt while Inspecting; do not tint
+the window background.
 
-Product rules and control honesty: `runtime-control.md`. Do not walk HST1
-to place the slider. Inspector Record does **not** arm or stop HST1.
+Scrub / `[-]` / `[+]` UI:
+
+- Thumb-down preview uses `runtime_client_copy_inspector_cell_film` (quantize
+  to nearest CP `<=`, exact `film_cycle` blit). Miss → full pink. No
+  reconstruct and no nearest-`<=` neighbour film while dragging.
+- Release lands (nearest CP `<=`, or LIVE at the right end). After land /
+  `[-]` / `[+]`, the slider **snaps** to the committed focus cycle. Worker
+  publishes film-first else reconstruct; UI must not pink-overlay when the
+  thumb is up (`thumb_down == false`).
+- `[-]` / `[+]` walk Record checkpoints (intent still named FRAME_STEP).
+
+Product rules and CRT table: `runtime-control.md`. Do not walk HST1 to place
+the slider. Inspector Record does **not** arm or stop HST1.
 
 ## Forensics
 

@@ -298,7 +298,7 @@ bool frontend_routes_keyboard_to_c64(const frontend *ui);
 bool frontend_wants_text_input(const frontend *ui);
 bool frontend_handle_view_cycle_key(frontend *ui, const SDL_KeyboardEvent *key);
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame);
-/* True while the Inspector thumb is down (film/pink preview). */
+/* True while the Inspector thumb is down (cell-film or full-pink preview). */
 bool frontend_inspector_preview(const frontend *ui, uint64_t *out_cycle);
 void frontend_inspector_set_preview_film(frontend *ui, bool has_film);
 /* Drop scrub preview so Leave / mode exit cannot keep showing a past still. */

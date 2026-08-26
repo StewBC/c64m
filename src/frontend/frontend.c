@@ -7742,6 +7742,7 @@ static void frontend_draw_misc_inspector(
         bool at_live = debug->inspector_focus_cycle >= debug->inspector_newest_cycle;
         bool thumb = ui->misc.inspector_thumb_down;
 
+        /* Snap thumb to committed focus after land / +/- (not while scrubbing). */
         if (!thumb) {
             slider = frontend_inspector_cycle_to_slider(
                 debug, debug->inspector_focus_cycle);
@@ -7776,6 +7777,7 @@ static void frontend_draw_misc_inspector(
                         false,
                         cycle);
                     ui->misc.inspector_thumb_down = false;
+                    ui->misc.inspector_preview_has_film = false;
                 }
             } else if ((hovered || moved) && down) {
                 ui->misc.inspector_thumb_down = true;
@@ -7795,7 +7797,7 @@ static void frontend_draw_misc_inspector(
     nk_layout_row_dynamic(ctx, 28.0f, 1);
     nk_label_wrap(
         ctx,
-        "retained snapshots -> live; stills where we have them, pink where we do not");
+        "retained checkpoints -> live; scrub: cell still or pink; landed: film or reconstruct");
 
     nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
     nk_layout_row_push(ctx, 0.48f);
