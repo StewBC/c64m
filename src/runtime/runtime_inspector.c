@@ -27,7 +27,6 @@ typedef struct runtime_inspector_input {
 
 struct runtime_inspector_recorder {
     bool recording;
-    uint32_t cadence_cycles;
     size_t memory_budget;
     size_t used;
     uint32_t slot_count;
@@ -326,10 +325,6 @@ static struct runtime_inspector_recorder *inspector_recorder_ensure(runtime *rt)
     }
     budget = (uint64_t)rt->inspector_memory_mb * 1024ull * 1024ull;
     rec->memory_budget = (size_t)budget;
-    rec->cadence_cycles = c64_config_cycles_per_frame(&rt->machine.config);
-    if (rec->cadence_cycles == 0u) {
-        rec->cadence_cycles = 19656u;
-    }
     slots = runtime_inspector_slot_count_for_budget(rt->inspector_memory_mb);
     rec->slots = (runtime_inspector_checkpoint *)calloc(slots, sizeof(*rec->slots));
     rec->slot_count = slots;
@@ -453,10 +448,6 @@ void runtime_inspector_recorder_set_enabled(runtime *rt, bool enabled)
         return;
     }
     rec->recording = true;
-    rec->cadence_cycles = c64_config_cycles_per_frame(&rt->machine.config);
-    if (rec->cadence_cycles == 0u) {
-        rec->cadence_cycles = 19656u;
-    }
     c64_set_input_event_callback(&rt->machine, inspector_log_input, rt);
     c64_set_media_event_callback(&rt->machine, inspector_on_media, rt);
     (void)runtime_inspector_checkpoint_take(rt);
@@ -942,14 +933,13 @@ uint64_t runtime_inspector_media_truncations(const runtime *rt)
 
 uint32_t runtime_inspector_cadence_cycles(const runtime *rt)
 {
-    if (rt != NULL && rt->inspector_recorder != NULL &&
-        rt->inspector_recorder->cadence_cycles != 0u) {
-        return rt->inspector_recorder->cadence_cycles;
+    uint32_t cycles;
+
+    if (rt == NULL) {
+        return 19656u;
     }
-    if (rt != NULL) {
-        return c64_config_cycles_per_frame(&rt->machine.config);
-    }
-    return 19656u;
+    cycles = c64_config_cycles_per_frame(&rt->machine.config);
+    return cycles != 0u ? cycles : 19656u;
 }
 
 void runtime_inspector_get_focus(const runtime *rt, runtime_inspector_focus *out)
@@ -1333,11 +1323,6 @@ bool runtime_inspector_checkpoint_step(runtime *rt, int direction)
     runtime_inspector_apply_live_seal(rt);
     runtime_inspector_sync_focus(rt);
     return true;
-}
-
-bool runtime_inspector_frame_step(runtime *rt, int direction)
-{
-    return runtime_inspector_checkpoint_step(rt, direction);
 }
 
 runtime_inspector_enter_status runtime_inspector_enter(runtime *rt)

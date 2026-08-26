@@ -1058,17 +1058,17 @@ bool runtime_client_inspector_land_to_cycle(
     return runtime_client_push(client, &command);
 }
 
-bool runtime_client_inspector_frame_step(
+bool runtime_client_inspector_checkpoint_step(
     runtime_client *client, int direction, uint64_t request_token)
 {
     runtime_command command = {
-        .type = RUNTIME_COMMAND_INSPECTOR_FRAME_STEP,
+        .type = RUNTIME_COMMAND_INSPECTOR_CHECKPOINT_STEP,
         .request_token = request_token,
     };
     if (client == NULL) {
         return false;
     }
-    command.data.inspector_frame_step.direction =
+    command.data.inspector_checkpoint_step.direction =
         direction > 0 ? 1 : (direction < 0 ? -1 : 0);
     return runtime_client_push(client, &command);
 }

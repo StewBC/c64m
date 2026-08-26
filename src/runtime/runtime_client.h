@@ -260,8 +260,8 @@ bool runtime_client_inspector_land(
     runtime_client *client, uint64_t cycle, uint64_t request_token);
 bool runtime_client_inspector_land_to_cycle(
     runtime_client *client, uint64_t cycle, uint64_t request_token);
-/* direction < 0 / > 0: Record CP walk via FRAME_STEP command. */
-bool runtime_client_inspector_frame_step(
+/* direction < 0 / > 0: Record checkpoint lattice walk. */
+bool runtime_client_inspector_checkpoint_step(
     runtime_client *client, int direction, uint64_t request_token);
 bool runtime_client_request_call_stack(runtime_client *client);
 

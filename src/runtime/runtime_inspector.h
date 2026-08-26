@@ -133,8 +133,6 @@ bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle);
    Loads the target checkpoint into the live c64_t (quantized). Does not
    sealed-hunt frame_complete. */
 bool runtime_inspector_checkpoint_step(runtime *rt, int direction);
-/* Thin alias of checkpoint_step. */
-bool runtime_inspector_frame_step(runtime *rt, int direction);
 runtime_inspector_mode runtime_inspector_current_mode(const runtime *rt);
 bool runtime_inspector_in_inspect(const runtime *rt);
 runtime_inspector_enter_status runtime_inspector_can_enter(const runtime *rt);
@@ -148,4 +146,5 @@ const char *runtime_inspector_window_start_name(runtime_history_media_change_kin
 uint64_t runtime_inspector_checkpoint_count(const runtime *rt);
 uint64_t runtime_inspector_checkpoints_dropped(const runtime *rt);
 uint64_t runtime_inspector_media_truncations(const runtime *rt);
+/* Approx frame length (cycles_per_frame); not the Record clock. */
 uint32_t runtime_inspector_cadence_cycles(const runtime *rt);

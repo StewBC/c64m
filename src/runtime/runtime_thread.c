@@ -5731,11 +5731,12 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             }
             break;
 
-        case RUNTIME_COMMAND_INSPECTOR_FRAME_STEP:
+        case RUNTIME_COMMAND_INSPECTOR_CHECKPOINT_STEP:
             /* [-]/[+]: checkpoint walk. */
             if (rt->inspecting) {
                 if (runtime_inspector_checkpoint_step(
-                        rt, (int)command->data.inspector_frame_step.direction)) {
+                        rt,
+                        (int)command->data.inspector_checkpoint_step.direction)) {
                     runtime_inspector_publish_committed_head(rt);
                     runtime_publish_state_changed(
                         rt,

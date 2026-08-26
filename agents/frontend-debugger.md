@@ -42,7 +42,7 @@ Scrub / `[-]` / `[+]` UI:
   `[-]` / `[+]`, the slider **snaps** to the committed focus cycle. Worker
   publishes film-first else reconstruct; UI must not pink-overlay when the
   thumb is up (`thumb_down == false`).
-- `[-]` / `[+]` walk Record checkpoints (intent still named FRAME_STEP).
+- `[-]` / `[+]` walk Record checkpoints (`INSPECTOR_CHECKPOINT_STEP`).
 
 Product rules and CRT table: `runtime-control.md`. Do not walk HST1 to place
 the slider. Inspector Record does **not** arm or stop HST1.

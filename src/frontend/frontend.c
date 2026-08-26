@@ -7753,7 +7753,7 @@ static void frontend_draw_misc_inspector(
         /* [-]/[+]: Record CP walk. */
         if (frontend_nk_action_button(ctx, "-", !thumb && !at_oldest)) {
             frontend_push_inspector_intent(
-                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP, false, 0u);
+                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, false, 0u);
         }
         nk_layout_row_push(ctx, 0.84f);
         {
@@ -7788,7 +7788,7 @@ static void frontend_draw_misc_inspector(
         nk_layout_row_push(ctx, 0.08f);
         if (frontend_nk_action_button(ctx, "+", !thumb && !at_live)) {
             frontend_push_inspector_intent(
-                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP, true, 0u);
+                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, true, 0u);
         }
         nk_layout_row_end(ctx);
         ui->misc.inspector_slider = slider;

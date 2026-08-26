@@ -78,8 +78,8 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_INSPECTOR_LEAVE,
     RUNTIME_COMMAND_INSPECTOR_LAND,
     RUNTIME_COMMAND_INSPECTOR_LAND_TO_CYCLE,
-    /* [-]/[+]: dispatches checkpoint_step (name still FRAME_STEP). */
-    RUNTIME_COMMAND_INSPECTOR_FRAME_STEP
+    /* [-]/[+]: Record checkpoint lattice walk. */
+    RUNTIME_COMMAND_INSPECTOR_CHECKPOINT_STEP
 } runtime_command_type;
 
 enum {
@@ -340,6 +340,6 @@ typedef struct runtime_command {
 
         struct {
             int8_t direction;
-        } inspector_frame_step;
+        } inspector_checkpoint_step;
     } data;
 } runtime_command;

@@ -575,7 +575,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "cp_step back",
-            runtime_client_inspector_frame_step(client, -1, token));
+            runtime_client_inspector_checkpoint_step(client, -1, token));
         expect_true(
             "[-] adjacent prev CP",
             wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 1u], 3.0));
@@ -586,7 +586,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "cp_step back again",
-            runtime_client_inspector_frame_step(client, -1, token));
+            runtime_client_inspector_checkpoint_step(client, -1, token));
         expect_true(
             "second [-] adjacent prev CP",
             wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 2u], 3.0));
@@ -597,7 +597,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "cp_step fwd",
-            runtime_client_inspector_frame_step(client, 1, token));
+            runtime_client_inspector_checkpoint_step(client, 1, token));
         expect_true(
             "[+] adjacent next CP",
             wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 1u], 3.0));
@@ -616,7 +616,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "[+] past newest",
-            runtime_client_inspector_frame_step(client, 1, token));
+            runtime_client_inspector_checkpoint_step(client, 1, token));
         t0 = clock();
         while ((!runtime_inspector_at_live(rt) ||
                 rt->machine.clock.cycle != live) &&
@@ -645,7 +645,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "[-] from between",
-            runtime_client_inspector_frame_step(client, -1, token));
+            runtime_client_inspector_checkpoint_step(client, -1, token));
         expect_true(
             "[-] between → lower CP",
             wait_focus_cycle(rt, client, cps[1u], 3.0));
@@ -660,7 +660,7 @@ int main(void)
         token = runtime_client_alloc_request_token(client);
         expect_true(
             "[+] from between",
-            runtime_client_inspector_frame_step(client, 1, token));
+            runtime_client_inspector_checkpoint_step(client, 1, token));
         expect_true(
             "[+] between → upper CP",
             wait_focus_cycle(rt, client, cps[2u], 3.0));
