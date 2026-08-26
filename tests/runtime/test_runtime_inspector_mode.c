@@ -489,6 +489,77 @@ int main(void)
         expect_true("live cycle after run", rt->machine.clock.cycle == cycles_now);
     }
 
+    /* [-]/[+] frame step after a quantized mid-timeline land. */
+    {
+        uint64_t old = 0u;
+        uint64_t live = 0u;
+        uint64_t n = 0u;
+        uint64_t mid;
+        uint64_t after_land;
+        uint64_t after_back;
+        uint64_t after_back2;
+        uint64_t after_fwd;
+        uint32_t cadence;
+        clock_t t0;
+
+        runtime_inspector_timeline_bounds(rt, &old, &live, &n);
+        expect_true("frame_step timeline", n >= 2u && live > old);
+        mid = old + (live - old) / 2u;
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "land mid for frame_step",
+            runtime_client_inspector_land(client, mid, token));
+        t0 = clock();
+        while (rt->machine.clock.cycle >= live &&
+               (double)(clock() - t0) / CLOCKS_PER_SEC < 2.0) {
+        }
+        drain(client);
+        after_land = rt->machine.clock.cycle;
+        expect_true("landed before live", after_land < live);
+        expect_true("landed at/after oldest", after_land >= old);
+
+        cadence = runtime_inspector_cadence_cycles(rt);
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "frame_step back",
+            runtime_client_inspector_frame_step(client, -1, token));
+        t0 = clock();
+        while (rt->machine.clock.cycle == after_land &&
+               (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
+        }
+        drain(client);
+        after_back = rt->machine.clock.cycle;
+        expect_true("[-] moved back", after_back < after_land);
+        expect_true(
+            "[-] stepped about a frame",
+            (after_land - after_back) > (uint64_t)(cadence / 4u));
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "frame_step back again",
+            runtime_client_inspector_frame_step(client, -1, token));
+        t0 = clock();
+        while (rt->machine.clock.cycle == after_back &&
+               (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
+        }
+        drain(client);
+        after_back2 = rt->machine.clock.cycle;
+        expect_true("second [-] moved back", after_back2 < after_back);
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "frame_step fwd",
+            runtime_client_inspector_frame_step(client, 1, token));
+        t0 = clock();
+        while (rt->machine.clock.cycle == after_back2 &&
+               (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
+        }
+        drain(client);
+        after_fwd = rt->machine.clock.cycle;
+        expect_true("[+] moved forward", after_fwd > after_back2);
+        expect_true("still inspecting after frame_step", runtime_inspector_in_inspect(rt));
+    }
+
     /* F12 from a past land stops at live, stays in Inspect. */
     {
         uint64_t old = 0u;
