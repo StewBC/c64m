@@ -5340,8 +5340,9 @@ static void runtime_inspector_publish_head(runtime *rt)
 }
 
 /* Everyday land / ± completion: film exact for the committed cell, else
-   reconstruct. After snapshot load paint buffers are cleared to unpainted
-   (width/height become non-zero garbage); copy_paint would publish black. */
+   reconstruct. LIVE is the exception: blit the last retained still (same as
+   scrub-right / Leave) so release does not jump past that picture. After CP
+   load, paint is unpainted — never copy_paint. */
 static void runtime_inspector_publish_committed_head(runtime *rt)
 {
     uint64_t focus;
@@ -5357,12 +5358,15 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
     focus = rt->machine.clock.cycle;
     if (runtime_inspector_cp_index_lookup_film(
             &rt->inspector_cp_index, focus, &cell_cycle, &film_cycle) &&
-        cell_cycle == focus &&
-        film_cycle != 0u &&
-        runtime_frame_ring_copy_by_cycle_exact(
-            &rt->frame_ring, film_cycle, &rt->publish_frame)) {
-        (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
-        return;
+        film_cycle != 0u) {
+        bool use_film =
+            (cell_cycle == focus) || runtime_inspector_at_live(rt);
+        if (use_film &&
+            runtime_frame_ring_copy_by_cycle_exact(
+                &rt->frame_ring, film_cycle, &rt->publish_frame)) {
+            (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
+            return;
+        }
     }
 
     if (c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
@@ -5371,9 +5375,8 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
 }
 
 /*
- * After Leave restores NOW, present a CRT that matches live — not the last
- * scrub film. Prefer the frame-ring still nearest at-or-before now_cycle
- * (raster-correct); fall back to a VIC+RAM dump when film is missing.
+ * After Leave restores NOW: prefer frame-ring still nearest ≤ now_cycle
+ * (last stuffed picture); dump only when film is missing.
  */
 static void runtime_inspector_publish_leave_frame(runtime *rt, uint64_t now_cycle)
 {
