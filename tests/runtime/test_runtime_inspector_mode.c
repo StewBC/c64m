@@ -1065,11 +1065,7 @@ int main(void)
             "pr2 warp ring stalled",
             fi_after.count == fi_before.count &&
                 fi_after.newest_cycle == fi_before.newest_cycle);
-        /* Newest cell has film_cycle=0 → join at live is a miss. */
-        expect_true(
-            "pr2 warp join miss",
-            !runtime_client_copy_inspector_cell_film(
-                client, rt->machine.clock.cycle, &got));
+        /* Newest warp cell has film_cycle=0; join skips it and uses earlier film. */
         {
             runtime_inspector_cp_index *idx = &rt->inspector_cp_index;
             uint32_t newest;
@@ -1083,6 +1079,13 @@ int main(void)
             expect_true("pr2 warp cell advanced", cell == rt->machine.clock.cycle ||
                 cell <= rt->machine.clock.cycle);
         }
+        expect_true(
+            "pr2 warp join skips zero-film cell",
+            runtime_client_copy_inspector_cell_film(
+                client, rt->machine.clock.cycle, &got));
+        expect_true(
+            "pr2 warp join earlier film",
+            got.machine_cycle == fi_before.newest_cycle);
 
         expect_true(
             "pr2 set max",

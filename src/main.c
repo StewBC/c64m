@@ -7146,6 +7146,8 @@ static bool run_main_loop(
             uint64_t preview_cycle = 0u;
             if (frontend_inspector_preview(ui, &preview_cycle)) {
                 static c64_frame film;
+                bool at_live = debug_state.inspector_window_valid &&
+                    preview_cycle >= debug_state.inspector_newest_cycle;
                 /* Cell-film join only: never nearest-<= neighbour still. */
                 if (runtime_client_copy_inspector_cell_film(
                         client, preview_cycle, &film)) {
@@ -7154,6 +7156,9 @@ static bool run_main_loop(
                     debug_state.has_frame = true;
                     debug_state.frame_number = film.frame_number;
                     debug_state.frame_cycle = film.machine_cycle;
+                } else if (at_live) {
+                    /* LIVE/NOW is not "missing film => pink". */
+                    frontend_inspector_set_preview_film(ui, true);
                 } else {
                     frontend_inspector_set_preview_film(ui, false);
                 }

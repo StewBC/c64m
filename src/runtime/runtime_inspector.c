@@ -223,17 +223,18 @@ bool runtime_inspector_cp_index_lookup_film(
         return false;
     }
     inspector_cp_index_lock(index);
-    /* Scan all retained entries (do not assume physical/logical sort). */
+    /* Greatest cycle ≤ preview that has a preferred still. Skip film_cycle=0
+       cells (enter/enable/refill, warp) so LIVE-adjacent scrub is not a miss. */
     for (i = 0u; i < index->count; ++i) {
         const runtime_inspector_cp_index_entry *entry =
             &index->entries[inspector_cp_index_logical_slot(index, i)];
-        if (entry->cycle <= preview_cycle) {
+        if (entry->cycle <= preview_cycle && entry->film_cycle != 0u) {
             if (best == NULL || entry->cycle >= best->cycle) {
                 best = entry;
             }
         }
     }
-    if (best != NULL && best->film_cycle != 0u) {
+    if (best != NULL) {
         if (out_cell_cycle != NULL) {
             *out_cell_cycle = best->cycle;
         }
