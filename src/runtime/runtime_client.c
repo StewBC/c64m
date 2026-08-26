@@ -1338,7 +1338,7 @@ bool runtime_client_copy_frame_at(
         runtime_frame_ring_copy_by_frame(client->frame_ring, target, out_frame);
 }
 
-bool runtime_client_copy_frame_exact_cycle(
+bool runtime_client_copy_frame_by_cycle_exact(
     runtime_client *client,
     uint64_t machine_cycle,
     c64_frame *out_frame) {
