@@ -241,15 +241,8 @@ runtime *runtime_create(const runtime_config *config) {
         uint32_t cp_slots = 0u;
         if (rt->inspector_memory_mb != 0u &&
             rt->inspector_memory_mb <= RUNTIME_INSPECTOR_MAX_MEMORY_MB) {
-            uint64_t budget =
-                (uint64_t)rt->inspector_memory_mb * 1024ull * 1024ull;
-            cp_slots = (uint32_t)(budget / (64ull * 1024ull));
-            if (cp_slots < 2u) {
-                cp_slots = 2u;
-            }
-            if (cp_slots > 4096u) {
-                cp_slots = 4096u;
-            }
+            cp_slots = runtime_inspector_slot_count_for_budget(
+                rt->inspector_memory_mb);
         }
         if (!runtime_inspector_cp_index_init(&rt->inspector_cp_index, cp_slots)) {
             runtime_destroy(rt);

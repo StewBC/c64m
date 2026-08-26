@@ -843,6 +843,182 @@ int main(void)
         stop_runtime(rt, client);
     }
 
+    /* PR2: media truncate after CP-ring wrap keeps chronological scrub join. */
+    {
+        uint32_t i;
+        uint64_t keep_cell = 0u;
+        uint64_t keep_film = 0u;
+        uint64_t drop_before = 0u;
+        uint64_t dropped0;
+        c64_frame got;
+
+        fill_base_config(&config);
+        config.inspector_memory_mb = 1u; /* small tape — fill/wrap quickly */
+        rt = start_runtime(&config, &client);
+        drain(client);
+        dropped0 = runtime_inspector_checkpoints_dropped(rt);
+
+        for (i = 0u; i < 64u; ++i) {
+            expect_true("pr2 wrap step", runtime_client_step_frame(client));
+            expect_true(
+                "pr2 wrap frame done",
+                poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+            if (runtime_inspector_checkpoints_dropped(rt) > dropped0) {
+                break;
+            }
+        }
+        drain(client);
+        expect_true(
+            "pr2 wrap dropped",
+            runtime_inspector_checkpoints_dropped(rt) > dropped0);
+        expect_true(
+            "pr2 wrap join before trunc",
+            runtime_inspector_cp_index_lookup_film(
+                &rt->inspector_cp_index,
+                rt->machine.clock.cycle,
+                &keep_cell,
+                &keep_film));
+        expect_true("pr2 wrap keep film", keep_film != 0u);
+        /* Truncate away a prefix while leaving the newest cell. */
+        {
+            uint64_t old = 0u;
+            uint64_t live = 0u;
+            uint64_t n = 0u;
+            runtime_inspector_timeline_bounds(rt, &old, &live, &n);
+            expect_true("pr2 wrap window", n >= 2u && old < keep_cell);
+            drop_before = old + (keep_cell - old) / 2u;
+            if (drop_before <= old) {
+                drop_before = keep_cell;
+            }
+        }
+        runtime_inspector_on_media_event(rt, drop_before, 8);
+        expect_true(
+            "pr2 wrap trunc kept some",
+            runtime_inspector_checkpoint_count(rt) >= 1u);
+        expect_true(
+            "pr2 wrap join after trunc",
+            runtime_client_copy_inspector_cell_film(client, keep_cell, &got));
+        expect_true("pr2 wrap join film", got.machine_cycle == keep_film);
+        {
+            uint64_t cell = 0u;
+            uint64_t film = 0u;
+            expect_true(
+                "pr2 wrap index ordered",
+                runtime_inspector_cp_index_lookup_film(
+                    &rt->inspector_cp_index, keep_cell, &cell, &film));
+            expect_true("pr2 wrap index cell", cell == keep_cell);
+            expect_true("pr2 wrap index film", film == keep_film);
+        }
+        stop_runtime(rt, client);
+    }
+
+    /* PR2: turbo-display (warp) births film_cycle=0; MAX still pushes film. */
+    {
+        uint64_t cps0;
+        uint64_t cps1;
+        uint64_t cell = 0u;
+        uint64_t film = 0u;
+        c64_frame got;
+        runtime_frame_ring_info fi_before;
+        runtime_frame_ring_info fi_after;
+
+        fill_base_config(&config);
+        config.inspector_off_on_max = false;
+        rt = start_runtime(&config, &client);
+        drain(client);
+        expect_true(
+            "pr2 turbo recording",
+            runtime_inspector_recorder_is_recording(rt));
+
+        /* Seed one normal frame so the ring is non-empty before warp stall. */
+        expect_true("pr2 turbo seed", runtime_client_step_frame(client));
+        expect_true(
+            "pr2 turbo seed done",
+            poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+        drain(client);
+        runtime_frame_ring_get_info(&rt->frame_ring, &fi_before);
+        expect_true("pr2 turbo seed film", fi_before.count >= 1u);
+
+        expect_true(
+            "pr2 set warp",
+            runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_WARP));
+        drain(client);
+        expect_true(
+            "pr2 warp still recording",
+            runtime_inspector_recorder_is_recording(rt));
+        cps0 = runtime_inspector_checkpoint_count(rt);
+        expect_true("pr2 warp step", runtime_client_step_frame(client));
+        expect_true(
+            "pr2 warp frame done",
+            poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+        drain(client);
+        cps1 = runtime_inspector_checkpoint_count(rt);
+        expect_true("pr2 warp birth", cps1 == cps0 + 1u);
+        runtime_frame_ring_get_info(&rt->frame_ring, &fi_after);
+        expect_true(
+            "pr2 warp ring stalled",
+            fi_after.count == fi_before.count &&
+                fi_after.newest_cycle == fi_before.newest_cycle);
+        /* Newest cell has film_cycle=0 → join at live is a miss. */
+        expect_true(
+            "pr2 warp join miss",
+            !runtime_client_copy_inspector_cell_film(
+                client, rt->machine.clock.cycle, &got));
+        {
+            runtime_inspector_cp_index *idx = &rt->inspector_cp_index;
+            uint32_t newest;
+            expect_true("pr2 warp index nonempty", idx->count > 0u);
+            mutex_lock(idx->mutex);
+            newest = (idx->head + idx->capacity - 1u) % idx->capacity;
+            film = idx->entries[newest].film_cycle;
+            cell = idx->entries[newest].cycle;
+            mutex_unlock(idx->mutex);
+            expect_true("pr2 warp film_cycle 0", film == 0u);
+            expect_true("pr2 warp cell advanced", cell == rt->machine.clock.cycle ||
+                cell <= rt->machine.clock.cycle);
+        }
+
+        expect_true(
+            "pr2 set max",
+            runtime_client_set_turbo_multiplier(client, RUNTIME_TURBO_MODE_MAX));
+        drain(client);
+        expect_true(
+            "pr2 max still recording",
+            runtime_inspector_recorder_is_recording(rt));
+        runtime_frame_ring_get_info(&rt->frame_ring, &fi_before);
+        cps0 = runtime_inspector_checkpoint_count(rt);
+        expect_true("pr2 max step", runtime_client_step_frame(client));
+        expect_true(
+            "pr2 max frame done",
+            poll_event(client, RUNTIME_EVENT_RUN_COMPLETE, 0u, NULL, 1));
+        drain(client);
+        expect_true(
+            "pr2 max birth",
+            runtime_inspector_checkpoint_count(rt) == cps0 + 1u);
+        runtime_frame_ring_get_info(&rt->frame_ring, &fi_after);
+        expect_true("pr2 max ring pushed", fi_after.count > fi_before.count ||
+            fi_after.newest_cycle > fi_before.newest_cycle);
+        expect_true(
+            "pr2 max film lookup",
+            runtime_inspector_cp_index_lookup_film(
+                &rt->inspector_cp_index,
+                rt->machine.clock.cycle,
+                &cell,
+                &film));
+        expect_true("pr2 max film_cycle nonzero", film != 0u);
+        expect_true(
+            "pr2 max join",
+            runtime_client_copy_inspector_cell_film(client, cell, &got));
+        expect_true("pr2 max join film", got.machine_cycle == film);
+
+        expect_true(
+            "pr2 leave turbo",
+            runtime_client_set_turbo_multiplier(
+                client, RUNTIME_TURBO_MODE_NORMAL));
+        drain(client);
+        stop_runtime(rt, client);
+    }
+
     remove("runtime_insp_mode_64c.bin");
     remove("runtime_insp_mode_character.bin");
     return 0;

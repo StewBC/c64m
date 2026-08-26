@@ -64,7 +64,7 @@ static const runtime_inspector_checkpoint *inspector_cp_at_const(
     return &rec->slots[inspector_cp_slot(rec, logical)];
 }
 
-static uint32_t inspector_slot_count_for_budget(uint32_t memory_mb)
+uint32_t runtime_inspector_slot_count_for_budget(uint32_t memory_mb)
 {
     uint64_t budget;
     uint32_t slots;
@@ -224,13 +224,14 @@ bool runtime_inspector_cp_index_lookup_film(
         return false;
     }
     inspector_cp_index_lock(index);
+    /* Scan all retained entries (do not assume physical/logical sort). */
     for (i = 0u; i < index->count; ++i) {
         const runtime_inspector_cp_index_entry *entry =
             &index->entries[inspector_cp_index_logical_slot(index, i)];
         if (entry->cycle <= preview_cycle) {
-            best = entry;
-        } else {
-            break;
+            if (best == NULL || entry->cycle >= best->cycle) {
+                best = entry;
+            }
         }
     }
     if (best != NULL && best->film_cycle != 0u) {
@@ -329,7 +330,7 @@ static struct runtime_inspector_recorder *inspector_recorder_ensure(runtime *rt)
     if (rec->cadence_cycles == 0u) {
         rec->cadence_cycles = 19656u;
     }
-    slots = inspector_slot_count_for_budget(rt->inspector_memory_mb);
+    slots = runtime_inspector_slot_count_for_budget(rt->inspector_memory_mb);
     rec->slots = (runtime_inspector_checkpoint *)calloc(slots, sizeof(*rec->slots));
     rec->slot_count = slots;
     rec->input_cap = RUNTIME_INSPECTOR_INPUT_CAP_DEFAULT;
@@ -773,9 +774,11 @@ static void inspector_truncate_to_cycle(
             (runtime_inspector_checkpoint *)calloc(rec->slot_count, sizeof(*tmp));
         uint32_t w = 0u;
         if (tmp != NULL) {
-            for (i = 0u; i < rec->slot_count; ++i) {
-                if (rec->slots[i].blob != NULL) {
-                    tmp[w++] = rec->slots[i];
+            /* Compact in logical order so a wrapped ring stays chronological. */
+            for (i = 0u; i < rec->count; ++i) {
+                runtime_inspector_checkpoint *cp = inspector_cp_at(rec, i);
+                if (cp->blob != NULL) {
+                    tmp[w++] = *cp;
                 }
             }
             free(rec->slots);

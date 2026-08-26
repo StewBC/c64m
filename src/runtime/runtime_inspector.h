@@ -71,6 +71,9 @@ typedef struct runtime_inspector_cp_index {
     uint32_t head;
 } runtime_inspector_cp_index;
 
+/* Same slot formula as the recorder budget so the shared index capacity matches. */
+uint32_t runtime_inspector_slot_count_for_budget(uint32_t memory_mb);
+
 bool runtime_inspector_cp_index_init(
     runtime_inspector_cp_index *index, uint32_t capacity);
 void runtime_inspector_cp_index_destroy(runtime_inspector_cp_index *index);
