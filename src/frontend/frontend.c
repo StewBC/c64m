@@ -263,6 +263,9 @@ typedef struct frontend_misc_view_state {
     bool inspector_thumb_down;
     uint64_t inspector_preview_cycle;
     bool inspector_preview_has_film;
+    /* Hold slider at scrub target until land updates focus (avoids snap-back). */
+    bool inspector_land_pending;
+    uint64_t inspector_focus_at_scrub;
 } frontend_misc_view_state;
 
 typedef enum frontend_active_view {
@@ -7731,6 +7734,7 @@ static void frontend_draw_misc_inspector(
         /* Stop scrub preview immediately so it cannot overwrite the NOW frame. */
         ui->misc.inspector_thumb_down = false;
         ui->misc.inspector_preview_has_film = false;
+        ui->misc.inspector_land_pending = false;
         frontend_push_inspector_intent(
             ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE, false, 0u);
     }
@@ -7742,16 +7746,25 @@ static void frontend_draw_misc_inspector(
         bool at_live = debug->inspector_focus_cycle >= debug->inspector_newest_cycle;
         bool thumb = ui->misc.inspector_thumb_down;
 
-        /* Snap thumb to committed focus after land / +/- (not while scrubbing). */
+        if (ui->misc.inspector_land_pending &&
+            debug->inspector_focus_cycle != ui->misc.inspector_focus_at_scrub) {
+            ui->misc.inspector_land_pending = false;
+        }
+
+        /* Snap after land / ±. While land is in flight, hold the scrub target
+           so the thumb does not jump back to the pre-scrub focus. */
         if (!thumb) {
-            slider = frontend_inspector_cycle_to_slider(
-                debug, debug->inspector_focus_cycle);
+            uint64_t snap_cycle = ui->misc.inspector_land_pending ?
+                ui->misc.inspector_preview_cycle :
+                debug->inspector_focus_cycle;
+            slider = frontend_inspector_cycle_to_slider(debug, snap_cycle);
         }
 
         nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
         nk_layout_row_push(ctx, 0.08f);
         /* [-]/[+]: Record CP walk. */
         if (frontend_nk_action_button(ctx, "-", !thumb && !at_oldest)) {
+            ui->misc.inspector_land_pending = false;
             frontend_push_inspector_intent(
                 ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, false, 0u);
         }
@@ -7765,7 +7778,12 @@ static void frontend_draw_misc_inspector(
                 nk_input_is_mouse_hovering_rect(&ctx->input, bounds);
 
             if (moved && down) {
+                if (!ui->misc.inspector_thumb_down) {
+                    ui->misc.inspector_focus_at_scrub =
+                        debug->inspector_focus_cycle;
+                }
                 ui->misc.inspector_thumb_down = true;
+                ui->misc.inspector_land_pending = false;
             }
             if (ui->misc.inspector_thumb_down) {
                 uint64_t cycle = frontend_inspector_slider_to_cycle(debug, slider);
@@ -7778,15 +7796,20 @@ static void frontend_draw_misc_inspector(
                         cycle);
                     ui->misc.inspector_thumb_down = false;
                     ui->misc.inspector_preview_has_film = false;
+                    ui->misc.inspector_land_pending = true;
                 }
             } else if ((hovered || moved) && down) {
+                ui->misc.inspector_focus_at_scrub =
+                    debug->inspector_focus_cycle;
                 ui->misc.inspector_thumb_down = true;
+                ui->misc.inspector_land_pending = false;
                 ui->misc.inspector_preview_cycle =
                     frontend_inspector_slider_to_cycle(debug, slider);
             }
         }
         nk_layout_row_push(ctx, 0.08f);
         if (frontend_nk_action_button(ctx, "+", !thumb && !at_live)) {
+            ui->misc.inspector_land_pending = false;
             frontend_push_inspector_intent(
                 ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, true, 0u);
         }
@@ -8585,6 +8608,7 @@ void frontend_inspector_clear_preview(frontend *ui)
     }
     ui->misc.inspector_thumb_down = false;
     ui->misc.inspector_preview_has_film = false;
+    ui->misc.inspector_land_pending = false;
 }
 
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame)

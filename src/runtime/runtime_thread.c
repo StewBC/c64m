@@ -5340,14 +5340,13 @@ static void runtime_inspector_publish_head(runtime *rt)
 }
 
 /* Everyday land / ± completion: film exact for the committed cell, else
-   present/reconstruct from the landed machine. */
+   reconstruct. After snapshot load paint buffers are cleared to unpainted
+   (width/height become non-zero garbage); copy_paint would publish black. */
 static void runtime_inspector_publish_committed_head(runtime *rt)
 {
     uint64_t focus;
     uint64_t cell_cycle = 0u;
     uint64_t film_cycle = 0u;
-    bool paint_off;
-    bool ok;
 
     if (rt == NULL) {
         return;
@@ -5366,17 +5365,7 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
         return;
     }
 
-    paint_off = !c64_video_output_enabled(&rt->machine) ||
-        runtime_turbo_display_mode(rt);
-    if (paint_off) {
-        ok = c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame);
-    } else {
-        ok = c64_copy_paint_frame(&rt->machine, &rt->publish_frame);
-        if (!ok) {
-            ok = c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame);
-        }
-    }
-    if (ok) {
+    if (c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame)) {
         (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
     }
 }
