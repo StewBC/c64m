@@ -59,6 +59,7 @@ static bool runtime_history_append_commit_marker(
     uint32_t arg1);
 static void runtime_inspector_reattach_live_hooks(runtime *rt);
 static void runtime_inspector_publish_head(runtime *rt);
+static void runtime_inspector_publish_committed_head(runtime *rt);
 static void runtime_inspector_publish_leave_frame(runtime *rt, uint64_t now_cycle);
 static void runtime_commit_turbo_mode(runtime *rt, uint32_t multiplier);
 static void runtime_finish_to_instruction_boundary(runtime *rt);
@@ -5338,10 +5339,47 @@ static void runtime_inspector_publish_head(runtime *rt)
     runtime_publish_presented_frame(rt);
 }
 
-static void runtime_inspector_publish_head_dump(runtime *rt)
+/* Everyday land / ± completion: film exact for the committed cell, else
+   present/reconstruct; geometric dump last. No pink on committed focus. */
+static void runtime_inspector_publish_committed_head(runtime *rt)
 {
+    uint64_t focus;
+    uint64_t cell_cycle = 0u;
+    uint64_t film_cycle = 0u;
+    bool paint_off;
+    bool ok;
+
+    if (rt == NULL) {
+        return;
+    }
     runtime_publish_cpu_state(rt);
     runtime_publish_machine_state(rt);
+
+    focus = rt->machine.clock.cycle;
+    if (runtime_inspector_cp_index_lookup_film(
+            &rt->inspector_cp_index, focus, &cell_cycle, &film_cycle) &&
+        cell_cycle == focus &&
+        film_cycle != 0u &&
+        runtime_frame_ring_copy_by_cycle_exact(
+            &rt->frame_ring, film_cycle, &rt->publish_frame)) {
+        (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
+        return;
+    }
+
+    paint_off = !c64_video_output_enabled(&rt->machine) ||
+        runtime_turbo_display_mode(rt);
+    if (paint_off) {
+        ok = c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame);
+    } else {
+        ok = c64_copy_paint_frame(&rt->machine, &rt->publish_frame);
+        if (!ok) {
+            ok = c64_make_current_frame_snapshot(&rt->machine, &rt->publish_frame);
+        }
+    }
+    if (ok) {
+        (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
+        return;
+    }
     (void)runtime_publish_debug_frame(rt);
 }
 
@@ -5551,8 +5589,9 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 if (runtime_inspector_at_live(rt)) {
                     break;
                 }
-                if (runtime_inspector_frame_step(rt, 1)) {
-                    runtime_inspector_publish_head(rt);
+                /* Inspect: next Record cell (same as [+]), not VIC hunt. */
+                if (runtime_inspector_checkpoint_step(rt, 1)) {
+                    runtime_inspector_publish_committed_head(rt);
                     runtime_publish_state_changed(
                         rt,
                         RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
@@ -5656,7 +5695,6 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             uint64_t live = 0u;
             uint64_t count = 0u;
             uint64_t cycle = command->data.inspector_land.cycle;
-            bool dump;
 
             if (!rt->inspecting) {
                 runtime_publish_error(rt, "not inspecting");
@@ -5667,13 +5705,8 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
                 runtime_publish_error(rt, "inspector land outside timeline");
                 break;
             }
-            dump = cycle < live;
             if (runtime_inspector_land(rt, cycle)) {
-                if (dump) {
-                    runtime_inspector_publish_head_dump(rt);
-                } else {
-                    runtime_inspector_publish_head(rt);
-                }
+                runtime_inspector_publish_committed_head(rt);
                 runtime_publish_state_changed(
                     rt,
                     RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
@@ -5686,10 +5719,11 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
 
         case RUNTIME_COMMAND_INSPECTOR_LAND_TO_CYCLE:
             if (rt->inspecting) {
-                /* Publish once after exact land even on partial (best-effort focus). */
+                /* Publish once after exact land even on partial (best-effort focus).
+                   Mid-frame focus skips film (cell_cycle != focus) → reconstruct. */
                 (void)runtime_inspector_land_to_cycle(
                     rt, command->data.inspector_land_to_cycle.cycle);
-                runtime_inspector_publish_head(rt);
+                runtime_inspector_publish_committed_head(rt);
                 runtime_publish_state_changed(
                     rt,
                     RUNTIME_STATE_CHANGED_INSPECTOR_LAND,
@@ -5700,10 +5734,11 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_INSPECTOR_FRAME_STEP:
+            /* [-]/[+]: checkpoint walk (name retained; PR5 may rename). */
             if (rt->inspecting) {
-                if (runtime_inspector_frame_step(
+                if (runtime_inspector_checkpoint_step(
                         rt, (int)command->data.inspector_frame_step.direction)) {
-                    runtime_inspector_publish_head(rt);
+                    runtime_inspector_publish_committed_head(rt);
                     runtime_publish_state_changed(
                         rt,
                         RUNTIME_STATE_CHANGED_INSPECTOR_LAND,

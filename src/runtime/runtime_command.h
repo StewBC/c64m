@@ -78,6 +78,7 @@ typedef enum runtime_command_type {
     RUNTIME_COMMAND_INSPECTOR_LEAVE,
     RUNTIME_COMMAND_INSPECTOR_LAND,
     RUNTIME_COMMAND_INSPECTOR_LAND_TO_CYCLE,
+    /* [-]/[+]: dispatches checkpoint_step (PR5 may rename). */
     RUNTIME_COMMAND_INSPECTOR_FRAME_STEP
 } runtime_command_type;
 

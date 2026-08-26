@@ -567,6 +567,43 @@ static const runtime_inspector_checkpoint *inspector_nearest_cp(
     return best;
 }
 
+/* Greatest retained CP with cycle < focus (slots are chronological). */
+static const runtime_inspector_checkpoint *inspector_prev_cp(
+    const struct runtime_inspector_recorder *rec, uint64_t focus)
+{
+    uint32_t i;
+    const runtime_inspector_checkpoint *best = NULL;
+
+    if (rec == NULL) {
+        return NULL;
+    }
+    for (i = 0u; i < rec->count; ++i) {
+        const runtime_inspector_checkpoint *cp = inspector_cp_at_const(rec, i);
+        if (cp->cycle < focus) {
+            best = cp;
+        }
+    }
+    return best;
+}
+
+/* Least retained CP with cycle > focus. */
+static const runtime_inspector_checkpoint *inspector_next_cp(
+    const struct runtime_inspector_recorder *rec, uint64_t focus)
+{
+    uint32_t i;
+
+    if (rec == NULL) {
+        return NULL;
+    }
+    for (i = 0u; i < rec->count; ++i) {
+        const runtime_inspector_checkpoint *cp = inspector_cp_at_const(rec, i);
+        if (cp->cycle > focus) {
+            return cp;
+        }
+    }
+    return NULL;
+}
+
 static void inspector_prep_dst(const runtime *rt, c64_t *dst)
 {
     memcpy(dst->bus.basic_rom, rt->machine.bus.basic_rom, sizeof(dst->bus.basic_rom));
@@ -1260,131 +1297,47 @@ bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle)
     return true;
 }
 
-bool runtime_inspector_frame_step(runtime *rt, int direction)
+bool runtime_inspector_checkpoint_step(runtime *rt, int direction)
 {
-    uint64_t oldest = 0u;
-    uint64_t live = 0u;
-    uint64_t count = 0u;
-    uint64_t here;
+    struct runtime_inspector_recorder *rec;
+    const runtime_inspector_checkpoint *cp;
+    uint64_t focus;
 
     if (rt == NULL || !rt->inspecting) {
         return false;
     }
-    runtime_inspector_timeline_bounds(rt, &oldest, &live, &count);
-    if (count == 0u) {
+    if (direction == 0) {
+        return true;
+    }
+    rec = rt->inspector_recorder;
+    if (rec == NULL || rec->count == 0u) {
         return false;
     }
-    here = rt->machine.clock.cycle;
-    if (direction > 0) {
-        if (here >= live) {
-            return runtime_inspector_restore_live(rt);
-        }
-        (void)c64_consume_frame_complete(&rt->machine);
-        runtime_inspector_apply_live_seal(rt);
-        c64_set_video_output_enabled(&rt->machine, true);
-        while (rt->machine.clock.cycle < live) {
-            uint64_t c0 = rt->machine.clock.cycle;
-            char error[256];
-            if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
-                break;
-            }
-            runtime_inspector_apply_logged_inputs(
-                rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
-            if (c64_consume_frame_complete(&rt->machine)) {
-                break;
-            }
-        }
-        if (rt->machine.clock.cycle >= live) {
-            return runtime_inspector_restore_live(rt);
-        }
-        runtime_inspector_apply_live_seal(rt);
-        runtime_inspector_sync_focus(rt);
-        return true;
-    }
+    focus = rt->machine.clock.cycle;
     if (direction < 0) {
-        /* Undo snapshot requires an instruction boundary (c64_snapshot_save
-           refuses micro_active). Frame ends often land mid-instruction, so
-           finish the current op before snapshotting. Search still uses the
-           pre-finish cycle so we step back from where the user was. */
-        uint64_t search_from = here;
-        uint64_t last_fr;
-        uint64_t prev_fr;
-        uint8_t *then_blob = NULL;
-        size_t then_size = 0u;
-        const uint64_t near_cycles = 64u;
-
-        if (search_from <= oldest) {
-            return true;
+        cp = inspector_prev_cp(rec, focus);
+        if (cp == NULL) {
+            return true; /* no-op at oldest */
         }
-        while (rt->machine.pending_cpu_trace_active ||
-               rt->machine.cpu.micro_active) {
-            uint64_t c0 = rt->machine.clock.cycle;
-            char error[256];
-            if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
-                break;
-            }
-            runtime_inspector_apply_logged_inputs(
-                rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
-            if (rt->machine.clock.cycle >= live) {
-                return runtime_inspector_restore_live(rt);
-            }
+    } else {
+        cp = inspector_next_cp(rec, focus);
+        if (cp == NULL) {
+            return runtime_inspector_restore_live(rt);
         }
-        if (!runtime_inspector_snapshot_machine(rt, &then_blob, &then_size)) {
-            return false;
-        }
-        if (!runtime_inspector_load_nearest_checkpoint(
-                rt, search_from - 1u, &rt->machine)) {
-            (void)runtime_inspector_restore_blob(rt, then_blob, then_size);
-            runtime_inspector_apply_live_seal(rt);
-            free(then_blob);
-            return false;
-        }
-        free(then_blob);
-        last_fr = rt->machine.clock.cycle;
-        prev_fr = last_fr;
-        (void)c64_consume_frame_complete(&rt->machine);
-        runtime_inspector_apply_live_seal(rt);
-        c64_set_video_output_enabled(&rt->machine, true);
-        while (rt->machine.clock.cycle < search_from) {
-            uint64_t c0 = rt->machine.clock.cycle;
-            char error[256];
-            if (!c64_step_cycle(&rt->machine, error, sizeof(error))) {
-                break;
-            }
-            runtime_inspector_apply_logged_inputs(
-                rt, &rt->machine, c0 + 1u, rt->machine.clock.cycle);
-            if (c64_consume_frame_complete(&rt->machine)) {
-                uint64_t c = rt->machine.clock.cycle;
-                if (c < search_from) {
-                    prev_fr = last_fr;
-                    last_fr = c;
-                } else {
-                    break;
-                }
-            }
-        }
-        /* Checkpoints sit a few cycles after frame ends. A lone [-] from a
-           quantized land would only nudge back to that nearby boundary; treat
-           "already at / just past a frame end" as a request for the prior one. */
-        if (last_fr < search_from &&
-            (search_from - last_fr) <= near_cycles &&
-            prev_fr < last_fr) {
-            last_fr = prev_fr;
-        }
-        if (rt->machine.clock.cycle != last_fr) {
-            if (!runtime_inspector_load_nearest_checkpoint(
-                    rt, last_fr, &rt->machine)) {
-                return false;
-            }
-            if (!runtime_inspector_reexecute_to(rt, last_fr)) {
-                return false;
-            }
-        }
-        runtime_inspector_apply_live_seal(rt);
-        runtime_inspector_sync_focus(rt);
-        return true;
     }
+    /* Load the cell directly. Focus may be mid-instruction after
+       land_to_cycle / F10; land()'s undo snapshot refuses micro_active. */
+    if (!runtime_inspector_load_nearest_checkpoint(rt, cp->cycle, &rt->machine)) {
+        return false;
+    }
+    runtime_inspector_apply_live_seal(rt);
+    runtime_inspector_sync_focus(rt);
     return true;
+}
+
+bool runtime_inspector_frame_step(runtime *rt, int direction)
+{
+    return runtime_inspector_checkpoint_step(rt, direction);
 }
 
 runtime_inspector_enter_status runtime_inspector_enter(runtime *rt)

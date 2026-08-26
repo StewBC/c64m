@@ -194,6 +194,58 @@ static void expect_true(const char *name, int v)
     }
 }
 
+/* Logical Record cells oldest→newest (shared scrub index). */
+static uint32_t collect_cp_cycles(runtime *rt, uint64_t *out, uint32_t cap)
+{
+    runtime_inspector_cp_index *idx;
+    uint32_t n = 0u;
+    uint32_t i;
+
+    if (rt == NULL || out == NULL || cap == 0u) {
+        return 0u;
+    }
+    idx = &rt->inspector_cp_index;
+    mutex_lock(idx->mutex);
+    for (i = 0u; i < idx->count && n < cap; ++i) {
+        uint32_t slot =
+            (idx->head + idx->capacity - idx->count + i) % idx->capacity;
+        out[n++] = idx->entries[slot].cycle;
+    }
+    mutex_unlock(idx->mutex);
+    return n;
+}
+
+static int cp_index_of(const uint64_t *cycles, uint32_t n, uint64_t cycle)
+{
+    uint32_t i;
+    for (i = 0u; i < n; ++i) {
+        if (cycles[i] == cycle) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* Wait until the worker commits focus to want (avoids torn mid-load reads). */
+static int wait_focus_cycle(
+    runtime *rt, runtime_client *client, uint64_t want, double secs)
+{
+    clock_t t0 = clock();
+
+    while ((double)(clock() - t0) / CLOCKS_PER_SEC < secs) {
+        if (rt->inspector_focus.valid && rt->inspector_focus.cycle == want &&
+            rt->machine.clock.cycle == want) {
+            drain(client);
+            return rt->inspector_focus.valid &&
+                rt->inspector_focus.cycle == want &&
+                rt->machine.clock.cycle == want;
+        }
+    }
+    drain(client);
+    return rt->inspector_focus.valid && rt->inspector_focus.cycle == want &&
+        rt->machine.clock.cycle == want;
+}
+
 int main(void)
 {
     runtime_config config;
@@ -489,75 +541,129 @@ int main(void)
         expect_true("live cycle after run", rt->machine.clock.cycle == cycles_now);
     }
 
-    /* [-]/[+] frame step after a quantized mid-timeline land. */
+    /* [-]/[+] = strict adjacent CP walk (not VIC frame_complete hunt). */
     {
         uint64_t old = 0u;
         uint64_t live = 0u;
         uint64_t n = 0u;
+        uint64_t cps[64];
+        uint32_t cp_n;
+        int land_i;
         uint64_t mid;
         uint64_t after_land;
         uint64_t after_back;
         uint64_t after_back2;
         uint64_t after_fwd;
-        uint32_t cadence;
+        uint64_t between;
         clock_t t0;
 
         runtime_inspector_timeline_bounds(rt, &old, &live, &n);
-        expect_true("frame_step timeline", n >= 2u && live > old);
-        mid = old + (live - old) / 2u;
+        cp_n = collect_cp_cycles(rt, cps, 64u);
+        expect_true("cp_step timeline", cp_n >= 3u && live > old);
+
+        mid = cps[cp_n / 2u];
         token = runtime_client_alloc_request_token(client);
         expect_true(
-            "land mid for frame_step",
+            "land mid for cp_step",
             runtime_client_inspector_land(client, mid, token));
-        t0 = clock();
-        while (rt->machine.clock.cycle >= live &&
-               (double)(clock() - t0) / CLOCKS_PER_SEC < 2.0) {
-        }
-        drain(client);
+        expect_true("land mid focus", wait_focus_cycle(rt, client, mid, 2.0));
         after_land = rt->machine.clock.cycle;
+        land_i = cp_index_of(cps, cp_n, after_land);
+        expect_true("landed on CP cell", land_i >= 1);
         expect_true("landed before live", after_land < live);
-        expect_true("landed at/after oldest", after_land >= old);
 
-        cadence = runtime_inspector_cadence_cycles(rt);
         token = runtime_client_alloc_request_token(client);
         expect_true(
-            "frame_step back",
+            "cp_step back",
             runtime_client_inspector_frame_step(client, -1, token));
-        t0 = clock();
-        while (rt->machine.clock.cycle == after_land &&
-               (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
-        }
-        drain(client);
+        expect_true(
+            "[-] adjacent prev CP",
+            wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 1u], 3.0));
         after_back = rt->machine.clock.cycle;
-        expect_true("[-] moved back", after_back < after_land);
-        expect_true(
-            "[-] stepped about a frame",
-            (after_land - after_back) > (uint64_t)(cadence / 4u));
+        expect_true("[-] cycle", after_back == cps[(uint32_t)land_i - 1u]);
 
+        expect_true("second [-] needs room", land_i >= 2);
         token = runtime_client_alloc_request_token(client);
         expect_true(
-            "frame_step back again",
+            "cp_step back again",
             runtime_client_inspector_frame_step(client, -1, token));
-        t0 = clock();
-        while (rt->machine.clock.cycle == after_back &&
-               (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
-        }
-        drain(client);
+        expect_true(
+            "second [-] adjacent prev CP",
+            wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 2u], 3.0));
         after_back2 = rt->machine.clock.cycle;
-        expect_true("second [-] moved back", after_back2 < after_back);
+        expect_true(
+            "second [-] cycle", after_back2 == cps[(uint32_t)land_i - 2u]);
 
         token = runtime_client_alloc_request_token(client);
         expect_true(
-            "frame_step fwd",
+            "cp_step fwd",
+            runtime_client_inspector_frame_step(client, 1, token));
+        expect_true(
+            "[+] adjacent next CP",
+            wait_focus_cycle(rt, client, cps[(uint32_t)land_i - 1u], 3.0));
+        after_fwd = rt->machine.clock.cycle;
+        expect_true("[+] cycle", after_fwd == cps[(uint32_t)land_i - 1u]);
+        expect_true("still inspecting after cp_step", runtime_inspector_in_inspect(rt));
+
+        /* [+] past newest CP → LIVE/NOW. */
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "land newest CP",
+            runtime_client_inspector_land(client, cps[cp_n - 1u], token));
+        expect_true(
+            "newest focus",
+            wait_focus_cycle(rt, client, cps[cp_n - 1u], 2.0));
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "[+] past newest",
             runtime_client_inspector_frame_step(client, 1, token));
         t0 = clock();
-        while (rt->machine.clock.cycle == after_back2 &&
+        while ((!runtime_inspector_at_live(rt) ||
+                rt->machine.clock.cycle != live) &&
                (double)(clock() - t0) / CLOCKS_PER_SEC < 3.0) {
         }
         drain(client);
-        after_fwd = rt->machine.clock.cycle;
-        expect_true("[+] moved forward", after_fwd > after_back2);
-        expect_true("still inspecting after frame_step", runtime_inspector_in_inspect(rt));
+        expect_true("[+] to LIVE", runtime_inspector_at_live(rt));
+        expect_true("[+] LIVE cycle", rt->machine.clock.cycle == live);
+
+        /* Between-cell focus after exact land: ± still uses strict < / > lattice. */
+        between = cps[1u] + (cps[2u] - cps[1u]) / 2u;
+        if (between <= cps[1u]) {
+            between = cps[1u] + 1u;
+        }
+        if (between >= cps[2u]) {
+            between = cps[2u] - 1u;
+        }
+        expect_true("between-cell span", between > cps[1u] && between < cps[2u]);
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "land_to_cycle between",
+            runtime_client_inspector_land_to_cycle(client, between, token));
+        expect_true(
+            "between focus", wait_focus_cycle(rt, client, between, 3.0));
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "[-] from between",
+            runtime_client_inspector_frame_step(client, -1, token));
+        expect_true(
+            "[-] between → lower CP",
+            wait_focus_cycle(rt, client, cps[1u], 3.0));
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "re-land between for [+]",
+            runtime_client_inspector_land_to_cycle(client, between, token));
+        expect_true(
+            "between focus again", wait_focus_cycle(rt, client, between, 3.0));
+
+        token = runtime_client_alloc_request_token(client);
+        expect_true(
+            "[+] from between",
+            runtime_client_inspector_frame_step(client, 1, token));
+        expect_true(
+            "[+] between → upper CP",
+            wait_focus_cycle(rt, client, cps[2u], 3.0));
     }
 
     /* F12 from a past land stops at live, stays in Inspect. */

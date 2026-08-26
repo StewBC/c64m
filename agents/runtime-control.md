@@ -145,9 +145,11 @@ Pinned product rules:
 
 - One debugger skin. Enter Inspect starts at live. Leave restores NOW.
 - Pokes/media/save-state/history-record fail with `read-only-inspector`.
-- Forward = sealed execute toward live (F10-family, `[+]`, F12). Backward =
-  earlier checkpoint + re-execute. Nothing executes past live.
+- `[+]` / `[-]` = Record checkpoint walk (strict next/prev CP; `[+]` past
+  newest → LIVE/NOW). F10-family / F12 remain sealed execute toward live.
+  Nothing executes past live.
 - F12 stops on the one breakpoint list or at live; stays in Inspect.
+- CRT pink policy unfinished until PR4 (scrub pink vs landed reconstruct).
 - Guest media **write that succeeds** cuts the window (older checkpoints,
   inputs, and film drop). A refused write-protect does not cut. Housekeeping
   (eject flush, save-state, export) must not cut.

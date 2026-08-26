@@ -128,6 +128,12 @@ bool runtime_inspector_land(runtime *rt, uint64_t cycle);
    One helper / one publish at command end — do not split into two UI RPCs. */
 bool runtime_inspector_land_to_cycle(runtime *rt, uint64_t target_cycle);
 bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle);
+/* Walk Record lattice. direction < 0: greatest CP with cycle < focus;
+   direction > 0: least CP with cycle > focus, else LIVE/NOW.
+   Loads the target checkpoint into the live c64_t (quantized). Does not
+   sealed-hunt frame_complete. */
+bool runtime_inspector_checkpoint_step(runtime *rt, int direction);
+/* Alias for checkpoint_step (PR5 may rename callers / FRAME_STEP). */
 bool runtime_inspector_frame_step(runtime *rt, int direction);
 runtime_inspector_mode runtime_inspector_current_mode(const runtime *rt);
 bool runtime_inspector_in_inspect(const runtime *rt);
