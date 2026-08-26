@@ -7721,7 +7721,7 @@ static void frontend_draw_misc_inspector(
             frontend_draw_inspector_window_summary(ctx, debug);
         } else if (!debug->inspector_window_valid) {
             nk_layout_row_dynamic(ctx, 36.0f, 1);
-            nk_label_wrap(ctx, "No Inspector snapshots yet.");
+            nk_label_wrap(ctx, "No Inspector checkpoints yet.");
         }
         return;
     }
