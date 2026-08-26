@@ -5340,7 +5340,7 @@ static void runtime_inspector_publish_head(runtime *rt)
 }
 
 /* Everyday land / ± completion: film exact for the committed cell, else
-   present/reconstruct; geometric dump last. No pink on committed focus. */
+   present/reconstruct from the landed machine. */
 static void runtime_inspector_publish_committed_head(runtime *rt)
 {
     uint64_t focus;
@@ -5366,6 +5366,7 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
         return;
     }
 
+    /* Single snapshot attempt (no second dump path that retries the same call). */
     paint_off = !c64_video_output_enabled(&rt->machine) ||
         runtime_turbo_display_mode(rt);
     if (paint_off) {
@@ -5378,9 +5379,7 @@ static void runtime_inspector_publish_committed_head(runtime *rt)
     }
     if (ok) {
         (void)runtime_publish_frame_copy(rt, &rt->publish_frame);
-        return;
     }
-    (void)runtime_publish_debug_frame(rt);
 }
 
 /*
@@ -5734,7 +5733,7 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_INSPECTOR_FRAME_STEP:
-            /* [-]/[+]: checkpoint walk (name retained; PR5 may rename). */
+            /* [-]/[+]: checkpoint walk. */
             if (rt->inspecting) {
                 if (runtime_inspector_checkpoint_step(
                         rt, (int)command->data.inspector_frame_step.direction)) {

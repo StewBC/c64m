@@ -7749,7 +7749,7 @@ static void frontend_draw_misc_inspector(
 
         nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
         nk_layout_row_push(ctx, 0.08f);
-        /* [-]/[+]: Record CP walk (intent name retained; PR5 may rename). */
+        /* [-]/[+]: Record CP walk. */
         if (frontend_nk_action_button(ctx, "-", !thumb && !at_oldest)) {
             frontend_push_inspector_intent(
                 ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_FRAME_STEP, false, 0u);

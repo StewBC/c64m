@@ -133,7 +133,7 @@ bool runtime_inspector_reexecute_to(runtime *rt, uint64_t target_cycle);
    Loads the target checkpoint into the live c64_t (quantized). Does not
    sealed-hunt frame_complete. */
 bool runtime_inspector_checkpoint_step(runtime *rt, int direction);
-/* Alias for checkpoint_step (PR5 may rename callers / FRAME_STEP). */
+/* Thin alias of checkpoint_step. */
 bool runtime_inspector_frame_step(runtime *rt, int direction);
 runtime_inspector_mode runtime_inspector_current_mode(const runtime *rt);
 bool runtime_inspector_in_inspect(const runtime *rt);
