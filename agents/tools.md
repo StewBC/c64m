@@ -21,8 +21,9 @@ A parser must not call runtime, SDL, or frontend. The assembler library is
 independent of the live machine; runtime supplies target callbacks, selects
 the 6502 profile, and predefines `AM65=0` plus `C64=1`. The CLI supplies
 file-output targets, predefines `AM65=1`, and does not define a machine.
-The subtree also supports opt-in `.65c02`, `.rockwell`, and `.wdc` without
-changing the C64 default.
+The assembler also supports opt-in `.65c02`, `.rockwell`, and `.wdc` without
+changing the C64 default. Canonical history lives in the am65 hub repo;
+this tree is a vendored copy under `src/tools/am65`.
 
 `src/tools/assembler/` is an empty leftover; the real tree is `am65/`.
 
