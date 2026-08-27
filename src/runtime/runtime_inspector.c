@@ -248,6 +248,122 @@ bool runtime_inspector_cp_index_lookup_film(
     return ok;
 }
 
+bool runtime_inspector_cp_index_adjacent(
+    runtime_inspector_cp_index *index,
+    uint64_t from_cycle,
+    int direction,
+    uint64_t live_cycle,
+    uint64_t *out_cycle)
+{
+    uint32_t i;
+    bool ok = false;
+    uint64_t best = 0u;
+    bool have = false;
+
+    if (index == NULL || out_cycle == NULL || direction == 0) {
+        return false;
+    }
+    inspector_cp_index_lock(index);
+    if (direction < 0) {
+        for (i = 0u; i < index->count; ++i) {
+            const runtime_inspector_cp_index_entry *entry =
+                &index->entries[inspector_cp_index_logical_slot(index, i)];
+            if (entry->cycle < from_cycle && (!have || entry->cycle >= best)) {
+                best = entry->cycle;
+                have = true;
+            }
+        }
+        if (have) {
+            *out_cycle = best;
+            ok = true;
+        }
+    } else {
+        for (i = 0u; i < index->count; ++i) {
+            const runtime_inspector_cp_index_entry *entry =
+                &index->entries[inspector_cp_index_logical_slot(index, i)];
+            if (entry->cycle > from_cycle && (!have || entry->cycle < best)) {
+                best = entry->cycle;
+                have = true;
+            }
+        }
+        if (have) {
+            *out_cycle = best;
+            ok = true;
+        } else if (live_cycle > from_cycle) {
+            *out_cycle = live_cycle;
+            ok = true;
+        }
+    }
+    inspector_cp_index_unlock(index);
+    return ok;
+}
+
+bool runtime_inspector_cp_index_snapshot_slot(
+    runtime_inspector_cp_index *index,
+    uint64_t cycle,
+    uint64_t live_cycle,
+    uint64_t *out_ordinal,
+    uint64_t *out_count,
+    bool *out_exact)
+{
+    uint32_t i;
+    uint64_t count;
+    uint64_t newest_cp = 0u;
+    bool has_live;
+    bool exact = false;
+    uint64_t ordinal = 0u;
+    bool have_le = false;
+    uint64_t best_cycle = 0u;
+    uint64_t best_ordinal = 0u;
+
+    if (index == NULL) {
+        return false;
+    }
+    inspector_cp_index_lock(index);
+    if (index->count == 0u) {
+        inspector_cp_index_unlock(index);
+        return false;
+    }
+    newest_cp =
+        index->entries[inspector_cp_index_logical_slot(index, index->count - 1u)]
+            .cycle;
+    has_live = live_cycle > newest_cp;
+    count = (uint64_t)index->count + (has_live ? 1u : 0u);
+
+    if (has_live && cycle >= live_cycle) {
+        ordinal = count - 1u;
+        exact = true;
+    } else {
+        for (i = 0u; i < index->count; ++i) {
+            const runtime_inspector_cp_index_entry *entry =
+                &index->entries[inspector_cp_index_logical_slot(index, i)];
+            if (entry->cycle <= cycle && (!have_le || entry->cycle >= best_cycle)) {
+                best_cycle = entry->cycle;
+                best_ordinal = i;
+                have_le = true;
+            }
+        }
+        if (!have_le) {
+            inspector_cp_index_unlock(index);
+            return false;
+        }
+        ordinal = best_ordinal;
+        exact = (best_cycle == cycle);
+    }
+    inspector_cp_index_unlock(index);
+
+    if (out_ordinal != NULL) {
+        *out_ordinal = ordinal;
+    }
+    if (out_count != NULL) {
+        *out_count = count;
+    }
+    if (out_exact != NULL) {
+        *out_exact = exact;
+    }
+    return true;
+}
+
 static void inspector_drop_oldest(runtime *rt, struct runtime_inspector_recorder *rec)
 {
     runtime_inspector_checkpoint *cp;

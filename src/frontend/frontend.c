@@ -268,6 +268,9 @@ typedef struct frontend_misc_view_state {
     /* Hold slider at scrub target until land updates focus (avoids snap-back). */
     bool inspector_land_pending;
     uint64_t inspector_focus_at_scrub;
+    /* [+]/[-] absolute-dest chase: worker land in flight (0 = none). Desired
+       dest may move ahead in preview_cycle; on completion we chase once. */
+    uint64_t inspector_land_inflight_cycle;
 } frontend_misc_view_state;
 
 typedef enum frontend_active_view {
@@ -404,6 +407,7 @@ typedef struct frontend_file_browser_state {
 
 struct frontend {
     platform_window *window;
+    runtime_client *runtime_client;
     struct nk_context *ctx;
     SDL_Renderer *renderer;
     struct nk_font *help_font;
@@ -7472,6 +7476,13 @@ static void frontend_forensics_land_context_from_debug(
     out->newest_cycle = debug->inspector_newest_cycle;
 }
 
+static bool frontend_inspector_intent_is_coalescable_land(
+    frontend_debugger_intent_type type)
+{
+    return type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND ||
+        type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE;
+}
+
 static void frontend_push_inspector_intent_ex(
     frontend *ui,
     frontend_debugger_intent_type type,
@@ -7485,16 +7496,13 @@ static void frontend_push_inspector_intent_ex(
     if (ui == NULL) {
         return;
     }
-    if (coalesce_land &&
-        (type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND ||
-         type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE)) {
+    if (coalesce_land && frontend_inspector_intent_is_coalescable_land(type)) {
         i = ui->intent_read;
         while (i != ui->intent_write) {
-            if (ui->intents[i].type == FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND ||
-                ui->intents[i].type ==
-                    FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND_TO_CYCLE) {
+            if (frontend_inspector_intent_is_coalescable_land(ui->intents[i].type)) {
                 /* Latest land wins; keep the requested land flavor. */
                 ui->intents[i].type = type;
+                ui->intents[i].enabled = enabled;
                 ui->intents[i].inspector_cycle = cycle;
                 return;
             }
@@ -7519,6 +7527,77 @@ static void frontend_push_inspector_intent(
     uint64_t cycle)
 {
     frontend_push_inspector_intent_ex(ui, type, enabled, cycle, true);
+}
+
+static void frontend_inspector_dispatch_land_cycle(frontend *ui, uint64_t cycle)
+{
+    if (ui == NULL) {
+        return;
+    }
+    frontend_push_inspector_intent(
+        ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND, false, cycle);
+    ui->misc.inspector_land_pending = true;
+    ui->misc.inspector_land_inflight_cycle = cycle;
+    ui->misc.inspector_preview_cycle = cycle;
+}
+
+/* Length-1 [+]/[-] buffer: absolute Record neighbor via cp_index, LAND chase. */
+static void frontend_inspector_step_toward(
+    frontend *ui,
+    const frontend_debug_state *debug,
+    int direction)
+{
+    uint64_t base;
+    uint64_t dest = 0u;
+
+    if (ui == NULL || debug == NULL || direction == 0 ||
+        ui->runtime_client == NULL || !debug->inspector_window_valid) {
+        return;
+    }
+    if (ui->misc.inspector_land_pending &&
+        ui->misc.inspector_land_inflight_cycle != 0u) {
+        base = ui->misc.inspector_preview_cycle;
+    } else {
+        base = debug->inspector_focus_cycle;
+    }
+    if (!runtime_client_inspector_adjacent_cycle(
+            ui->runtime_client,
+            base,
+            direction,
+            debug->inspector_newest_cycle,
+            &dest)) {
+        return;
+    }
+    ui->misc.inspector_preview_cycle = dest;
+    if (ui->misc.inspector_land_inflight_cycle == 0u) {
+        frontend_inspector_dispatch_land_cycle(ui, dest);
+    }
+}
+
+static void frontend_inspector_chase_pending_land(
+    frontend *ui,
+    const frontend_debug_state *debug)
+{
+    if (ui == NULL || debug == NULL || !ui->misc.inspector_land_pending) {
+        return;
+    }
+    if (ui->misc.inspector_land_inflight_cycle == 0u) {
+        /* Scrub-only pending: clear once focus leaves the pre-scrub cycle. */
+        if (debug->inspector_focus_cycle != ui->misc.inspector_focus_at_scrub) {
+            ui->misc.inspector_land_pending = false;
+        }
+        return;
+    }
+    if (debug->inspector_focus_cycle != ui->misc.inspector_land_inflight_cycle) {
+        return;
+    }
+    if (ui->misc.inspector_preview_cycle != debug->inspector_focus_cycle) {
+        frontend_inspector_dispatch_land_cycle(
+            ui, ui->misc.inspector_preview_cycle);
+        return;
+    }
+    ui->misc.inspector_land_pending = false;
+    ui->misc.inspector_land_inflight_cycle = 0u;
 }
 
 static void frontend_forensics_flush_land(frontend *ui)
@@ -7737,6 +7816,7 @@ static void frontend_draw_misc_inspector(
         ui->misc.inspector_thumb_down = false;
         ui->misc.inspector_preview_has_film = false;
         ui->misc.inspector_land_pending = false;
+        ui->misc.inspector_land_inflight_cycle = 0u;
         frontend_push_inspector_intent(
             ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_LEAVE, false, 0u);
     }
@@ -7744,17 +7824,43 @@ static void frontend_draw_misc_inspector(
     slider = ui->misc.inspector_slider;
     {
         bool down = nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT);
-        bool at_oldest = debug->inspector_focus_cycle <= debug->inspector_oldest_cycle;
-        bool at_live = debug->inspector_focus_cycle >= debug->inspector_newest_cycle;
         bool thumb = ui->misc.inspector_thumb_down;
+        uint64_t step_base;
+        bool can_previous = false;
+        bool can_next = false;
+        uint64_t probe = 0u;
 
+        frontend_inspector_chase_pending_land(ui, debug);
+
+        /* [+]/[-] stay clickable while a land is in flight so hammered presses
+           update the length-1 destination; only scrub thumb blocks them. */
         if (ui->misc.inspector_land_pending &&
-            debug->inspector_focus_cycle != ui->misc.inspector_focus_at_scrub) {
-            ui->misc.inspector_land_pending = false;
+            ui->misc.inspector_land_inflight_cycle != 0u) {
+            step_base = ui->misc.inspector_preview_cycle;
+        } else {
+            step_base = debug->inspector_focus_cycle;
+        }
+        if (ui->runtime_client != NULL) {
+            can_previous = runtime_client_inspector_adjacent_cycle(
+                ui->runtime_client,
+                step_base,
+                -1,
+                debug->inspector_newest_cycle,
+                &probe);
+            can_next = runtime_client_inspector_adjacent_cycle(
+                ui->runtime_client,
+                step_base,
+                1,
+                debug->inspector_newest_cycle,
+                &probe);
+        } else {
+            can_previous =
+                step_base > debug->inspector_oldest_cycle;
+            can_next = step_base < debug->inspector_newest_cycle;
         }
 
-        /* Snap after land / ±. While land is in flight, hold the scrub target
-           so the thumb does not jump back to the pre-scrub focus. */
+        /* Snap after land / ±. While land is in flight, hold the scrub/step
+           target so the thumb does not jump back to the pre-land focus. */
         if (!thumb) {
             uint64_t snap_cycle = ui->misc.inspector_land_pending ?
                 ui->misc.inspector_preview_cycle :
@@ -7764,11 +7870,9 @@ static void frontend_draw_misc_inspector(
 
         nk_layout_row_begin(ctx, NK_DYNAMIC, 22.0f, 3);
         nk_layout_row_push(ctx, 0.08f);
-        /* [-]/[+]: Record CP walk. */
-        if (frontend_nk_action_button(ctx, "-", !thumb && !at_oldest)) {
-            ui->misc.inspector_land_pending = false;
-            frontend_push_inspector_intent(
-                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, false, 0u);
+        /* [-]/[+]: absolute Record neighbor + length-1 chase. */
+        if (frontend_nk_action_button(ctx, "-", !thumb && can_previous)) {
+            frontend_inspector_step_toward(ui, debug, -1);
         }
         nk_layout_row_push(ctx, 0.84f);
         {
@@ -7786,18 +7890,21 @@ static void frontend_draw_misc_inspector(
                 }
                 ui->misc.inspector_thumb_down = true;
                 ui->misc.inspector_land_pending = false;
+                ui->misc.inspector_land_inflight_cycle = 0u;
             }
             if (ui->misc.inspector_thumb_down) {
                 uint64_t cycle = frontend_inspector_slider_to_cycle(debug, slider);
                 ui->misc.inspector_preview_cycle = cycle;
                 if (!down) {
+                    ui->misc.inspector_thumb_down = false;
+                    ui->misc.inspector_preview_has_film = false;
+                    /* Scrub uses focus_at_scrub completion, not step inflight. */
+                    ui->misc.inspector_land_inflight_cycle = 0u;
                     frontend_push_inspector_intent(
                         ui,
                         FRONTEND_DEBUGGER_INTENT_INSPECTOR_LAND,
                         false,
                         cycle);
-                    ui->misc.inspector_thumb_down = false;
-                    ui->misc.inspector_preview_has_film = false;
                     ui->misc.inspector_land_pending = true;
                 }
             } else if ((hovered || moved) && down) {
@@ -7805,24 +7912,81 @@ static void frontend_draw_misc_inspector(
                     debug->inspector_focus_cycle;
                 ui->misc.inspector_thumb_down = true;
                 ui->misc.inspector_land_pending = false;
+                ui->misc.inspector_land_inflight_cycle = 0u;
                 ui->misc.inspector_preview_cycle =
                     frontend_inspector_slider_to_cycle(debug, slider);
             }
         }
         nk_layout_row_push(ctx, 0.08f);
-        if (frontend_nk_action_button(ctx, "+", !thumb && !at_live)) {
-            ui->misc.inspector_land_pending = false;
-            frontend_push_inspector_intent(
-                ui, FRONTEND_DEBUGGER_INTENT_INSPECTOR_CHECKPOINT_STEP, true, 0u);
+        if (frontend_nk_action_button(ctx, "+", !thumb && can_next)) {
+            frontend_inspector_step_toward(ui, debug, 1);
         }
         nk_layout_row_end(ctx);
         ui->misc.inspector_slider = slider;
     }
 
-    nk_layout_row_dynamic(ctx, 28.0f, 1);
-    nk_label_wrap(
-        ctx,
-        "retained checkpoints -> live; scrub: cell still or pink; landed: film or reconstruct");
+    {
+        bool preview_active = ui->misc.inspector_thumb_down ||
+            ui->misc.inspector_land_pending;
+        uint64_t focus_ordinal = 0u;
+        uint64_t preview_ordinal = 0u;
+        uint64_t catalog_count = 0u;
+        bool focus_exact = false;
+        bool preview_exact = false;
+        bool have_focus = false;
+        bool have_preview = false;
+        uint64_t live = debug->inspector_newest_cycle;
+
+        if (ui->runtime_client != NULL) {
+            have_focus = runtime_client_inspector_snapshot_slot(
+                ui->runtime_client,
+                debug->inspector_focus_cycle,
+                live,
+                &focus_ordinal,
+                &catalog_count,
+                &focus_exact);
+            if (preview_active) {
+                have_preview = runtime_client_inspector_snapshot_slot(
+                    ui->runtime_client,
+                    ui->misc.inspector_preview_cycle,
+                    live,
+                    &preview_ordinal,
+                    &catalog_count,
+                    &preview_exact);
+            }
+        }
+
+        nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
+        nk_layout_row_push(ctx, 0.48f);
+        nk_label(ctx, "Snapshot:", NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, 0.52f);
+        if (preview_active && have_preview && catalog_count > 0u) {
+            uint64_t preview_number = preview_ordinal + 1u;
+            if (have_focus && focus_exact) {
+                snprintf(
+                    line, sizeof(line), "%llu of %llu/%llu",
+                    (unsigned long long)(focus_ordinal + 1u),
+                    (unsigned long long)preview_number,
+                    (unsigned long long)catalog_count);
+            } else {
+                snprintf(
+                    line, sizeof(line), "Exact to %llu/%llu",
+                    (unsigned long long)preview_number,
+                    (unsigned long long)catalog_count);
+            }
+        } else if (have_focus && focus_exact && catalog_count > 0u) {
+            snprintf(
+                line, sizeof(line), "%llu of %llu",
+                (unsigned long long)(focus_ordinal + 1u),
+                (unsigned long long)catalog_count);
+        } else if (have_focus) {
+            snprintf(line, sizeof(line), "Exact focus");
+        } else {
+            snprintf(line, sizeof(line), "-");
+        }
+        nk_label(ctx, line, NK_TEXT_LEFT);
+        nk_layout_row_end(ctx);
+    }
 
     nk_layout_row_begin(ctx, NK_DYNAMIC, 18.0f, 2);
     nk_layout_row_push(ctx, 0.48f);
@@ -7832,7 +7996,8 @@ static void frontend_draw_misc_inspector(
         line,
         sizeof(line),
         "%llu",
-        (unsigned long long)(ui->misc.inspector_thumb_down ?
+        (unsigned long long)(ui->misc.inspector_thumb_down ||
+            ui->misc.inspector_land_pending ?
             ui->misc.inspector_preview_cycle : debug->inspector_focus_cycle));
     nk_label(ctx, line, NK_TEXT_LEFT);
     nk_layout_row_end(ctx);
@@ -8611,6 +8776,15 @@ void frontend_inspector_clear_preview(frontend *ui)
     ui->misc.inspector_thumb_down = false;
     ui->misc.inspector_preview_has_film = false;
     ui->misc.inspector_land_pending = false;
+    ui->misc.inspector_land_inflight_cycle = 0u;
+}
+
+void frontend_set_runtime_client(frontend *ui, runtime_client *client)
+{
+    if (ui == NULL) {
+        return;
+    }
+    ui->runtime_client = client;
 }
 
 bool frontend_submit_frame(frontend *ui, const c64_frame *frame)

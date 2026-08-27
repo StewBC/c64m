@@ -290,6 +290,8 @@ typedef struct frontend_assembler_options {
 
 frontend *frontend_create(platform_window *window);
 void frontend_destroy(frontend *ui);
+/* Optional: enables Inspector [+]/[-] adjacent-cycle lookup (absolute LAND). */
+void frontend_set_runtime_client(frontend *ui, runtime_client *client);
 
 void frontend_begin_input(frontend *ui);
 void frontend_handle_event(frontend *ui, SDL_Event *event);

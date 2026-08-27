@@ -84,6 +84,26 @@ bool runtime_inspector_cp_index_lookup_film(
     uint64_t preview_cycle,
     uint64_t *out_cell_cycle,
     uint64_t *out_film_cycle);
+/* Record lattice neighbor for Inspector [+]/[-].
+   direction < 0: greatest retained cycle < from_cycle.
+   direction > 0: least retained cycle > from_cycle, else live_cycle when
+   live_cycle > from_cycle (LIVE/NOW endpoint). */
+bool runtime_inspector_cp_index_adjacent(
+    runtime_inspector_cp_index *index,
+    uint64_t from_cycle,
+    int direction,
+    uint64_t live_cycle,
+    uint64_t *out_cycle);
+/* Snapshot line helpers: navigable slots are retained CPs plus a distinct
+   LIVE slot when live_cycle > newest CP (same idea as a2m NOW).
+   out_ordinal is 0-based; out_exact is true when cycle is exactly a CP or LIVE. */
+bool runtime_inspector_cp_index_snapshot_slot(
+    runtime_inspector_cp_index *index,
+    uint64_t cycle,
+    uint64_t live_cycle,
+    uint64_t *out_ordinal,
+    uint64_t *out_count,
+    bool *out_exact);
 
 /* I0 master switch. Off->on arms film (if budget > 0) and starts the
  * checkpoint recorder. Never arms HST1. On->off stops Inspector recording

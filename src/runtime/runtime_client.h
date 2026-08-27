@@ -263,6 +263,22 @@ bool runtime_client_inspector_land_to_cycle(
 /* direction < 0 / > 0: Record checkpoint lattice walk. */
 bool runtime_client_inspector_checkpoint_step(
     runtime_client *client, int direction, uint64_t request_token);
+/* Local Record-index neighbor (no worker round-trip). See
+   runtime_inspector_cp_index_adjacent. */
+bool runtime_client_inspector_adjacent_cycle(
+    runtime_client *client,
+    uint64_t from_cycle,
+    int direction,
+    uint64_t live_cycle,
+    uint64_t *out_cycle);
+/* Local Snapshot-line locate (no worker round-trip). */
+bool runtime_client_inspector_snapshot_slot(
+    runtime_client *client,
+    uint64_t cycle,
+    uint64_t live_cycle,
+    uint64_t *out_ordinal,
+    uint64_t *out_count,
+    bool *out_exact);
 bool runtime_client_request_call_stack(runtime_client *client);
 
 bool runtime_client_load_bin(

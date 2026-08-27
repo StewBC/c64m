@@ -7606,6 +7606,7 @@ int main(int argc, char **argv) {
         app_options_destroy(&options);
         return 1;
     }
+    frontend_set_runtime_client(ui, client);
 
     layout_state.split_display_right = options.layout_split_display_right;
     layout_state.split_top_bottom = options.layout_split_top_bottom;

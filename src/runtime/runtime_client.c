@@ -1073,6 +1073,44 @@ bool runtime_client_inspector_checkpoint_step(
     return runtime_client_push(client, &command);
 }
 
+bool runtime_client_inspector_adjacent_cycle(
+    runtime_client *client,
+    uint64_t from_cycle,
+    int direction,
+    uint64_t live_cycle,
+    uint64_t *out_cycle)
+{
+    if (client == NULL || client->inspector_cp_index == NULL || out_cycle == NULL) {
+        return false;
+    }
+    return runtime_inspector_cp_index_adjacent(
+        client->inspector_cp_index,
+        from_cycle,
+        direction,
+        live_cycle,
+        out_cycle);
+}
+
+bool runtime_client_inspector_snapshot_slot(
+    runtime_client *client,
+    uint64_t cycle,
+    uint64_t live_cycle,
+    uint64_t *out_ordinal,
+    uint64_t *out_count,
+    bool *out_exact)
+{
+    if (client == NULL || client->inspector_cp_index == NULL) {
+        return false;
+    }
+    return runtime_inspector_cp_index_snapshot_slot(
+        client->inspector_cp_index,
+        cycle,
+        live_cycle,
+        out_ordinal,
+        out_count,
+        out_exact);
+}
+
 bool runtime_client_history_find(
     runtime_client *client,
     uint32_t session_id,
