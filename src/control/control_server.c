@@ -1,5 +1,6 @@
 #include "control_server.h"
 
+#include "c64m_log.h"
 #include "control_deferred.h"
 #include "message_queue.h"
 #include "mutex.h"
@@ -574,7 +575,7 @@ bool control_server_start(control_server *server)
         return false;
     }
     server->started = true;
-    SDL_Log("control: listening on 127.0.0.1:%u", (unsigned)server->port);
+    log_info("control: listening on 127.0.0.1:%u", (unsigned)server->port);
     return true;
 }
 

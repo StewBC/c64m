@@ -1,5 +1,7 @@
 #include "platform_audio.h"
 
+#include "c64m_log.h"
+
 #include <SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,7 +58,7 @@ platform_audio *platform_audio_create(const platform_audio_desc *desc) {
     }
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
-        SDL_Log("platform_audio: SDL_InitSubSystem(AUDIO) failed: %s", SDL_GetError());
+        log_error("platform_audio: SDL_InitSubSystem(AUDIO) failed: %s", SDL_GetError());
         return NULL;
     }
 
@@ -81,7 +83,7 @@ platform_audio *platform_audio_create(const platform_audio_desc *desc) {
         SDL_AUDIO_ALLOW_FREQUENCY_CHANGE |
         SDL_AUDIO_ALLOW_CHANNELS_CHANGE);
     if (audio->device_id == 0) {
-        SDL_Log("platform_audio: SDL_OpenAudioDevice failed: %s", SDL_GetError());
+        log_error("platform_audio: SDL_OpenAudioDevice failed: %s", SDL_GetError());
         free(audio);
         return NULL;
     }
@@ -101,7 +103,7 @@ platform_audio *platform_audio_create(const platform_audio_desc *desc) {
 
     audio->is_open = true;
 
-    SDL_Log("platform_audio: opened device id=%u rate=%d channels=%d samples=%d",
+    log_info("platform_audio: opened device id=%u rate=%d channels=%d samples=%d",
         (unsigned)audio->device_id,
         audio->actual_rate,
         audio->actual_channels,

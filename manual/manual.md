@@ -44,6 +44,7 @@ Useful flags:
 | `--audio-smoke`        | Emit a 440 Hz test tone to verify audio output      |
 | `--inspector`          | Enable Inspector recording (checkpoints; default off). `--inspector-memory=<MiB>` sets the budget (0 or 16..4096) |
 | `--inspector-off-on-max` / `--no-inspector-off-on-max` | Wipe Inspector Record on max/warp (default on). Does not pause the CPU flight recorder |
+| `--log-level <level>`  | Host log policy: `all`, `warn` (default), `error`, or `none` |
 
 By default, c64m loads `c64m.ini` from the current directory. The INI file stores
 configuration, window size, debugger layout, and breakpoints.
@@ -1640,6 +1641,7 @@ emulator removes comments.
 |-------------------|--------------------------------------------------------|
 | `Save`            | `yes` -- save INI on quit                               |
 | `scroll_wheel_lines` | Integer; lines scrolled per wheel click             |
+| `log_level`       | `all`, `warn` (default), `error`, or `none`; host log policy (also `--log-level`). Does not mute CLI/usage errors on stderr. |
 | `symbol_files`    | Comma-separated list of symbol file paths              |
 | `turbo_speeds`    | Comma-separated turbo modes, e.g. `1,2,3` (1=normal, 2=max, 3=warp) |
 | `pause_on_brk`    | `true`/`false`; when true, free-run auto-pauses at the next `BRK` (`$00`). Absent/false (default) executes BRK like hardware so carts that hit a KERNAL-handled BRK during boot keep running |

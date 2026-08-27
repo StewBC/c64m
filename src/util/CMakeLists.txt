@@ -3,6 +3,7 @@
 add_library(util STATIC
     audio_buffer.c
     basic_v2.c
+    c64m_log.c
     config.c
     cond.c
     message_queue.c
@@ -25,6 +26,8 @@ target_include_directories(util PUBLIC
 target_compile_features(util PUBLIC c_std_99)
 
 target_link_libraries(util
+    PUBLIC
+        c64m_logc
     PRIVATE
         SDL2::SDL2
         c64m_inih

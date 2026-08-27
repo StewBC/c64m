@@ -42,7 +42,6 @@ enum {
        still providing a safety fallback if the callee never returns to stop_pc.
        Logged periodically so the terminal shows progress. */
     STEP_OVER_FAST_LIMIT     = 500000,
-    STEP_OVER_LOG_INTERVAL   = 10000,
 
 };
 
@@ -4653,9 +4652,6 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
     interrupt_depth = 0;
     rt->suppress_execute_bp = true;
 
-    fprintf(stderr, "STEP OVER: start PC=%04X stop_pc=%04X\n",
-            (unsigned)rt->machine.cpu.cpu.pc, (unsigned)stop_pc);
-
     {
         int fast_limit = 0;
         for (;;) {
@@ -4664,8 +4660,6 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
             }
 
             if (!rt->suppress_execute_bp && runtime_breakpoint_matches_pc(rt)) {
-                fprintf(stderr, "STEP OVER: breakpoint hit at PC=%04X jsr=%d idepth=%d\n",
-                        (unsigned)rt->machine.cpu.cpu.pc, jsr_counter, interrupt_depth);
                 runtime_pause_for_breakpoint(rt);
                 return true;
             }
@@ -4690,23 +4684,13 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
 
             if (interrupt_taken) {
                 interrupt_depth++;
-                fprintf(stderr, "STEP OVER: IRQ/NMI taken at opc=%02X new_PC=%04X idepth=%d jsr=%d\n",
-                        (unsigned)opcode, (unsigned)rt->machine.cpu.cpu.pc,
-                        interrupt_depth, jsr_counter);
             } else if (opcode == 0x40u /* RTI */ && interrupt_depth > 0) {
                 interrupt_depth--;
-                fprintf(stderr, "STEP OVER: RTI at opc-PC, new_PC=%04X idepth=%d jsr=%d\n",
-                        (unsigned)rt->machine.cpu.cpu.pc, interrupt_depth, jsr_counter);
             } else if (interrupt_depth == 0) {
                 if (opcode == 0x20u /* JSR */) {
                     jsr_counter++;
-                    fprintf(stderr, "STEP OVER: JSR -> new_PC=%04X jsr=%d\n",
-                            (unsigned)rt->machine.cpu.cpu.pc, jsr_counter);
                 } else if (opcode == 0x60u /* RTS */) {
                     jsr_counter--;
-                    fprintf(stderr, "STEP OVER: RTS -> new_PC=%04X jsr=%d (stop_pc=%04X)\n",
-                            (unsigned)rt->machine.cpu.cpu.pc, jsr_counter,
-                            (unsigned)stop_pc);
                 }
             }
 
@@ -4720,22 +4704,11 @@ static bool runtime_step_over(runtime *rt, bool *alive) {
 
             if (interrupt_depth == 0 && jsr_counter <= 0 &&
                 rt->machine.cpu.cpu.pc == stop_pc) {
-                fprintf(stderr, "STEP OVER: done at PC=%04X after %d instructions\n",
-                        (unsigned)stop_pc, fast_limit);
                 return runtime_publish_step_complete(rt);
             }
 
-            if (++fast_limit % STEP_OVER_LOG_INTERVAL == 0) {
-                fprintf(stderr, "STEP OVER: still running iter=%d PC=%04X stop=%04X jsr=%d idepth=%d\n",
-                        fast_limit, (unsigned)rt->machine.cpu.cpu.pc,
-                        (unsigned)stop_pc, jsr_counter, interrupt_depth);
-            }
-
+            ++fast_limit;
             if (fast_limit >= STEP_OVER_FAST_LIMIT) {
-                fprintf(stderr, "STEP OVER: fallback to RUNNING after %d instructions"
-                        " PC=%04X stop_pc=%04X jsr=%d idepth=%d\n",
-                        fast_limit, (unsigned)rt->machine.cpu.cpu.pc,
-                        (unsigned)stop_pc, jsr_counter, interrupt_depth);
                 rt->exec_state = RUNTIME_EXEC_RUNNING;
                 runtime_publish_simple_event(rt, RUNTIME_EVENT_RUNNING);
                 return true;
@@ -5513,7 +5486,6 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_RUN:
-            fprintf(stderr, "RUN command received\n");
             if (rt->inspecting && runtime_inspector_at_live(rt)) {
                 break;
             }
@@ -5527,7 +5499,6 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_PAUSE:
-            fprintf(stderr, "PAUSE command received\n");
             rt->exec_state = RUNTIME_EXEC_PAUSED;
             rt->last_stop_reason = RUNTIME_STOP_REASON_PAUSE_COMMAND;
             if (rt->inspecting) {
@@ -5552,7 +5523,6 @@ static bool runtime_process_command(runtime *rt, const runtime_command *command,
             break;
 
         case RUNTIME_COMMAND_STEP_INSTRUCTION:
-            fprintf(stderr, "STEP_INSTRUCTION command received\n");
             if (rt->inspecting && runtime_inspector_at_live(rt)) {
                 break;
             }

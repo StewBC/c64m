@@ -1,3 +1,4 @@
+#include "c64m_log.h"
 #include "app_options.h"
 #include "audio_buffer.h"
 #include "c64_snapshot.h"
@@ -31,6 +32,43 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+
+
+/* Mirror c64m_log_level onto SDL's logger so leftover SDL/nuklear lines obey
+   the same --log-level / [config] log_level policy. */
+static void sdl_log_discard(
+    void *userdata,
+    int category,
+    SDL_LogPriority priority,
+    const char *message)
+{
+    (void)userdata;
+    (void)category;
+    (void)priority;
+    (void)message;
+}
+
+static void apply_sdl_log_policy(c64m_log_level level)
+{
+    switch (level) {
+    case C64M_LOG_LEVEL_ALL:
+        SDL_LogSetOutputFunction(NULL, NULL);
+        SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+        break;
+    case C64M_LOG_LEVEL_ERROR:
+        SDL_LogSetOutputFunction(NULL, NULL);
+        SDL_LogSetAllPriority(SDL_LOG_PRIORITY_ERROR);
+        break;
+    case C64M_LOG_LEVEL_NONE:
+        SDL_LogSetOutputFunction(sdl_log_discard, NULL);
+        break;
+    case C64M_LOG_LEVEL_WARN:
+    default:
+        SDL_LogSetOutputFunction(NULL, NULL);
+        SDL_LogSetAllPriority(SDL_LOG_PRIORITY_WARN);
+        break;
+    }
+}
 
 enum {
     C64M_CONTROLLER_MAX = 2,
@@ -627,10 +665,10 @@ static bool send_quicksave(runtime_client *client, const app_options *options, c
     const char *snapshot_dir = frontend_get_browse_dir(ui, FRONTEND_BROWSE_SLOT_SNAPSHOT);
 
     if (!make_quicksave_path(options, snapshot_dir, path, sizeof(path))) {
-        SDL_Log("quicksave: failed to build snapshot path");
+        log_warn("quicksave: failed to build snapshot path");
         return false;
     }
-    SDL_Log("quicksave: %s", path);
+    log_info("quicksave: %s", path);
     return runtime_client_save_state(client, path);
 }
 
@@ -639,10 +677,10 @@ static bool send_quickload(runtime_client *client, const app_options *options, c
     const char *snapshot_dir = frontend_get_browse_dir(ui, FRONTEND_BROWSE_SLOT_SNAPSHOT);
 
     if (!find_newest_state_file(options, snapshot_dir, path, sizeof(path))) {
-        SDL_Log("quickload: no .c64state files found");
+        log_warn("quickload: no .c64state files found");
         return false;
     }
-    SDL_Log("quickload: %s", path);
+    log_info("quickload: %s", path);
     return runtime_client_load_state(client, path);
 }
 
@@ -1118,7 +1156,7 @@ static void apply_loaded_host_state(
         if (controller_state != NULL) {
             sdl_c64_controller_send_ports(controller_state, client);
         }
-        SDL_Log(
+        log_info(
             "loaded host keyboard joystick: port %u (%s)",
             (unsigned)host.port,
             frontend_joystick_layout_to_string(host.layout));
@@ -1135,7 +1173,7 @@ static void apply_loaded_host_state(
             frontend_set_disk_queue(ui, 8, &options->disk_slots[8]);
             frontend_set_disk_queue(ui, 9, &options->disk_slots[9]);
         }
-        SDL_Log(
+        log_info(
             "loaded host disk queues: 8=%d (current=%d) 9=%d (current=%d)",
             options->disk_slots[8].count,
             options->disk_slots[8].current,
@@ -2517,7 +2555,7 @@ static void complete_deferred_control_response(
             deferred->request_token = 0u;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
         return;
     }
@@ -2530,7 +2568,7 @@ static void complete_deferred_control_response(
             deferred->request_token = 0u;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_MEMORY &&
                event->type == RUNTIME_EVENT_MEMORY_RPC_COMPLETE) {
@@ -2555,7 +2593,7 @@ static void complete_deferred_control_response(
                 deferred->request_token = 0u;
             } else {
                 control_response_release(&response);
-                SDL_Log("control: response queue full");
+                log_warn("control: response queue full");
             }
         } else {
             uint8_t *payload = NULL;
@@ -2581,7 +2619,7 @@ static void complete_deferred_control_response(
                     deferred->request_token = 0u;
                 } else {
                     control_response_release(&response);
-                    SDL_Log("control: response queue full");
+                    log_warn("control: response queue full");
                 }
             } else {
                 control_format_memory_rpc_response(
@@ -2596,7 +2634,7 @@ static void complete_deferred_control_response(
                     deferred->request_token = 0u;
                 } else {
                     control_response_release(&response);
-                    SDL_Log("control: response queue full");
+                    log_warn("control: response queue full");
                 }
             }
         }
@@ -2618,7 +2656,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_CALL_STACK &&
                event->type == RUNTIME_EVENT_CALL_STACK_RESPONSE) {
@@ -2627,7 +2665,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_DISK_STATUS &&
                event->type == RUNTIME_EVENT_DISK_STATUS_RESPONSE &&
@@ -2637,7 +2675,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_DRIVE_CPU &&
                event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
@@ -2649,7 +2687,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_VIC &&
                event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
@@ -2661,7 +2699,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_GET_CIA &&
                event->type == RUNTIME_EVENT_MACHINE_STATE_RESPONSE) {
@@ -2677,7 +2715,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if ((deferred->command_type == CONTROL_COMMAND_BREAK_EXEC ||
                 deferred->command_type == CONTROL_COMMAND_BREAK_CLEAR ||
@@ -2731,7 +2769,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if ((deferred->command_type == CONTROL_COMMAND_HISTORY_INFO ||
                 deferred->command_type == CONTROL_COMMAND_HISTORY_RECORD ||
@@ -2756,7 +2794,7 @@ static void complete_deferred_control_response(
             deferred->request_token = 0u;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if ((deferred->command_type == CONTROL_COMMAND_HISTORY_FIND ||
                 deferred->command_type == CONTROL_COMMAND_HISTORY_NEXT ||
@@ -2818,7 +2856,7 @@ static void complete_deferred_control_response(
             deferred->request_token = 0u;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     } else if (deferred->command_type == CONTROL_COMMAND_ASSEMBLE &&
                (event->type == RUNTIME_EVENT_ASSEMBLE_COMPLETE ||
@@ -2845,7 +2883,7 @@ static void complete_deferred_control_response(
             deferred->active = false;
         } else {
             control_response_release(&response);
-            SDL_Log("control: response queue full");
+            log_warn("control: response queue full");
         }
     }
 }
@@ -2872,7 +2910,7 @@ static void complete_deferred_debug_memory_response(
         deferred->active = false;
     } else {
         control_response_release(&response);
-        SDL_Log("control: response queue full");
+        log_warn("control: response queue full");
     }
 }
 
@@ -2898,7 +2936,7 @@ static void complete_deferred_frame_response(
         deferred->active = false;
     } else {
         control_response_release(&response);
-        SDL_Log("control: response queue full");
+        log_warn("control: response queue full");
     }
 }
 
@@ -2926,7 +2964,7 @@ static void complete_deferred_wait_response(
         deferred->active = false;
     } else {
         control_response_release(&response);
-        SDL_Log("control: response queue full");
+        log_warn("control: response queue full");
     }
 }
 
@@ -3217,7 +3255,7 @@ static void cancel_deferred_control_response(
         control_response_release(&response);
         deferred->active = false;
         deferred->request_token = 0u;
-        SDL_Log("control: response queue full while cancelling deferred");
+        log_warn("control: response queue full while cancelling deferred");
     }
 }
 
@@ -3602,7 +3640,7 @@ static void poll_runtime_events(
                 debug_state->drive9_hardware.activity_write_seq = 0;
             }
         } else if (event.type == RUNTIME_EVENT_ERROR) {
-            SDL_Log("runtime error: %s", event.data.error.message);
+            log_error("runtime error: %s", event.data.error.message);
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_ERROR) {
             if (ui != NULL) {
                 frontend_show_assembler_errors(ui, event.data.error.message);
@@ -3610,7 +3648,7 @@ static void poll_runtime_events(
         } else if (event.type == RUNTIME_EVENT_ASSEMBLE_COMPLETE) {
             poll_symbols_into(client, ui, control_cache);
             if (event.data.assemble.notice[0] != '\0') {
-                SDL_Log("%s", event.data.assemble.notice);
+                log_info("%s", event.data.assemble.notice);
             }
             if (ui != NULL) {
                 frontend_invalidate_disassembly_cache(ui);
@@ -3622,9 +3660,9 @@ static void poll_runtime_events(
             }
         } else if (event.type == RUNTIME_EVENT_SAVE_STATE_COMPLETE) {
             if (!append_host_state_chunk(event.data.state_file.path, options, kbd_joystick)) {
-                SDL_Log("save state host settings append failed: %s", event.data.state_file.path);
+                log_warn("save state host settings append failed: %s", event.data.state_file.path);
             }
-            SDL_Log("save state complete: %s", event.data.state_file.path);
+            log_info("save state complete: %s", event.data.state_file.path);
         } else if (event.type == RUNTIME_EVENT_LOAD_STATE_COMPLETE) {
             apply_loaded_host_state(
                 event.data.state_file.path,
@@ -3633,14 +3671,7 @@ static void poll_runtime_events(
                 client,
                 controller_state,
                 kbd_joystick);
-            SDL_Log("load state complete: %s", event.data.state_file.path);
-        } else if (event.type == RUNTIME_EVENT_STEP_COMPLETE &&
-                   debug_state != NULL &&
-                   debug_state->has_cpu) {
-            SDL_Log(
-                "STEP instruction PC=%04X CYCLES=%llu",
-                debug_state->cpu.pc,
-                (unsigned long long)debug_state->cpu.cycles);
+            log_info("load state complete: %s", event.data.state_file.path);
         } else if (event.type == RUNTIME_EVENT_DISK_SWAP && options != NULL) {
             uint8_t device = event.data.disk_swap.device;
             int32_t param = event.data.disk_swap.swap_param;
@@ -3728,14 +3759,12 @@ static void poll_runtime_events(
 }
 
 static void send_run_command(runtime_client *client) {
-    SDL_Log("RUN command requested");
     if (runtime_client_run(client)) {
         request_debug_state(client);
     }
 }
 
 static void send_pause_command(runtime_client *client) {
-    SDL_Log("PAUSE command requested");
     if (runtime_client_pause(client)) {
         request_debug_state(client);
     }
@@ -3976,21 +4005,18 @@ static void leave_forensics_mode(
 }
 
 static void send_step_instruction_command(runtime_client *client) {
-    SDL_Log("STEP instruction requested");
     if (runtime_client_step_instruction(client)) {
         request_debug_state(client);
     }
 }
 
 static void send_step_out_command(runtime_client *client) {
-    SDL_Log("STEP OUT requested");
     if (runtime_client_step_out(client)) {
         request_debug_state(client);
     }
 }
 
 static void send_step_over_command(runtime_client *client) {
-    SDL_Log("STEP OVER requested");
     if (runtime_client_step_over(client)) {
         request_debug_state(client);
     }
@@ -4040,7 +4066,6 @@ static void send_run_to_cursor_command(
         }
         addr = debug_state->cpu.pc;
     }
-    SDL_Log("RUN TO CURSOR requested: $%04X", addr);
     if (runtime_client_run_to_cursor(client, addr)) {
         request_debug_state(client);
     }
@@ -4244,20 +4269,20 @@ static void sdl_c64_controller_add(
         }
     }
     if (slot >= C64M_CONTROLLER_MAX) {
-        SDL_Log("ignoring extra controller: %s", SDL_GameControllerNameForIndex(device_index));
+        log_info("ignoring extra controller: %s", SDL_GameControllerNameForIndex(device_index));
         return;
     }
 
     controller = SDL_GameControllerOpen(device_index);
     if (controller == NULL) {
-        SDL_Log("SDL_GameControllerOpen failed: %s", SDL_GetError());
+        log_error("SDL_GameControllerOpen failed: %s", SDL_GetError());
         return;
     }
 
     joystick = SDL_GameControllerGetJoystick(controller);
     instance_id = joystick != NULL ? SDL_JoystickInstanceID(joystick) : -1;
     if (instance_id < 0) {
-        SDL_Log("SDL_JoystickInstanceID failed: %s", SDL_GetError());
+        log_error("SDL_JoystickInstanceID failed: %s", SDL_GetError());
         SDL_GameControllerClose(controller);
         return;
     }
@@ -4269,7 +4294,7 @@ static void sdl_c64_controller_add(
     state->controllers[slot].controller = controller;
     state->controllers[slot].instance_id = instance_id;
     state->controllers[slot].inputs = sdl_c64_controller_read_inputs(controller);
-    SDL_Log("controller connected: %s", SDL_GameControllerName(controller));
+    log_info("controller connected: %s", SDL_GameControllerName(controller));
     sdl_c64_controller_send_ports(state, client);
 }
 
@@ -4284,7 +4309,7 @@ static void sdl_c64_controller_remove(
         return;
     }
 
-    SDL_Log("controller disconnected: %s", SDL_GameControllerName(state->controllers[slot].controller));
+    log_info("controller disconnected: %s", SDL_GameControllerName(state->controllers[slot].controller));
     SDL_GameControllerClose(state->controllers[slot].controller);
     memset(&state->controllers[slot], 0, sizeof(state->controllers[slot]));
     sdl_c64_controller_send_ports(state, client);
@@ -4355,10 +4380,10 @@ static void sdl_c64_controller_switch_mapping(
     connected_count = sdl_c64_controller_count(state);
     if (connected_count >= 2) {
         state->swapped = !state->swapped;
-        SDL_Log("controller ports swapped");
+        log_info("controller ports swapped");
     } else {
         state->single_controller_port = port;
-        SDL_Log("single controller mapped to C64 joystick port %u", port);
+        log_info("single controller mapped to C64 joystick port %u", port);
     }
     sdl_c64_controller_send_ports(state, client);
 }
@@ -4718,12 +4743,12 @@ static void dispatch_debugger_intents(
                                 layout_state.split_memory_misc;
                         }
                         if (options->no_save_ini) {
-                            SDL_Log("Save INI now: saving disabled (--nosaveini)");
+                            log_info("Save INI now: saving disabled (--nosaveini)");
                         } else if (!app_options_save_shutdown(options)) {
-                            SDL_Log("Save INI now failed: %s",
+                            log_error("Save INI now failed: %s",
                                     options->ini_path ? options->ini_path : "(null)");
                         } else {
-                            SDL_Log("Save INI now: wrote %s",
+                            log_info("Save INI now: wrote %s",
                                     options->ini_path ? options->ini_path : "(null)");
                         }
                     }
@@ -6782,7 +6807,7 @@ static void dispatch_control_request(
 
     if (!control_server_post_response(control, &response)) {
         control_response_release(&response);
-        SDL_Log("control: response queue full");
+        log_warn("control: response queue full");
     }
 }
 
@@ -6950,7 +6975,6 @@ static bool run_main_loop(
                             window, client, ui, &ui_visible, true);
                     } else {
                         ui_visible = !ui_visible;
-                        SDL_Log("ui_visible=%s", ui_visible ? "true" : "false");
                         {
                             int min_w = 0;
                             int min_h = 0;
@@ -7014,7 +7038,7 @@ static bool run_main_loop(
                     if (!frontend_config_dialog_is_open(ui)) {
                         frontend_set_config_state(ui, options);
                     }
-                    SDL_Log("keyboard joystick layout: %s",
+                    log_info("keyboard joystick layout: %s",
                             frontend_joystick_layout_to_string(next_layout));
                     send_event_to_frontend = false;
                 } else if (event.key.keysym.sym == SDLK_t &&
@@ -7049,9 +7073,9 @@ static bool run_main_loop(
                         frontend_set_config_state(ui, options);
                     }
                     if (next == 0u) {
-                        SDL_Log("keyboard joystick disabled");
+                        log_info("keyboard joystick disabled");
                     } else {
-                        SDL_Log("keyboard joystick assigned to port %u (%s)",
+                        log_info("keyboard joystick assigned to port %u (%s)",
                                 next,
                                 frontend_joystick_layout_to_string(kbd_joystick.layout));
                     }
@@ -7074,7 +7098,7 @@ static bool run_main_loop(
                                     && count > 0) {
                                 runtime_client_paste_events(client, events, count);
                             } else if (perr.offset >= 0) {
-                                SDL_Log("paste parse error at offset %d: %s",
+                                log_warn("paste parse error at offset %d: %s",
                                         perr.offset, perr.message ? perr.message : "");
                             }
                         }
@@ -7360,9 +7384,14 @@ int main(int argc, char **argv) {
     int exit_code = 0;
     bool platform_started = false;
 
+    c64m_log_init();
+
     if (!app_options_load_startup(&options, argc, argv)) {
         return 1;
     }
+    /* INI/CLI may override the WARN default; apply before further host work. */
+    c64m_log_apply(options.log_level);
+    apply_sdl_log_policy(options.log_level);
 
     if (options.headless) {
         if (!platform_init_headless()) {
@@ -7378,21 +7407,21 @@ int main(int argc, char **argv) {
        internally, so this may safely precede platform_init(). */
     if (!options.headless) {
         abuf = audio_buffer_create(8192);
-    }
-    if (abuf != NULL) {
-        platform_audio_desc audio_desc;
-        audio_desc.requested_rate             = 48000;
-        audio_desc.requested_channels         = 2;
-        audio_desc.requested_callback_samples = 512;
-        audio_desc.buffer                     = abuf;
-        paudio = platform_audio_create(&audio_desc);
-        if (paudio == NULL) {
-            SDL_Log("audio: failed to open device, running without audio");
-            audio_buffer_destroy(abuf);
-            abuf = NULL;
+        if (abuf != NULL) {
+            platform_audio_desc audio_desc;
+            audio_desc.requested_rate             = 48000;
+            audio_desc.requested_channels         = 2;
+            audio_desc.requested_callback_samples = 512;
+            audio_desc.buffer                     = abuf;
+            paudio = platform_audio_create(&audio_desc);
+            if (paudio == NULL) {
+                log_warn("audio: failed to open device, running without audio");
+                audio_buffer_destroy(abuf);
+                abuf = NULL;
+            }
+        } else {
+            log_warn("audio: failed to allocate buffer, running without audio");
         }
-    } else {
-        SDL_Log("audio: failed to allocate buffer, running without audio");
     }
 
     if (!runtime_init()) {
@@ -7493,7 +7522,7 @@ int main(int argc, char **argv) {
         if (options.control_port > 0) {
             control = control_server_create((uint16_t)options.control_port);
             if (control == NULL || !control_server_start(control)) {
-                SDL_Log("control: failed to listen on 127.0.0.1:%d", options.control_port);
+                log_error("control: failed to listen on 127.0.0.1:%d", options.control_port);
                 control_server_destroy(control);
                 runtime_destroy(rt);
                 runtime_shutdown();
@@ -7525,7 +7554,7 @@ int main(int argc, char **argv) {
         runtime_stop(rt);
         poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         if (!runtime_save_debug_ini(rt)) {
-            SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
+            log_error("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
         }
         control_server_destroy(control);
         runtime_destroy(rt);
@@ -7616,7 +7645,7 @@ int main(int argc, char **argv) {
     if (options.control_port > 0) {
         control = control_server_create((uint16_t)options.control_port);
         if (control == NULL || !control_server_start(control)) {
-            SDL_Log("control: failed to listen on 127.0.0.1:%d", options.control_port);
+            log_error("control: failed to listen on 127.0.0.1:%d", options.control_port);
             control_server_destroy(control);
             frontend_destroy(ui);
             platform_window_destroy(window);
@@ -7651,7 +7680,7 @@ int main(int argc, char **argv) {
     runtime_stop(rt);
     poll_runtime_events(client, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (!runtime_save_debug_ini(rt)) {
-        SDL_Log("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
+        log_error("failed to save debug ini data: %s", options.ini_path ? options.ini_path : "(null)");
     }
 
     platform_window_get_size(window, &options.window_width, &options.window_height);
@@ -7691,7 +7720,7 @@ int main(int argc, char **argv) {
         }
     }
     if ((options.save_ini || options.remember) && !app_options_save_shutdown(&options)) {
-        SDL_Log("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
+        log_error("failed to save ini file: %s", options.ini_path ? options.ini_path : "(null)");
     }
 
     frontend_destroy(ui);

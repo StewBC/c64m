@@ -1411,6 +1411,13 @@ static void apply_config(app_options *options, config *cfg)
     if (options->scroll_wheel_lines < 1) {
         options->scroll_wheel_lines = 1;
     }
+    value = config_get(cfg, "config", "log_level");
+    if (value != NULL && value[0] != '\0') {
+        c64m_log_level parsed_log = C64M_LOG_LEVEL_WARN;
+        if (c64m_log_level_from_string(value, &parsed_log)) {
+            options->log_level = parsed_log;
+        }
+    }
     value = config_get(cfg, "config", "symbol_files");
     if (value != NULL) {
         replace_string(&options->symbol_files, value);
@@ -1764,6 +1771,7 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
     const char *video_standard = NULL;
     const char *history_memory = NULL;
     const char *inspector_memory = NULL;
+    const char *log_level_s = NULL;
     int inspector = 0;
     int inspector_cli = -1;
     int inspector_off_on_max_flag = 0;
@@ -1792,6 +1800,8 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         OPT_BOOLEAN('f', "defaults", &defaults, "use default settings", NULL, 0, OPT_NONEG),
         OPT_STRING('d', "disk", &disk, "1541 drive image; format <drive>=<image>", NULL, 0, 0),
         OPT_STRING('i', "inifile", &ini_path, "path to an .ini file", NULL, 0, 0),
+        OPT_STRING('\0', "log-level", &log_level_s,
+                   "host log policy: all|warn|error|none (default warn)", NULL, 0, 0),
         OPT_BOOLEAN('n', "noini", &noini, "do not use an ini file", NULL, 0, OPT_NONEG),
         OPT_BOOLEAN('!', "nosaveini", &no_save_ini, "do not save the ini no matter what", NULL, 0, OPT_NONEG),
         OPT_STRING('p', "prg", &prg_path, "load file as PRG at startup", NULL, 0, 0),
@@ -1887,6 +1897,16 @@ static bool parse_command_line_overrides(app_options *options, int argc, char **
         }
         replace_string(&options->keyboard_joystick_layout, kbdjoy_layout);
     }
+    if (log_level_s != NULL) {
+        c64m_log_level parsed_log = C64M_LOG_LEVEL_WARN;
+        if (!c64m_log_level_from_string(log_level_s, &parsed_log)) {
+            fprintf(
+                stderr,
+                "c64m: --log-level expects all, warn, error, or none\n");
+            return false;
+        }
+        options->log_level = parsed_log;
+    }
 
     if (remember) {
         options->remember = true;
@@ -1967,6 +1987,7 @@ void app_options_init(app_options *options)
     memset(options, 0, sizeof(*options));
     options->use_ini = true;
     replace_string(&options->ini_path, C64M_DEFAULT_INI);
+    options->log_level = C64M_LOG_LEVEL_WARN;
     options->scroll_wheel_lines = C64M_DEFAULT_SCROLL_WHEEL_LINES;
     replace_string(&options->video_standard, C64M_DEFAULT_VIDEO_STANDARD);
     options->crt_scanline_strength = C64M_DEFAULT_CRT_SCANLINE_STRENGTH;
@@ -2028,6 +2049,7 @@ bool app_options_copy(app_options *dest, const app_options *src)
     dest->remember = src->remember;
     dest->defaults = src->defaults;
     dest->no_save_ini = src->no_save_ini;
+    dest->log_level = src->log_level;
     dest->autorun = src->autorun;
     dest->emulate_1541 = src->emulate_1541;
     dest->media_1541 = src->media_1541;
@@ -2201,6 +2223,8 @@ bool app_options_save_shutdown(const app_options *options)
         config_set(cfg, "config", "turbo_speeds", options->turbo_multipliers);
     }
     config_set_int(cfg, "config", "scroll_wheel_lines", options->scroll_wheel_lines);
+    /* Always persist so a non-default value (and an explicit warn) survives. */
+    config_set(cfg, "config", "log_level", c64m_log_level_name(options->log_level));
     config_set_int(cfg, "debug", "history_memory_mb", options->history_memory_mb);
     config_set_int(cfg, "debug", "frame_ring_memory_mb", options->frame_ring_memory_mb);
     config_set_int(cfg, "debug", "vic_ring_memory_mb", options->vic_ring_memory_mb);

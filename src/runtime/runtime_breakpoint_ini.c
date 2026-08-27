@@ -1,5 +1,6 @@
 #include "runtime_breakpoint_ini.h"
 
+#include "c64m_log.h"
 #include "config.h"
 
 #include <ctype.h>
@@ -121,7 +122,7 @@ typedef struct runtime_ini_breakpoint_parse_state {
 } runtime_ini_breakpoint_parse_state;
 
 static void runtime_ini_warn(const char *key, const char *message) {
-    fprintf(stderr, "warning: breakpoint `%s`: %s\n", key, message);
+    log_warn("breakpoint `%s`: %s", key, message);
 }
 
 static void runtime_ini_strip_suffix(char *address) {

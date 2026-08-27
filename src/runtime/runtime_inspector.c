@@ -1,6 +1,7 @@
 #include "runtime_inspector.h"
 
 #include "c64_snapshot.h"
+#include "c64m_log.h"
 #include "runtime_frame_ring.h"
 #include "runtime_internal.h"
 
@@ -507,10 +508,9 @@ void runtime_inspector_set_enabled(runtime *rt, bool enabled)
         runtime_frame_ring_set_recording(&rt->frame_ring, true);
     }
     if (rt->inspector_memory_mb == 0u && !rt->inspector_empty_tape_warned) {
-        fprintf(
-            stderr,
+        log_warn(
             "Inspector recording enabled with inspector_memory_mb=0; "
-            "checkpoint tape is empty\n");
+            "checkpoint tape is empty");
         rt->inspector_empty_tape_warned = true;
     }
     runtime_inspector_recorder_set_enabled(rt, true);

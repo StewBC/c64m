@@ -18,6 +18,8 @@
 
 #include "stb_image.h"
 
+#include "c64m_log.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1003,7 +1005,7 @@ static bool frontend_update_crt_texture(frontend *ui)
             C64_FRAME_WIDTH * FRONTEND_CRT_RENDER_SCALE,
             C64_FRAME_PAL_HEIGHT * FRONTEND_CRT_RENDER_SCALE);
         if (ui->crt_texture == NULL) {
-            SDL_Log("SDL_CreateTexture for CRT output failed: %s", SDL_GetError());
+            log_error("SDL_CreateTexture for CRT output failed: %s", SDL_GetError());
             return false;
         }
         SDL_SetTextureBlendMode(ui->crt_texture, SDL_BLENDMODE_NONE);
@@ -1036,7 +1038,7 @@ static bool frontend_update_crt_texture(frontend *ui)
     if (SDL_UpdateTexture(ui->crt_texture, NULL, ui->crt_pixels,
             C64_FRAME_WIDTH * FRONTEND_CRT_RENDER_SCALE *
                 (int)sizeof(*ui->crt_pixels)) != 0) {
-        SDL_Log("SDL_UpdateTexture for CRT output failed: %s", SDL_GetError());
+        log_error("SDL_UpdateTexture for CRT output failed: %s", SDL_GetError());
         return false;
     }
     ui->crt_texture_valid = true;
@@ -1066,7 +1068,7 @@ static void frontend_preview_crt_options(frontend *ui, const app_options *option
     frontend_apply_display_filter(ui);
 
     if (effects_changed && !frontend_update_crt_texture(ui)) {
-        SDL_Log("frontend: could not refresh CRT output");
+        log_warn("frontend: could not refresh CRT output");
     }
 }
 
@@ -8043,7 +8045,7 @@ frontend *frontend_create(platform_window *window)
         led_red,
         led_red_len);
     if (ui->led_green_texture == NULL || ui->led_red_texture == NULL) {
-        SDL_Log("frontend: failed to load disk activity LED textures");
+        log_warn("frontend: failed to load disk activity LED textures");
     }
 
     return ui;
@@ -8623,7 +8625,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         (frame->height != C64_FRAME_PAL_HEIGHT && frame->height != C64_FRAME_NTSC_HEIGHT) ||
         frame->stride_bytes != C64_FRAME_WIDTH ||
         frame->pixel_format != C64_FRAME_PIXEL_FORMAT_INDEXED8) {
-        SDL_Log("unexpected frame format: %ux%u stride=%u format=%u",
+        log_error("unexpected frame format: %ux%u stride=%u format=%u",
             frame->width,
             frame->height,
             frame->stride_bytes,
@@ -8646,7 +8648,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
             (int)frame->width,
             C64_FRAME_PAL_HEIGHT);
         if (ui->display_texture == NULL) {
-            SDL_Log("SDL_CreateTexture failed: %s", SDL_GetError());
+            log_error("SDL_CreateTexture failed: %s", SDL_GetError());
             return false;
         }
         SDL_SetTextureBlendMode(ui->display_texture, SDL_BLENDMODE_NONE);
@@ -8688,7 +8690,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
         if (SDL_UpdateTexture(ui->display_texture, &frame_rect,
                 ui->display_pixels,
                 C64_FRAME_WIDTH * (int)sizeof(*ui->display_pixels)) != 0) {
-            SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
+            log_error("SDL_UpdateTexture failed: %s", SDL_GetError());
             return false;
         }
     }
@@ -8699,7 +8701,7 @@ bool frontend_submit_frame(frontend *ui, const c64_frame *frame)
        a new frame height, not as an option change. */
     ui->layout.display_aspect = frontend_display_aspect(ui);
     if (!frontend_update_crt_texture(ui)) {
-        SDL_Log("frontend: CRT output update failed; using unprocessed frame");
+        log_warn("frontend: CRT output update failed; using unprocessed frame");
     }
     return true;
 }
