@@ -295,7 +295,7 @@ static void usage(const char *program) {
     fprintf(stderr,
         "Usage: %s -i <infile> [-o <outfile>] [-a <addr>] [-s <symfile|->]\n"
         "               [-C <6502|65c02|rockwell|wdc>] [-D name[=value]]...\n"
-        "               [--auto-adjust-segments] [-v] [-h]\n"
+        "               [-I <dir>]... [--auto-adjust-segments] [-v] [-h]\n"
         "\n"
         "  -i <infile>        assembly source to assemble (required)\n"
         "  -o <outfile>       binary output for the default (unnamed) target\n"
@@ -305,6 +305,8 @@ static void usage(const char *program) {
         "  -C, --cpu <name>   initial CPU profile (default 6502); source may switch\n"
         "                     profiles with .6502, .65c02, .rockwell, or .wdc\n"
         "  -D name[=value]    predefine a text define (value defaults to \"1\"); repeatable\n"
+        "  -I <dir>           add an include/incbin search directory (cwd-relative);\n"
+        "                     repeatable; same list as .search, tried before .search\n"
         "  -A, --auto-adjust-segments\n"
         "                     retry overlapping segment layouts with suggested starts\n"
         "  -v                 verbose: hex-dump each target's output\n"
@@ -358,6 +360,20 @@ static int inject_defines(ASSEMBLER *as, int argc, char **argv) {
                 fprintf(stderr, "Could not predefine %s\n", spec);
                 return 0;
             }
+        }
+    }
+    return 1;
+}
+
+static int inject_search_dirs(ASSEMBLER *as, int argc, char **argv) {
+    for(int i = 1; i < argc - 1; i++) {
+        if(0 != strcmp(argv[i], "-I")) {
+            continue;
+        }
+        const char *dir = argv[i + 1];
+        if(assembler_add_search_dir(as, dir) != ASM_OK) {
+            fprintf(stderr, "Could not add search directory: %s\n", dir);
+            return 0;
         }
     }
     return 1;
@@ -437,6 +453,13 @@ int main(int argc, char **argv) {
     assembler_predefine(&as, "AM65", "1");
     assembler_set_auto_adjust_segments(&as, auto_adjust_segments);
     if(!inject_defines(&as, argc, argv)) {
+        assembler_shutdown(&as);
+        file_target_free(default_target);
+        errlog_shutdown(&log);
+        return 1;
+    }
+    if(!inject_search_dirs(&as, argc, argv)) {
+        print_errors(&log);
         assembler_shutdown(&as);
         file_target_free(default_target);
         errlog_shutdown(&log);

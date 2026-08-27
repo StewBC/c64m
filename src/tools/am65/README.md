@@ -3,8 +3,7 @@
 `am65` is the assembler used by a2m, c64m, and the standalone `am65`
 command-line program. Apps keep a plain vendored copy under `src/tools/am65`
 so a normal `git clone` of either app is enough to build. Assembler history
-and merges live in the am65 hub repo (https://github.com/StewBC/am65); see
-`HUB.md` there for the sync/get workflow.
+and merges live in this hub repo; see `HUB.md` for the sync/get workflow.
 
 The initial CPU profile is NMOS 6502. It can be selected through the library
 API (`assembler_set_cpu_profile`), with `am65 --cpu`, or changed within source:
@@ -20,6 +19,31 @@ Profiles are cumulative. Selecting a profile establishes the initial state for
 each assembly; an in-source directive affects subsequent lines. This lets c64m
 and Apple ][+ select 6502, Apple //e Enhanced select 65C02, and standalone users
 opt into Rockwell or WDC instructions explicitly.
+
+## Include search paths
+
+`.include` and `.incbin` resolve relative to the directory of the **including**
+file first. Fallback directories come from:
+
+1. CLI / host seeds: `am65 -I <dir>` (repeatable; paths are cwd-relative), via
+   `assembler_add_search_dir`
+2. In-source `.search "dir"` (resolved relative to the file that contains it)
+
+Both feed the same list. `-I` entries are applied first; `.search` appends after
+them. Duplicates of the same resolved directory are ignored. A bare include that
+misses locally is then tried under each search directory using the include
+string as written (no basename strip). `.search` only affects includes that
+appear **after** it. Empty or missing search directories produce a warning.
+
+```asm
+.search "../shared"
+.include "local.s"     ; beside this file if present
+.include "shared.s"    ; else ../shared/shared.s
+```
+
+```sh
+am65 -i alt/root.asm -I shared -o out.bin
+```
 
 ## Named scopes and output targets
 
