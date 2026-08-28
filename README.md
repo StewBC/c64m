@@ -1,3 +1,14 @@
+# c64m — RETIRED (development moved to machines)
+
+**This repository is frozen.** c64m development continues in the `machines`
+monorepo (a2m + c64m share a debugger shell, not silicon).
+
+- Last frozen SHA: `7f3c1abeb1abc6a5121020cb0650db10ba8e2a0a`
+- Tag: `frozen-for-machines-7f3c1abeb1abc6a5121020cb0650db10ba8e2a0a`
+- Do not open feature PRs here. Do not push further work here.
+
+---
+
 # c64m — Commodore 64 Emulator
 
 c64m is a Commodore 64 emulator written in C99. It was almost entirely written using
